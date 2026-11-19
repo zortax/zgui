@@ -686,9 +686,14 @@ fn present_on(
     // a scope cannot be read here. The error goes to the device's uncaptured-error handler there.
     #[cfg(target_arch = "wasm32")]
     {
-        Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-            &state.gpu, surface, setup,
-        ))))
+        Ok(Presentation::Surface(Box::new(
+            ConfiguredSurface::for_window(
+                &state.gpu,
+                surface,
+                setup,
+                crate::target::native::NativeWindow::of(window.clone()),
+            ),
+        )))
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -696,8 +701,12 @@ fn present_on(
             .gpu
             .device()
             .push_error_scope(wgpu::ErrorFilter::Validation);
-        let presentation =
-            Presentation::Surface(Box::new(ConfiguredSurface::new(&state.gpu, surface, setup)));
+        let presentation = Presentation::Surface(Box::new(ConfiguredSurface::for_window(
+            &state.gpu,
+            surface,
+            setup,
+            crate::target::native::NativeWindow::of(window.clone()),
+        )));
         match futures::executor::block_on(scope.pop()) {
             None => Ok(presentation),
             Some(error) => Err(Rejected::Failed(error.to_string())),

@@ -6,7 +6,7 @@ use zgui_geom::{Device, Size};
 
 use crate::gpu::device::Gpu;
 use crate::gpu::formats::Formats;
-use crate::target::native::{ChainConfig, NativeChain};
+use crate::target::native::{ChainConfig, NativeChain, NativeWindow};
 use crate::target::scene_texture::{SHRINK_SLACK, size_class};
 
 /// A surface wait long enough to be visible as an application stall.
@@ -129,7 +129,17 @@ impl ConfiguredSurface {
     /// the assertion is worth making: it is the guard on everything that might later be added
     /// beside it.
     pub fn new(gpu: &Arc<Gpu>, surface: wgpu::Surface<'static>, setup: SurfaceSetup) -> Self {
-        let mut configured = Self::unconfigured(gpu, surface, setup);
+        Self::for_window(gpu, surface, setup, NativeWindow::default())
+    }
+
+    /// [`ConfiguredSurface::new`], for a surface made for `window`.
+    pub(crate) fn for_window(
+        gpu: &Arc<Gpu>,
+        surface: wgpu::Surface<'static>,
+        setup: SurfaceSetup,
+        window: NativeWindow,
+    ) -> Self {
+        let mut configured = Self::unconfigured(gpu, surface, setup, window);
         configured.apply(gpu);
         configured
     }
@@ -147,6 +157,7 @@ impl ConfiguredSurface {
         gpu: &Arc<Gpu>,
         surface: wgpu::Surface<'static>,
         setup: SurfaceSetup,
+        window: NativeWindow,
     ) -> Self {
         let capabilities = surface.get_capabilities(gpu.adapter());
         let mode = present_mode(setup.pacing, &capabilities);
@@ -183,7 +194,7 @@ impl ConfiguredSurface {
             view_formats: formats.view_formats(),
         };
         let native = if crate::target::native::wanted() {
-            let native = NativeChain::new(gpu, &surface);
+            let native = NativeChain::new(gpu, &surface, window);
             if native.is_none() {
                 tracing::info!(
                     "this backend or this surface cannot have a swap chain of the renderer's own, \

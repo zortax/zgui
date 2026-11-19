@@ -66,7 +66,7 @@ impl Debt {
 
     /// Makes every texture owe everything, for a set whose contents are no longer known.
     #[cfg_attr(
-        all(not(vulkan_hal), not(test)),
+        all(not(any(vulkan_hal, windows)), not(test)),
         expect(dead_code, reason = "only a native swap chain forgets its contents")
     )]
     pub(crate) fn forget(&mut self) {

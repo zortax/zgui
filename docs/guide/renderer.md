@@ -70,9 +70,10 @@ that carries the old picture over, and a backdrop that widens its rectangles all
 damage. A frame that is composed and not presented, because the platform held it or no texture was
 free, adds its rectangles to both sets for the next present.
 
-`zgui-render-wgpu` makes its own Vulkan swap chain when `ZGUI_PRESENTER=native` is set. Its images
-keep their contents, and `VK_KHR_incremental_present` tells the compositor which rectangles
-changed. `ZGUI_PRESENT_VERIFY=1` reads every presented image back and compares it with the kept
+`zgui-render-wgpu` makes its own swap chain when `ZGUI_PRESENTER=native` is set: a Vulkan swap
+chain, or on Windows with DX12 a flip-sequential DXGI swap chain for an opaque window. Its images
+keep their contents, and `VK_KHR_incremental_present` or the dirty rectangles of
+`IDXGISwapChain1::Present1` tell the compositor which rectangles changed. `ZGUI_PRESENT_VERIFY=1` reads every presented image back and compares it with the kept
 target, which finds a damage bug at the frame where it occurs.
 
 To measure the effect, run `anim-cadence` from `zgui-bench` once with `ZGUI_PRESENTER=native` and

@@ -415,7 +415,12 @@ impl<W: Into<wgpu::SurfaceTarget<'static>> + Clone> Proof for WindowSurface<W> {
             return Err("the surface is not compatible with this adapter".to_owned());
         }
         Ok(Presentation::Surface(Box::new(
-            ConfiguredSurface::unconfigured(gpu, surface, self.setup),
+            ConfiguredSurface::unconfigured(
+                gpu,
+                surface,
+                self.setup,
+                crate::target::native::NativeWindow::of(self.window.clone()),
+            ),
         )))
     }
 }

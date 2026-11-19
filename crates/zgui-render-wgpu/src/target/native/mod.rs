@@ -10,7 +10,8 @@
 //!
 //! # Where it is used
 //!
-//! On a Vulkan device, where `VK_KHR_incremental_present` carries the rectangles. Every other
+//! On a Vulkan device, where `VK_KHR_incremental_present` carries the rectangles, and on a DX12
+//! device with an opaque window, where `IDXGISwapChain1::Present1` carries them. Every other
 //! backend keeps wgpu's swap chain. A native chain that cannot be made gives the window back to
 //! wgpu's.
 //!
@@ -25,6 +26,9 @@ mod vulkan;
 
 #[cfg(vulkan_hal)]
 pub(crate) use vulkan::INCREMENTAL_PRESENT;
+
+#[cfg(windows)]
+mod dxgi;
 
 /// The variable that chooses who owns a window's swap chain.
 ///
@@ -51,7 +55,7 @@ pub(crate) fn verify() -> bool {
 /// The configuration a native chain is built for, which mirrors the wgpu surface configuration.
 #[derive(Clone, Debug)]
 #[cfg_attr(
-    not(vulkan_hal),
+    not(any(vulkan_hal, windows)),
     expect(dead_code, reason = "no backend here has a native chain to read it")
 )]
 pub(crate) struct ChainConfig {
@@ -65,6 +69,41 @@ pub(crate) struct ChainConfig {
     pub present_mode: wgpu::PresentMode,
     /// How the compositor blends the images.
     pub alpha_mode: wgpu::CompositeAlphaMode,
+}
+
+/// What a native chain needs to know about the window that the wgpu surface does not say.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct NativeWindow {
+    /// The Win32 window handle, where the window has one.
+    #[cfg_attr(
+        not(windows),
+        expect(
+            dead_code,
+            reason = "only a DXGI swap chain is made for a window handle"
+        )
+    )]
+    pub hwnd: Option<isize>,
+}
+
+impl NativeWindow {
+    /// What `window` says about itself.
+    pub(crate) fn of(window: impl Into<wgpu::SurfaceTarget<'static>>) -> Self {
+        use wgpu::rwh::{HasWindowHandle, RawWindowHandle};
+        let raw = match window.into() {
+            wgpu::SurfaceTarget::DisplayAndWindow(handle) => {
+                handle.window_handle().ok().map(|handle| handle.as_raw())
+            }
+            wgpu::SurfaceTarget::Window(handle) => {
+                handle.window_handle().ok().map(|handle| handle.as_raw())
+            }
+            _ => None,
+        };
+        let hwnd = match raw {
+            Some(RawWindowHandle::Win32(handle)) => Some(handle.hwnd.get()),
+            _ => None,
+        };
+        Self { hwnd }
+    }
 }
 
 /// An image acquired from a native chain.
@@ -83,15 +122,18 @@ pub(crate) struct NativeImage {
 pub(crate) enum NativeChain {
     /// A Vulkan swap chain.
     #[cfg(vulkan_hal)]
-    Vulkan(vulkan::Chain),
+    Vulkan(Box<vulkan::Chain>),
+    /// A DXGI swap chain.
+    #[cfg(windows)]
+    Dxgi(Box<dxgi::Chain>),
     /// Nothing, on a target with no backend that has a native chain.
-    #[cfg(not(vulkan_hal))]
+    #[cfg(not(any(vulkan_hal, windows)))]
     #[expect(dead_code, reason = "a value of this variant cannot exist")]
     Never(core::convert::Infallible),
 }
 
 #[cfg_attr(
-    not(vulkan_hal),
+    not(any(vulkan_hal, windows)),
     expect(unused_variables, reason = "no backend here has a native chain")
 )]
 impl NativeChain {
@@ -102,11 +144,20 @@ impl NativeChain {
     pub(crate) fn new(
         gpu: &std::sync::Arc<crate::Gpu>,
         surface: &wgpu::Surface<'static>,
+        window: NativeWindow,
     ) -> Option<Self> {
+        #[cfg(not(windows))]
+        let _ = window;
         let backend = gpu.adapter().get_info().backend;
         match backend {
             #[cfg(vulkan_hal)]
-            wgpu::Backend::Vulkan => vulkan::Chain::new(gpu, surface).map(Self::Vulkan),
+            wgpu::Backend::Vulkan => {
+                vulkan::Chain::new(gpu, surface).map(|chain| Self::Vulkan(Box::new(chain)))
+            }
+            #[cfg(windows)]
+            wgpu::Backend::Dx12 => {
+                dxgi::Chain::new(gpu, window).map(|chain| Self::Dxgi(Box::new(chain)))
+            }
             _ => None,
         }
     }
@@ -123,7 +174,9 @@ impl NativeChain {
         match self {
             #[cfg(vulkan_hal)]
             Self::Vulkan(chain) => chain.configure(config),
-            #[cfg(not(vulkan_hal))]
+            #[cfg(windows)]
+            Self::Dxgi(chain) => chain.configure(config),
+            #[cfg(not(any(vulkan_hal, windows)))]
             Self::Never(never) => match *never {},
         }
     }
@@ -133,7 +186,9 @@ impl NativeChain {
         match self {
             #[cfg(vulkan_hal)]
             Self::Vulkan(chain) => chain.acquire(),
-            #[cfg(not(vulkan_hal))]
+            #[cfg(windows)]
+            Self::Dxgi(chain) => chain.acquire(),
+            #[cfg(not(any(vulkan_hal, windows)))]
             Self::Never(never) => match *never {},
         }
     }
@@ -143,7 +198,9 @@ impl NativeChain {
         match self {
             #[cfg(vulkan_hal)]
             Self::Vulkan(chain) => chain.note_written(rects),
-            #[cfg(not(vulkan_hal))]
+            #[cfg(windows)]
+            Self::Dxgi(chain) => chain.note_written(rects),
+            #[cfg(not(any(vulkan_hal, windows)))]
             Self::Never(never) => match *never {},
         }
     }
@@ -157,7 +214,9 @@ impl NativeChain {
         match self {
             #[cfg(vulkan_hal)]
             Self::Vulkan(chain) => chain.take_owed(slot, frame),
-            #[cfg(not(vulkan_hal))]
+            #[cfg(windows)]
+            Self::Dxgi(chain) => chain.take_owed(slot, frame),
+            #[cfg(not(any(vulkan_hal, windows)))]
             Self::Never(never) => match *never {},
         }
     }
@@ -175,7 +234,9 @@ impl NativeChain {
         match self {
             #[cfg(vulkan_hal)]
             Self::Vulkan(chain) => chain.present(slot, frame, damage),
-            #[cfg(not(vulkan_hal))]
+            #[cfg(windows)]
+            Self::Dxgi(chain) => chain.present(slot, frame, damage),
+            #[cfg(not(any(vulkan_hal, windows)))]
             Self::Never(never) => match *never {},
         }
     }
@@ -183,7 +244,7 @@ impl NativeChain {
 
 /// Clips `rects` to a frame of `frame` pixels, and answers the whole frame for an empty list.
 #[cfg_attr(
-    not(vulkan_hal),
+    not(any(vulkan_hal, windows)),
     expect(dead_code, reason = "no backend here has a native chain to present")
 )]
 ///

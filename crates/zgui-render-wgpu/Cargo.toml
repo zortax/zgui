@@ -46,6 +46,11 @@ zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
 [target.'cfg(any(windows, target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
 ash.workspace = true
 
+# A DXGI swap chain made by the renderer itself, where wgpu's would discard what a buffer held and
+# name no dirty rectangles.
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
 [lints]
 workspace = true
 
