@@ -5,8 +5,8 @@
 //! compositor recomposites the whole window, even when one caret blinked.
 //!
 //! A swap chain made here keeps both. Its images keep their contents between presents, so a frame
-//! copies only what the image owes ([`Debt`](crate::target::debt::Debt)). Its present names the
-//! rectangles that changed, so the compositor or the display engine redraws only those.
+//! copies only what the image owes. Its present names the rectangles that changed, so the
+//! compositor or the display engine redraws only those.
 //!
 //! # Where it is used
 //!
