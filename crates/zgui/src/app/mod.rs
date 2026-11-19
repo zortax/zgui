@@ -10,6 +10,9 @@ pub use zgui_platform_winit::android::AndroidApp;
 /// location, Bluetooth, NFC, USB, media, security and system integration.
 #[cfg(target_os = "android")]
 pub use zgui_platform_winit::android;
+/// iOS status bar style and software keyboard height.
+#[cfg(target_os = "ios")]
+pub use zgui_platform_winit::ios;
 
 /// Defines the handler for Android background work; see [`android::background`].
 #[cfg(target_os = "android")]
