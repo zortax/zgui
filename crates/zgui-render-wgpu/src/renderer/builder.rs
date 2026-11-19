@@ -512,7 +512,7 @@ mod tests {
             view_formats: &[],
         });
         let supplied = Supplied::new(vec![texture]).ok_or("the texture was refused")?;
-        let mut presentation = Presentation::Supplied(supplied);
+        let mut presentation = Presentation::Supplied(Box::new(supplied));
         presentation.resize(gpu, Size::new(16, 16));
         Ok(presentation)
     }

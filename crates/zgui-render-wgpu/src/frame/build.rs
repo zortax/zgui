@@ -31,6 +31,9 @@ pub struct FramePlan {
     pub unisolated: u32,
     /// How many instanced batches were left out of a pass whose scissor they miss.
     pub culled: u32,
+    /// The rectangles of the composed target the frame redraws, widened to cover every backdrop
+    /// read.
+    pub rects: Vec<Rect<i32, Device>>,
 }
 
 impl FramePlan {

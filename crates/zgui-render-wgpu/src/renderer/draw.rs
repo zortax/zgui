@@ -166,15 +166,10 @@ impl Renderer for WgpuRenderer {
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
 
-        // Resolved here, before anything is recorded, because the copy that ends the frame is
-        // limited to these rectangles and that copy is recorded below. Taken from what the frame
-        // will draw rather than from what it was asked to draw: the widening above happens between
-        // the two, and a display given only what was asked for misses the rest.
-        let rects = damage::rects(damage, self.composed.used());
-        let redrawn: u64 = rects.iter().map(|rect| damage::area(*rect)).sum();
-        damage::rows_of(&rects, &mut self.composed_rows);
-        self.composed_rects.clear();
-        self.composed_rects.extend_from_slice(&rects);
+        let redrawn: u64 = damage::rects(damage, self.composed.used())
+            .iter()
+            .map(|rect| damage::area(*rect))
+            .sum();
 
         let formats = self.presentation.formats();
         // Before anything is planned: a display list may name an effect declared since the last
@@ -255,14 +250,23 @@ impl Renderer for WgpuRenderer {
         };
         zgui_profile::latency::mark("r.encoder");
         let mut encoder = self.frame_encoder();
+        // What this frame writes into the composed target. Taken from what the frame draws, and
+        // not from the damage it was handed: the full-damage widening above, the backdrop widening
+        // in the plan, the carry and the shift below all write pixels outside that damage.
+        self.composed_rects.clear();
+        self.composed_rects.extend_from_slice(&plan.rects);
         // First of all: a target reallocated by a resize receives the picture of the one it
         // replaced, which the shift below and every pass after it build on.
         if let Some(carried) = self.composed.carry(&mut encoder) {
             zgui_profile::latency::note_with("r.carry", || format!("{carried:?}"));
+            self.composed_rects.push(self.composed.used());
         }
         // Before anything this frame draws, and after nothing: the passes below clear and redraw
         // each damage rectangle, and the pixels this moves are the ones outside them.
         if let Some(shift) = self.pending_shift.take() {
+            if let Some(moved_to) = shift.destination() {
+                self.composed_rects.push(moved_to);
+            }
             let moved = crate::frame::shift::apply(
                 &self.gpu,
                 &mut encoder,
@@ -272,6 +276,8 @@ impl Renderer for WgpuRenderer {
             );
             zgui_profile::latency::note("r.shift", format!("by={:?} moved={moved}", shift.by));
         }
+        damage::rows_of(&self.composed_rects, &mut self.composed_rows);
+        self.presentation.note_written(&self.composed_rects);
         zgui_profile::latency::mark("r.buffers");
         let uploaded = self.buffers.upload_frame(&self.gpu, &mut encoder, scene);
         let upload_allocations = self.buffers.upload_allocations();
@@ -328,7 +334,7 @@ impl Renderer for WgpuRenderer {
         let presented = self.acquire_surface();
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
-            let scissors = self.blit_scissors(&presented, false);
+            let scissors = self.blit_scissors(&presented);
             draw_calls += self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.submit_frame(encoder);
@@ -361,7 +367,7 @@ impl Renderer for WgpuRenderer {
         let mut encoder = self.frame_encoder();
         let mut draw_calls = 0;
         if let Some(view) = &presented.view {
-            let scissors = self.blit_scissors(&presented, true);
+            let scissors = self.blit_scissors(&presented);
             draw_calls = self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.gpu.queue().submit([encoder.finish()]);
@@ -764,24 +770,12 @@ impl WgpuRenderer {
     /// else is copied whole: an acquired surface texture is a new resource marked wholly
     /// uninitialised on every acquisition, so a partial copy onto one comes out black everywhere
     /// it did not write.
-    ///
-    /// `held` says the copy is of a frame composed earlier. More than one frame can have been
-    /// composed since the last copy, so a supplied texture is then copied whole.
     fn blit_scissors(
         &mut self,
         presented: &crate::target::swapchain::Presented,
-        held: bool,
     ) -> Vec<Rect<i32, Device>> {
         match &mut self.presentation {
-            Presentation::Supplied(supplied) => {
-                let slot = supplied.selected();
-                if held {
-                    let whole = Rect::new(zgui_geom::Point::new(0, 0), supplied.size());
-                    supplied.owed(slot, &[whole])
-                } else {
-                    supplied.owed(slot, &self.composed_rects)
-                }
-            }
+            Presentation::Supplied(supplied) => supplied.take_owed(supplied.selected()),
             Presentation::Surface(_) | Presentation::Offscreen(_) => {
                 let used = self.composed.used();
                 // A cropping swap chain can be larger than the frame. Only the frame's extent is
@@ -819,6 +813,14 @@ impl WgpuRenderer {
         let Some(pipeline) = pipelines.get(&self.gpu, kind, format) else {
             return 0;
         };
+        // A supplied texture persists, and the copy covers only what it owes, so what it holds is
+        // kept. Every other texture is copied whole. An acquired surface texture is marked
+        // uninitialised on each acquisition, so loading it makes wgpu clear it first.
+        let load = if self.presentation.keeps_contents() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
+        };
         let queries = self
             .timer
             .as_mut()
@@ -830,9 +832,7 @@ impl WgpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    // The copy covers the rectangles below and no other pixel, so what the texture
-                    // already holds is kept.
-                    load: wgpu::LoadOp::Load,
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],

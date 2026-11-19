@@ -521,7 +521,7 @@ impl SharedGraphics {
         }
         Ok(self.assemble(
             state,
-            Presentation::Supplied(supplied),
+            Presentation::Supplied(Box::new(supplied)),
             target,
             None,
             Origin::Supplied,

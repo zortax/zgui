@@ -52,10 +52,23 @@ pub enum Presentation {
     /// A texture, standing in for a surface that cannot be created.
     Offscreen(Offscreen),
     /// Textures a caller owns, one of which it chooses before each frame.
-    Supplied(Supplied),
+    Supplied(Box<Supplied>),
 }
 
 impl Presentation {
+    /// Records rectangles a frame wrote into the composed target. See [`Supplied::note_written`].
+    pub fn note_written(&mut self, rects: &[Rect<i32, Device>]) {
+        if let Self::Supplied(supplied) = self {
+            supplied.note_written(rects);
+        }
+    }
+
+    /// Whether the texture a frame is copied into keeps what it held, so that a copy of only what
+    /// it owes is enough.
+    pub fn keeps_contents(&self) -> bool {
+        matches!(self, Self::Supplied(_))
+    }
+
     /// The formats everything is drawn in.
     pub fn formats(&self) -> Formats {
         match self {
@@ -329,6 +342,10 @@ pub struct Supplied {
     /// a texture to owe, and a debt would be pixels sent for nobody. Set by whoever supplied them,
     /// because only it knows what it does with them afterwards.
     consumed: bool,
+    /// What was written into the composed target since the last copy into any texture.
+    ///
+    /// The whole debt of a consumed set. A rotated set keeps its debt per texture in `stale`.
+    uncopied: DamageSet<STALE>,
     /// Whether the renderer was configured for an extent these textures do not have.
     ///
     /// The renderer cannot reallocate a supplied set, so this is a state a frame has to stop in
@@ -374,6 +391,7 @@ impl Supplied {
             // set wrongly called consumed shows a stale rectangle, and one wrongly called rotated
             // sends pixels nobody needed.
             consumed: false,
+            uncopied: DamageSet::full(),
             textures,
             selected: 0,
             size,
@@ -515,34 +533,47 @@ impl Supplied {
         !self.diverged
     }
 
-    /// Records what this frame wrote against every texture, and takes what `slot` is owed.
+    /// Records rectangles a frame wrote into the composed target.
     ///
-    /// The debt is what the copy at the end of the frame has to cover: the rectangles this frame
-    /// drew **and** the ones drawn while this texture was not the one being written. Taking it
-    /// leaves the texture owing nothing, because what follows writes exactly those.
-    pub fn owed(&mut self, slot: usize, rects: &[Rect<i32, Device>]) -> Vec<Rect<i32, Device>> {
-        // **A set that is read out and thrown away every frame owes nothing.** Where the caller
-        // composites what it was handed onto a buffer of its own, this frame's rectangles are the
-        // whole of what it needs and a debt would be pixels sent across a link for nobody.
-        if self.consumed {
-            return rects.to_vec();
-        }
-        let whole = Rect::new(zgui_geom::Point::new(0, 0), self.size);
-        for held in &mut self.stale {
-            for rect in rects {
+    /// Called when the frame is composed, and not when it is copied out. A frame can be composed
+    /// and never copied: the platform held it, or no texture was free. What it wrote is then owed
+    /// with the next copy, whichever frame makes it.
+    pub fn note_written(&mut self, rects: &[Rect<i32, Device>]) {
+        for rect in rects {
+            self.uncopied.absorb(*rect);
+            for held in &mut self.stale {
                 held.absorb(*rect);
             }
         }
-        let Some(held) = self.stale.get_mut(slot) else {
-            return vec![whole];
-        };
-        let debt = if held.is_full() {
-            vec![whole]
+    }
+
+    /// Takes the rectangles the copy into `slot` has to cover, clipped to the textures.
+    ///
+    /// A rotated texture is owed everything written since it was last copied into. A consumed one
+    /// is owed everything written since the last copy into any of them. Taking the debt clears it,
+    /// because the copy that follows writes exactly those rectangles.
+    pub fn take_owed(&mut self, slot: usize) -> Vec<Rect<i32, Device>> {
+        let whole = Rect::new(zgui_geom::Point::new(0, 0), self.size);
+        let uncopied = core::mem::take(&mut self.uncopied);
+        // **A set that is read out and thrown away every frame owes nothing of its own.** Where
+        // the caller composites what it was handed onto a buffer of its own, what changed since the
+        // last copy is the whole of what it needs, and a debt would be pixels sent for nobody.
+        let owed = if self.consumed {
+            uncopied
         } else {
-            held.rects().to_vec()
+            match self.stale.get_mut(slot) {
+                Some(held) => core::mem::take(held),
+                None => DamageSet::full(),
+            }
         };
-        *held = DamageSet::<STALE>::new();
-        debt
+        if owed.is_full() {
+            return vec![whole];
+        }
+        owed.rects()
+            .iter()
+            .filter_map(|rect| rect.intersection(whole))
+            .filter(|rect| !rect.is_empty())
+            .collect()
     }
 
     /// Records that the caller reads each texture out and throws it away.
