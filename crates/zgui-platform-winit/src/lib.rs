@@ -96,3 +96,6 @@ pub use crate::waker::{ProxyWaker, UserEvent};
 
 #[cfg(target_os = "android")]
 pub mod android;
+/// iOS status bar style and software keyboard height.
+#[cfg(target_os = "ios")]
+pub mod ios;

@@ -87,6 +87,14 @@ workspace = true
 [target.'cfg(not(target_os = "android"))'.dependencies]
 arboard.workspace = true
 
+# Keyboard frame and status bar, which winit does not report or expose generically.
+[target.'cfg(target_os = "ios")'.dependencies]
+block2.workspace = true
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["NSDictionary", "NSValue"] }
+objc2-core-foundation = "0.3.2"
+objc2-ui-kit = "0.3.2"
+
 [target.'cfg(target_os = "android")'.dependencies]
 jni.workspace = true
 winit = { workspace = true, features = ["android-native-activity"] }

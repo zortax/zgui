@@ -222,6 +222,8 @@ impl PlatformCx for WinitCx<'_> {
             Arc::clone(&self.shared.waker),
         ));
         surface.place_title_buttons();
+        #[cfg(target_os = "ios")]
+        crate::ios::attach(&window, &self.shared.proxy);
         #[cfg(target_os = "macos")]
         {
             if let Some(view) = crate::macos::ns_view(&window) {

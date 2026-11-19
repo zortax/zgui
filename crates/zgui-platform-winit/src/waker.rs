@@ -39,8 +39,8 @@ pub enum UserEvent {
     /// Android is destroying the activity; the event loop must end.
     #[cfg(target_os = "android")]
     Destroyed,
-    /// Android system insets changed; read them from the host.
-    #[cfg(target_os = "android")]
+    /// System insets changed (Android host, iOS keyboard); read them again.
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     Insets,
     /// Android dark mode or font scale changed; read them from the host.
     #[cfg(target_os = "android")]

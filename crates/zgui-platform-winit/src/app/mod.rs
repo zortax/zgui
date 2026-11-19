@@ -358,6 +358,11 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
                 self.send_insets(event_loop);
                 None
             }
+            #[cfg(target_os = "ios")]
+            UserEvent::Insets => {
+                self.send_ios_insets(event_loop);
+                None
+            }
             #[cfg(target_os = "android")]
             UserEvent::Configuration => {
                 self.send_configuration(event_loop);
@@ -584,7 +589,7 @@ impl<A: AppHandler> WinitApp<A> {
 #[cfg(target_os = "ios")]
 impl<A: AppHandler> WinitApp<A> {
     /// Gives every surface its safe area: on iOS winit reports it as the inner rectangle inside
-    /// the full-screen outer one. There is no keyboard yet, so its height is zero.
+    /// the full-screen outer one; the keyboard height comes from UIKit's keyboard frame.
     fn send_ios_insets(&mut self, event_loop: &ActiveEventLoop) {
         let cx = WinitCx::new(&self.shared, event_loop);
         for surface in self.shared.all() {
@@ -607,7 +612,7 @@ impl<A: AppHandler> WinitApp<A> {
                         bottom: DevicePx(bottom),
                         left: DevicePx(left),
                     },
-                    keyboard: DevicePx(0.0),
+                    keyboard: DevicePx(crate::ios::keyboard_px(window.scale_factor())),
                 },
             );
         }
