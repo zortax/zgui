@@ -100,7 +100,7 @@ impl Shared {
     }
 
     /// Every surface that still exists.
-    #[cfg(target_os = "android")]
+    #[cfg(any(target_os = "android", target_os = "ios"))]
     pub(crate) fn all(&self) -> Vec<Arc<WinitSurface>> {
         self.surfaces.borrow().clone()
     }
