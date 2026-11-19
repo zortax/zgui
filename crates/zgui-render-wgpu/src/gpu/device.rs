@@ -285,13 +285,13 @@ fn probe(adapter: &wgpu::Adapter, device: &wgpu::Device) -> RenderCapabilities {
     let limits = device.limits();
     RenderCapabilities {
         subpixel_text: features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
-        vector_compute: downlevel
-            .flags
-            .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
-            && adapter
-                .get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm)
-                .allowed_usages
-                .contains(wgpu::TextureUsages::STORAGE_BINDING),
+        // Vello dispatches its compute stages indirectly; the iOS simulator's Metal cannot.
+        vector_compute: downlevel.flags.contains(
+            wgpu::DownlevelFlags::COMPUTE_SHADERS | wgpu::DownlevelFlags::INDIRECT_EXECUTION,
+        ) && adapter
+            .get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm)
+            .allowed_usages
+            .contains(wgpu::TextureUsages::STORAGE_BINDING),
         mutable_texture_formats: downlevel
             .flags
             .contains(wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS),
