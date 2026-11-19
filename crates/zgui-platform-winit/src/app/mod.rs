@@ -41,6 +41,8 @@ use winit::application::ApplicationHandler;
 use winit::event::StartCause;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::window::WindowId;
+#[cfg(target_os = "ios")]
+use zgui_geom::{DevicePx, Edges};
 use zgui_platform::{AppHandler, PlatformError, Surface, SurfaceEvent, WakeReason};
 
 use crate::app::window::WindowState;
@@ -267,6 +269,8 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
             self.send_insets(event_loop);
             self.send_configuration(event_loop);
         }
+        #[cfg(target_os = "ios")]
+        self.send_ios_insets(event_loop);
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
@@ -406,6 +410,8 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
         a11y::observe(Surface::id(surface.as_ref()), surface.window(), &event);
 
         let destroyed = matches!(event, winit::event::WindowEvent::Destroyed);
+        #[cfg(target_os = "ios")]
+        let resized = matches!(event, winit::event::WindowEvent::Resized(_));
         let relayout = relays_out_title_bar(&event);
         let timestamp = self.shared.clock().timestamp();
         let state = self.windows.entry(window_id).or_default();
@@ -441,6 +447,10 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
         if destroyed {
             self.shared.forget(window_id);
             self.windows.remove(&window_id);
+        }
+        #[cfg(target_os = "ios")]
+        if resized {
+            self.send_ios_insets(event_loop);
         }
         zgui_profile::latency::mark("evt.out");
     }
@@ -554,6 +564,39 @@ impl<A: AppHandler> WinitApp<A> {
                 SurfaceEvent::InsetsChanged {
                     safe_area,
                     keyboard,
+                },
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "ios")]
+impl<A: AppHandler> WinitApp<A> {
+    /// Gives every surface its safe area: on iOS winit reports it as the inner rectangle inside
+    /// the full-screen outer one. There is no keyboard yet, so its height is zero.
+    fn send_ios_insets(&mut self, event_loop: &ActiveEventLoop) {
+        let cx = WinitCx::new(&self.shared, event_loop);
+        for surface in self.shared.all() {
+            let window = surface.window();
+            let (Ok(inner), Ok(outer)) = (window.inner_position(), window.outer_position()) else {
+                continue;
+            };
+            let (size, screen) = (window.inner_size(), window.outer_size());
+            let top = (inner.y - outer.y).max(0) as f32;
+            let left = (inner.x - outer.x).max(0) as f32;
+            let bottom = (screen.height as f32 - size.height as f32 - top).max(0.0);
+            let right = (screen.width as f32 - size.width as f32 - left).max(0.0);
+            self.handler.surface_event(
+                &cx,
+                Surface::id(surface.as_ref()),
+                SurfaceEvent::InsetsChanged {
+                    safe_area: Edges {
+                        top: DevicePx(top),
+                        right: DevicePx(right),
+                        bottom: DevicePx(bottom),
+                        left: DevicePx(left),
+                    },
+                    keyboard: DevicePx(0.0),
                 },
             );
         }

@@ -117,6 +117,11 @@ impl Surface for WinitSurface {
     }
 
     fn size(&self) -> Size<DevicePx, Device> {
+        // On iOS winit's inner size is only the safe area, while the view and its Metal layer
+        // cover the whole screen; the safe area reaches the document as insets instead.
+        #[cfg(target_os = "ios")]
+        let size = self.window.outer_size();
+        #[cfg(not(target_os = "ios"))]
         let size = self.window.inner_size();
         Size::new(DevicePx(size.width as f32), DevicePx(size.height as f32))
     }
@@ -161,7 +166,11 @@ impl Surface for WinitSurface {
         // Windows paints only visible windows, and a surface stays hidden until its first frame
         // presents. Until the window is shown, the loop delivers the request itself. A window that
         // is hidden later waits for the paint that shows it again.
-        if cfg!(windows) && !self.shown.load(Ordering::Relaxed) {
+        //
+        // On iOS winit turns a request into `setNeedsDisplay`, which UIKit drops when it is made
+        // from inside `drawRect:` (where every frame runs), so no later frame would ever arrive.
+        // The loop delivers those requests itself too.
+        if cfg!(target_os = "ios") || (cfg!(windows) && !self.shown.load(Ordering::Relaxed)) {
             self.waker.redraw(self.window.id());
         } else {
             self.window.request_redraw();
