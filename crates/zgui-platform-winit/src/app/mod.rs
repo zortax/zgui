@@ -374,6 +374,17 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
             }
             UserEvent::Wake(reason) => Some(reason),
             UserEvent::A11y(event) => a11y_wake(&self.shared, event),
+            // iOS: asked again from here, outside `drawRect:`, the request is kept, and UIKit
+            // paces frames to the display. Drawing here directly would run frames back to back
+            // whenever one asks for the next, and the loop would never reach queued touches.
+            #[cfg(target_os = "ios")]
+            UserEvent::Redraw(window) => {
+                if let Some(surface) = self.shared.by_window(window) {
+                    surface.window().request_redraw();
+                }
+                None
+            }
+            #[cfg(not(target_os = "ios"))]
             UserEvent::Redraw(window) => {
                 self.window_event(
                     event_loop,

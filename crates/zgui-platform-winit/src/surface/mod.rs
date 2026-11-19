@@ -169,7 +169,7 @@ impl Surface for WinitSurface {
         //
         // On iOS winit turns a request into `setNeedsDisplay`, which UIKit drops when it is made
         // from inside `drawRect:` (where every frame runs), so no later frame would ever arrive.
-        // The loop delivers those requests itself too.
+        // The loop re-issues those requests from its own turn, where UIKit keeps them.
         if cfg!(target_os = "ios") || (cfg!(windows) && !self.shown.load(Ordering::Relaxed)) {
             self.waker.redraw(self.window.id());
         } else {
