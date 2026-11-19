@@ -25,6 +25,9 @@
 //! nothing in the measurement is paid for on the loop. That thread also ends the process, which is
 //! what makes a run a fixed length rather than something to be killed from outside.
 //!
+//! The report also states how many pixels each frame's present copied, and how many it told the
+//! compositor had changed (`copy_px_per_frame`, `damage_px_per_frame`).
+//!
 //! `ZGUI_CADENCE_BURN_US` adds that many microseconds of processor work to every frame, which is
 //! how a cadence is measured against frames that do not fit the interval.
 
@@ -126,10 +129,12 @@ fn reporting(stamps: Stamps, seconds: f64, idle: bool) {
     std::thread::spawn(move || {
         settled(&stamps, idle);
         stamps.lock().map(|mut held| held.clear()).ok();
+        let before = Present::now();
         let wall = Instant::now();
         std::thread::sleep(Duration::from_secs_f64(seconds));
         let taken = stamps.lock().map(|held| held.clone()).unwrap_or_default();
-        let _ = std::fs::write(&out, report(&taken, wall.elapsed(), idle));
+        let present = Present::now().since(before);
+        let _ = std::fs::write(&out, report(&taken, wall.elapsed(), idle, present));
         std::process::exit(0);
     });
 }
@@ -162,12 +167,39 @@ fn settled(stamps: &Stamps, idle: bool) {
     }
 }
 
+/// The pixels the presents of a span copied and reported as changed.
+#[derive(Clone, Copy)]
+struct Present {
+    /// Pixels the copy at the end of each frame wrote into the presented texture.
+    copied: u64,
+    /// Pixels each present told the compositor had changed.
+    damaged: u64,
+}
+
+impl Present {
+    /// The totals so far.
+    fn now() -> Self {
+        Self {
+            copied: zgui_profile::counter::get(zgui_profile::Counter::PresentCopyPx),
+            damaged: zgui_profile::counter::get(zgui_profile::Counter::PresentDamagePx),
+        }
+    }
+
+    /// What was added since `before`.
+    fn since(self, before: Self) -> Self {
+        Self {
+            copied: self.copied.saturating_sub(before.copied),
+            damaged: self.damaged.saturating_sub(before.damaged),
+        }
+    }
+}
+
 /// What the run saw, as one JSON object.
 ///
 /// The rate is taken between the first frame and the last rather than over the wall-clock span, so
 /// that it is the cadence of the frames that were drawn. Both are reported: the two agreeing is what
 /// says the window drew for the whole run rather than for part of it.
-fn report(stamps: &[Instant], wall: Duration, idle: bool) -> String {
+fn report(stamps: &[Instant], wall: Duration, idle: bool, present: Present) -> String {
     let mut gaps: Vec<f64> = stamps
         .windows(2)
         .map(|pair| pair[1].duration_since(pair[0]).as_secs_f64() * 1_000.0)
@@ -183,11 +215,15 @@ fn report(stamps: &[Instant], wall: Duration, idle: bool) -> String {
     } else {
         0.0
     };
+    let frames = stamps.len().max(1) as u64;
     format!(
         "{{\"idle\":{idle},\"frames\":{},\"wall_s\":{:.4},\"drawn_s\":{drawn:.4},\
-         \"fps\":{fps:.3},\"median_gap_ms\":{median:.4},\"gaps_ms\":{}}}",
+         \"fps\":{fps:.3},\"median_gap_ms\":{median:.4},\"copy_px_per_frame\":{},\
+         \"damage_px_per_frame\":{},\"gaps_ms\":{}}}",
         stamps.len(),
         wall.as_secs_f64(),
+        present.copied / frames,
+        present.damaged / frames,
         serialise(&gaps)
     )
 }
