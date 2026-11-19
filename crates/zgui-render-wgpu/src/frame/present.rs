@@ -15,7 +15,7 @@ use crate::target::swapchain::{Presentation, Presented};
 /// have somewhere to go. An injected answer that would not present skips the acquisition
 /// altogether, which is what makes a `Lost` or an `Outdated` reproducible on a surface that is
 /// perfectly healthy.
-pub fn acquire(presentation: &Presentation, injector: &mut FaultInjector) -> Presented {
+pub fn acquire(presentation: &mut Presentation, injector: &mut FaultInjector) -> Presented {
     let Some(injected) = injector.take() else {
         return presentation.acquire();
     };
@@ -31,5 +31,6 @@ pub fn acquire(presentation: &Presentation, injector: &mut FaultInjector) -> Pre
         acquisition: injected,
         surface_texture: None,
         view: None,
+        native: None,
     }
 }

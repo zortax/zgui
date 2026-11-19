@@ -402,6 +402,11 @@ counters! {
     /// owes for one that keeps its contents.
     PresentCopyPx => present_copy_px, Group::RendererSpecific;
 
+    /// Pixels a present told the compositor or the display engine had changed.
+    ///
+    /// The whole frame where the present can name no rectangle.
+    PresentDamagePx => present_damage_px, Group::RendererSpecific;
+
     /// Bytes copied to the GPU.
     BytesUploaded => bytes_uploaded, Group::RendererSpecific;
 

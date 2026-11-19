@@ -158,9 +158,12 @@ pub struct WgpuRenderer {
     ///
     /// A frame that is composed and then held or not acquired still changed the picture, so its
     /// rectangles go to the next present together with that frame's own.
-    unpresented: zgui_bits::DamageSet<{ crate::target::swapchain::STALE }>,
+    unpresented: zgui_bits::DamageSet<{ crate::target::debt::STALE }>,
     /// What the last presented frame changed, compared with the frame presented before it.
     presented_damage: Vec<Rect<i32, Device>>,
+    /// Whether every image of a swap chain this crate made is checked against the composed
+    /// target. See [`VERIFY_ENV`](crate::target::native::VERIFY_ENV).
+    verify: bool,
     /// The buffer a readback of the composed target copies through.
     ///
     /// One buffer for the life of the renderer rather than one a frame. A console reads its whole
@@ -285,6 +288,7 @@ impl WgpuRenderer {
             composed_rects: Vec::new(),
             unpresented: zgui_bits::DamageSet::full(),
             presented_damage: Vec::new(),
+            verify: crate::target::native::verify(),
             staging: crate::renderer::readback::Staging::new(),
             target,
             subpixel_order: SubpixelOrder::default(),

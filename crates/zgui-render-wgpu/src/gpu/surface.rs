@@ -1,9 +1,12 @@
 //! The surface configuration, and the only place `configure` is called.
 
+use std::sync::Arc;
+
 use zgui_geom::{Device, Size};
 
 use crate::gpu::device::Gpu;
 use crate::gpu::formats::Formats;
+use crate::target::native::{ChainConfig, NativeChain};
 use crate::target::scene_texture::{SHRINK_SLACK, size_class};
 
 /// A surface wait long enough to be visible as an application stall.
@@ -81,6 +84,12 @@ pub struct SurfaceSetup {
 /// driver listed first" and "work it out later".
 #[derive(Debug)]
 pub struct ConfiguredSurface {
+    /// The swap chain this crate made for the surface, where it made one.
+    ///
+    /// Declared before `surface`, so it is dropped first: a swap chain may not outlive the
+    /// surface it was made for. While it exists, wgpu's surface is never configured, because a
+    /// surface has at most one swap chain.
+    native: Option<NativeChain>,
     /// The surface itself.
     surface: wgpu::Surface<'static>,
     /// The configuration it currently holds.
@@ -119,7 +128,7 @@ impl ConfiguredSurface {
     /// is drawn into it. That cannot happen through the format choice itself, which is exactly why
     /// the assertion is worth making: it is the guard on everything that might later be added
     /// beside it.
-    pub fn new(gpu: &Gpu, surface: wgpu::Surface<'static>, setup: SurfaceSetup) -> Self {
+    pub fn new(gpu: &Arc<Gpu>, surface: wgpu::Surface<'static>, setup: SurfaceSetup) -> Self {
         let mut configured = Self::unconfigured(gpu, surface, setup);
         configured.apply(gpu);
         configured
@@ -135,7 +144,7 @@ impl ConfiguredSurface {
     ///
     /// Panics in a debug build for the same reason as [`ConfiguredSurface::new`].
     pub(crate) fn unconfigured(
-        gpu: &Gpu,
+        gpu: &Arc<Gpu>,
         surface: wgpu::Surface<'static>,
         setup: SurfaceSetup,
     ) -> Self {
@@ -173,7 +182,20 @@ impl ConfiguredSurface {
             alpha_mode: formats.alpha_mode,
             view_formats: formats.view_formats(),
         };
+        let native = if crate::target::native::wanted() {
+            let native = NativeChain::new(gpu, &surface);
+            if native.is_none() {
+                tracing::info!(
+                    "this backend or this surface cannot have a swap chain of the renderer's own, \
+                     so wgpu's is used"
+                );
+            }
+            native
+        } else {
+            None
+        };
         let mut configured = Self {
+            native,
             surface,
             config,
             formats,
@@ -251,7 +273,20 @@ impl ConfiguredSurface {
         }
         zgui_profile::latency::mark("cfg.in");
         let began = web_time::Instant::now();
-        self.surface.configure(gpu.device(), &self.config);
+        let chain = self.chain_config();
+        match self.native.as_mut().map(|native| native.configure(&chain)) {
+            Some(Ok(())) => {}
+            Some(Err(reason)) => {
+                tracing::warn!(
+                    %reason,
+                    "the renderer's own swap chain could not be made, so wgpu's is used"
+                );
+                // Destroyed first: a surface has at most one swap chain.
+                self.native = None;
+                self.surface.configure(gpu.device(), &self.config);
+            }
+            None => self.surface.configure(gpu.device(), &self.config),
+        }
         let elapsed = began.elapsed();
         if human_visible_wait(elapsed) {
             tracing::warn!(
@@ -270,6 +305,27 @@ impl ConfiguredSurface {
         );
         self.configured = true;
         self.reconfigure_pending = false;
+    }
+
+    /// The configuration a native chain is made for, from the one wgpu's would hold.
+    fn chain_config(&self) -> ChainConfig {
+        ChainConfig {
+            size: Size::new(self.config.width as i32, self.config.height as i32),
+            format: self.config.format,
+            view_formats: self.config.view_formats.clone(),
+            present_mode: self.config.present_mode,
+            alpha_mode: self.config.alpha_mode,
+        }
+    }
+
+    /// The swap chain this crate made for the surface, where it made one.
+    pub(crate) fn native(&mut self) -> Option<&mut NativeChain> {
+        self.native.as_mut()
+    }
+
+    /// Whether frames are presented through a swap chain this crate made.
+    pub(crate) fn is_native(&self) -> bool {
+        self.native.is_some()
     }
 
     /// The swap chain extent that holds frames of `used` pixels: `used` itself, or with cropping

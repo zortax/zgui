@@ -16,7 +16,7 @@ use crate::frame::plan::plan_segments;
 use crate::frame::present;
 use crate::gpu::timing::{GpuTimer, PassQueries, TimedWork};
 use crate::pipeline::kind::PipelineKind;
-use crate::renderer::WgpuRenderer;
+use crate::renderer::{WgpuRenderer, readback};
 use crate::target::acquire::{Acquisition, SurfaceAction};
 use crate::target::swapchain::Presentation;
 
@@ -341,6 +341,7 @@ impl Renderer for WgpuRenderer {
             draw_calls += self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.submit_frame(encoder);
+        self.verify_native(&presented);
         let acquisition = presented.acquisition;
         self.hand_over(presented);
 
@@ -374,6 +375,7 @@ impl Renderer for WgpuRenderer {
             draw_calls = self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.gpu.queue().submit([encoder.finish()]);
+        self.verify_native(&presented);
         let acquisition = presented.acquisition;
         self.hand_over(presented);
         acquisition.outcome(FrameStats {
@@ -655,7 +657,7 @@ impl WgpuRenderer {
         // which is why its damage is retired either way.
         zgui_profile::latency::mark("acq.in");
         let asked = web_time::Instant::now();
-        let presented = present::acquire(&self.presentation, &mut self.faults);
+        let presented = present::acquire(&mut self.presentation, &mut self.faults);
         // Measured around the call and nowhere else. It is the frame's slack seen from the inside:
         // how much earlier than it needed to be the frame was started.
         self.acquire_block = asked.elapsed();
@@ -722,8 +724,26 @@ impl WgpuRenderer {
         {
             notify(self.target);
         }
+        let mut response = response;
         if let Some(texture) = presented.surface_texture {
             self.gpu.queue().present(texture);
+        } else if let Some(image) = &presented.native
+            && response.presents
+        {
+            let frame = self.target.size;
+            let answer =
+                self.presentation
+                    .present_native(image.slot, frame, &self.presented_damage);
+            let after = answer.response();
+            if !after.presents {
+                // The frame is composed and its image never reached the compositor, so the next
+                // frame presents it even with nothing new to draw.
+                self.present_composed_next = true;
+                tracing::debug!(answer = answer.name(), "a present was refused");
+            }
+            response.reconfigure |= after.reconfigure;
+            response.recreate_surface |= after.recreate_surface;
+            response.force_full_damage |= after.force_full_damage;
         }
         zgui_profile::latency::mark("pres.out");
         // After the present, so the frame reaches the screen first. It does nothing unless this
@@ -764,6 +784,67 @@ impl WgpuRenderer {
         }
     }
 
+    /// Checks an image of a swap chain this crate made against the composed target, where
+    /// [`VERIFY_ENV`](crate::target::native::VERIFY_ENV) asks for it.
+    ///
+    /// Runs after the copy is submitted and before the image is given back, because nothing may
+    /// read an image the compositor holds. The readback leaves wgpu tracking the image as a copy
+    /// source, and the barrier that gives the image back expects a colour attachment, so an empty
+    /// pass over the image puts wgpu's tracker back.
+    fn verify_native(&self, presented: &crate::target::swapchain::Presented) {
+        let Some(image) = &presented.native else {
+            return;
+        };
+        if !self.verify || !image.readable || !presented.acquisition.response().presents {
+            return;
+        }
+        let size = self.target.size;
+        let shown = readback::read(&self.gpu, &image.texture, image.texture.format(), size);
+        let composed = readback::read(
+            &self.gpu,
+            self.composed.texture(),
+            self.composed.format(),
+            size,
+        );
+        'rows: for y in 0..size.height {
+            for x in 0..size.width {
+                let (left, right) = (shown.rgba(x, y), composed.rgba(x, y));
+                if left != right {
+                    tracing::error!(
+                        x,
+                        y,
+                        shown = ?left,
+                        composed = ?right,
+                        slot = image.slot,
+                        "a presented image differs from the composed target"
+                    );
+                    break 'rows;
+                }
+            }
+        }
+        let view = image
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.frame_encoder();
+        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("zgui.present.verified"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        }));
+        self.gpu.queue().submit([encoder.finish()]);
+    }
+
     /// How many pixels `damage` redrew of the composed target.
     fn redrawn(damage: &DamageSet, composed: &crate::target::scene_texture::SceneTexture) -> u64 {
         damage::rects(damage, composed.used())
@@ -796,6 +877,14 @@ impl WgpuRenderer {
         match &mut self.presentation {
             Presentation::Supplied(supplied) => supplied.take_owed(supplied.selected()),
             Presentation::Surface(_) | Presentation::Offscreen(_) => {
+                // An image of a swap chain this crate made keeps what it held, so it is owed only
+                // what changed since it was last copied into.
+                if let Some(image) = &presented.native {
+                    let frame = self.target.size;
+                    if let Some(owed) = self.presentation.take_owed_native(image.slot, frame) {
+                        return owed;
+                    }
+                }
                 let used = self.composed.used();
                 // A cropping swap chain can be larger than the frame. Only the frame's extent is
                 // shown, so only that is copied, and nothing reads past the composed target.
