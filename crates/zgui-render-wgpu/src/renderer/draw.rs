@@ -844,6 +844,7 @@ impl WgpuRenderer {
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.composed_binding, &[]);
         let mut drawn = 0;
+        let mut copied = 0;
         for rect in scissors {
             let (width, height) = (
                 rect.size.width.max(0) as u32,
@@ -860,7 +861,9 @@ impl WgpuRenderer {
             );
             pass.draw(0..4, 0..1);
             drawn += 1;
+            copied += u64::from(width) * u64::from(height);
         }
+        counter::add(Counter::PresentCopyPx, copied);
         drawn
     }
 }
