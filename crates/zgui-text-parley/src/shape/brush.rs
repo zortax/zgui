@@ -1,6 +1,6 @@
 //! The brush a shaped run carries, in the shape the engine requires.
 
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::Brush;
 
 /// A paint slot, wrapped so that it can travel through a shaped layout.

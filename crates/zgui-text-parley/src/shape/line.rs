@@ -143,7 +143,7 @@ pub(crate) fn shape(
     // slot from whoever draws it.
     let lowered = LoweredStyle::of(
         &text_style(request, settings),
-        zgui_scene::PaintSlot(0),
+        zgui_space::PaintSlot(0),
         CssPx::ZERO,
     );
     // A scale of one, because the size is already in device pixels.

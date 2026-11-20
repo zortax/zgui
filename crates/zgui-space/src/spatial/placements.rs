@@ -17,7 +17,7 @@
 //!
 //! ```
 //! use zgui_geom::Matrix4;
-//! use zgui_scene::{OwnSpace, Placements, PropertyOwner, SpatialTree};
+//! use zgui_space::{OwnSpace, Placements, PropertyOwner, SpatialTree};
 //!
 //! let mut tree = SpatialTree::with_viewport();
 //! let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -178,7 +178,7 @@ impl Placements {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{OwnSpace, Placements, PropertyOwner, SpatialTree};
+    /// use zgui_space::{OwnSpace, Placements, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
@@ -281,7 +281,7 @@ impl Placements {
     }
 
     /// Whether `other` holds the same occupant and the same matrix bits in every slot.
-    pub(crate) fn same_as(&self, other: &Self) -> bool {
+    pub fn same_as(&self, other: &Self) -> bool {
         let bits = |matrix: &Matrix4| matrix.columns.map(|column| column.map(f32::to_bits));
         self.slots.len() == other.slots.len()
             && self.slots.iter().zip(&other.slots).all(|(left, right)| {
@@ -315,7 +315,7 @@ impl Placements {
     ///
     /// ```
     /// use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
-    /// use zgui_scene::{OwnSpace, Placements, PropertyOwner, SpatialTree};
+    /// use zgui_space::{OwnSpace, Placements, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");

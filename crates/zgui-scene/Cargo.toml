@@ -19,12 +19,12 @@ kurbo.workspace = true
 peniko.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
-zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 
 [dev-dependencies]
 proptest.workspace = true

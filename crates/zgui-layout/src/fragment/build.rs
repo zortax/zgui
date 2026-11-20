@@ -22,7 +22,7 @@
 
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Edges, Point, Rect, Size};
-use zgui_scene::{
+use zgui_space::{
     ClipId, ClipTable, OwnSpace, PropertyOwner, ScrollFrameId, SpatialId, SpatialTree,
     StackingContextId,
 };
@@ -102,9 +102,9 @@ impl Descent {
     /// The state a document's root box is composed against.
     ///
     /// `spatial` is the document's root space. The viewport rectangle starts at the poison offset,
-    /// which is zero outside the poison test mode — see [`zgui_scene::spatial::poison`].
+    /// which is zero outside the poison test mode — see [`zgui_space::spatial::poison`].
     pub(crate) fn root(viewport: Size<DevicePx, Device>, spatial: SpatialId) -> Self {
-        let poison = DevicePx(zgui_scene::spatial::poison::origin());
+        let poison = DevicePx(zgui_space::spatial::poison::origin());
         let viewport = Rect::new(Point::new(poison, poison), viewport);
         Self {
             layout: (0.0, 0.0),
@@ -243,8 +243,8 @@ pub struct Tables<'a> {
     ///
     /// Read where a fragment's old ink is put on the device. A coordinate system these do not
     /// resolve is resolved in [`Tables::spatial`] instead, which is the answer for a caller that has
-    /// published nothing yet: [`Placements::EMPTY`](zgui_scene::Placements::EMPTY).
-    pub drawn: &'a zgui_scene::Placements,
+    /// published nothing yet: [`Placements::EMPTY`](zgui_space::Placements::EMPTY).
+    pub drawn: &'a zgui_space::Placements,
     /// The two numbers no style carries.
     pub device: DeviceStyle,
     /// Where each scroll container is scrolled to.
@@ -356,14 +356,14 @@ pub(crate) fn place(
     // A sticky box with nothing scrollable above it is held still against the window, which is a
     // scrollable region without being a box; without that, a box whose stickiness has no named port
     // would answer that it moves with everything around it, which is the one thing sticky is not.
-    let sticky_port = is_sticky.then(|| from.scroll.unwrap_or(zgui_scene::ScrollFrameId::VIEWPORT));
+    let sticky_port = is_sticky.then(|| from.scroll.unwrap_or(zgui_space::ScrollFrameId::VIEWPORT));
     let own_space = OwnSpace::of(own_matrix, sticky_port, fixed);
     let space = tables
         .spatial
         .space_of(parent_spatial, PropertyOwner::of(key), own_space);
     let transform = Some(space);
     let transform_hash = {
-        use zgui_scene::Content;
+        use zgui_space::Content;
         matrix
             .unwrap_or(zgui_geom::Matrix4::IDENTITY)
             .content_hash()

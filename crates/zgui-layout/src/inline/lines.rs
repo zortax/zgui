@@ -220,7 +220,7 @@ mod tests {
         let runs = vec![StyledRun {
             text: 5..9,
             style: Arc::new(TextStyle::initial()),
-            brush: zgui_scene::PaintSlot(0),
+            brush: zgui_space::PaintSlot(0),
         }];
         let extents = vec![RunExtents {
             line: Extents {
@@ -252,7 +252,7 @@ mod tests {
         let runs = vec![StyledRun {
             text: 0..5,
             style: Arc::new(TextStyle::initial()),
-            brush: zgui_scene::PaintSlot(0),
+            brush: zgui_space::PaintSlot(0),
         }];
         // A 10 px line height on a face 12 above and 4 below.
         let extents = vec![RunExtents {

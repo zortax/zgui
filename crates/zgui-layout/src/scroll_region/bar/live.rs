@@ -10,7 +10,7 @@
 
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point, Rect};
-use zgui_scene::SpatialTree;
+use zgui_space::SpatialTree;
 
 use crate::axis::Axis;
 use crate::fragment::{FragmentKind, ScrollbarPart};

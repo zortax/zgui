@@ -9,7 +9,7 @@
 //! before it can remove it.
 
 use zgui_arena::SlotVec;
-use zgui_scene::SpatialId;
+use zgui_space::SpatialId;
 
 use crate::fragment::FragKey;
 

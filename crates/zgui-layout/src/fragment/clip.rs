@@ -15,7 +15,7 @@ use zgui_css::values::border::BorderCornerRadiusValue;
 use zgui_css::values::length::{LengthPercentage, evaluate_at};
 use zgui_css::values::size::OverflowValue;
 use zgui_geom::{Corners, CssPx, Device, DevicePx, Edges, Rect, Size, Vec2};
-use zgui_scene::{ClipId, ClipLink, ClipTable};
+use zgui_space::{ClipId, ClipLink, ClipTable};
 
 use crate::fragment::custom_properties::CustomProperties;
 
@@ -64,8 +64,8 @@ pub fn chain_for_children(
     border: Edges<DevicePx>,
     scale: f32,
     shift: Size<DevicePx, Device>,
-    space: zgui_scene::SpatialId,
-    owner: zgui_scene::PropertyOwner,
+    space: zgui_space::SpatialId,
+    owner: zgui_space::PropertyOwner,
 ) -> ClipId {
     if !clips_children(style) {
         return parent;
@@ -151,7 +151,7 @@ fn component(value: &LengthPercentage, basis: f32, scale: f32) -> f32 {
 mod tests {
     use zgui_css::StyleDraft;
     use zgui_geom::{Device, DevicePx, Edges, Point, Rect, Size};
-    use zgui_scene::{ClipId, ClipTable};
+    use zgui_space::{ClipId, ClipTable};
 
     use super::{CustomProperties, chain_for_children, clips_children, inner_radii};
 
@@ -167,8 +167,8 @@ mod tests {
     }
 
     /// An owner to name chains after.
-    fn owner(word: u64) -> zgui_scene::PropertyOwner {
-        zgui_scene::PropertyOwner::new(word).expect("a non-zero word names an owner")
+    fn owner(word: u64) -> zgui_space::PropertyOwner {
+        zgui_space::PropertyOwner::new(word).expect("a non-zero word names an owner")
     }
 
     #[test]
@@ -185,7 +185,7 @@ mod tests {
             Edges::ZERO,
             1.0,
             UNMOVED,
-            zgui_scene::SpatialId::VIEWPORT,
+            zgui_space::SpatialId::VIEWPORT,
             owner(1),
         );
         assert_eq!(chain, ClipId::ROOT);
@@ -208,7 +208,7 @@ mod tests {
             Edges::ZERO,
             1.0,
             UNMOVED,
-            zgui_scene::SpatialId::VIEWPORT,
+            zgui_space::SpatialId::VIEWPORT,
             owner(1),
         );
         assert_eq!(clips.len(), 2, "the root and the box's own link");
@@ -225,7 +225,7 @@ mod tests {
             Edges::ZERO,
             1.0,
             by,
-            zgui_scene::SpatialId::VIEWPORT,
+            zgui_space::SpatialId::VIEWPORT,
             owner(1),
         );
         assert_eq!(again, first, "the same clipping box is the same chain");
@@ -252,7 +252,7 @@ mod tests {
             Edges::ZERO,
             1.0,
             UNMOVED,
-            zgui_scene::SpatialId::VIEWPORT,
+            zgui_space::SpatialId::VIEWPORT,
             owner(1),
         );
 
@@ -270,7 +270,7 @@ mod tests {
             Edges::ZERO,
             1.0,
             UNMOVED,
-            zgui_scene::SpatialId::VIEWPORT,
+            zgui_space::SpatialId::VIEWPORT,
             owner(1),
         );
         assert_eq!(again, first, "the same clipping box is the same chain");

@@ -13,4 +13,4 @@
 /// releases a slot only when no element is drawn through it and no key resolves to it. The brush is
 /// part of the paragraph key, so a cached result that names a released slot serves only a context
 /// that names the same slot again.
-pub type Brush = zgui_scene::PaintSlot;
+pub type Brush = zgui_space::PaintSlot;

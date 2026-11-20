@@ -72,7 +72,7 @@ struct Entry<V> {
 /// nothing refers to and this frame did not touch.
 ///
 /// ```
-/// use zgui_scene::{ClipId, Table};
+/// use zgui_space::{ClipId, Table};
 /// use zgui_geom::Matrix4;
 ///
 /// let mut table: Table<ClipId, Matrix4> = Table::new();

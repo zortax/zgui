@@ -26,7 +26,7 @@ use zgui_bits::{DamageSet, Dirty};
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::ClipId;
+use zgui_space::ClipId;
 
 use crate::fragment::build::{Descent, Placed, Tables};
 use crate::fragment::hit::{HitIndex, HitOrder};
@@ -117,7 +117,7 @@ pub fn rebuild_in(
     // emit time, which is after this walk has already released and re-established.
     tables.spatial.recycle();
     // The poison offset is a whole number, so rounding against it rounds as at the origin.
-    let poison = zgui_scene::spatial::poison::origin();
+    let poison = zgui_space::spatial::poison::origin();
     let seed = crate::round::snap::seed(store, root);
     let seed = (seed.0 + poison, seed.1 + poison);
     let descent = Descent {
@@ -135,7 +135,7 @@ pub fn rebuild_in(
     // A box that painted nothing leaves nothing behind of its own: the pieces below it left with
     // it and are in this list too. Its subtree's rectangle would add only what lay between them —
     // for the band an overlay is mounted on, the whole window.
-    let vacated: Vec<(Rect<DevicePx, Device>, zgui_scene::SpatialId)> = store
+    let vacated: Vec<(Rect<DevicePx, Device>, zgui_space::SpatialId)> = store
         .retired_fragments()
         .iter()
         .filter_map(|frag| store.fragment(*frag))
@@ -235,7 +235,7 @@ pub fn rebuild_in(
     // and must not have it taken away again; and given back rather than left, because a name that is
     // never returned is a slot in the dense buffer that is never reused.
     for gone in store.drain_retired_boxes() {
-        let owner = zgui_scene::PropertyOwner::of(gone);
+        let owner = zgui_space::PropertyOwner::of(gone);
         tables.spatial.release(owner);
         tables.spatial.release(owner.content());
         if store
@@ -276,7 +276,7 @@ pub fn rebuild_in(
 #[derive(Clone, Copy, Debug)]
 struct Anchors {
     /// The document's root space.
-    root: zgui_scene::SpatialId,
+    root: zgui_space::SpatialId,
     /// What the root space resolves to in the tree this walk writes, when that is not the
     /// identity.
     now: Option<zgui_geom::Matrix4>,
@@ -287,7 +287,7 @@ struct Anchors {
 
 impl Anchors {
     /// The answers for `root`.
-    fn of(tables: &Tables<'_>, root: zgui_scene::SpatialId) -> Self {
+    fn of(tables: &Tables<'_>, root: zgui_space::SpatialId) -> Self {
         let now = tables.spatial.resolve(root);
         let before = tables.drawn.get(root).copied().or(now);
         let moving = |matrix: Option<zgui_geom::Matrix4>| {
@@ -471,7 +471,7 @@ impl Admitted {
 #[derive(Clone, Copy, Debug)]
 struct Held {
     /// The coordinate system its own content was drawn in.
-    transform: Option<zgui_scene::SpatialId>,
+    transform: Option<zgui_space::SpatialId>,
     /// A fingerprint of what that system resolved to.
     transform_hash: u64,
     /// Its flags.
@@ -481,7 +481,7 @@ struct Held {
     /// Its padding box, which is a scroll container's port.
     padding_box: Rect<DevicePx, Device>,
     /// The coordinate system its ink was measured in.
-    anchor: zgui_scene::SpatialId,
+    anchor: zgui_space::SpatialId,
 }
 
 impl Held {
@@ -502,7 +502,7 @@ impl Held {
 #[derive(Clone, Copy, Debug)]
 struct ContentSpace {
     /// Its name.
-    id: zgui_scene::SpatialId,
+    id: zgui_space::SpatialId,
     /// How far its matrix moved since the last walk, when it held one then and it moved.
     moved: Option<(f32, f32)>,
 }
@@ -528,7 +528,7 @@ struct Folded {
     ///
     /// The anchor the box above hands its children, except for a fixed box inside a content
     /// space: it measures its ink where it hangs from.
-    anchor: Option<zgui_scene::SpatialId>,
+    anchor: Option<zgui_space::SpatialId>,
     /// The [`FragmentFlags::BOUND`] flags of the subtree.
     bound: FragmentFlags,
 }
@@ -665,10 +665,10 @@ struct Pass<'a, 'b, D: FrameDirty> {
 #[derive(Clone, Copy, Debug)]
 struct Resolved {
     /// The coordinate system.
-    id: zgui_scene::SpatialId,
-    /// [`PropertyTree::writes`](zgui_scene::PropertyTree::writes) when it was resolved.
+    id: zgui_space::SpatialId,
+    /// [`PropertyTree::writes`](zgui_space::PropertyTree::writes) when it was resolved.
     stamp: u64,
-    /// What [`SpatialTree::resolve`](zgui_scene::SpatialTree::resolve) gave.
+    /// What [`SpatialTree::resolve`](zgui_space::SpatialTree::resolve) gave.
     matrix: Option<zgui_geom::Matrix4>,
 }
 
@@ -710,7 +710,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     fn device_now(
         &self,
         rect: Rect<DevicePx, Device>,
-        anchor: zgui_scene::SpatialId,
+        anchor: zgui_space::SpatialId,
     ) -> Rect<DevicePx, Device> {
         if anchor == self.anchors.root {
             return through(self.anchors.now, rect);
@@ -720,11 +720,11 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
 
     /// What `id` resolves to in the tree this walk writes.
     ///
-    /// The answer [`SpatialTree::resolve`](zgui_scene::SpatialTree::resolve) gives, in every bit.
+    /// The answer [`SpatialTree::resolve`](zgui_space::SpatialTree::resolve) gives, in every bit.
     /// The last two answers are kept under the tree's
-    /// [write stamp](zgui_scene::PropertyTree::writes): the rows of one content space name the
+    /// [write stamp](zgui_space::PropertyTree::writes): the rows of one content space name the
     /// same anchor, and their clip chains the space above it, so each is resolved once.
-    fn resolve(&self, id: zgui_scene::SpatialId) -> Option<zgui_geom::Matrix4> {
+    fn resolve(&self, id: zgui_space::SpatialId) -> Option<zgui_geom::Matrix4> {
         let spatial = &*self.tables.spatial;
         let stamp = spatial.writes();
         let [last, before] = &self.resolved;
@@ -757,7 +757,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     fn device_before(
         &self,
         rect: Rect<DevicePx, Device>,
-        anchor: zgui_scene::SpatialId,
+        anchor: zgui_space::SpatialId,
     ) -> Rect<DevicePx, Device> {
         if anchor == self.anchors.root {
             return through(self.anchors.before, rect);
@@ -1142,8 +1142,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     fn reanchor(
         &self,
         rect: Rect<DevicePx, Device>,
-        from: zgui_scene::SpatialId,
-        to: zgui_scene::SpatialId,
+        from: zgui_space::SpatialId,
+        to: zgui_space::SpatialId,
     ) -> Rect<DevicePx, Device> {
         if rect.is_empty() || from == to {
             return rect;
@@ -1181,7 +1181,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         previous: Option<Held>,
         own: Dirty,
     ) -> Option<ContentSpace> {
-        let owner = zgui_scene::PropertyOwner::of(key).content();
+        let owner = zgui_space::PropertyOwner::of(key).content();
         let held = previous.is_some_and(|held| held.flags.contains(FragmentFlags::SCROLLS_CONTENT));
         let wanted = self.refused != Some(key)
             && placed.scrolls
@@ -1205,10 +1205,10 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             .map(|node| node.local);
         let id = spatial.establish(
             owner,
-            zgui_scene::SpatialNode {
+            zgui_space::SpatialNode {
                 parent: Some(placed.descent.spatial),
                 local,
-                anchoring: zgui_scene::Anchoring::Content,
+                anchoring: zgui_space::Anchoring::Content,
             },
         );
         // How far the content moved since the space was last written, read off the two matrices.
@@ -1775,7 +1775,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 line_box.ink,
                 scale,
             );
-            let hash = zgui_scene::ContentHash::new()
+            let hash = zgui_space::ContentHash::new()
                 .u32(slice.box_.index())
                 .f32(part.origin.x.0 - rect.origin.x.0)
                 .f32(part.origin.y.0 - rect.origin.y.0)

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use zgui_geom::CssPx;
 use zgui_interned::Ident;
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{FontSource, ParagraphShaper};
 use zgui_text_parley::{
     Controls, FontFeature, FontSystem, FontSystemOptions, FontVariation, LineRequest, LineSettings,

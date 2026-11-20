@@ -6,7 +6,7 @@
 //! text. A chain of more than two rounded links therefore also reports how many tests its
 //! resolution applies, and how many that change pixels it drops.
 
-use zgui_scene::{ClipId, ClipLink, ClipTable, MaskSource};
+use zgui_space::{ClipId, ClipLink, ClipTable, MaskSource};
 
 use crate::text::number::{all_zero, list, rect};
 use crate::transcript::tile;
@@ -95,7 +95,7 @@ pub fn link(link: &ClipLink) -> String {
 #[cfg(test)]
 mod tests {
     use zgui_geom::{Corners, DevicePx, Point, Rect, Size, Vec2};
-    use zgui_scene::{ClipId, ClipLink, ClipTable};
+    use zgui_space::{ClipId, ClipLink, ClipTable};
 
     use super::chain;
 
@@ -136,10 +136,10 @@ mod tests {
             id = table.push(
                 id,
                 ClipLink::RoundedRect {
-                    shape: zgui_scene::CornerShape::ROUND,
+                    shape: zgui_space::CornerShape::ROUND,
                     rect: bounds(0.0, 0.0, 100.0 - step as f32, 100.0),
                     radii: Corners::uniform(radius),
-                    space: zgui_scene::SpatialId::VIEWPORT,
+                    space: zgui_space::SpatialId::VIEWPORT,
                 },
             );
         }

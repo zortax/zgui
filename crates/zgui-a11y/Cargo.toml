@@ -36,7 +36,7 @@ zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 # so a rectangle sent to a consumer outside this process is only meaningful with the matrix that
 # space resolved to — and a name for a space does not change when that matrix does, which is what
 # makes a published rectangle go stale with nothing having touched the element.
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
 # The interchange vocabulary itself. Every type crossing this crate's outward edge is one of

@@ -55,7 +55,7 @@ fn measure(
     fonts: &mut parley::FontContext,
     scratch: &mut parley::LayoutContext<SlotBrush>,
 ) -> StrutMetrics {
-    let lowered = LoweredStyle::of(style, zgui_scene::PaintSlot(0), CssPx::ZERO);
+    let lowered = LoweredStyle::of(style, zgui_space::PaintSlot(0), CssPx::ZERO);
     let mut builder = scratch.ranged_builder(fonts, PROBE, 1.0, true);
     lowered.push_default(&mut builder);
     let mut layout: parley::Layout<SlotBrush> = builder.build(PROBE);

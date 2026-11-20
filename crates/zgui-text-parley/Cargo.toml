@@ -18,7 +18,7 @@ zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 

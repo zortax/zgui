@@ -16,7 +16,8 @@ use zgui_dom::side::{AnimOverride, BoxKey};
 use zgui_geom::{DevicePx, Edges};
 use zgui_layout::fragment::diff::pixels;
 use zgui_paint::OwnedPaints;
-use zgui_scene::{PaintRewrite, PropertyOwner};
+use zgui_scene::PaintRewrite;
+use zgui_space::PropertyOwner;
 
 use crate::window::anim::place::Writing;
 

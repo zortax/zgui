@@ -2,7 +2,7 @@
 
 use zgui_dom::NodeKey;
 use zgui_geom::{Corners, Device, DevicePx, Rect, Vec2};
-use zgui_scene::{ClipId, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::fragment::FragKey;
 use crate::fragment::hit::pointer_events::PointerEvents;

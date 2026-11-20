@@ -24,7 +24,7 @@ const KAPPA: f64 = 0.552_284_749_830_793_6;
 ///
 /// ```
 /// use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-/// use zgui_scene::clip::path::rounded_rect;
+/// use zgui_space::clip::path::rounded_rect;
 ///
 /// let rect: Rect<DevicePx, Device> = Rect::new(
 ///     Point::new(DevicePx(0.0), DevicePx(0.0)),

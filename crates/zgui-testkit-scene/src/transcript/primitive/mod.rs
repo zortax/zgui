@@ -13,7 +13,8 @@ pub mod style;
 pub mod vector;
 
 use zgui_geom::Matrix4;
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_scene::Scene;
+use zgui_space::{ClipId, SpatialId};
 
 use crate::text::number::list;
 use crate::transcript::clip;

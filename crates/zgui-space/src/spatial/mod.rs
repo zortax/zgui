@@ -28,7 +28,7 @@
 //! ```
 //! use zgui_arena::DomainId;
 //! use zgui_geom::Matrix4;
-//! use zgui_scene::{Anchoring, OwnSpace, PropertyOwner, SpatialTree};
+//! use zgui_space::{Anchoring, OwnSpace, PropertyOwner, SpatialTree};
 //!
 //! let mut tree = SpatialTree::new(DomainId::FIRST);
 //! let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");

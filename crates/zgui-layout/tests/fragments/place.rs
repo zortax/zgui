@@ -54,10 +54,10 @@ fn a_scroll_container_clips_its_descendants_and_nothing_above_it() {
     assert!(port_fragment.flags.contains(FragmentFlags::CLIPS_CHILDREN));
     assert_eq!(
         port_fragment.clip,
-        zgui_scene::ClipId::ROOT,
+        zgui_space::ClipId::ROOT,
         "a box is not clipped by itself"
     );
-    assert_ne!(row_fragment.clip, zgui_scene::ClipId::ROOT);
+    assert_ne!(row_fragment.clip, zgui_space::ClipId::ROOT);
     let resolved = frame.clips.resolve(row_fragment.clip);
     assert_eq!(
         resolved.aabb[3], 100.0,

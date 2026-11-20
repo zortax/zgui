@@ -93,7 +93,7 @@ impl ShapedRun<'_> {
     /// destination.
     ///
     /// ```
-    /// use zgui_scene::PaintSlot;
+    /// use zgui_space::PaintSlot;
     /// use zgui_text::{FaceId, RasterStyle, ShapedRun, VariationInstance};
     ///
     /// let run = ShapedRun {
@@ -158,7 +158,7 @@ impl ShapedRun<'_> {
     /// is never drawn at.
     ///
     /// ```
-    /// use zgui_scene::PaintSlot;
+    /// use zgui_space::PaintSlot;
     /// use zgui_text::{
     ///     FaceId, RasterStyle, ShapedGlyph, ShapedRun, SubpixelOffset, VariationInstance,
     /// };
@@ -234,7 +234,7 @@ mod tests {
             synthetic_bold: 0.0,
             synthetic_slant: 0.0,
             has_color: false,
-            brush: zgui_scene::PaintSlot(0),
+            brush: zgui_space::PaintSlot(0),
             glyphs: &[],
             text_start: 0,
         }

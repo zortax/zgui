@@ -117,7 +117,7 @@ pub fn clip_chains(laid: &crate::zdoc::build::Laid) -> String {
     if let Some(root) = laid.store.root() {
         collect_clips(&laid.store, root, &mut seen);
     }
-    seen.sort_by_key(|id: &zgui_scene::ClipId| id.0);
+    seen.sort_by_key(|id: &zgui_space::ClipId| id.0);
     seen.dedup();
     for id in seen {
         let _ = writeln!(out, "clip {} = {:?}", id.0, laid.tables.clips.links(id));
@@ -126,7 +126,7 @@ pub fn clip_chains(laid: &crate::zdoc::build::Laid) -> String {
 }
 
 /// Every clip chain named by a box's fragments or by anything below it.
-fn collect_clips(store: &LayoutStore, key: BoxKey, out: &mut Vec<zgui_scene::ClipId>) {
+fn collect_clips(store: &LayoutStore, key: BoxKey, out: &mut Vec<zgui_space::ClipId>) {
     let Some(node) = store.get(key) else {
         return;
     };
@@ -217,7 +217,7 @@ fn write_fragment(
             rect(fragment.subtree_ink),
             fragment.flags.bits(),
             fragment.clip.0,
-            fragment.transform.map(zgui_scene::SpatialId::index),
+            fragment.transform.map(zgui_space::SpatialId::index),
             fragment.stacking().map(|id| id.0),
             fragment.scroll().map(|id| id.0),
             fragment.subtree_disjoint,

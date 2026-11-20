@@ -1,7 +1,8 @@
 //! The rectangle primitives: quads, shaded quads, shadows and decoration lines, and the marks
 //! that draw recognised shapes.
 
-use zgui_scene::{ClipId, Decoration, MarkFlags, MarkItem, Quad, Scene, ShadedQuad, Shadow};
+use zgui_scene::{Decoration, MarkFlags, MarkItem, Quad, Scene, ShadedQuad, Shadow};
+use zgui_space::ClipId;
 
 use crate::text::number::{all_zero, float, list, rect};
 use crate::transcript::paint;

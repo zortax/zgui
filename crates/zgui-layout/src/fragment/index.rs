@@ -46,7 +46,7 @@ pub fn ink_of(store: &LayoutStore, node: NodeKey) -> Rect<DevicePx, Device> {
 pub fn device_ink_of(
     store: &LayoutStore,
     node: NodeKey,
-    placements: &zgui_scene::Placements,
+    placements: &zgui_space::Placements,
 ) -> Rect<DevicePx, Device> {
     let mut held: Option<Rect<DevicePx, Device>> = None;
     for frag in store.fragments_of(node) {

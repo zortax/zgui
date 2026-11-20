@@ -43,7 +43,7 @@ mod settle;
 
 use zgui_geom::{Device, DevicePx, Point, Rect};
 use zgui_profile::{Counter, counter};
-use zgui_scene::SpatialId;
+use zgui_space::SpatialId;
 
 use crate::fragment::FragKey;
 use crate::fragment::hit::rtree::home::{Home, Homes};

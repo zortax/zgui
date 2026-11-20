@@ -198,7 +198,7 @@ fn line_height(height: CssLineHeight) -> LineHeight {
 #[cfg(test)]
 mod tests {
     use parley::style::StyleProperty;
-    use zgui_scene::PaintSlot;
+    use zgui_space::PaintSlot;
     use zgui_text_style::{OpticalSizing, TextStyle, tag, variant};
 
     use super::LoweredStyle;

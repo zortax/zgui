@@ -25,7 +25,8 @@ use zgui_dom::NodeKey;
 use zgui_dom::side::{AnimOverride, AnimPlacement};
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::Painter;
-use zgui_scene::{PropertyOwner, Scene, SpatialId};
+use zgui_scene::Scene;
+use zgui_space::{PropertyOwner, SpatialId};
 
 /// Moves boxes by writing the display list's coordinate systems, and recolours them by writing
 /// the paint slots they own.

@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::{Point, Rect, Size};
-use zgui_scene::{ClipLink, PaintRef, Quad, Scene};
+use zgui_scene::{PaintRef, Quad, Scene};
+use zgui_space::ClipLink;
 use zgui_testkit_scene::dump::golden;
 use zgui_testkit_scene::transcript;
 

@@ -26,9 +26,9 @@ zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 # The window's own vocabulary: what a person did, and in which units the machine said it.
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 # Answering "what is under this point" needs the clip chains and the transforms the fragments were
-# measured against, and both of those are the scene's tables — the same identifiers the hit index
+# measured against, and both of those are zgui-space's tables — the same identifiers the hit index
 # already carries, so naming them here is naming what the index answers with.
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
 rustc-hash.workspace = true

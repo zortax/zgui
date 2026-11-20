@@ -9,7 +9,7 @@ use std::sync::Arc;
 use zgui_edit::LineMap;
 use zgui_edit::select::Affinity;
 use zgui_geom::{Css, CssPx, Point};
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_testkit_scene::MonoShaper;
 use zgui_text::{
     BreakRequest, BrokenParagraph, ParagraphContent, ParagraphShaper, ShapedParagraph, StyledRun,

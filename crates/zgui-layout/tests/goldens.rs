@@ -237,7 +237,7 @@ impl TreeDump for InlineLines {
 
 /// Renders every inline formatting context in `store`, line by line.
 fn inline_text(store: &zgui_layout::tree::store::LayoutStore, frame: &Frame) -> String {
-    let placements = zgui_scene::Placements::of(&frame.spatial);
+    let placements = zgui_space::Placements::of(&frame.spatial);
     let mut out = String::new();
     let mut stack = vec![store.root().expect("a root")];
     let mut contexts = Vec::new();

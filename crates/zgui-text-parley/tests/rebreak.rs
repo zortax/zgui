@@ -18,7 +18,7 @@ use smallvec::SmallVec;
 use zgui_geom::{CssPx, Point, Size};
 use zgui_profile::counter::non_vacuity::{Scenario, assert_non_vacuous};
 use zgui_profile::{Counter, counter};
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{
     BreakRequest, BrokenParagraph, InlineBoxGeometry, InlineBoxPlacement, LineBand, LineBands,
     LineGeometry, ParagraphContent, ParagraphShaper, ShapedParagraph, StyledRun, TextGeometry,

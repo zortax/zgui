@@ -27,7 +27,7 @@
 
 mod support;
 
-use zgui_scene::SpatialId;
+use zgui_space::SpatialId;
 use zgui_view::{IntoView, View};
 
 /// Two subtrees that each establish a coordinate system, shown one at a time.

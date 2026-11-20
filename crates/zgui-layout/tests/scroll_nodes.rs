@@ -20,7 +20,7 @@ use zgui_layout::fragment::diff::{FrameDirty, RigidMoves};
 use zgui_layout::fragment::transform::placed::onto_device;
 use zgui_layout::{FragmentFlags, LayoutStore};
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
-use zgui_scene::Placements;
+use zgui_space::Placements;
 
 /// The counter block is process-wide, so every case runs alone.
 fn exclusive() -> MutexGuard<'static, ()> {
@@ -993,7 +993,7 @@ fn a_new_port_with_a_fixed_box_in_a_transformed_row_takes_no_content_space() {
     assert!(
         frame
             .spatial
-            .of(zgui_scene::PropertyOwner::of(key).content())
+            .of(zgui_space::PropertyOwner::of(key).content())
             .is_none(),
         "the new port kept the content space it gave back"
     );

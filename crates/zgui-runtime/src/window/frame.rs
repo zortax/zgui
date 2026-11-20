@@ -1217,7 +1217,7 @@ impl Window {
         // for a pass over the records or a large batch. Until then such a paragraph is an old
         // one like any other: the brush is part of its key, so a later claim of the slot that
         // finds it draws it through that claim's colour.
-        let dropping: &[zgui_scene::PaintSlot] =
+        let dropping: &[zgui_space::PaintSlot] =
             if records || released.len() as u64 >= super::brushes::SWEEP_AFTER_DROPPED {
                 &released
             } else {

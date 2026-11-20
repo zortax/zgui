@@ -14,7 +14,7 @@ use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 use zgui_geom::CssPx;
 use zgui_profile::{Counter, counter};
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{
     BreakRequest, BrokenParagraph, InlineBoxGeometry, LineBand, LineBands, ParagraphCache,
     ParagraphContent, ParagraphShaper, ShapedParagraph, StyledRun, TextMap, lay_out,

@@ -293,7 +293,7 @@ impl ShapedRun<'_> {
     /// How this run's glyphs reach the screen.
     ///
     /// ```
-    /// use zgui_scene::PaintSlot;
+    /// use zgui_space::PaintSlot;
     /// use zgui_text::{FaceId, RasterPath, RunSurface, ShapedRun, VariationInstance};
     ///
     /// let run = ShapedRun {

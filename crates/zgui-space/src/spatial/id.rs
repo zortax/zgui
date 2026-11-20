@@ -24,7 +24,7 @@ pub const SPATIAL_DOMAIN: DomainId = DomainId::new(DocumentId::FIRST, ArenaKind:
 /// ```
 /// use zgui_arena::DomainId;
 /// use zgui_geom::Matrix4;
-/// use zgui_scene::{PropertyOwner, SpatialTree};
+/// use zgui_space::{PropertyOwner, SpatialTree};
 ///
 /// let mut tree = SpatialTree::new(DomainId::FIRST);
 /// let viewport = PropertyOwner::new(1).expect("not the empty word");
@@ -131,7 +131,7 @@ impl PropertyOwner {
     ///
     /// ```
     /// use zgui_arena::{ChunkArena, DomainId};
-    /// use zgui_scene::PropertyOwner;
+    /// use zgui_space::PropertyOwner;
     ///
     /// let mut boxes: ChunkArena<&str> = ChunkArena::new(DomainId::FIRST);
     /// let one = boxes.insert("a box");
@@ -165,7 +165,7 @@ impl PropertyOwner {
     /// one domain, so the flipped word names no box that can share a tree with this one.
     ///
     /// ```
-    /// use zgui_scene::PropertyOwner;
+    /// use zgui_space::PropertyOwner;
     ///
     /// let owner = PropertyOwner::new(0x0001_0001_0000_0004).expect("not the empty word");
     /// assert_ne!(owner.content(), owner);

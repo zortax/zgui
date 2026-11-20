@@ -24,7 +24,7 @@
 //! ```
 //! use std::sync::Arc;
 //! use zgui_geom::CssPx;
-//! use zgui_scene::PaintSlot;
+//! use zgui_space::PaintSlot;
 //! use zgui_text::{BreakRequest, ParagraphCache, ParagraphContent, StyledRun, TextMap, lay_out};
 //! use zgui_text_style::{ParagraphStyle, TextStyle};
 //! use zgui_testkit_scene::MonoShaper;

@@ -30,12 +30,12 @@ pub struct DiffScratch {
     /// The fragments a box is about to retire.
     pub(super) stale: Vec<FragKey>,
     /// The boxes that imposed a clip and left the tree, until the frame's owner takes them.
-    pub(super) retired_clips: Vec<zgui_scene::PropertyOwner>,
+    pub(super) retired_clips: Vec<zgui_space::PropertyOwner>,
 }
 
 impl DiffScratch {
     /// Takes the boxes that imposed a clip and left the tree since the last call.
-    pub fn take_retired_clips(&mut self) -> impl Iterator<Item = zgui_scene::PropertyOwner> + '_ {
+    pub fn take_retired_clips(&mut self) -> impl Iterator<Item = zgui_space::PropertyOwner> + '_ {
         self.retired_clips.drain(..)
     }
 }

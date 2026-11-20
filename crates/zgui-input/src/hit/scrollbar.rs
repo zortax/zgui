@@ -10,7 +10,7 @@ use zgui_geom::{Device, DevicePx, Point};
 use zgui_layout::fragment::ScrollbarPart;
 use zgui_layout::scroll_region::bar::live;
 use zgui_layout::{Axis, FragmentKind, HitIndex, LayoutStore};
-use zgui_scene::{ClipTable, SpatialTree};
+use zgui_space::{ClipTable, SpatialTree};
 
 /// Where a press on a scrollbar landed.
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -61,7 +61,7 @@ mod walk;
 
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Size};
-use zgui_scene::ClipId;
+use zgui_space::ClipId;
 
 use crate::fragment::FragmentFlags;
 use crate::fragment::diff::dirty::FrameDirty;

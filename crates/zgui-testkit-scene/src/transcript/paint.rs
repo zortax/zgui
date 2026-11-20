@@ -6,7 +6,7 @@
 
 use zgui_color::{Color, ColorSpace, GradientStop, HueInterpolation};
 use zgui_scene::{GradientKind, Paint, PaintKind, PaintRef, PaintTable, TextPaint, TextPaintTable};
-use zgui_scene::{PaintId, PaintSlot};
+use zgui_space::{PaintId, PaintSlot};
 
 use crate::text::number::{float, list, rect};
 use crate::transcript::tile;
@@ -190,7 +190,8 @@ fn kind(tag: u32) -> &'static str {
 #[cfg(test)]
 mod tests {
     use zgui_color::Color;
-    use zgui_scene::{PaintId, PaintKind, PaintRef, PaintTable};
+    use zgui_scene::{PaintKind, PaintRef, PaintTable};
+    use zgui_space::PaintId;
 
     use super::{color, reference};
 

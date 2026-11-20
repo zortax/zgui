@@ -192,7 +192,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");

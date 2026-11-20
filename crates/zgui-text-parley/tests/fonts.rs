@@ -193,7 +193,7 @@ fn a_face_registered_later_reaches_the_shaper() {
 /// and only the face is gone.
 #[test]
 fn a_face_unregistered_after_shaping_is_not_drawn_with_again() {
-    use zgui_scene::PaintSlot;
+    use zgui_space::PaintSlot;
     use zgui_text::{ParagraphContent, ParagraphShaper, StyledRun, TextMap};
     use zgui_text_parley::Shaper;
     use zgui_text_style::ParagraphStyle;

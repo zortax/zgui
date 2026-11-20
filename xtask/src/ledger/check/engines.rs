@@ -175,6 +175,7 @@ const LEDGER: &[(&str, &[&str])] = &[
         "kurbo",
         &[
             "zgui-elements",
+            "zgui-space",
             "zgui-scene",
             "zgui-paint",
             // A vector document's outlines are Béziers and its clips are Béziers, and they cross
@@ -215,6 +216,7 @@ const LEDGER: &[(&str, &[&str])] = &[
         "bytemuck",
         &[
             "zgui-geom",
+            "zgui-space",
             "zgui-scene",
             "zgui-render-wgpu",
             "zgui-render-vector-vello",

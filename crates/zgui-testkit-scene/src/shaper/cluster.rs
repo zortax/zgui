@@ -83,7 +83,7 @@ pub fn shape(content: &ParagraphContent<'_>) -> Vec<Cluster> {
             // A cluster outside every run has no brush either; slot zero is an ordinary entry and
             // is the only answer available, which is why the contract says the runs cover the
             // string.
-            brush: run.map_or(zgui_scene::PaintSlot(0), |run| run.brush),
+            brush: run.map_or(zgui_space::PaintSlot(0), |run| run.brush),
         });
     }
     clusters
@@ -114,7 +114,7 @@ mod tests {
     use std::sync::Arc;
 
     use zgui_geom::CssPx;
-    use zgui_scene::PaintSlot;
+    use zgui_space::PaintSlot;
     use zgui_text::{ParagraphContent, StyledRun, TextMap};
     use zgui_text_style::{ParagraphStyle, TextStyle};
 

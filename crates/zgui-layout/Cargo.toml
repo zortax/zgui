@@ -23,9 +23,11 @@ zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
-# The clip chain and the transform a fragment carries are the scene's identifiers. A parallel id
-# space here would be the same aliasing hazard one level up.
+# The filters, shader declarations and text paint table a fragment refers to.
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# The clip chain and the transform a fragment carries are these identifiers. A parallel id space
+# here would be the same aliasing hazard one level up.
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
 # The run and paragraph properties an inline formatting context is built from, and the two keys a
 # shaped result is cached under. Named directly because they appear in this crate's own signatures:

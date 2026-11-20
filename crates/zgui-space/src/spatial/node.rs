@@ -75,7 +75,7 @@ impl OwnSpace {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{Anchoring, OwnSpace, ScrollFrameId};
+    /// use zgui_space::{Anchoring, OwnSpace, ScrollFrameId};
     ///
     /// assert_eq!(OwnSpace::of(None, None, false), None, "drawn in the space above it");
     ///

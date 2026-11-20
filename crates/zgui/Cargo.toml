@@ -66,6 +66,7 @@ zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["count
 # asserted on the primitives and the clip chain rather than on pixels, which the renderer's own
 # tests cover.
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 
 [features]
 # Records which component each part of the document came from, so a development tool can show a

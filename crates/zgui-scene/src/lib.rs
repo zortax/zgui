@@ -72,8 +72,6 @@
 #![forbid(unsafe_code)]
 
 pub mod batch;
-pub mod clip;
-pub mod content;
 pub mod group;
 pub mod id;
 pub mod invariant;
@@ -86,9 +84,9 @@ pub mod prim;
 pub mod resource;
 pub mod scene;
 pub mod shader;
-pub mod spatial;
-pub mod table;
 pub mod vector;
+
+pub use zgui_space::{clip, content, spatial, table};
 
 /// Path geometry, re-exported because it is part of this crate's vocabulary.
 ///

@@ -17,7 +17,7 @@ use zgui_edit::select::Selection;
 use zgui_geom::CssPx;
 use zgui_interned::ElementName;
 use zgui_profile::Counter;
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_testkit_scene::MonoShaper;
 use zgui_testkit_scene::counters::Recording;
 use zgui_text::{BreakRequest, ParagraphCache, ParagraphContent, StyledRun, TextMap, lay_out};

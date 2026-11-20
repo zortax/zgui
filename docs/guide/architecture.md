@@ -87,7 +87,7 @@ mechanically.
 | Layer | Crates | What the layer is |
 |---|---|---|
 | L0 foundation | `zgui-geom`, `zgui-color`, `zgui-arena`, `zgui-interned`, `zgui-bits`, `zgui-profile` | Coordinate spaces, colour, storage whose addresses hold still, interned names, invalidation bits, counters. No policy. |
-| L1 contracts | `zgui-vocab`, `zgui-css`, `zgui-scene`, `zgui-render`, `zgui-atlas`, `zgui-platform`, `zgui-reactive` | The traits and value types the rest of the tree agrees on. Nothing here implements anything replaceable. |
+| L1 contracts | `zgui-vocab`, `zgui-css`, `zgui-space`, `zgui-scene`, `zgui-render`, `zgui-atlas`, `zgui-platform`, `zgui-reactive` | The traits and value types the rest of the tree agrees on. Nothing here implements anything replaceable. |
 | L2 backends | `zgui-render-wgpu`, `zgui-render-vector-vello`, `zgui-render-vector-coverage`, `zgui-platform-wayland`, `zgui-platform-winit`, `zgui-platform-web`, `zgui-platform-headless` | Implementations of L1 contracts. Every one of them is replaceable, and every one of them has a sibling. |
 | L3 document | `zgui-dom` | One arena of nodes, safe to read from many threads while the cascade runs over it. |
 | L4 engines | `zgui-style`, `zgui-layout`, `zgui-text`, `zgui-text-style`, `zgui-text-parley`, `zgui-paint`, `zgui-svg` | The stages that turn a document into a display list. |

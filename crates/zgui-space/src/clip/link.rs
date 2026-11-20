@@ -38,7 +38,7 @@ pub enum ClipLink {
         /// A clip carries the shape for the same reason a quad does: content inside a squircle
         /// card has to be cut to the squircle, and a chain that only knew the radii would cut it
         /// to the ellipse those radii describe and let the corners of a child show through.
-        shape: crate::prim::CornerShape,
+        shape: crate::corner::CornerShape,
         /// The coordinate system the rectangle is measured in.
         ///
         /// A clipping box inside a transformed subtree measures its rectangle in its own space,
@@ -77,7 +77,7 @@ impl ClipLink {
         Self::RoundedRect {
             rect,
             radii: Corners::uniform(Vec2::splat(DevicePx(0.0))),
-            shape: crate::prim::CornerShape::ROUND,
+            shape: crate::corner::CornerShape::ROUND,
             space,
         }
     }
@@ -87,7 +87,7 @@ impl ClipLink {
         Self::RoundedRect {
             rect,
             radii: Corners::uniform(radius),
-            shape: crate::prim::CornerShape::ROUND,
+            shape: crate::corner::CornerShape::ROUND,
             space: SpatialId::VIEWPORT,
         }
     }
@@ -96,7 +96,7 @@ impl ClipLink {
     pub fn shaped(
         rect: Rect<DevicePx, Device>,
         radii: Corners<Vec2<DevicePx>>,
-        shape: crate::prim::CornerShape,
+        shape: crate::corner::CornerShape,
         space: SpatialId,
     ) -> Self {
         Self::RoundedRect {
@@ -128,7 +128,7 @@ impl ClipLink {
     /// drawn somewhere else on every frame of the scroll. Taking the shift back out asks the
     /// question the other way round — which rectangle of the *unscrolled* document this is — and
     /// that answer holds still while the scroll runs.
-    pub(crate) fn unshifted(self, shift: Size<DevicePx, Device>) -> Self {
+    pub fn unshifted(self, shift: Size<DevicePx, Device>) -> Self {
         match self {
             Self::RoundedRect {
                 rect,

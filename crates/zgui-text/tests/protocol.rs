@@ -10,7 +10,7 @@ use std::sync::{Mutex, MutexGuard};
 use support::scene::Scene;
 use zgui_geom::CssPx;
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{BreakRequest, InlineBoxGeometry, ParagraphKey, TextMap};
 use zgui_text_style::{LengthPercent, OverflowWrap, TextAlign, TextStyle, WrapMode};
 

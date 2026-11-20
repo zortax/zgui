@@ -56,7 +56,7 @@ impl ShapedRunOwned {
     /// shaped one produce the same cache entries.
     ///
     /// ```
-    /// use zgui_scene::PaintSlot;
+    /// use zgui_space::PaintSlot;
     /// use zgui_text::{
     ///     FaceId, RasterStyle, ShapedGlyph, ShapedRun, ShapedRunOwned, VariationInstance,
     /// };
@@ -134,7 +134,7 @@ mod tests {
     use crate::font::face::FaceId;
     use crate::glyph::key::RasterStyle;
     use crate::glyph::run::{ShapedGlyph, ShapedRun};
-    use zgui_scene::PaintSlot;
+    use zgui_space::PaintSlot;
 
     /// An owned run over one face at one size.
     fn owned() -> ShapedRunOwned {

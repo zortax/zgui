@@ -30,7 +30,7 @@ proptest.workspace = true
 # assertions are made against the mechanism rather than against a model of it.
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 # The real text engine, for the one question a fixed-metrics shaper cannot answer: what a line

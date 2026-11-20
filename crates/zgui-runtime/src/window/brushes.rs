@@ -16,7 +16,8 @@ use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
 use zgui_layout::fragment::diff::pixels;
 use zgui_layout::tree::store::LayoutStore;
-use zgui_scene::{PaintSlot, TextPaint, TextPaintTable};
+use zgui_scene::{TextPaint, TextPaintTable};
+use zgui_space::PaintSlot;
 use zgui_style::{TextPaintUpdate, TextRun};
 use zgui_text_style::TextPaintKey;
 
@@ -608,7 +609,8 @@ mod tests {
     use zgui_color::Color;
     use zgui_css::{PinnedGroup, StyleDraft};
     use zgui_dom::NodeKey;
-    use zgui_scene::{PaintSlot, TextPaint, TextPaintTable};
+    use zgui_scene::{TextPaint, TextPaintTable};
+    use zgui_space::PaintSlot;
     use zgui_style::{TextPaintUpdate, TextRun};
     use zgui_text_style::TextPaintKey;
 

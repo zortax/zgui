@@ -68,7 +68,7 @@ fn a_third_rounded_clip_keeps_its_corners() {
         .primitives
         .quads
         .iter()
-        .find(|quad| quad.clip_id() != zgui_scene::ClipId::ROOT && quad.radii[0] == 0.0)
+        .find(|quad| quad.clip_id() != zgui_space::ClipId::ROOT && quad.radii[0] == 0.0)
         .expect("the fill is drawn through the clips around it");
     assert!(
         scene.clips.rounded_links(fill.clip_id()) >= 3,

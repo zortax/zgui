@@ -3,7 +3,7 @@
 use zgui_dom::{Document, NodeKey, StyleFilter};
 use zgui_geom::{Css, Device, DevicePx, Point, Scale};
 use zgui_layout::{HitIndex, LayoutStore};
-use zgui_scene::{ClipTable, SpatialTree};
+use zgui_space::{ClipTable, SpatialTree};
 use zgui_vocab::UiState;
 
 use crate::hit::HitChain;

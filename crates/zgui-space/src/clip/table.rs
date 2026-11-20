@@ -422,7 +422,7 @@ impl ClipTable {
     ///
     /// `space` is a slot rather than a whole [`SpatialId`], because a primitive carries only the
     /// slot. Two occupants of one slot are one coordinate system as far as this is concerned, and
-    /// a name that has gone stale is [a different question](crate::scene::depends).
+    /// a name that has gone stale is a different question.
     pub fn bounds_in(&self, id: ClipId, space: u32) -> Rect<DevicePx, Device> {
         self.bounds_in_carried(id, space, &|_| None)
     }
@@ -442,7 +442,7 @@ impl ClipTable {
         let mut cursor = id;
         while let Some(ClipNode::Link { link, parent, .. }) = self.get(cursor) {
             if let ClipLink::RoundedRect {
-                shape: crate::prim::CornerShape::ROUND,
+                shape: crate::corner::CornerShape::ROUND,
                 rect,
                 space: measured,
                 ..

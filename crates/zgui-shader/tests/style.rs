@@ -142,7 +142,7 @@ fn a_corner_shape_keeps_a_gradient_the_way_it_keeps_a_colour() {
     let scene = app.app_mut().windows_mut()[0].scene();
     let fill = scene
         .paints
-        .get(zgui_scene::PaintId(shaded[0].fill.index))
+        .get(zgui_space::PaintId(shaded[0].fill.index))
         .expect("the gradient interned");
     assert!(
         matches!(fill, zgui_scene::Paint::Gradient { .. }),

@@ -20,7 +20,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{SpatialId, SpatialTree};
+    /// use zgui_space::{SpatialId, SpatialTree};
     ///
     /// let tree = SpatialTree::with_viewport();
     /// assert_eq!(tree.viewport(), SpatialId::VIEWPORT);
@@ -59,9 +59,9 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    /// use zgui_space::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
     ///
-    /// let mut tree = SpatialTree::new(zgui_scene::SPATIAL_DOMAIN);
+    /// let mut tree = SpatialTree::new(zgui_space::SPATIAL_DOMAIN);
     /// let viewport = tree.root(PropertyOwner::VIEWPORT);
     /// assert_eq!(tree.document(), viewport);
     ///
@@ -111,7 +111,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_arena::DomainId;
-    /// use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::new(DomainId::FIRST);
     /// let root = tree.root(PropertyOwner::new(1).expect("a handle is never the empty word"));
@@ -153,7 +153,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -194,7 +194,7 @@ impl SpatialTree {
     /// ```
     /// use zgui_arena::DomainId;
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{Anchoring, OwnSpace, PropertyOwner, SpatialTree};
+    /// use zgui_space::{Anchoring, OwnSpace, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::new(DomainId::FIRST);
     /// let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
@@ -228,7 +228,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
@@ -271,7 +271,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    /// use zgui_space::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -306,7 +306,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    /// use zgui_space::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -352,7 +352,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");

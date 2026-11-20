@@ -18,7 +18,6 @@
 //! it. Under-reporting it leaves stale pixels behind, which is why it is stated here rather than
 //! left to each caller to decide.
 
-pub mod corner;
 pub mod decoration;
 pub mod external;
 pub mod kind;
@@ -28,6 +27,8 @@ pub mod quad;
 pub mod shaded;
 pub mod shadow;
 pub mod sprite;
+
+pub use zgui_space::corner;
 
 pub use crate::prim::corner::CornerShape;
 pub use crate::prim::decoration::{Decoration, DecorationStyle};

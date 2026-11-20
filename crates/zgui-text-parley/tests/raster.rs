@@ -482,10 +482,10 @@ fn a_variable_face_draws_each_weight_at_its_own_instance() {
     let glyph = regular.glyphs[0];
     let style = RasterStyle::Grayscale;
     let light_key = regular
-        .as_run(zgui_scene::PaintSlot(0))
+        .as_run(zgui_space::PaintSlot(0))
         .key_for(glyph, 0.0, style);
     let heavy_key = bold
-        .as_run(zgui_scene::PaintSlot(0))
+        .as_run(zgui_space::PaintSlot(0))
         .key_for(glyph, 0.0, style);
     assert_ne!(light_key, heavy_key);
     let light = raster.raster(&light_key).expect("a glyph");
@@ -500,14 +500,14 @@ fn a_variable_face_draws_each_weight_at_its_own_instance() {
     let light_curves = raster
         .outline(
             &regular
-                .as_run(zgui_scene::PaintSlot(0))
+                .as_run(zgui_space::PaintSlot(0))
                 .outline_key(glyph.glyph),
         )
         .expect("curves");
     let heavy_curves = raster
         .outline(
             &bold
-                .as_run(zgui_scene::PaintSlot(0))
+                .as_run(zgui_space::PaintSlot(0))
                 .outline_key(glyph.glyph),
         )
         .expect("curves");

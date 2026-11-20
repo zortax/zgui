@@ -89,7 +89,7 @@ fn a_style_sheet_cuts_the_box_it_names_and_the_clip_that_box_gives_its_children(
         .expect("the card reached the display list");
     assert_eq!(
         card.corner_shape(),
-        zgui_scene::CornerShape::SQUIRCLE,
+        zgui_space::CornerShape::SQUIRCLE,
         "the box the sheet named is cut to the shape it named"
     );
 
@@ -99,7 +99,7 @@ fn a_style_sheet_cuts_the_box_it_names_and_the_clip_that_box_gives_its_children(
         .primitives
         .quads
         .iter()
-        .find(|quad| quad.clip_id() != zgui_scene::ClipId::ROOT)
+        .find(|quad| quad.clip_id() != zgui_space::ClipId::ROOT)
         .expect("the child is drawn through a clip of its own");
     assert!(
         scene
@@ -108,8 +108,8 @@ fn a_style_sheet_cuts_the_box_it_names_and_the_clip_that_box_gives_its_children(
             .iter()
             .any(|link| matches!(
                 link,
-                zgui_scene::ClipLink::RoundedRect { shape, .. }
-                    if *shape == zgui_scene::CornerShape::SQUIRCLE
+                zgui_space::ClipLink::RoundedRect { shape, .. }
+                    if *shape == zgui_space::CornerShape::SQUIRCLE
             )),
         "the clip the card gives its children is cut the way the card is"
     );
@@ -117,7 +117,7 @@ fn a_style_sheet_cuts_the_box_it_names_and_the_clip_that_box_gives_its_children(
     let resolved = scene.clips.resolve(inner.clip_id());
     assert_eq!(
         resolved.rounded[0].shape,
-        zgui_scene::CornerShape::SQUIRCLE.get(),
+        zgui_space::CornerShape::SQUIRCLE.get(),
         "the chain flattens to a test the shading code cuts the same way"
     );
 }
@@ -135,7 +135,7 @@ fn a_box_beside_the_one_that_named_a_shape_is_still_the_ellipse() {
         .iter()
         .find(|quad| quad.radii[0] == 12.0)
         .expect("the sibling reached the display list");
-    assert_eq!(plain.corner_shape(), zgui_scene::CornerShape::ROUND);
+    assert_eq!(plain.corner_shape(), zgui_space::CornerShape::ROUND);
 }
 
 /// The shape inherits, because every unregistered custom property does — and here that is wanted
@@ -152,7 +152,7 @@ fn the_shape_inherits_and_a_descendant_can_take_it_back() {
         .primitives
         .quads
         .iter()
-        .find(|quad| quad.clip_id() != zgui_scene::ClipId::ROOT && quad.radii[0] == 0.0)
+        .find(|quad| quad.clip_id() != zgui_space::ClipId::ROOT && quad.radii[0] == 0.0)
         .expect("the child reached the display list");
-    assert_eq!(inner.corner_shape(), zgui_scene::CornerShape::SQUIRCLE);
+    assert_eq!(inner.corner_shape(), zgui_space::CornerShape::SQUIRCLE);
 }

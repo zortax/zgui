@@ -6,7 +6,7 @@
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::ClipId;
+use zgui_space::ClipId;
 
 use crate::fragment::build::Tables;
 use crate::fragment::diff::dirty::FrameDirty;
@@ -182,7 +182,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
         // and therefore the clip it imposes below — is measured in.
         let space = fragment
             .transform
-            .unwrap_or(zgui_scene::SpatialId::VIEWPORT);
+            .unwrap_or(zgui_space::SpatialId::VIEWPORT);
         if T::INDEXES {
             self.reindex(frag, clip);
         }
@@ -201,7 +201,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             scale,
             shift,
             space,
-            zgui_scene::PropertyOwner::of(key),
+            zgui_space::PropertyOwner::of(key),
         )
     }
 

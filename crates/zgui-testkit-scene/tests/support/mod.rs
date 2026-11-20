@@ -11,10 +11,11 @@ use zgui_scene::kurbo::{self, Shape};
 use zgui_scene::peniko::{BlendMode, Compose, Mix};
 use zgui_scene::prim::{BorderStyle, DecorationStyle};
 use zgui_scene::{
-    BackdropFilter, ClipLink, ColorSprite, Decoration, ExternalQuad, ExternalTextureId, Filter,
-    GradientKind, GroupBoundary, MaskSource, MonoSprite, Paint, PaintRef, Quad, Scene, Shadow,
-    SubpixelSprite, VectorId, VectorItem,
+    BackdropFilter, ColorSprite, Decoration, ExternalQuad, ExternalTextureId, Filter, GradientKind,
+    GroupBoundary, MonoSprite, Paint, PaintRef, Quad, Scene, Shadow, SubpixelSprite, VectorId,
+    VectorItem,
 };
+use zgui_space::{ClipLink, MaskSource};
 
 /// A device rectangle.
 pub(crate) fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
@@ -65,7 +66,7 @@ pub(crate) fn kitchen_sink() -> Scene {
         rounded,
         ClipLink::Mask {
             tile: tile(TextureKind::Mono, 3),
-            transform: zgui_scene::SpatialId::VIEWPORT,
+            transform: zgui_space::SpatialId::VIEWPORT,
             source: MaskSource::Path,
         },
     );
@@ -148,9 +149,9 @@ pub(crate) fn kitchen_sink() -> Scene {
 /// A coordinate system directly under the viewport, holding `matrix`.
 ///
 /// Named after a made-up owner, because a scene built by hand has no boxes to name one after.
-fn space(scene: &mut Scene, owner: u64, matrix: zgui_geom::Matrix4) -> zgui_scene::SpatialId {
+fn space(scene: &mut Scene, owner: u64, matrix: zgui_geom::Matrix4) -> zgui_space::SpatialId {
     let viewport = scene.spatial.viewport();
-    let owner = zgui_scene::PropertyOwner::new(owner).expect("not the empty word");
-    let own = zgui_scene::OwnSpace::of(Some(matrix), None, false);
+    let owner = zgui_space::PropertyOwner::new(owner).expect("not the empty word");
+    let own = zgui_space::OwnSpace::of(Some(matrix), None, false);
     scene.spatial.space_of(viewport, owner, own)
 }

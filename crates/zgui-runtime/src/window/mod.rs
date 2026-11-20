@@ -162,7 +162,7 @@ pub struct Window {
     /// The reusable buffers the fragment walk works in, warm across frames.
     diff_scratch: zgui_layout::fragment::diff::DiffScratch,
     /// The boxes that imposed a clip and left the tree, whose chains are still in the table.
-    retired_clips: rustc_hash::FxHashSet<zgui_scene::PropertyOwner>,
+    retired_clips: rustc_hash::FxHashSet<zgui_space::PropertyOwner>,
     /// Where each scroll container is scrolled to, and everything that moves one over time.
     scroll: Rc<RefCell<zgui_scroll::Scroller>>,
     /// What this desktop means by one detent of a wheel, and which way it points.
@@ -569,7 +569,7 @@ pub struct Window {
     /// leaves every rectangle measured through it exactly where it was, so the fragment pass has
     /// nothing to report and everything drawn in that space is somewhere else. Filled where the
     /// frame's matrices are published and drained by [`Window::publish_a11y`].
-    moved_spaces: Vec<zgui_scene::SpatialId>,
+    moved_spaces: Vec<zgui_space::SpatialId>,
     /// Which node the accessibility tree was last told holds focus.
     ///
     /// Focus rides on every accessibility update, so a frame that moved focus and changed no node
@@ -1196,7 +1196,7 @@ impl Window {
     /// and these are the matrices the frame on the screen was composed through. A caller holding a
     /// fragment's rectangle and its coordinate system turns the two into a place on the surface
     /// with [`onto_device`](zgui_layout::fragment::transform::placed::onto_device).
-    pub fn placements(&self) -> std::cell::Ref<'_, zgui_scene::Placements> {
+    pub fn placements(&self) -> std::cell::Ref<'_, zgui_space::Placements> {
         self.host.placements()
     }
 

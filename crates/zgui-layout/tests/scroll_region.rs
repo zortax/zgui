@@ -30,7 +30,7 @@ fn golden_path(name: &str) -> PathBuf {
 
 /// Every fragment's rectangle, in painting order, as text.
 fn fragment_rects(store: &LayoutStore, frame: &Frame) -> String {
-    let placements = zgui_scene::Placements::of(&frame.spatial);
+    let placements = zgui_space::Placements::of(&frame.spatial);
     let mut out = String::new();
     let root = store.root().expect("a root");
     for key in zgui_layout::fragment::stacking::paint_order(store, root) {

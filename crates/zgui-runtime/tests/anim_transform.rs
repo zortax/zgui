@@ -392,7 +392,7 @@ fn a_bar_goes_back_where_its_style_puts_it_when_the_animation_ends() {
 fn space_of(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
     class: &str,
-) -> Option<(zgui_scene::SpatialId, zgui_geom::Matrix4)> {
+) -> Option<(zgui_space::SpatialId, zgui_geom::Matrix4)> {
     let window = harness
         .app()
         .windows()
@@ -416,7 +416,7 @@ fn space_of(
         }
         let key = document.store().key_of(index);
         for box_key in layout.boxes_of(key) {
-            let owner = zgui_scene::PropertyOwner::of(*box_key);
+            let owner = zgui_space::PropertyOwner::of(*box_key);
             if let Some(id) = spatial.of(owner) {
                 return Some((id, spatial.resolve(id)?));
             }
@@ -428,7 +428,7 @@ fn space_of(
 /// Whether anything in the frame that was drawn names `space`'s slot.
 fn drawn_under(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
-    space: zgui_scene::SpatialId,
+    space: zgui_space::SpatialId,
 ) -> bool {
     let window = harness
         .app()

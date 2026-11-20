@@ -16,7 +16,7 @@
 
 use zgui_css::ComputedStyle;
 use zgui_css::values::custom::Property;
-use zgui_scene::CornerShape;
+use zgui_space::CornerShape;
 
 use crate::fragment::custom_properties::CustomProperties;
 
@@ -79,7 +79,7 @@ fn parse(written: &str) -> Option<CornerShape> {
 #[cfg(test)]
 mod tests {
     use super::parse;
-    use zgui_scene::CornerShape;
+    use zgui_space::CornerShape;
 
     #[test]
     fn every_keyword_the_draft_names_is_a_place_along_the_exponent() {

@@ -25,7 +25,7 @@
 //!
 //! ```
 //! use zgui_geom::CssPx;
-//! use zgui_scene::PaintSlot;
+//! use zgui_space::PaintSlot;
 //! use zgui_text::{BreakRequest, ParagraphContent, ParagraphKey, StyledRun, TextMap};
 //! use zgui_text_style::{ParagraphStyle, TextStyle};
 //!

@@ -15,7 +15,7 @@ use zgui_bits::DamageSet;
 use zgui_geom::CssPx;
 use zgui_profile::{COUNTERS_ENABLED, Counter};
 use zgui_render::Renderer;
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_testkit_scene::CaptureRenderer;
 use zgui_testkit_scene::counters::{Recording, is_meaningful};
 use zgui_testkit_scene::{MonoLayout, MonoShaper};
@@ -79,7 +79,7 @@ fn nothing_the_kitchen_sink_pushes_is_culled_by_its_clips() {
         let mut scene = zgui_scene::Scene::new();
         scene.begin_frame(zgui_geom::Size::new(64, 64));
         let fill = zgui_scene::PaintRef::solid(scene.paints.solid(zgui_color::Color::BLACK));
-        let clip = scene.clips.only(zgui_scene::ClipLink::rect(support::rect(
+        let clip = scene.clips.only(zgui_space::ClipLink::rect(support::rect(
             0.0, 0.0, 8.0, 8.0,
         )));
         assert!(

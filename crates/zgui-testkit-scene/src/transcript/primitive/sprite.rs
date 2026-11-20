@@ -4,7 +4,8 @@
 //! so they share a rendering and differ only in the name it carries. Writing the body twice would
 //! be the more direct way to have one of them silently stop printing a field.
 
-use zgui_scene::{ClipId, ColorSprite, MonoSprite, Scene, SpriteTile, SubpixelSprite};
+use zgui_scene::{ColorSprite, MonoSprite, Scene, SpriteTile, SubpixelSprite};
+use zgui_space::ClipId;
 
 use crate::text::number::{all_zero, float, list, rect};
 use crate::transcript::primitive::suffix;

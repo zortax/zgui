@@ -114,7 +114,7 @@ impl A11yBuilder {
     ///
     /// Costs nothing at all until an update has been published, because what it looks in is what
     /// the consumer is holding — and on a machine with nothing listening, that is empty.
-    pub fn note_space_moved(&mut self, space: zgui_scene::SpatialId) {
+    pub fn note_space_moved(&mut self, space: zgui_space::SpatialId) {
         let moved: Vec<NodeKey> = self.held.measured_in(space).collect();
         for node in moved {
             self.owed.mark_moved(node);

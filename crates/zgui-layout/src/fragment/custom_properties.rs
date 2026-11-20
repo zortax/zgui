@@ -141,7 +141,7 @@ mod tests {
         );
         assert_eq!(
             corner::shape_with(&child, declared),
-            zgui_scene::CornerShape::SQUIRCLE
+            zgui_space::CornerShape::SQUIRCLE
         );
         let border_box = Rect::new(
             Point::new(DevicePx(0.0), DevicePx(0.0)),
