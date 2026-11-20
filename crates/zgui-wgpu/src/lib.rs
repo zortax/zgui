@@ -46,7 +46,7 @@ use zgui_dom::NodeKey;
 use zgui_dom::host::replaced::{Intrinsic, ReplacedId};
 use zgui_geom::{Css, CssPx, Device, Size};
 use zgui_reactive::FrameWaker;
-use zgui_render::{ExternalTexture, TextureHandle};
+use zgui_render::{ExternalTexture, Renderer as _, TextureHandle};
 use zgui_render_wgpu::Gpu;
 use zgui_render_wgpu::WgpuRenderer;
 use zgui_runtime::embed::{
@@ -668,8 +668,10 @@ impl EmbedHost for WgpuSurfaces {
             binding.content_attached = false;
             binding.described = None;
             cx.content.remove_image(ReplacedId::new(node));
-            if let Some(handle) = binding.registered.take() {
-                cx.renderer.release_external(handle);
+            if let Some(handle) = binding.registered.take()
+                && let Some(renderer) = wgpu_renderer(&mut *cx.renderer)
+            {
+                renderer.release_external(handle);
             }
         }
     }
@@ -833,8 +835,10 @@ impl WgpuSurfaces {
         let id = ReplacedId::new(node);
         cx.content.remove_image(id);
         cx.intrinsics.remove(id);
-        if let Some(handle) = binding.registered {
-            cx.renderer.release_external(handle);
+        if let Some(handle) = binding.registered
+            && let Some(renderer) = wgpu_renderer(&mut *cx.renderer)
+        {
+            renderer.release_external(handle);
         }
         match &binding.producer {
             Producer::Handle(state) => {
@@ -1092,8 +1096,11 @@ struct AttachAsk<'a> {
 
 /// Registers (when the description moved), attaches, and damages one texture.
 fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
+    let Some(renderer) = wgpu_renderer(&mut *cx.renderer) else {
+        return;
+    };
     if *ask.described != Some((ask.extent, ask.premultiplied)) {
-        let handle = cx.renderer.register_external(ExternalTexture {
+        let handle = renderer.register_external(ExternalTexture {
             id: ask.id,
             handle: TextureHandle(0),
             size: ask.extent,
@@ -1102,11 +1109,7 @@ fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
         *ask.registered = Some(handle);
         *ask.described = Some((ask.extent, ask.premultiplied));
     }
-    let attached = cx
-        .renderer
-        .as_any_mut()
-        .and_then(|any| any.downcast_mut::<WgpuRenderer>())
-        .is_some_and(|renderer| renderer.attach_external(ask.id, ask.texture));
+    let attached = renderer.attach_external(ask.id, ask.texture);
     debug_assert!(
         attached,
         "the description above is what makes attach accept"
@@ -1149,6 +1152,13 @@ fn gpu_of(cx: &mut EmbedSyncCx<'_>) -> Option<Arc<Gpu>> {
         .as_any_mut()
         .and_then(|any| any.downcast_mut::<WgpuRenderer>())
         .map(|renderer| Arc::clone(renderer.gpu()))
+}
+
+/// Returns the window's renderer as zgui's own wgpu renderer, when it is one.
+// compositor: a window drawing through the compositor binds no external texture yet, so its
+// surfaces show nothing.
+fn wgpu_renderer(renderer: &mut dyn compositor_api::Renderer) -> Option<&mut WgpuRenderer> {
+    renderer.as_any_mut()?.downcast_mut::<WgpuRenderer>()
 }
 
 /// Marks `node`'s replaced content changed, through the seam's own mark-and-wake pairing.

@@ -33,6 +33,22 @@ impl Pixels {
         }
     }
 
+    /// Wraps `bytes`, row-major and tightly packed, four to a pixel, of an extent `size`, blue
+    /// first when `bgra` says so.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `bytes` does not hold four bytes for every pixel of `size`.
+    pub fn from_bytes(bytes: Vec<u8>, size: Size<i32, Device>, bgra: bool) -> Self {
+        assert_eq!(
+            bytes.len(),
+            (size.width.max(0) * size.height.max(0) * 4) as usize,
+            "{} bytes are not four for each pixel of {size:?}",
+            bytes.len()
+        );
+        Self { bytes, size, bgra }
+    }
+
     /// Whether this holds a whole frame of `size` in the given channel order.
     ///
     /// A band-limited readback keeps the rows nothing named, which is only a frame where the rows

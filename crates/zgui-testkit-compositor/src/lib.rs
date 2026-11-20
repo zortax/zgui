@@ -10,7 +10,9 @@
 //! opened are reported as [`Unavailable`]. The factory never substitutes another implementation.
 //!
 //! A [`Screen`] is a recording renderer whose last frame is the whole picture on its output, for a
-//! window drawing through a compositor.
+//! window drawing through a compositor. A [`Kept`] renderer keeps its target, so each frame it
+//! records is what the compositor redraws, and an [`Aged`] renderer composes into a rotation of
+//! images by their age.
 //!
 //! A [`Session`] drives the selected compositor as one client drawing into one output, with a
 //! recording renderer under it. Each frame comes back as a [`Drawing`], the instances the frame
@@ -23,14 +25,17 @@
 
 #![forbid(unsafe_code)]
 
+mod aged;
 mod device;
 mod drawing;
+mod kept;
 mod null;
 mod output;
 mod screen;
 mod select;
 mod session;
 mod unavailable;
+mod windows;
 
 use compositor_api::{Compositor, Renderer};
 use compositor_capture::CaptureRenderer;
@@ -38,14 +43,17 @@ use compositor_core::CompositorImpl;
 use compositor_text::SwashRaster;
 use std::sync::Arc;
 
+pub use crate::aged::{Aged, Refusals};
 pub use crate::device::{Composed, Device, Pixels};
 pub use crate::drawing::{Drawing, Instance};
+pub use crate::kept::{Drawn, Frames, Kept};
 pub use crate::null::NullRenderer;
 pub use crate::output::TestOutput;
 pub use crate::screen::{Screen, Shown, drawing_of};
 pub use crate::select::{CompositorKind, RendererKind};
 pub use crate::session::{FONTS, Session, with_fake_text};
 pub use crate::unavailable::Unavailable;
+pub use crate::windows::{Pacing, Windows};
 
 /// Returns the compositor `ZGUI_COMPOSITOR` selects, with verification of damage hints on and
 /// glyphs rasterised through swash.
@@ -63,6 +71,17 @@ pub fn compositor() -> Result<Box<dyn Compositor>, Unavailable> {
         }
         CompositorKind::Naive => Err(Unavailable::not_written("ZGUI_COMPOSITOR", "naive")),
     }
+}
+
+/// Returns the compositor [`compositor`] selects, with the fake text of [`with_fake_text`].
+///
+/// # Panics
+///
+/// Panics when the environment selects a compositor that cannot be provided.
+pub fn fake_text_compositor() -> Box<dyn Compositor> {
+    let mut compositor = compositor().unwrap_or_else(|why| panic!("no compositor: {why}"));
+    with_fake_text(&mut *compositor);
+    compositor
 }
 
 /// Returns the renderer `ZGUI_RENDERER` selects, drawing into an offscreen target of `size`

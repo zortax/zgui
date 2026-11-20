@@ -2,7 +2,6 @@
 
 mod compositor;
 pub mod fonts;
-mod graphics;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -10,6 +9,7 @@ use zgui_platform::{AppHandler, Decorations, PlatformError};
 use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
+pub use crate::app::compositor::compositor;
 pub use crate::app::fonts::Fonts;
 
 /// A maker of the renderer a window's compositor draws with, given the window's first size in
@@ -546,11 +546,10 @@ impl App {
         self
     }
 
-    /// Draws each window through a compositor of its own, with the renderer `make` returns for the
-    /// window's first size.
+    /// Draws the frames of each window with the renderer `make` returns for the window's first
+    /// size.
     ///
-    /// The compositor shares the application's fonts and rasterises glyphs with swash. A factory
-    /// set with [`App::with_renderer`] takes precedence.
+    /// A factory set with [`App::with_renderer`] takes precedence.
     pub fn with_compositor_renderer(mut self, make: CompositorRendererMaker) -> Self {
         self.compositor_renderer = Some(make);
         self
@@ -699,12 +698,10 @@ impl App {
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
         let group_precision = self.group_precision;
-        let compositor_fonts = fonts.compositor_registry();
         let compositor_renderer = self.compositor_renderer;
         let renderer = self.renderer.unwrap_or_else(|| match compositor_renderer {
-            Some(make) => compositor::wrapping(compositor_fonts, make),
-            None if compositor::legacy_wanted() => graphics::factory(group_precision),
-            None => compositor::factory(compositor_fonts),
+            Some(make) => compositor::wrapping(make),
+            None => compositor::factory(group_precision),
         });
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and
@@ -719,6 +716,7 @@ impl App {
                     setup();
                 }
             })
+            .with_compositor(compositor::compositor(&fonts))
             .with_renderer(renderer)
             .with_metrics(Box::new({
                 let fonts = fonts.clone();

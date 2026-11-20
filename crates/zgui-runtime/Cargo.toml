@@ -48,7 +48,6 @@ zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # The frame owns scroll offsets and this is where they live: writing one is a fast path over the
 # fragments a frame already has, and the loop is what drives it.

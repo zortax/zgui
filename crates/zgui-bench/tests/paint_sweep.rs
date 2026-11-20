@@ -12,12 +12,12 @@
 
 use std::time::Duration;
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
-use zgui::runtime::compositor::CompositorRenderer;
 use zgui::runtime::{App, AppError, Runtime};
 use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::{component, view};
@@ -90,13 +90,12 @@ fn opened(
         .with_title("paint-sweep")
         .with_size(800.0, 600.0)
         .with_stylesheet(SHEET)
+        .with_compositor(zgui::app::compositor(&fonts))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
              -> Result<Box<dyn Renderer>, AppError> {
-                let compositor =
-                    zgui_testkit_compositor::compositor().expect("the test compositor exists");
-                let mut inner = CompositorRenderer::new(compositor, Box::new(Screen::new()));
+                let mut inner = Screen::new();
                 inner.configure(target);
                 Ok(Box::new(inner))
             },
@@ -187,10 +186,6 @@ fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
 
 /// Returns what the window of `harness` shows.
 fn drawing(harness: &Harness<Runtime>) -> Drawing {
-    let bridge = harness.app().windows()[0]
-        .renderer()
-        .as_any()
-        .and_then(|any| any.downcast_ref::<CompositorRenderer>())
-        .expect("the window draws through a compositor");
-    zgui_testkit_compositor::drawing_of(bridge.renderer()).expect("the window drew a frame")
+    zgui_testkit_compositor::drawing_of(harness.app().windows()[0].renderer())
+        .expect("the window drew a frame")
 }

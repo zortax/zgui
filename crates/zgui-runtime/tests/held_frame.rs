@@ -11,16 +11,16 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui_atlas::TextureSink;
-use zgui_bits::DamageSet;
-use zgui_platform::{Surface, SurfaceEvent};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    Renderer, SkipReason, TextureHandle,
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+    SkipReason,
 };
+use zgui_platform::{Surface, SurfaceEvent};
 use zgui_runtime::{App, AppError, Runtime};
-use zgui_scene::Scene;
 use zgui_view::{BuildCx, IntoView, View};
+
+mod support;
 
 /// What a test sets and reads about the renderer under its window.
 #[derive(Default)]
@@ -35,9 +35,9 @@ struct Gate {
     presented: Cell<u32>,
 }
 
-/// A capture renderer that holds its frames while the test says so.
+/// A recording renderer that holds its frames while the test says so.
 struct Holding {
-    inner: zgui_testkit_scene::CaptureRenderer,
+    inner: zgui_testkit_compositor::Screen,
     gate: Rc<Gate>,
 }
 
@@ -47,15 +47,19 @@ impl Renderer for Holding {
     }
 
     fn configure(&mut self, target: RenderTarget) {
-        Renderer::configure(&mut self.inner, target);
+        self.inner.configure(target);
     }
 
     fn target(&self) -> Option<RenderTarget> {
-        Renderer::target(&self.inner)
+        self.inner.target()
     }
 
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let drawn = self.inner.draw(scene, damage);
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        let drawn = self.inner.draw(frame);
         self.gate.drawn.set(self.gate.drawn.get() + 1);
         if self.gate.hold.get() {
             self.gate.held.set(true);
@@ -72,20 +76,8 @@ impl Renderer for Holding {
         FrameOutcome::Presented(FrameStats::default())
     }
 
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn TextureSink {
-        self.inner.texture_sink()
     }
 }
 
@@ -102,13 +94,14 @@ fn window(hold: bool) -> (zgui_platform_headless::Harness<Runtime>, Rc<Gate>) {
              .block { display: block; width: 100px; height: 100px;
                       background-color: rgb(200, 200, 200) }",
         )
+        .with_compositor(support::compositor())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
                 let mut renderer = Holding {
-                    inner: zgui_testkit_scene::CaptureRenderer::new(),
+                    inner: zgui_testkit_compositor::Screen::new(),
                     gate: Rc::clone(&handed),
                 };
-                Renderer::configure(&mut renderer, target);
+                renderer.configure(target);
                 Ok::<_, AppError>(Box::new(renderer) as Box<dyn Renderer>)
             },
         ))
@@ -127,13 +120,10 @@ fn window(hold: bool) -> (zgui_platform_headless::Harness<Runtime>, Rc<Gate>) {
 
 #[test]
 fn a_held_frame_asks_for_nothing_until_the_platform_is_ready() {
-    let (mut harness, gate) = window(false);
+    let (mut harness, gate) = window(true);
     harness.settle(8);
-    gate.hold.set(true);
     let id = harness.platform().offscreens()[0].id();
-    harness.platform().offscreens()[0].request_redraw();
-    harness.settle(4);
-    assert_eq!(gate.drawn.get(), 2, "the held frame was drawn again");
+    assert_eq!(gate.drawn.get(), 1, "the held frame was drawn again");
     assert!(gate.held.get());
     assert_eq!(gate.presented.get(), 0);
 

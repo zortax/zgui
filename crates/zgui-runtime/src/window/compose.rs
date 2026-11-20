@@ -3,21 +3,18 @@
 use zgui_bits::DamageSet;
 use zgui_paint::CompositorSync;
 
-use crate::compositor::CompositorRenderer;
 use crate::window::Window;
 
 impl Window {
-    /// Opens the frame's transaction, when the window draws through a compositor.
+    /// Opens the frame's transaction.
     ///
     /// The first call attaches a sync to the painter, so the walk records every fragment it
     /// visits.
     pub(super) fn open_transaction(&mut self) {
-        let Some(bridge) = bridge(&mut *self.renderer) else {
-            return;
-        };
-        let (output, transaction) = (bridge.output(), bridge.transaction());
+        let transaction = self.compositor.transaction();
         if self.painter.compositor().is_none() {
-            self.painter.attach_compositor(CompositorSync::new(output));
+            self.painter
+                .attach_compositor(CompositorSync::new(self.compositor.output()));
         }
         if let Some(sync) = self.painter.compositor() {
             sync.open(transaction);
@@ -27,19 +24,23 @@ impl Window {
     /// Commits the frame's transaction.
     ///
     /// A rejected transaction leaves the compositor with nothing of this window, so the sync
-    /// forgets what it recorded and the next frame redraws the whole surface.
+    /// forgets what it recorded and the next frame records the whole surface again.
     pub(super) fn submit_transaction(&mut self, transaction: compositor_types::Transaction) {
         let report = self.painter.compositor().map(|sync| sync.report());
-        let Some(bridge) = bridge(&mut *self.renderer) else {
-            return;
-        };
-        bridge.submit(transaction);
-        if bridge.take_rejected() {
-            if let Some(sync) = self.painter.compositor() {
-                sync.reset();
+        match self.compositor.commit(transaction) {
+            Ok(committed) => {
+                if let Some(report) = &report {
+                    crate::window::counters::committed(&committed, report);
+                }
+                self.committed = Some(committed.counters);
             }
-            self.damage = DamageSet::full();
-            self.request_frame();
+            Err(_) => {
+                if let Some(sync) = self.painter.compositor() {
+                    sync.reset();
+                }
+                self.damage = DamageSet::full();
+                self.request_frame();
+            }
         }
         if let Some(report) = report {
             tracing::debug!(target: "zgui::compositor", ?report, "transaction committed");
@@ -53,11 +54,4 @@ impl Window {
             }
         }
     }
-}
-
-/// Returns the window's renderer as a compositor bridge, if it is one.
-fn bridge(renderer: &mut dyn zgui_render::Renderer) -> Option<&mut CompositorRenderer> {
-    renderer
-        .as_any_mut()
-        .and_then(|any| any.downcast_mut::<CompositorRenderer>())
 }

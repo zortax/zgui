@@ -58,8 +58,17 @@ impl Window {
                 scale: self.scale,
                 damage: zgui_bits::DamageSet::new(),
                 painter: &self.painter,
+                moved: Vec::new(),
             };
             let tick = self.animator.tick(&mut document, &report, &mut writing);
+            if !writing.moved.is_empty() {
+                // What is under a stationary pointer moved, and so did what a screen reader was
+                // told about the boxes drawn in the written systems.
+                self.hit.note_space_moved();
+                if self.a11y.held() > 0 {
+                    self.moved_spaces.extend_from_slice(&writing.moved);
+                }
+            }
             (tick, writing.damage)
         };
         // A boundary sampled a little early shows the old step, so the wake lands just after it.

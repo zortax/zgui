@@ -1,0 +1,158 @@
+//! What a measured window draws through: no device, this machine's device offscreen, or a window
+//! on the desktop.
+
+use std::sync::Arc;
+
+use compositor_api::{Compositor, Renderer};
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+    VectorBackend,
+};
+use compositor_vello::VelloOptions;
+use compositor_wgpu::{Gpu, WgpuRenderer, wgpu};
+use zgui::platform::{PlatformError, Surface};
+use zgui::runtime::AppError;
+
+/// A renderer that accepts a frame and does nothing with it, so the numbers are the CPU's.
+///
+/// It reports a kept target once it presented a frame, and that it can move composed pixels, so
+/// the compositor narrows a scroll's or a resize's damage the way it does for a device.
+#[derive(Default)]
+pub struct NullRenderer {
+    /// The surface it was configured for.
+    target: Option<RenderTarget>,
+    /// Whether a frame was presented into the target since it was configured.
+    kept: bool,
+}
+
+impl NullRenderer {
+    /// Returns a renderer configured for `target`.
+    pub fn new(target: RenderTarget) -> Self {
+        Self {
+            target: Some(target),
+            kept: false,
+        }
+    }
+}
+
+impl Renderer for NullRenderer {
+    fn capabilities(&self) -> RenderCapabilities {
+        RenderCapabilities {
+            can_shift: true,
+            ..RenderCapabilities::MINIMAL
+        }
+    }
+
+    fn configure(&mut self, target: RenderTarget) {
+        if self.target.is_some_and(|held| held.size != target.size) {
+            self.kept = false;
+        }
+        self.target = Some(target);
+    }
+
+    fn target(&self) -> Option<RenderTarget> {
+        self.target
+    }
+
+    fn target_age(&self) -> BufferAge {
+        if self.kept {
+            BufferAge::Kept
+        } else {
+            BufferAge::Unknown
+        }
+    }
+
+    fn draw(&mut self, _frame: &Frame) -> FrameOutcome {
+        self.kept = true;
+        FrameOutcome::Presented(FrameStats::default())
+    }
+
+    fn memory(&self) -> MemoryReport {
+        MemoryReport::default()
+    }
+}
+
+/// Opens this machine's device drawing into an offscreen texture for `target`, with vello
+/// filling paths.
+///
+/// # Errors
+///
+/// Fails when no adapter opens a device.
+pub fn device(target: RenderTarget) -> Result<WgpuRenderer, AppError> {
+    let mut gpu = compositor_wgpu::Builder::new()
+        .offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)
+        .map_err(AppError::GpuUnavailable)?;
+    attach_vello(&mut gpu);
+    gpu.configure(target);
+    Ok(gpu)
+}
+
+/// Gives `renderer` vello as its path rasteriser, with its compiled pipelines kept where zgui
+/// keeps its other pipelines.
+fn attach_vello(renderer: &mut WgpuRenderer) {
+    let options = VelloOptions {
+        adapter: None,
+        cache_directory: zgui_render_wgpu::gpu::pipeline_cache::directory(),
+    };
+    renderer.set_vector_factory(
+        Box::new(move |gpu: &Arc<Gpu>, size| {
+            compositor_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
+        }),
+        VectorBackend::Compute,
+        "vello",
+    );
+}
+
+/// Opens this machine's device for the window `surface` is, wired as an application's window is.
+///
+/// A platform that paces its own frames is told about every present and decides when a composed
+/// frame is handed over. Elsewhere the platform is told only when `ZGUI_PRESENT_PACING=notify`
+/// asks for it.
+///
+/// # Errors
+///
+/// Fails when the window offers no handles a graphics API can draw into, or no adapter presents
+/// to it.
+pub fn window(surface: &Arc<dyn Surface>, target: RenderTarget) -> Result<WgpuRenderer, AppError> {
+    let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
+        AppError::Platform(PlatformError::Backend(
+            "this window offers no handles a graphics API can draw into".to_owned(),
+        ))
+    })?;
+    let platform = matches!(
+        surface.present_pacing(),
+        zgui::platform::PresentPacing::Platform
+    );
+    let notify =
+        platform || matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify");
+    let mut builder = compositor_wgpu::Builder::new();
+    if platform {
+        builder = builder.with_present_pacing(compositor_wgpu::PresentPacing::Platform);
+    }
+    if notify {
+        let presented = Arc::clone(surface);
+        builder = builder.with_pre_present(Box::new(move |target: RenderTarget| {
+            let size = zgui::geom::Size::new(
+                i32::try_from(target.size[0]).unwrap_or(i32::MAX),
+                i32::try_from(target.size[1]).unwrap_or(i32::MAX),
+            );
+            presented.pre_present_frame(size, f64::from(target.scale));
+        }));
+    }
+    let mut renderer = builder
+        .for_surface(target.size, target.opaque, handles)
+        .map_err(AppError::GpuUnavailable)?;
+    if platform {
+        let gate = Arc::clone(surface);
+        renderer.set_present_gate(Box::new(move || gate.present_now()));
+    }
+    attach_vello(&mut renderer);
+    renderer.configure(target);
+    Ok(renderer)
+}
+
+/// Returns a compositor for a measured document that draws no text.
+#[must_use]
+pub fn compositor() -> Box<dyn Compositor> {
+    Box::new(compositor_core::CompositorImpl::new())
+}

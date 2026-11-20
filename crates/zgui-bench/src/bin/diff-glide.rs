@@ -28,10 +28,11 @@
 
 use std::time::{Duration, Instant};
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{Css, CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError, Runtime};
 use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::vocab::{
@@ -150,52 +151,6 @@ fn ProbeList() -> impl IntoView {
     }
 }
 
-/// The recorder, answering yes to moving composed pixels it does not hold.
-///
-/// The same stance as the harness renderer the scenarios draw through: this probe takes CPU
-/// numbers, and the decision to shift narrows the frame's damage — the emit walk, replays and
-/// order inserts that follow from the narrowing are exactly what is being measured. Answering no
-/// would measure a frame the framework does not draw where a device exists.
-struct Shifting(zgui_testkit_scene::CaptureRenderer);
-
-impl Renderer for Shifting {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        self.0.capabilities()
-    }
-    fn configure(&mut self, target: RenderTarget) {
-        self.0.configure(target);
-    }
-    fn target(&self) -> Option<RenderTarget> {
-        self.0.target()
-    }
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        self.0.draw(scene, damage)
-    }
-    fn shifts_composed_pixels(&self) -> bool {
-        true
-    }
-    fn shift_composed(&mut self, _shift: zgui::render::ScrollShift) {}
-    fn register_external(
-        &mut self,
-        texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.0.register_external(texture)
-    }
-    fn release_external(&mut self, handle: zgui::render::TextureHandle) {
-        self.0.release_external(handle)
-    }
-    fn memory(&self) -> zgui::render::MemoryReport {
-        self.0.memory()
-    }
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.0.texture_sink()
-    }
-}
-
 /// Opens the probe's window over the machine's own fonts.
 fn opened() -> Harness<Runtime> {
     let fonts = Fonts::system();
@@ -205,13 +160,15 @@ fn opened() -> Harness<Runtime> {
         .with_title("diff-glide")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(SHEET)
+        .with_compositor(zgui::app::compositor(&fonts))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
              -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = Shifting(zgui_testkit_scene::CaptureRenderer::new());
-                inner.configure(target);
-                Ok(Box::new(inner))
+                // A renderer that moves composed pixels it does not hold: the compositor's decision
+                // to shift narrows a frame's damage, and the walk and replays that follow from the
+                // narrowing are what this probe measures.
+                Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target)))
             },
         ))
         .with_metrics(Box::new(move || metrics.metrics()))

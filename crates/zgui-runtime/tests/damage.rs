@@ -4,11 +4,10 @@
 //! and checks the renderer honours it. That tests the consumer and never the producer, so a frame
 //! loop that reported the whole window on every keystroke would leave all of them green. The
 //! assertions here build no damage at all: they mount a document, change exactly one node in it,
-//! and ask what the frame that followed was drawn against.
+//! and ask which region the frame that followed painted again.
 //!
-//! The damage has to be read *inside* `draw`. A window retires its damage as soon as the frame is
-//! submitted, so a test reading it afterwards sees an empty set and passes whatever the frame did
-//! — which is why the renderer here records every set it is handed.
+//! The region is read from each frame's report as the frame ends, because a window retires its
+//! damage as soon as the frame is submitted.
 //!
 //! [`DamageSet`]: zgui_bits::DamageSet
 
@@ -18,17 +17,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui_bits::DamageSet;
 use zgui_geom::{Device, Point, Rect, Size};
-use zgui_platform::Surface;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
-use zgui_runtime::{App, AppError, Runtime};
-use zgui_scene::Scene;
+use zgui_runtime::{App, FrameProbe, Runtime, Window};
 use zgui_view::{BuildCx, IntoView, View};
 
 /// A window far larger than the one node that changes in it.
@@ -90,44 +82,19 @@ struct Sprite {
 /// The frames a run was drawn against, in order.
 type Log = Rc<RefCell<Vec<Drawn>>>;
 
-/// A renderer that records the damage of every frame and draws through a compositor.
-///
-/// The compositor renderer stands behind it, so the window records its frames into the
-/// compositor as usual.
+/// A probe that records the region every frame painted again and what the output shows after it.
 struct Recorder {
     /// Where the frames go.
     log: Log,
-    /// The compositor renderer the frames are drawn with.
-    inner: Box<dyn Renderer>,
 }
 
-impl Recorder {
-    /// Returns what the output shows, or `None` before the first frame.
-    fn shown(&self) -> Option<zgui_testkit_compositor::Drawing> {
-        let bridge = self
-            .inner
-            .as_any()?
-            .downcast_ref::<zgui_runtime::compositor::CompositorRenderer>()?;
-        zgui_testkit_compositor::drawing_of(bridge.renderer())
-    }
-}
-
-impl Renderer for Recorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.inner.configure(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.inner.target()
-    }
-
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let outcome = self.inner.draw(scene, damage);
-        let drawing = self.shown().expect("the compositor drew a frame");
+impl FrameProbe for Recorder {
+    fn frame_ended(&self, window: &Window) {
+        let damage = window
+            .last_frame_report()
+            .expect("a frame that ended has a report")
+            .painted;
+        let drawing = support::drawing(window);
         let glyphs = drawing.glyphs();
         self.log.borrow_mut().push(Drawn {
             full: damage.is_full(),
@@ -161,35 +128,6 @@ impl Renderer for Recorder {
                 })
                 .collect(),
         });
-        outcome
-    }
-
-    fn set_subpixel_order(&mut self, order: zgui_render::SubpixelOrder) {
-        self.inner.set_subpixel_order(order);
-    }
-
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
-    fn memory(&self) -> MemoryReport {
-        self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        self.inner.texture_sink()
-    }
-
-    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
-        self.inner.as_any_mut()
-    }
-
-    fn as_any(&self) -> Option<&dyn core::any::Any> {
-        self.inner.as_any()
     }
 }
 
@@ -202,20 +140,15 @@ fn mount(
     log: &Log,
     view: impl FnMut(&mut BuildCx<'_>) -> Box<dyn zgui_view::Anchor> + 'static,
 ) -> zgui_platform_headless::Harness<Runtime> {
-    let factory = Rc::clone(log);
     let handler = App::new()
         .with_title("damage")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(
-            move |surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let renderer = Recorder {
-                    log: Rc::clone(&factory),
-                    inner: support::compositor(surface, target)?,
-                };
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
+        .with_probe(Rc::new(Recorder {
+            log: Rc::clone(log),
+        }))
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
                 zgui_testkit_scene::MonoShaper::new(),

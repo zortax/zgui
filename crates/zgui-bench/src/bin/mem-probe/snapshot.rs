@@ -154,14 +154,14 @@ fn gpu(window: &Window, vram_mib: Option<u64>) -> Group {
     let mut group = vec![
         ("renderer_fixed_bytes", memory.fixed),
         ("renderer_targets_bytes", memory.targets),
-        ("renderer_scratch_bytes", memory.scratch),
-        ("renderer_atlases_bytes", memory.atlases),
-        ("renderer_buffers_bytes", memory.buffers),
+        ("renderer_scratch_bytes", memory.vector),
+        ("renderer_atlases_bytes", memory.atlas),
+        ("renderer_buffers_bytes", memory.chunks),
         ("renderer_total_bytes", memory.total()),
     ];
     let wgpu = renderer
         .as_any()
-        .and_then(|any| any.downcast_ref::<zgui_render_wgpu::WgpuRenderer>());
+        .and_then(|any| any.downcast_ref::<compositor_wgpu::WgpuRenderer>());
     group.push(("renderer_is_wgpu", u64::from(wgpu.is_some())));
     if let Some(report) = wgpu.and_then(|wgpu| wgpu.gpu().device().generate_allocator_report()) {
         group.push(("allocator_allocated_bytes", report.total_allocated_bytes));

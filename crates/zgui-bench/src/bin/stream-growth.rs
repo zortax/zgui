@@ -15,12 +15,13 @@
 
 use std::time::{Duration, Instant};
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{Css, CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RwSignal};
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError};
 use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::vocab::{
@@ -154,11 +155,12 @@ fn main() {
         .with_title("stream-growth")
         .with_size(900.0, 700.0)
         .with_stylesheet(SHEET)
+        .with_compositor(zgui::app::compositor(&fonts))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
              -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = zgui_testkit_scene::CaptureRenderer::new();
+                let mut inner = zgui_bench::renderers::NullRenderer::default();
                 inner.configure(target);
                 Ok(Box::new(inner))
             },

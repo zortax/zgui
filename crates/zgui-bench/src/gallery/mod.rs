@@ -33,7 +33,9 @@ pub(crate) fn runtime(size: &str) -> Runtime {
         .with_title("gallery-scale")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(sheet())
-        .with_renderer(crate::draw::factory(&fonts))
+        .with_compositor(zgui::app::compositor(&fonts))
+        .with_renderer(Box::new(renderer))
+        .with_probe(crate::draw::recorder())
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))

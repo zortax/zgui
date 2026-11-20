@@ -523,10 +523,10 @@ fn spatial_ids_are_stable_across_an_animation() {
 }
 
 #[test]
-fn a_settled_transform_animation_restyles_nothing_and_rebuilds_no_box() {
-    // A transform moves where a box is drawn and nothing else, so a frame of the animation runs no
-    // cascade, rebuilds no box and re-encodes nothing. Measured over the second pass, once the
-    // first has learnt where the bar goes.
+fn a_settled_transform_animation_writes_one_property_and_rebuilds_nothing() {
+    // A transform moves where a box is drawn and nothing else, so a frame of the animation writes
+    // the bar's coordinate system, runs no cascade, rebuilds no box or fragment and re-encodes
+    // nothing. Measured over the second pass.
     let _guard = measuring();
     let mut harness = sliding_bar(SLIDE_CSS);
     harness.settle(8);
@@ -563,6 +563,18 @@ fn a_settled_transform_animation_restyles_nothing_and_rebuilds_no_box() {
         assert_eq!(
             frame.repaints, 0,
             "a written transform re-encoded what it had already drawn"
+        );
+        assert!(
+            frame.place_writes_without_reemit > 0,
+            "not one frame of the animation was served by a write"
+        );
+        assert_eq!(
+            frame.place_writes_with_reemit, 0,
+            "a frame of the animation composed the bar again"
+        );
+        assert_eq!(
+            frame.fragments_rebuilt, 0,
+            "a written transform rebuilt a fragment"
         );
     }
 }

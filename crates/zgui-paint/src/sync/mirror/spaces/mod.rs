@@ -78,8 +78,8 @@ impl Spaces {
         }
         self.forget(slot);
 
-        let (node, parent) = self.value(tx, holds, tree, occupant);
-        let written = Written::of(node.as_ref(), parent);
+        let (node, parent, parent_scroll) = self.value(tx, holds, tree, occupant);
+        let written = Written::of(node.as_ref(), parent, parent_scroll);
         let scroll = self.add_scroll(tx, holds, tree, slot, &written);
         let id = tx.create_transform(written.node(scroll));
         holds.created(id);
@@ -88,6 +88,9 @@ impl Spaces {
         }
         if let Some(scroll) = scroll {
             holds.hold(id, scroll);
+        }
+        if let Some(sticky) = written.sticky {
+            holds.hold(id, sticky.scroll);
         }
 
         let index = slot as usize;
@@ -172,7 +175,8 @@ impl Spaces {
         self.adopted.remove(&id);
     }
 
-    /// Returns the value of `occupant` and the mirrored node of its parent.
+    /// Returns the value of `occupant`, the mirrored node of its parent and the scroll node that
+    /// parent applies.
     ///
     /// A coordinate system whose parent is gone resolves to nothing.
     fn value(
@@ -181,17 +185,21 @@ impl Spaces {
         holds: &mut Holds,
         tree: &SpatialTree,
         occupant: Option<SpatialId>,
-    ) -> (Option<SpatialNode>, Option<TransformId>) {
+    ) -> (Option<SpatialNode>, Option<TransformId>, Option<ScrollId>) {
         let Some(node) = occupant.and_then(|id| tree.get(id)).copied() else {
-            return (None, None);
+            return (None, None, None);
         };
         match node.parent {
-            None => (Some(node), None),
+            None => (Some(node), None, None),
             Some(parent) if tree.contains(parent) => {
-                let parent = self.mirror(tx, holds, tree, parent.index());
-                (Some(node), Some(parent))
+                let mirrored = self.mirror(tx, holds, tree, parent.index());
+                let scroll = self
+                    .slots
+                    .get(parent.index() as usize)
+                    .and_then(|entry| entry.as_ref()?.scroll);
+                (Some(node), Some(mirrored), scroll)
             }
-            Some(_) => (None, None),
+            Some(_) => (None, None, None),
         }
     }
 
@@ -213,8 +221,8 @@ impl Spaces {
             self.forget(slot);
             return 0;
         }
-        let (node, parent) = self.value(tx, holds, tree, occupant);
-        let next = Written::of(node.as_ref(), parent);
+        let (node, parent, parent_scroll) = self.value(tx, holds, tree, occupant);
+        let next = Written::of(node.as_ref(), parent, parent_scroll);
         if next == entry.written {
             return 0;
         }
@@ -230,6 +238,18 @@ impl Spaces {
                 holds.hold(entry.id, new);
             }
         }
+        let (stuck, sticks) = (
+            entry.written.sticky.map(|sticky| sticky.scroll),
+            next.sticky.map(|sticky| sticky.scroll),
+        );
+        if stuck != sticks {
+            if let Some(old) = stuck {
+                holds.unhold(entry.id, old);
+            }
+            if let Some(new) = sticks {
+                holds.hold(entry.id, new);
+            }
+        }
         let reshaped = next.parent != entry.written.parent
             || next.scroll.is_some() != entry.written.scroll.is_some();
         if reshaped {
@@ -241,7 +261,10 @@ impl Spaces {
             tx.set_transform_node(entry.id, next.node(stored.scroll));
             writes += 1;
         } else {
-            if next.local != entry.written.local || next.fixed != entry.written.fixed {
+            if next.local != entry.written.local
+                || next.fixed != entry.written.fixed
+                || next.sticky != entry.written.sticky
+            {
                 tx.set_transform_node(entry.id, next.node(entry.scroll));
                 writes += 1;
             }

@@ -48,90 +48,19 @@ impl TreeChangeHandler for Silent {
 mod nowhere {
     use std::sync::Arc;
 
-    use zgui::atlas::{SinkError, TextureFormat, TextureId, TextureSink};
-    use zgui::geom::{Device, Rect, Size};
+    use compositor_api::Renderer;
+    use compositor_types::RenderTarget;
     use zgui::platform::Surface;
-    use zgui::render::{
-        ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-        Renderer, TextureHandle,
-    };
     use zgui::runtime::AppError;
-
-    /// A texture sink that accepts every upload and holds nothing.
-    struct Sink;
-
-    impl TextureSink for Sink {
-        fn create_texture(
-            &mut self,
-            _: TextureId,
-            _: Size<i32, Device>,
-            _: TextureFormat,
-        ) -> Result<(), SinkError> {
-            Ok(())
-        }
-
-        fn write_texture(
-            &mut self,
-            _: TextureId,
-            _: Rect<i32, Device>,
-            _: TextureFormat,
-            _: &[u8],
-        ) -> Result<(), SinkError> {
-            Ok(())
-        }
-
-        fn destroy_texture(&mut self, _: TextureId) {}
-    }
-
-    /// The renderer itself.
-    pub(crate) struct Nowhere {
-        /// The surface it was configured for.
-        pub(crate) target: Option<RenderTarget>,
-        /// Where tiles go.
-        sink: Sink,
-    }
-
-    impl Renderer for Nowhere {
-        fn capabilities(&self) -> RenderCapabilities {
-            RenderCapabilities::MINIMAL
-        }
-
-        fn configure(&mut self, target: RenderTarget) {
-            self.target = Some(target);
-        }
-
-        fn target(&self) -> Option<RenderTarget> {
-            self.target
-        }
-
-        fn draw(&mut self, _: &zgui::scene::Scene, _: &zgui::bits::DamageSet) -> FrameOutcome {
-            FrameOutcome::Presented(FrameStats::default())
-        }
-
-        fn register_external(&mut self, _: ExternalTexture) -> TextureHandle {
-            TextureHandle(1)
-        }
-
-        fn release_external(&mut self, _: TextureHandle) {}
-
-        fn memory(&self) -> MemoryReport {
-            MemoryReport::ZERO
-        }
-
-        fn texture_sink(&mut self) -> &mut dyn TextureSink {
-            &mut self.sink
-        }
-    }
 
     /// Builds one.
     pub(crate) fn build(
         _: &Arc<dyn Surface>,
         target: RenderTarget,
     ) -> Result<Box<dyn Renderer>, AppError> {
-        Ok(Box::new(Nowhere {
-            target: Some(target),
-            sink: Sink,
-        }))
+        let mut renderer = zgui_testkit_compositor::NullRenderer::default();
+        renderer.configure(target);
+        Ok(Box::new(renderer))
     }
 }
 

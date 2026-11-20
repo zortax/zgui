@@ -1,10 +1,10 @@
 //! What the spatial tree promises, and the two promises interning a matrix could not make.
 
 use zgui_arena::{ArenaKind, ChunkArena, DocumentId, DomainId};
-use zgui_geom::Matrix4;
+use zgui_geom::{Matrix4, Rect};
 
 use crate::id::ScrollFrameId;
-use crate::spatial::{Anchoring, OwnSpace, Placements, PropertyOwner, SpatialTree};
+use crate::spatial::{Anchoring, OwnSpace, Placements, PropertyOwner, SpatialTree, StickyPort};
 
 /// Stands in for the boxes a document is made of, so that owners are minted the way they are in
 /// one: from a handle carrying a slot and an occupancy counter.
@@ -173,12 +173,17 @@ fn each_of_the_three_cases_establishes_a_space_and_says_which_it_is() {
             anchoring: Anchoring::Scrolling,
         }),
     );
+    let held = StickyPort {
+        shift: (0.0, 12.0),
+        ..StickyPort::still(port, Rect::ZERO)
+    };
     assert_eq!(
-        OwnSpace::of(None, Some(port), false),
+        OwnSpace::of(None, Some(held), false),
         Some(OwnSpace {
-            local: Matrix4::IDENTITY,
-            anchoring: Anchoring::Sticky { port },
+            local: Matrix4::translation(0.0, 12.0, 0.0),
+            anchoring: Anchoring::Sticky(held),
         }),
+        "a sticky box's local matrix applies its shift",
     );
     assert_eq!(
         OwnSpace::of(None, None, true),
@@ -199,11 +204,12 @@ fn a_transformed_sticky_box_keeps_both_answers() {
     let matrix = Matrix4::scale(2.0, 2.0, 1.0);
     let port = ScrollFrameId(3);
 
+    let held = StickyPort::still(port, Rect::ZERO);
     assert_eq!(
-        OwnSpace::of(Some(matrix), Some(port), false),
+        OwnSpace::of(Some(matrix), Some(held), false),
         Some(OwnSpace {
             local: matrix,
-            anchoring: Anchoring::Sticky { port },
+            anchoring: Anchoring::Sticky(held),
         }),
         "the matrix is the space and the anchoring is how it takes the scrolling; neither is the \
          other",

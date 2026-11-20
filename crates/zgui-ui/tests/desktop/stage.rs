@@ -78,6 +78,7 @@ impl Stage {
             .with_size(WIDTH, HEIGHT)
             .with_stylesheet(sheet)
             .with_renderer(Box::new(crate::desktop::renderer::build))
+            .with_probe(crate::desktop::renderer::counting())
             .into_handler(move || (Grab, view().into_view()))
             .expect("the application builds");
         let mut inner: Option<Box<dyn AppHandler>> = None;

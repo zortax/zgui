@@ -68,9 +68,8 @@ fn a_scroll_writes_the_scroll_node_and_nothing_else() {
     );
     assert_eq!(
         written.report.recorded + written.report.offsets,
-        1,
-        "only the sticky heading, which zgui composes against the port, moves on its own: \
-         {written:?}"
+        0,
+        "the sticky heading is held by the compositor and moves no chunk: {written:?}"
     );
 }
 
@@ -137,14 +136,16 @@ fn a_sticky_heading_stays_at_the_top_of_its_port() {
         places.push(drawn(&output, "premul[0, 0.5"));
     }
 
+    // The port's top edge is the device's, so a heading held there is drawn at its own place
+    // through no translation at all.
     for (offset, place) in [20, 60].iter().zip(&places) {
         assert_eq!(
             place.len(),
             1,
             "one heading at offset {offset}: {places:#?}"
         );
-        assert!(
-            place[0].starts_with(&format!("rect(0, {offset},")),
+        assert_eq!(
+            place[0], "rect(0, 0, 200, 10 ",
             "the heading is drawn at the top of the port at offset {offset}: {places:#?}"
         );
     }

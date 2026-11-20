@@ -31,6 +31,8 @@ zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
+# The window renderer's contract, which the backend companion is reached through.
+compositor-api.workspace = true
 rustc-hash.workspace = true
 tracing.workspace = true
 
@@ -41,3 +43,5 @@ workspace = true
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+# The compositor a window under test draws through, and a renderer that records its frames.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }

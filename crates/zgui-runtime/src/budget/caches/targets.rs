@@ -1,6 +1,6 @@
 //! The reusable targets the renderer composes isolated content in.
 
-use zgui_render::Renderer;
+use compositor_api::Renderer;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};

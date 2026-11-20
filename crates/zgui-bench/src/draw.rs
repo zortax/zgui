@@ -1,164 +1,58 @@
 //! What a window draws through, and what records the display list it drew.
 
+use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui::geom::{Device, Size};
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
+use compositor_wgpu::WgpuRenderer;
 use zgui::platform::Surface;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::AppError;
-
-/// A texture sink that accepts every upload and holds nothing.
-struct NullSink;
-
-impl zgui::atlas::TextureSink for NullSink {
-    fn create_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _size: Size<i32, Device>,
-        _format: zgui::atlas::TextureFormat,
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn write_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _bounds: zgui::geom::Rect<i32, Device>,
-        _format: zgui::atlas::TextureFormat,
-        _bytes: &[u8],
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn destroy_texture(&mut self, _texture: zgui::atlas::TextureId) {}
-}
-
-/// A renderer that accepts a frame and does nothing with it, so the numbers are the CPU's.
-struct NullRenderer {
-    /// The surface it was configured for.
-    target: Option<RenderTarget>,
-    /// Where tiles are uploaded.
-    sink: NullSink,
-    /// The next handle an external texture is given.
-    next: u64,
-    /// Where a frame drawn against the whole surface leaves its display list.
-    full: std::rc::Rc<crate::verify::FullFrame>,
-}
-
-impl Renderer for NullRenderer {
-    /// Yes, for the same reason every other number this harness takes is a CPU number.
-    ///
-    /// This renderer holds no pixels, so it cannot really move any. What it can do is let the
-    /// *decision* run: a scroll that a real renderer would answer by translating its composed
-    /// target narrows the frame's damage, and the emit walk, the replays and the draw-order inserts
-    /// that follow from that narrowing are exactly what this harness exists to measure. Answering
-    /// false here would measure the frame the framework no longer draws.
-    ///
-    /// What it does not measure is the copy itself, which is GPU work — as is everything else this
-    /// harness leaves out by having no device.
-    fn shifts_composed_pixels(&self) -> bool {
-        true
-    }
-
-    /// Yes, for the same reason: a resize that a real renderer answers from the picture it kept
-    /// narrows the frame's damage, and what follows from that is what this harness measures.
-    fn composed_survives_configure(&self) -> bool {
-        true
-    }
-
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        self.full.observe(scene, damage);
-        crate::phase::observe(scene, damage);
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.next += 1;
-        zgui::render::TextureHandle(self.next)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.sink
-    }
-}
+use zgui_bench::renderers::NullRenderer;
 
 thread_local! {
     /// Where the pixel comparison leaves the readback it asked for.
-    pub(crate) static CAPTURE: std::rc::Rc<crate::verify::Capture> = std::rc::Rc::default();
+    pub(crate) static CAPTURE: Rc<crate::verify::Capture> = Rc::default();
 
     /// Where each window's display-list recorder is left for its opener to pick up, oldest first.
     ///
-    /// A renderer is built inside the window that will draw through it, so this is the only place
+    /// A recorder is built with the application that opens the window, so this is the only place
     /// the two can be introduced. A slot rather than a list would hold only the window opened
     /// last, and the differential opens two.
-    static FULL_FRAMES: std::cell::RefCell<Vec<std::rc::Rc<crate::verify::FullFrame>>> =
+    static FULL_FRAMES: std::cell::RefCell<Vec<Rc<crate::verify::FullFrame>>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
-/// The display-list recorder of the window that was opened most recently.
+/// The display-list recorder of the application that was built most recently.
 ///
 /// # Panics
 ///
-/// Panics when no window has been opened since the last call, because a comparison reading a
-/// recorder no renderer writes to compares two frames that were never drawn.
-pub(crate) fn mounted_recorder() -> std::rc::Rc<crate::verify::FullFrame> {
+/// Panics when no application has been built since the last call, because a comparison reading
+/// a recorder nothing writes to compares two frames that were never drawn.
+pub(crate) fn mounted_recorder() -> Rc<crate::verify::FullFrame> {
     FULL_FRAMES.with(|held| {
         held.borrow_mut()
             .pop()
-            .expect("a window was opened and built a renderer")
+            .expect("an application was built with a recorder")
     })
 }
 
-/// Returns the factory of the renderers windows over `fonts` draw through.
+/// Builds the probe that records every frame's display list for the comparisons and phases.
 ///
-/// With `ZGUI_BENCH_COMPOSITOR` set, each window draws through its own `compositor-core`
-/// compositor, which shares `fonts` and rasterises glyphs with swash, onto a renderer that keeps
-/// nothing. Otherwise the factory is [`renderer`].
-pub(crate) fn factory(fonts: &zgui::prelude::Fonts) -> zgui::runtime::RendererFactory {
-    if std::env::var_os("ZGUI_BENCH_COMPOSITOR").is_none() {
-        return Box::new(renderer);
-    }
-    let fonts = fonts.clone();
-    let raster = Arc::new(compositor_text::SwashRaster::new());
-    Box::new(move |_surface, target| {
-        let full = std::rc::Rc::new(crate::verify::FullFrame::default());
-        FULL_FRAMES.with(|held| held.borrow_mut().push(full));
-        let registry = zgui_text_parley::CompositorFonts::new(Arc::clone(fonts.shaper().fonts()));
-        let mut compositor = compositor_core::CompositorImpl::new();
-        compositor_api::Compositor::use_font_registry(&mut compositor, Arc::new(registry));
-        compositor_api::Compositor::use_glyph_raster(&mut compositor, Arc::clone(&raster) as _);
-        let mut window = zgui::runtime::compositor::CompositorRenderer::new(
-            Box::new(compositor),
-            Box::new(zgui_testkit_compositor::NullRenderer::default()),
-        );
-        window.configure(target);
-        Ok(Box::new(window) as Box<dyn Renderer>)
+/// Its recorder is published for [`mounted_recorder`]. Keeping the list costs nothing until
+/// something asks for it: the recorder is off until a phase turns it on.
+pub(crate) fn recorder() -> Rc<dyn zgui::runtime::FrameProbe> {
+    let full = Rc::new(crate::verify::FullFrame::default());
+    FULL_FRAMES.with(|held| held.borrow_mut().push(Rc::clone(&full)));
+    Rc::new(crate::verify::Listed {
+        full,
+        capture: capturing().then(|| CAPTURE.with(Clone::clone)),
     })
+}
+
+/// Reports whether this run draws on the device and reads frames back, with `ZGUI_BENCH_CAPTURE`.
+fn capturing() -> bool {
+    std::env::var_os("ZGUI_BENCH_CAPTURE").is_some()
 }
 
 /// Builds the renderer a window draws through: nothing, or this machine's device offscreen.
@@ -166,49 +60,32 @@ pub(crate) fn renderer(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
-    // Every window publishes a display-list recorder, whichever renderer it draws through, because
-    // the recorder is how a comparison reads what a frame emitted and a phase that opens a window
-    // has no way to attach one afterwards. Keeping the list costs nothing until something asks for
-    // it: the recorder is off until a phase turns it on.
-    let full = std::rc::Rc::new(crate::verify::FullFrame::default());
-    FULL_FRAMES.with(|held| held.borrow_mut().push(std::rc::Rc::clone(&full)));
-    if std::env::var_os("ZGUI_BENCH_CAPTURE").is_some() {
-        let mut gpu = zgui_render_wgpu::Builder::new()
-            .offscreen(
-                target,
-                zgui_render_wgpu::wgpu::TextureFormat::Bgra8Unorm,
-                false,
-            )
-            .map_err(AppError::GpuUnavailable)?;
-        zgui_render_vector_vello::attach(&mut gpu, target.size);
-        return Ok(Box::new(crate::verify::Listed {
-            inner: Box::new(crate::verify::Recorded {
-                inner: gpu,
-                capture: CAPTURE.with(std::clone::Clone::clone),
-            }),
-            full,
+    if capturing() {
+        return Ok(Box::new(crate::verify::Recorded {
+            inner: device(target)?,
+            capture: CAPTURE.with(Clone::clone),
         }));
     }
     if std::env::var_os("ZGUI_BENCH_GPU").is_none() {
-        return Ok(Box::new(NullRenderer {
-            target: Some(target),
-            sink: NullSink,
-            next: 0,
-            full,
-        }));
+        return Ok(Box::new(NullRenderer::new(target)));
     }
-    let mut gpu = zgui_render_wgpu::Builder::new()
-        .offscreen(
-            target,
-            zgui_render_wgpu::wgpu::TextureFormat::Bgra8Unorm,
-            false,
-        )
-        .map_err(AppError::GpuUnavailable)?;
-    zgui_render_vector_vello::attach(&mut gpu, target.size);
-    let inner: Box<dyn Renderer> = if crate::gpu_time::enabled() {
+    let gpu = device(target)?;
+    Ok(if crate::gpu_time::enabled() {
         Box::new(crate::gpu_time::Timed::new(gpu))
     } else {
         Box::new(gpu)
-    };
-    Ok(Box::new(crate::verify::Listed { inner, full }))
+    })
+}
+
+/// Opens this machine's device offscreen for `target`, timing its passes when the run asks.
+///
+/// # Errors
+///
+/// Fails when no adapter opens a device.
+fn device(target: RenderTarget) -> Result<WgpuRenderer, AppError> {
+    // The device reads whether to time its passes when it opens.
+    if crate::gpu_time::enabled() {
+        compositor_wgpu::enable_gpu_timing();
+    }
+    zgui_bench::renderers::device(target)
 }

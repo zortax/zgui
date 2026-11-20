@@ -247,16 +247,16 @@ pub(crate) fn repaint_everything(harness: &mut Harness<zgui::runtime::Runtime>, 
     note("settled", harness);
 }
 
-/// The display list of the last frame one window drew against the whole surface.
+/// The display list of the last frame one window painted against the whole surface.
 ///
 /// A window's *current* scene is not this: it is whatever its last frame emitted, against whatever
 /// damage that frame was built for, and the frame that answers a full repaint is routinely followed
-/// by a small one that overwrites it. So the list is taken where it is drawn — inside the renderer,
-/// after the scene is finished and before anything else can touch it — and only for the frames that
-/// were drawn against every pixel, which are the only frames that hold the whole document.
+/// by a small one that overwrites it. So the list is taken as each frame ends, and only for the
+/// frames that were painted against every pixel, which are the only frames that hold the whole
+/// document.
 #[derive(Default)]
 pub(crate) struct FullFrame {
-    /// Whether the renderer keeps the list. Off for the measuring phases, which must not pay for
+    /// Whether the list is kept. Off for the measuring phases, which must not pay for
     /// rendering a transcript on every frame they are timing.
     pub(crate) wanted: std::cell::Cell<bool>,
     /// The last one kept.
@@ -264,7 +264,7 @@ pub(crate) struct FullFrame {
 }
 
 impl FullFrame {
-    /// Keeps `scene` if it was drawn against the whole surface and anyone asked for it.
+    /// Keeps `scene` if it was painted against the whole surface and anyone asked for it.
     pub(crate) fn observe(&self, scene: &zgui::scene::Scene, damage: &DamageSet) {
         if self.wanted.get() && damage.is_full() {
             *self.last.borrow_mut() = Some(
@@ -279,97 +279,29 @@ impl FullFrame {
     }
 }
 
-/// A renderer that keeps the display list of every frame drawn against the whole surface.
+/// A probe that keeps the display list of every frame painted against the whole surface.
 ///
-/// Wrapping rather than a field on each renderer, because a window is handed one renderer and a
-/// comparison needs the list whichever renderer that is — the device's, the device's under a
-/// readback, or the one that draws nothing at all.
+/// A probe rather than a field on each renderer, because a comparison needs the list whichever
+/// renderer a window draws through: the device's, the device's under a readback, or the one that
+/// draws nothing at all.
 pub(crate) struct Listed {
-    /// The renderer that does the work.
-    pub(crate) inner: Box<dyn zgui::render::Renderer>,
     /// Where a full frame's list is left.
     pub(crate) full: std::rc::Rc<FullFrame>,
+    /// Where every frame's region and list go when the window draws under a readback.
+    pub(crate) capture: Option<std::rc::Rc<Capture>>,
 }
 
-impl zgui::render::Renderer for Listed {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn configure(&mut self, target: zgui::render::RenderTarget) {
-        self.inner.configure(target);
-    }
-
-    fn target(&self) -> Option<zgui::render::RenderTarget> {
-        self.inner.target()
-    }
-
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        damage: &DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        self.full.observe(scene, damage);
-        self.inner.draw(scene, damage)
-    }
-
-    fn register_external(
-        &mut self,
-        texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: zgui::render::TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.inner.texture_sink()
-    }
-
-    fn vector_status(&self) -> zgui::render::VectorStatus {
-        self.inner.vector_status()
-    }
-
-    fn shifts_composed_pixels(&self) -> bool {
-        self.inner.shifts_composed_pixels()
-    }
-
-    fn composed_survives_configure(&self) -> bool {
-        self.inner.composed_survives_configure()
-    }
-
-    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
-        self.inner.shift_composed(shift);
-    }
-
-    fn target_pool(&self) -> zgui::render::TargetPoolReport {
-        self.inner.target_pool()
-    }
-
-    fn release_cached_targets(&mut self) -> u64 {
-        self.inner.release_cached_targets()
-    }
-
-    fn release_idle_resources(&mut self) -> u64 {
-        self.inner.release_idle_resources()
-    }
-
-    fn acquire_block(&self) -> core::time::Duration {
-        self.inner.acquire_block()
-    }
-
-    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
-        self.inner.as_any_mut()
-    }
-
-    fn as_any(&self) -> Option<&dyn core::any::Any> {
-        self.inner.as_any()
+impl zgui::runtime::FrameProbe for Listed {
+    fn frame_ended(&self, window: &zgui::runtime::Window) {
+        let scene = window.scene();
+        let painted = window
+            .last_frame_report()
+            .map_or_else(DamageSet::new, |report| report.painted);
+        self.full.observe(scene, &painted);
+        crate::phase::observe(scene, &painted);
+        if let Some(capture) = &self.capture {
+            capture.observe(scene, &painted);
+        }
     }
 }
 
@@ -515,7 +447,8 @@ pub(crate) fn compare_readings(
 /// What one frame was drawn against: whether the whole surface, and the rectangles otherwise.
 pub(crate) type Drawn = (bool, Vec<zgui::geom::Rect<i32, Device>>);
 
-/// The pixels a window last presented, kept for a comparison to read.
+/// The pixels a window last presented, and the display lists its frames painted, kept for a
+/// comparison to read.
 ///
 /// A window owns its renderer, so the only place a readback can be taken from is inside the
 /// renderer itself — after the draw and before anything else can touch the target.
@@ -525,13 +458,13 @@ pub(crate) struct Capture {
     /// a full device synchronisation and a measurement must not pay for one.
     pub(crate) want: std::cell::Cell<bool>,
     /// What the last frame that was asked for presented.
-    pub(crate) last: std::cell::RefCell<Option<zgui_render_wgpu::Pixels>>,
+    pub(crate) last: std::cell::RefCell<Option<compositor_wgpu::Pixels>>,
     /// The persistent target that frame was composed into, which is the one a partial repaint
     /// accumulates in and the one a stale pixel would survive in.
-    pub(crate) composed: std::cell::RefCell<Option<zgui_render_wgpu::Pixels>>,
-    /// Every damage set drawn against since the last time the list was emptied.
+    pub(crate) composed: std::cell::RefCell<Option<compositor_wgpu::Pixels>>,
+    /// Every region a paint walk was gated on since the last time the list was emptied.
     pub(crate) damages: std::cell::RefCell<Vec<Drawn>>,
-    /// The display list of every frame drawn against the whole surface.
+    /// The display list of every frame painted against the whole surface.
     pub(crate) full_lists: std::cell::RefCell<Vec<String>>,
     /// Whether the list of *every* frame is kept, not only the ones drawn against every pixel.
     ///
@@ -543,54 +476,58 @@ pub(crate) struct Capture {
     pub(crate) every_list: std::cell::RefCell<Vec<(String, String)>>,
 }
 
-/// This machine's device, with a readback taken whenever one is asked for.
-pub(crate) struct Recorded {
-    /// The renderer that does the work.
-    pub(crate) inner: zgui_render_wgpu::WgpuRenderer,
-    /// Where a readback is left.
-    pub(crate) capture: std::rc::Rc<Capture>,
-}
-
-impl zgui::render::Renderer for Recorded {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn configure(&mut self, target: zgui::render::RenderTarget) {
-        self.inner.configure(target);
-    }
-
-    fn target(&self) -> Option<zgui::render::RenderTarget> {
-        self.inner.target()
-    }
-
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        damage: &DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        self.capture
-            .damages
+impl Capture {
+    /// Keeps the region of a frame's paint walk and the display list it painted, as asked for.
+    fn observe(&self, scene: &zgui::scene::Scene, damage: &DamageSet) {
+        self.damages
             .borrow_mut()
             .push((damage.is_full(), damage.rects().to_vec()));
         if damage.is_full() {
-            self.capture
-                .full_lists
+            self.full_lists
                 .borrow_mut()
                 .push(zgui_testkit_scene::transcript::of(scene, damage).into_string());
         }
-        if self.capture.transcribe.get() {
+        if self.transcribe.get() {
             let against = if damage.is_full() {
                 "full".to_owned()
             } else {
                 format!("{:?}", damage.rects())
             };
-            self.capture.every_list.borrow_mut().push((
+            self.every_list.borrow_mut().push((
                 against,
                 zgui_testkit_scene::transcript::of(scene, &DamageSet::default()).into_string(),
             ));
         }
-        let outcome = self.inner.draw(scene, damage);
+    }
+}
+
+/// This machine's device, with a readback taken whenever one is asked for.
+pub(crate) struct Recorded {
+    /// The renderer that does the work.
+    pub(crate) inner: compositor_wgpu::WgpuRenderer,
+    /// Where a readback is left.
+    pub(crate) capture: std::rc::Rc<Capture>,
+}
+
+impl compositor_api::Renderer for Recorded {
+    fn capabilities(&self) -> compositor_types::RenderCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn configure(&mut self, target: compositor_types::RenderTarget) {
+        self.inner.configure(target);
+    }
+
+    fn target(&self) -> Option<compositor_types::RenderTarget> {
+        self.inner.target()
+    }
+
+    fn target_age(&self) -> compositor_types::BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &compositor_types::Frame) -> compositor_types::FrameOutcome {
+        let outcome = self.inner.draw(frame);
         if self.capture.want.get() {
             *self.capture.last.borrow_mut() = self.inner.read_presented();
             *self.capture.composed.borrow_mut() = Some(self.inner.read_composed());
@@ -598,26 +535,11 @@ impl zgui::render::Renderer for Recorded {
         outcome
     }
 
-    fn register_external(
-        &mut self,
-        texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: zgui::render::TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
-    fn memory(&self) -> zgui::render::MemoryReport {
+    fn memory(&self) -> compositor_types::MemoryReport {
         self.inner.memory()
     }
 
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.inner.texture_sink()
-    }
-
-    fn vector_status(&self) -> zgui::render::VectorStatus {
+    fn vector_status(&self) -> compositor_types::VectorStatus {
         self.inner.vector_status()
     }
 }

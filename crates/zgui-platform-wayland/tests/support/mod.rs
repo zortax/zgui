@@ -28,13 +28,13 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, WakeReason,
 };
-use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::renderer::PrePresent;
-use zgui_render_wgpu::{PresentPacing, SharedGraphics};
 use zgui_runtime::{App, AppError};
+use zgui_testkit_compositor::{Pacing, Windows};
 use zgui_view::{BuildCx, IntoView, View};
 
 /// How long a scripted property is allowed to take before something is declared stuck.
@@ -299,8 +299,8 @@ impl<A: AppHandler> AppHandler for StopAfter<A> {
 /// One device behind all of them, as in the application. So a property about several windows
 /// exercises the path that a shell with a bar, pop-ups and lock windows runs on.
 pub(crate) fn renderers() -> zgui_runtime::RendererFactory {
-    let graphics = SharedGraphics::new();
-    Box::new(move |surface, target| renderer(&graphics, surface, target))
+    let windows = Windows::new();
+    Box::new(move |surface, target| renderer(&windows, surface, target))
 }
 
 /// Builds whatever this surface can actually be drawn through.
@@ -309,7 +309,7 @@ pub(crate) fn renderers() -> zgui_runtime::RendererFactory {
 /// itself gets presentation that never blocks, and is told when a buffer is about to be committed
 /// so that it can ask the compositor for the next frame.
 fn renderer(
-    graphics: &SharedGraphics,
+    windows: &Windows,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
@@ -319,23 +319,24 @@ fn renderer(
         )));
     };
     let pacing = match surface.present_pacing() {
-        zgui_platform::PresentPacing::Platform => PresentPacing::Platform,
-        _ => PresentPacing::Display,
+        zgui_platform::PresentPacing::Platform => Pacing::Platform,
+        _ => Pacing::Display,
     };
     let notified = Arc::clone(surface);
-    let pre_present: PrePresent = Box::new(move |target| {
+    let pre_present = Box::new(move |target: RenderTarget| {
         PRESENTS.fetch_add(1, Ordering::Relaxed);
-        notified.pre_present_frame(target.size, f64::from(target.scale.get()));
+        let size = zgui_geom::Size::new(
+            i32::try_from(target.size[0]).unwrap_or(i32::MAX),
+            i32::try_from(target.size[1]).unwrap_or(i32::MAX),
+        );
+        notified.pre_present_frame(size, f64::from(target.scale));
     });
-    graphics
-        .renderer_for_surface(target, handles, pacing, Some(pre_present))
-        .map_or_else(
-            |unavailable| {
-                NO_DEVICE.store(true, Ordering::Relaxed);
-                Err(AppError::from(unavailable))
-            },
-            |renderer| Ok(Box::new(renderer) as Box<dyn Renderer>),
-        )
+    windows
+        .renderer(target, handles, pacing, Some(pre_present))
+        .map_err(|unavailable| {
+            NO_DEVICE.store(true, Ordering::Relaxed);
+            AppError::Platform(PlatformError::Backend(unavailable.to_string()))
+        })
 }
 
 /// The identifier every window these properties open is grouped under.
@@ -362,6 +363,7 @@ fn styled(title: &'static str, css: &'static str) -> Result<zgui_runtime::Runtim
         .with_application_id(APP_ID)
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
+        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
         .with_renderer(renderers())
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(

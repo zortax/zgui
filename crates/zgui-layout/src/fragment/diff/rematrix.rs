@@ -58,12 +58,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // Beyond the move's own damage: a frame that moves a port's pixels keeps this damage and
         // drops that.
         if let Some((before, _)) = before {
-            self.damage_drawn_beyond_a_move(
+            self.damage_in(
                 self.device_before(before, anchor),
                 super::Admitted::everything(),
             );
         }
-        self.damage_beyond_a_move(
+        self.damage_in(
             self.device_now(folded.subtree_ink, anchor),
             super::Admitted::everything(),
         );

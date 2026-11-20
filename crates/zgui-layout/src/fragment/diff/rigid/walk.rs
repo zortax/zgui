@@ -177,6 +177,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
         fragment.clip = clip;
         let clips = fragment.flags.contains(FragmentFlags::CLIPS_CHILDREN);
         let padding_box = fragment.padding_box();
+        let scrollbar = fragment.scrollbar;
         let border = fragment.border;
         // The space this box's fragments draw under, which is the space its padding box —
         // and therefore the clip it imposes below — is measured in.
@@ -197,6 +198,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             style,
             self.store.custom_properties(key, style),
             padding_box,
+            scrollbar,
             border,
             scale,
             shift,

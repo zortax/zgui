@@ -4,17 +4,17 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui_bits::DamageSet;
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+};
 use zgui_platform::Surface;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    Renderer, TextureHandle,
-};
 use zgui_runtime::{App, AppError, FrameProbe, FrameReport, Window};
-use zgui_scene::Scene;
 use zgui_view::{BuildCx, IntoView, View};
+
+mod support;
 
 /// A window with one swatch whose colour a signal decides.
 const CSS: &str = "root { display: block; width: 400px; height: 300px }
@@ -27,8 +27,6 @@ struct Numbering {
     drawn: Rc<Cell<u32>>,
     /// The surface it was pointed at.
     target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
 }
 
 impl Renderer for Numbering {
@@ -44,29 +42,20 @@ impl Renderer for Numbering {
         self.target
     }
 
-    fn draw(&mut self, _scene: &Scene, _damage: &DamageSet) -> FrameOutcome {
+    fn target_age(&self) -> BufferAge {
+        BufferAge::Unknown
+    }
+
+    fn draw(&mut self, _frame: &Frame) -> FrameOutcome {
         self.drawn.set(self.drawn.get() + 1);
         FrameOutcome::Presented(FrameStats {
-            vector_passes: 0,
             draw_calls: self.drawn.get(),
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
+            ..FrameStats::default()
         })
     }
 
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
     fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
+        MemoryReport::default()
     }
 }
 
@@ -109,12 +98,12 @@ fn a_probe_reads_the_report_of_the_frame_that_has_just_ended() {
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
         .with_probe(Rc::clone(&probe) as Rc<dyn FrameProbe>)
+        .with_compositor(support::compositor())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
                 let mut renderer = Numbering {
                     drawn: Rc::clone(&counter),
                     target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
                 };
                 renderer.configure(target);
                 Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))

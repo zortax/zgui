@@ -1,6 +1,6 @@
 //! Everything the renderer holds on the device that no other cache here accounts for.
 
-use zgui_render::Renderer;
+use compositor_api::Renderer;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};

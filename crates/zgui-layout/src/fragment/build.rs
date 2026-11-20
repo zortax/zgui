@@ -28,6 +28,12 @@ use zgui_space::{
 };
 
 use crate::fragment::{FragmentFlags, anchored, clip, filter, ink, sticky, transform};
+
+/// A rectangle that contains every rectangle a document lays out.
+const UNBOUNDED: Rect<DevicePx, Device> = Rect::new(
+    Point::new(DevicePx(-1.0e9), DevicePx(-1.0e9)),
+    Size::new(DevicePx(2.0e9), DevicePx(2.0e9)),
+);
 use crate::round::snap;
 use crate::style::DeviceStyle;
 use crate::tree::store::LayoutStore;
@@ -59,6 +65,9 @@ pub(crate) struct Descent {
     pub(crate) scrollport: Rect<DevicePx, Device>,
     /// The containing block's content box, in local space, which a sticky shift is clamped to.
     pub(crate) containing: Rect<DevicePx, Device>,
+    /// Whether the containing block is a scroll container whose content this box is drawn in, so
+    /// that it moves with the scroll offset and never holds a sticky box back.
+    pub(crate) containing_scrolls: bool,
     /// Whether [`Descent::layout`] and [`Descent::rounded`] are what this box's descendants were
     /// last composed against.
     ///
@@ -118,6 +127,7 @@ impl Descent {
             scroll: None,
             scrollport: viewport,
             containing: viewport,
+            containing_scrolls: false,
             origin_stable: true,
             fixed: FixedParent {
                 spatial,
@@ -188,6 +198,8 @@ pub(crate) struct Placed {
     pub(crate) offset: (f32, f32),
     /// Whether this box is `position: fixed`.
     pub(crate) fixed: bool,
+    /// Whether this box is sticky and its shift moved since it was last composed.
+    pub(crate) sticky_moved: bool,
     /// What this box itself adds to the [`FragmentFlags::BOUND`] flags its subtree folds up.
     pub(crate) bound: FragmentFlags,
     /// What this box's children are composed against.
@@ -223,6 +235,7 @@ impl Placed {
             anchor: content,
             scrollport: self.descent.scrollport.translate(by),
             containing: self.descent.containing.translate(by),
+            containing_scrolls: true,
             fixed,
             ..self.descent
         }
@@ -316,12 +329,11 @@ pub(crate) fn place(
     );
 
     let is_sticky = node.style.get_box().position == zgui_css::values::size::PositionValue::Sticky;
-    // Sticky is resolved here rather than in layout because nothing around the box moves: the
-    // shift is added to the composed position and to nothing else.
-    let (sticky_x, sticky_y) =
-        sticky::offset(&node.style, flow, from.scrollport, from.containing, scale);
-    let shift = (inherited.0 + sticky_x, inherited.1 + sticky_y);
-    let border_box = flow.translate(Size::new(DevicePx(sticky_x), DevicePx(sticky_y)));
+    // Sticky is resolved here rather than in layout because nothing around the box moves. The box
+    // is composed where the flow puts it, and the shift goes into the coordinate system it
+    // establishes, so a scroll that changes the shift moves no fragment.
+    let shift = inherited;
+    let border_box = flow;
 
     let border = snap::edges(snapped.border);
     let padding = snap::edges(snapped.padding);
@@ -342,7 +354,10 @@ pub(crate) fn place(
         zgui_dom::side::AnimPlacement::group,
     );
     let own_matrix = transform::matrix_of(box_, border_box, scale);
+    // A sticky box measures its ink, and its children theirs, in the coordinate system it
+    // establishes, which applies its shift. Every matrix above it is in that system's chain.
     let matrix = match (parent_matrix, own_matrix) {
+        _ if is_sticky => None,
         (None, None) => None,
         (Some(outer), None) => Some(outer),
         (None, Some(own)) => Some(own),
@@ -356,12 +371,33 @@ pub(crate) fn place(
     // A sticky box with nothing scrollable above it is held still against the window, which is a
     // scrollable region without being a box; without that, a box whose stickiness has no named port
     // would answer that it moves with everything around it, which is the one thing sticky is not.
-    let sticky_port = is_sticky.then(|| from.scroll.unwrap_or(zgui_space::ScrollFrameId::VIEWPORT));
+    let sticky_port = is_sticky.then(|| zgui_space::StickyPort {
+        port: from.scroll.unwrap_or(zgui_space::ScrollFrameId::VIEWPORT),
+        rect: flow,
+        // A containing block that scrolls with the content holds nothing back at any offset.
+        limit: if from.containing_scrolls {
+            UNBOUNDED
+        } else {
+            from.containing
+        },
+        inset: sticky::insets(&node.style, from.scrollport, scale),
+        shift: sticky::offset(&node.style, flow, from.scrollport, from.containing, scale),
+    });
     let own_space = OwnSpace::of(own_matrix, sticky_port, fixed);
+    let sticky_moved = is_sticky && {
+        let owner = PropertyOwner::of(key);
+        let before = tables
+            .spatial
+            .of(owner)
+            .and_then(|id| tables.spatial.get(id))
+            .map(|node| node.local);
+        before != own_space.map(|own| own.local)
+    };
     let space = tables
         .spatial
         .space_of(parent_spatial, PropertyOwner::of(key), own_space);
     let transform = Some(space);
+    let anchor = if is_sticky { space } else { parent_anchor };
     let transform_hash = {
         use zgui_space::Content;
         matrix
@@ -397,6 +433,7 @@ pub(crate) fn place(
         &node.style,
         declared,
         padding_box,
+        scrollbar,
         border,
         scale,
         Size::new(DevicePx(shift.0), DevicePx(shift.1)),
@@ -454,7 +491,7 @@ pub(crate) fn place(
     let fixed_parent = if own_space.is_some() {
         FixedParent {
             spatial: space,
-            anchor: parent_anchor,
+            anchor,
             matrix,
             offset: (0.0, 0.0),
             scrolled: !fixed && from.in_scroll,
@@ -509,7 +546,7 @@ pub(crate) fn place(
         clip: from.clip,
         clip_transform,
         transform,
-        anchor: parent_anchor,
+        anchor,
         transform_hash,
         stacking,
         scroll,
@@ -521,6 +558,7 @@ pub(crate) fn place(
         scrolls,
         offset: (offset.x.0, offset.y.0),
         fixed,
+        sticky_moved,
         bound,
         descent: Descent {
             layout,
@@ -529,11 +567,12 @@ pub(crate) fn place(
             clip: child_clip,
             matrix,
             spatial: space,
-            anchor: parent_anchor,
+            anchor,
             stacking,
             scroll,
             scrollport,
             containing: content_box,
+            containing_scrolls: false,
             origin_stable,
             fixed: fixed_parent,
             in_scroll: scrolls || (!fixed && from.in_scroll),

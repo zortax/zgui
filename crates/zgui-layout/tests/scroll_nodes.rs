@@ -232,8 +232,9 @@ fn a_scroll_writes_the_content_space_and_leaves_the_rectangles_alone() {
         .place(element, Point::new(DevicePx(0.0), DevicePx(30.0)));
     frame.damage = zgui_bits::DamageSet::new();
     let moves = compose(&mut frame, &mut store, &mut Scrolled { node: element });
-    // The scroll moved every pixel of the port, and the walk visited no row to damage it. So the
-    // port itself is the damage, and it holds every row the port shows, before and after.
+    // The content moved up by 20 pixels, so the bottom 20 pixels of the port show content that was
+    // not in view, and the walk visited no row to damage it. That band is the damage. The port is
+    // the padding box without the room the scrollbars take.
     let port_piece = store
         .fragment(store.fragments_of_box(port_box)[0])
         .expect("a port piece");
@@ -242,14 +243,23 @@ fn a_scroll_writes_the_content_space_and_leaves_the_rectangles_alone() {
         port_piece.transform,
         &Placements::of(&frame.spatial),
     );
-    let pixels = zgui_layout::fragment::diff::pixels(port_on_device);
+    let bottom =
+        port_on_device.origin.y.0 + port_on_device.size.height.0 - port_piece.scrollbar.height.0;
+    let band = Rect::new(
+        Point::new(port_on_device.origin.x, DevicePx(bottom - 20.0)),
+        zgui_geom::Size::new(
+            DevicePx(port_on_device.size.width.0 - port_piece.scrollbar.width.0),
+            DevicePx(20.0),
+        ),
+    );
+    let pixels = zgui_layout::fragment::diff::pixels(band);
     assert!(
         frame
             .damage
             .rects()
             .iter()
             .any(|held| held.contains_rect(pixels)),
-        "the scroll damaged {:?}, which leaves part of the port {pixels:?} out",
+        "the scroll damaged {:?}, which leaves the band it brought into view {pixels:?} out",
         frame.damage.rects()
     );
     let fragment = store.fragment(first).expect("a row piece");
@@ -269,6 +279,13 @@ fn a_scroll_writes_the_content_space_and_leaves_the_rectangles_alone() {
         device.origin.y.0,
         was.origin.y.0 - 20.0,
         "the space did not carry the row by the change of offset"
+    );
+    assert!(
+        !frame
+            .damage
+            .intersects(zgui_layout::fragment::diff::pixels(device)),
+        "the scroll damaged {:?}, which reaches the row {device:?} that stayed in view",
+        frame.damage.rects()
     );
 }
 
@@ -877,12 +894,11 @@ fn a_fixed_box_inside_a_content_space_stays_where_a_fresh_build_puts_it() {
         .map(|key| device(&store, &frame, *key))
         .collect();
     assert_eq!(standing.len(), 2, "the page has two fixed boxes: {fixed:?}");
-    let mut last = 0.0;
     for by in STEPS {
         frame
             .scroll
             .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
-        let moves = compose(&mut frame, &mut store, &mut Scrolled { node: element });
+        compose(&mut frame, &mut store, &mut Scrolled { node: element });
         let placements = Placements::of(&frame.spatial);
         for (key, was) in fixed.iter().zip(&standing) {
             let now = device(&store, &frame, *key);
@@ -906,29 +922,7 @@ fn a_fixed_box_inside_a_content_space_stays_where_a_fresh_build_puts_it() {
                 );
                 above = store.node(parent).parent;
             }
-            if moves.by.is_some() {
-                let shifted =
-                    now.translate(zgui_geom::Size::new(DevicePx(0.0), DevicePx(last - by)));
-                // What the port's clip admits of each is what can be drawn there.
-                let port_piece = store
-                    .fragment(store.fragments_of_box(port_key)[0])
-                    .expect("a port piece");
-                let port_rect =
-                    onto_device(port_piece.padding_box(), port_piece.transform, &placements);
-                for rect in [now, shifted] {
-                    let Some(rect) = rect.intersection(port_rect) else {
-                        continue;
-                    };
-                    let pixels = zgui_layout::fragment::diff::pixels(rect);
-                    assert!(
-                        covered(&[&moves.beyond], pixels),
-                        "scrolled to {by}, the damage beyond the move {:?} leaves {pixels:?} out",
-                        moves.beyond.rects()
-                    );
-                }
-            }
         }
-        last = by;
     }
 }
 
@@ -1107,93 +1101,6 @@ fn a_fixed_box_in_a_sticky_box_keeps_the_port_out_of_a_content_space() {
     }
 }
 
-#[test]
-fn a_row_that_layout_moves_as_its_port_scrolls_damages_where_the_moved_pixels_put_it() {
-    let _guard = exclusive();
-    let mut fixture = page(12);
-    let mut store = fixture.box_tree();
-    let mut content = measurer();
-    let mut frame = lay_out(&mut store, &mut content, 300.0, 240.0);
-    let element = port(&store);
-    for by in [30.0, 40.0] {
-        frame
-            .scroll
-            .place(element, Point::new(DevicePx(0.0), DevicePx(by)));
-        compose(&mut frame, &mut store, &mut Scrolled { node: element });
-    }
-    let port_key = port_box(&store);
-    assert!(scrolls_content(&store, port_key));
-    let rows = store.node(port_key).children.clone();
-    let device_of = |store: &LayoutStore, frame: &Frame, key| {
-        store
-            .fragment(store.fragments_of_box(key)[0])
-            .expect("a live piece")
-            .device_subtree_ink(&Placements::of(&frame.spatial))
-    };
-    let before: Vec<_> = rows[4..9]
-        .iter()
-        .map(|key| device_of(&store, &frame, *key))
-        .collect();
-
-    // Row 3 grows, so layout moves every row after it, and the port scrolls in the same frame.
-    let target = store
-        .node(rows[3])
-        .source
-        .expect("the row came from an element");
-    let index = fixture
-        .document
-        .store()
-        .index_of(target)
-        .expect("a live element");
-    fixture.edit_restyle_and_patch(&mut store, |edit| {
-        edit.set_style_property(index, "height", Some("30px"));
-    });
-    support::lay_out_only(&mut store, &mut content, 300.0, 240.0);
-    let root = store.root().expect("a root box");
-    let above = vec![
-        store
-            .node(root)
-            .source
-            .expect("the root came from an element"),
-        element,
-    ];
-    frame
-        .scroll
-        .place(element, Point::new(DevicePx(0.0), DevicePx(55.0)));
-    let mut dirty = Owing {
-        target,
-        above,
-        bits: Dirty::RELAYOUT | Dirty::REPAINT,
-        scrolled: Some(element),
-    };
-    let moves = compose(&mut frame, &mut store, &mut dirty);
-    assert!(scrolls_content(&store, port_key));
-    let by = moves.by.expect("the frame reports the port's move");
-    let placements = Placements::of(&frame.spatial);
-    let port_piece = store
-        .fragment(store.fragments_of_box(port_key)[0])
-        .expect("a port piece");
-    let port_rect = onto_device(port_piece.padding_box(), port_piece.transform, &placements);
-    for (key, was) in rows[4..9].iter().zip(before) {
-        assert_ne!(
-            device_of(&store, &frame, *key),
-            was.translate(zgui_geom::Size::new(DevicePx(by.0), DevicePx(by.1))),
-            "row {key:?} moved with the port only, so layout did not move it"
-        );
-        // Moving the port's pixels puts the row's old image here, so it is drawn again.
-        let carried = was.translate(zgui_geom::Size::new(DevicePx(by.0), DevicePx(by.1)));
-        let Some(rect) = carried.intersection(port_rect) else {
-            continue;
-        };
-        let pixels = zgui_layout::fragment::diff::pixels(rect);
-        assert!(
-            covered(&[&moves.beyond], pixels),
-            "row {key:?}: the damage beyond the move {:?} leaves {pixels:?} out",
-            moves.beyond.rects()
-        );
-    }
-}
-
 /// A scrollport of `rows` rows, each a narrow box whose words take two lines.
 fn wrapped_page(rows: usize) -> Fixture {
     let rows: Vec<Element> = (0..rows)
@@ -1279,13 +1186,12 @@ fn a_line_that_goes_as_its_port_scrolls_is_damaged_on_the_drawn_frame() {
         1,
         "the words take one line"
     );
-    // The line that went is measured where the drawn frame put it. A frame that moves the port's
-    // pixels moves this damage with them.
+    // The line that went is measured where the drawn frame put it.
     let pixels = zgui_layout::fragment::diff::pixels(before[1]);
     assert!(
-        covered(&[&moves.drawn], pixels),
-        "the line that went {pixels:?} is not in the drawn frame's damage {:?}",
-        moves.drawn.rects()
+        covered(&[&frame.damage], pixels),
+        "the line that went {pixels:?} is not in the frame's damage {:?}",
+        frame.damage.rects()
     );
 }
 
@@ -1362,10 +1268,9 @@ fn a_port_kept_out_of_a_content_space_damages_every_row_it_carries_where_it_was_
             let pixels = zgui_layout::fragment::diff::pixels(rect);
             // Where it was is measured on the drawn frame and where it is on this one.
             assert!(
-                covered(&[&moves.beyond, &moves.drawn], pixels),
-                "row {key:?}: the damage beyond the move {:?} and {:?} leaves {pixels:?} out",
-                moves.beyond.rects(),
-                moves.drawn.rects()
+                covered(&[&frame.damage], pixels),
+                "row {key:?}: the frame's damage {:?} leaves {pixels:?} out",
+                frame.damage.rects()
             );
             checked += 1;
         }

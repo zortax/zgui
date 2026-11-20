@@ -11,12 +11,10 @@
 //! component installs — `--zui-icon-size` resolving through a second variable to a fallback — and a
 //! box that resolved to nothing paints nothing however well the element works.
 
-use std::sync::Arc;
 use std::sync::Mutex;
 
-use zgui::platform::{AppHandler, PlatformError, Surface};
+use zgui::platform::{AppHandler, PlatformError};
 use zgui::prelude::*;
-use zgui::runtime::AppError;
 use zgui_ui_icons::prelude::*;
 use zgui_ui_icons::set::mark::CHECK;
 
@@ -55,49 +53,15 @@ fn sized(bounds: [f32; 4], fill: Option<[f32; 4]>) -> Shape {
 /// The shapes of every frame of the run, in order.
 static SHAPES: Mutex<Vec<Vec<Shape>>> = Mutex::new(Vec::new());
 
-/// A renderer that records the shapes of every frame and draws nothing.
+/// A probe that records the shapes of every frame.
 ///
 /// A shape arrives as a vector item, a mark item, a coverage sprite or a quad, depending on the
 /// route the display list gives it, so all four are recorded.
-#[derive(Debug, Default)]
-struct Recorder {
-    /// Where tiles go, so the upload path still runs.
-    atlas: zgui::atlas::MemorySink,
-    /// What it was pointed at.
-    target: Option<zgui::render::RenderTarget>,
-}
+struct Recorder;
 
-impl zgui::render::Renderer for Recorder {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: zgui::render::RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<zgui::render::RenderTarget> {
-        self.target
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        zgui::render::TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::default()
-    }
-
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
+impl zgui::runtime::FrameProbe for Recorder {
+    fn frame_ended(&self, window: &zgui::runtime::Window) {
+        let scene = window.scene();
         let primitives = &scene.primitives;
         let mut frame: Vec<Shape> = primitives
             .vectors
@@ -131,11 +95,6 @@ impl zgui::render::Renderer for Recorder {
                 .map(|quad| sized(quad.bounds, solid(scene, quad.fill))),
         );
         SHAPES.lock().expect("the log is not poisoned").push(frame);
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.atlas
     }
 }
 
@@ -168,10 +127,9 @@ fn an_icon_mounted_in_a_window_paints_a_shape_the_size_its_own_sheet_gave_it() {
         .with_title("icon")
         .with_size(200.0, 120.0)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
-            let mut renderer = Recorder::default();
-            zgui::render::Renderer::configure(&mut renderer, target);
-            Ok::<_, AppError>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+        .with_probe(std::rc::Rc::new(Recorder))
+        .with_compositor_renderer(Box::new(|_size| {
+            Box::new(zgui_testkit_compositor::NullRenderer::default())
         }))
         .run_on(buffers, || view! { Card() })
         .expect("the application ran");

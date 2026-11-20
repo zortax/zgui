@@ -79,7 +79,6 @@ pub mod ops;
 pub mod order;
 pub mod paint;
 pub mod pass;
-pub mod place;
 pub mod prim;
 pub mod resource;
 pub mod scene;
@@ -116,8 +115,6 @@ pub use crate::paint::{
 pub use crate::pass::{
     MarkBin, MarkPlan, Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassPlan,
 };
-pub use crate::place::Placement;
-pub use crate::place::band::{Travel, Travels};
 pub use crate::prim::{
     ColorSprite, CornerShape, Decoration, ExternalQuad, ExternalTextureId, MarkBox, MarkFlags,
     MarkItem, MarkPayload, MonoSprite, PrimitiveKind, Quad, Resource, ShadedQuad, Shadow,

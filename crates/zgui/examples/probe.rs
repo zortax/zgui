@@ -13,17 +13,15 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use zgui::prelude::*;
-use zgui_atlas::TextureSink;
-use zgui_bits::DamageSet;
-use zgui_platform::{PlatformError, Surface};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
+use compositor_api::Renderer;
+use compositor_types::compositor_damage::DamageSet;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
 };
-use zgui_render_wgpu::{Builder, WgpuRenderer};
+use compositor_wgpu::{Builder, WgpuRenderer};
+use zgui::prelude::*;
+use zgui_platform::{PlatformError, Surface};
 use zgui_runtime::AppError;
-use zgui_scene::Scene;
 
 /// How many readbacks the run is allowed to write before it stops writing them.
 const SHOT_LIMIT: u32 = 12;
@@ -163,7 +161,7 @@ impl Probe {
     /// Copies the composed target off the device and writes it out as a binary PPM.
     ///
     /// The composed target is what the copy to the surface reads, so this is the frame that was
-    /// presented rather than a second rendering of the same scene.
+    /// presented rather than a second rendering of it.
     fn snapshot(&mut self, name: &str) -> Option<PathBuf> {
         let pixels = self.inner.read_composed();
         let size = pixels.size();
@@ -246,9 +244,14 @@ impl Renderer for Probe {
         self.inner.target()
     }
 
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let began = Instant::now();
-        let outcome = self.inner.draw(scene, damage);
+        let outcome = self.inner.draw(frame);
+        let damage = &frame.damage.draw;
         let cost = began.elapsed().as_secs_f64() * 1e3;
         let at = self.start.elapsed().as_secs_f64() * 1e3;
         self.frames += 1;
@@ -268,20 +271,8 @@ impl Renderer for Probe {
         outcome
     }
 
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
@@ -312,7 +303,7 @@ fn renderer(
     } else {
         builder
     };
-    let inner = builder.for_surface(target, handles)?;
+    let inner = builder.for_surface(target.size, target.opaque, handles)?;
     Ok(Box::new(Probe::new(inner, start, dir.to_path_buf())))
 }
 

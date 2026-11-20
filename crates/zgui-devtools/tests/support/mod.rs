@@ -12,10 +12,11 @@
 
 use std::time::Duration;
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui::geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 use zgui::platform::{Surface, SurfaceEvent};
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{AppError, Runtime};
 use zgui::view::{Anchor, BuildCx};
 use zgui::vocab::{
@@ -62,77 +63,14 @@ pub(crate) fn sheet() -> String {
         .to_owned()
 }
 
-/// A renderer that accepts a frame and holds nothing, so the test needs no graphics device.
-pub(crate) struct Blind {
-    /// The surface it was configured for.
-    target: Option<RenderTarget>,
-    /// Where uploads go.
-    sink: Sink,
-}
-
-/// A texture sink that accepts everything and keeps nothing.
-pub(crate) struct Sink;
-
-impl zgui::atlas::TextureSink for Sink {
-    fn create_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _size: Size<i32, zgui::geom::Device>,
-        _format: zgui::atlas::TextureFormat,
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn write_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _bounds: zgui::geom::Rect<i32, zgui::geom::Device>,
-        _format: zgui::atlas::TextureFormat,
-        _bytes: &[u8],
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn destroy_texture(&mut self, _texture: zgui::atlas::TextureId) {}
-}
-
-impl Renderer for Blind {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(
-        &mut self,
-        _scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        zgui::render::TextureHandle(1)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.sink
-    }
+/// Builds a renderer that accepts a frame and holds nothing, so the test needs no graphics device.
+fn blind(
+    _surface: &std::sync::Arc<dyn Surface>,
+    target: RenderTarget,
+) -> Result<Box<dyn Renderer>, AppError> {
+    let mut renderer = zgui_testkit_compositor::NullRenderer::default();
+    renderer.configure(target);
+    Ok(Box::new(renderer))
 }
 
 /// Opens an 800x600 window with a two-element page and the inspector in it.
@@ -151,14 +89,8 @@ pub(crate) fn sized(
         .with_size(size.width.0, size.height.0)
         .with_stylesheet(sheet())
         .with_probe(tools.probe())
-        .with_renderer(Box::new(
-            |_: &std::sync::Arc<dyn Surface>, target: RenderTarget| {
-                Ok::<_, AppError>(Box::new(Blind {
-                    target: Some(target),
-                    sink: Sink,
-                }) as Box<dyn Renderer>)
-            },
-        ))
+        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_renderer(Box::new(blind))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(
                 view! { Inspector(tools = tools) {Page(rows = rows)} }
@@ -184,14 +116,8 @@ pub(crate) fn mounted<V: IntoView + 'static>(
         .with_size(size.width.0, size.height.0)
         .with_stylesheet(sheet())
         .with_probe(tools.probe())
-        .with_renderer(Box::new(
-            |_: &std::sync::Arc<dyn Surface>, target: RenderTarget| {
-                Ok::<_, AppError>(Box::new(Blind {
-                    target: Some(target),
-                    sink: Sink,
-                }) as Box<dyn Renderer>)
-            },
-        ))
+        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_renderer(Box::new(blind))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let view = view.clone();
             Box::new(

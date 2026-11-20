@@ -137,13 +137,16 @@ fn run() -> Option<&'static Opened> {
             grab::forget();
             let log: Log = Arc::new(Mutex::new(Vec::new()));
             let found = Mutex::new(Found::default());
-            zgui::app()
-                .with_title("gallery")
-                .with_size(crate::app::WIDTH, crate::app::HEIGHT)
-                .with_stylesheet(crate::shell::SHEET)
-                .with_renderer(Box::new(device::factory(&log)))
-                .run_on(buffers(&found), || (Grab, view! { Gallery() }.into_view()))
-                .expect("the gallery ran");
+            device::drawn_on(
+                zgui::app()
+                    .with_title("gallery")
+                    .with_size(crate::app::WIDTH, crate::app::HEIGHT)
+                    .with_stylesheet(crate::shell::SHEET),
+                device::Pipeline::Scene,
+                &log,
+            )
+            .run_on(buffers(&found), || (Grab, view! { Gallery() }.into_view()))
+            .expect("the gallery ran");
             let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
             assert!(!frames.is_empty(), "the gallery drew no frame at all");
             let found = found.into_inner().unwrap_or_else(|held| held.into_inner());

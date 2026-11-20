@@ -12,6 +12,8 @@ mod budget;
 pub mod caret;
 mod clicks;
 mod compose;
+mod containment;
+mod counters;
 mod crossing;
 mod cursor;
 mod drag;
@@ -32,6 +34,7 @@ mod select;
 mod sheets;
 mod surface_focus;
 pub mod text_aa;
+mod unsent;
 mod value;
 
 use std::cell::{Cell, RefCell};
@@ -39,6 +42,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use web_time::{Duration, Instant};
 
+use compositor_api::Renderer;
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
 use zgui_geom::{CssPx, Device, DevicePx, Scale, Size};
@@ -47,7 +51,6 @@ use zgui_layout::HitIndex;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::{ContentCache, Painter};
 use zgui_platform::Surface;
-use zgui_render::Renderer;
 use zgui_scene::Scene;
 use zgui_style::{SheetHandle, SheetOrigin, SheetSource, StyleEngine, Viewport};
 use zgui_view::{Anchor, BuildCxOwned, DomHandle, HostHandle};
@@ -272,32 +275,8 @@ pub struct Window {
     /// Damage outside it names no pixel of the drawn frame or of the next one, so a layout pass
     /// cuts what it absorbs to it. `None` until the surface is first configured.
     damage_extent: Option<zgui_geom::Size<i32, zgui_geom::Device>>,
-    /// What every fragment pass this frame ran moved rigidly, and whether it moved anything else.
-    ///
-    /// The input to deciding whether the renderer may translate pixels it already has rather than
-    /// have them drawn again. Reset at the top of each frame and merged across passes, because a
-    /// scroll delivered to a listener can relay out inside the frame that delivered it.
-    rigid_moves: zgui_layout::fragment::diff::RigidMoves,
-    /// What this frame had damaged before its first layout pass ran, measured on the drawn frame.
-    ///
-    /// The other half of [`Window::rigid_moves`]: the walk reports what *it* damaged beyond the
-    /// movement, and this is what was already owed before it started. Held separately because a
-    /// frame runs the walk more than once and only the first of them starts from what the frame
-    /// inherited. A caret's old marks join it after layout, because they are pixels of the drawn
-    /// frame too. A scroll that moves composed pixels moves this damage with them.
-    damage_before_layout: DamageSet,
-    /// What the stages after the last layout pass damaged, measured on this frame's matrices.
-    ///
-    /// A scroll that moves composed pixels keeps this as it is: it names pixels the frame draws,
-    /// in the places the frame draws them.
-    damage_after_layout: DamageSet,
-    /// How many layout passes this frame has run, so the first can be told from the rest.
-    layout_passes: u32,
-    /// Which containers scrolled this frame, and from where to where.
-    ///
-    /// Kept because the change log is drained by the dispatch that reports the scroll to the
-    /// document, which happens well before anything decides what to draw.
-    scrolled_this_frame: Vec<zgui_scroll::report::Scrolled>,
+    /// Whether the cascade moved a text colour since the display list's brushes were last copied.
+    brushes_moved: bool,
     /// Which brush slot each element's text is drawn through.
     ///
     /// Held per element rather than per cascade result, because a cascade result is a new object
@@ -307,8 +286,18 @@ pub struct Window {
     text_slots: crate::window::brushes::TextSlots,
     /// The text engine.
     text: Box<dyn TextEngine>,
-    /// What puts the display list on the screen.
+    /// What draws the frames the compositor builds for this window's output.
     renderer: Box<dyn Renderer>,
+    /// This window's client of the compositor, and its output.
+    compositor: crate::compositor::Client,
+    /// What the window last read of its renderer's running totals.
+    renderer_totals: crate::window::counters::Totals,
+    /// See [`Window::set_check_damage_containment`].
+    check_damage: bool,
+    /// What the last commit did, until the frame it belongs to is checked.
+    committed: Option<compositor_types::CommitCounters>,
+    /// Whether the last frame the compositor built retired its damage.
+    retired: bool,
     /// What is hovered, pressed, focused and captured.
     router: Router,
     /// Focus moves that have happened and have not yet been announced to the document.
@@ -451,7 +440,7 @@ pub struct Window {
     scheme: zgui_style::ColorScheme,
     /// Whether the surface is drawn translucent rather than opaque.
     ///
-    /// Stated on every [`RenderTarget`](zgui_render::RenderTarget) this window configures and on
+    /// Stated on every [`RenderTarget`](compositor_types::RenderTarget) this window configures and on
     /// every frame it paints, because text with per-channel coverage has no meaning over a
     /// destination that is not opaque.
     translucent: bool,
@@ -459,7 +448,7 @@ pub struct Window {
     text_antialiasing: text_aa::TextAntialiasing,
     /// The stripe order the last frame drew per-channel text coverage for, or `None` when it drew
     /// one coverage for each pixel.
-    subpixel_order: Option<zgui_render::SubpixelOrder>,
+    subpixel_order: Option<compositor_types::SubpixelOrder>,
     /// Whether the surface is entirely hidden.
     occluded: bool,
     /// Whether the surface is the one receiving the keyboard.
@@ -552,6 +541,8 @@ pub struct Window {
     probe: Option<Rc<dyn crate::probe::FrameProbe>>,
     /// What the last frame did, or `None` before the first frame.
     last_report: Option<crate::window::frame::FrameReport>,
+    /// The region the last paint walk was gated on.
+    painted: DamageSet,
     /// What the accessibility tree was last told, and what it is owed.
     a11y: zgui_a11y::A11yBuilder,
     /// The elements this frame's fragment pass carried to a new position without changing.
@@ -593,7 +584,8 @@ pub struct Window {
 }
 
 impl Window {
-    /// Opens a window over `surface`, drawn by `renderer`, and builds `view` into `document`.
+    /// Opens a window over `surface` that draws into the output of `compositor` with `renderer`,
+    /// and builds `view` into `document`.
     ///
     /// `document` is empty and carries the identity the runtime gave this window.
     ///
@@ -603,10 +595,11 @@ impl Window {
     /// sheet was rejected outright. A sheet with one unrecognised declaration is not rejected: the
     /// rest of it applies and the drop is reported.
     #[allow(clippy::too_many_arguments)]
-    pub fn open(
+    pub(crate) fn open(
         surface: Arc<dyn Surface>,
         document: Document,
         renderer: Box<dyn Renderer>,
+        compositor: crate::compositor::Client,
         text: Box<dyn TextEngine>,
         metrics: Arc<dyn zgui_text::FontMetricsSource>,
         clock: Arc<dyn zgui_platform::Clock>,
@@ -633,7 +626,8 @@ impl Window {
         // The atlas may create textures as large as the device allows, so a photo the device can
         // hold is cached whole rather than clamped to the smallest supported device's limit.
         let atlas_limits = zgui_atlas::AtlasLimits {
-            max_texture_size: renderer.capabilities().max_texture_size,
+            max_texture_size: i32::try_from(renderer.capabilities().max_texture_size)
+                .unwrap_or(i32::MAX),
             ..zgui_atlas::AtlasLimits::default()
         };
         // The `- 2` keeps a maximal decode allocatable once the atlas pads the tile.
@@ -771,14 +765,15 @@ impl Window {
             budgets: crate::budget::Budgets::new(),
             damage: DamageSet::full(),
             damage_extent: None,
-            rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),
-            damage_before_layout: DamageSet::new(),
-            damage_after_layout: DamageSet::new(),
-            layout_passes: 0,
-            scrolled_this_frame: Vec::new(),
+            brushes_moved: false,
             text_slots: crate::window::brushes::TextSlots::default(),
             text,
             renderer,
+            compositor,
+            renderer_totals: crate::window::counters::Totals::default(),
+            check_damage: zgui_scene::invariant::enabled(),
+            committed: None,
+            retired: false,
             router: Router::new(),
             pending_focus: Vec::new(),
             pending_crossings: Vec::new(),
@@ -841,6 +836,7 @@ impl Window {
             binding: Box::new(NoBinding),
             probe: options.probe.clone(),
             last_report: None,
+            painted: DamageSet::new(),
             a11y: zgui_a11y::A11yBuilder::new(),
             a11y_moves: Vec::new(),
             moved_spaces: Vec::new(),
@@ -1314,6 +1310,17 @@ impl Window {
         self.check_spatial_dependencies = check;
     }
 
+    /// Turns on the check that the compositor redraws nothing the paint walk did not visit.
+    ///
+    /// A frame that breaks it panics, naming what was redrawn outside the region the walk was
+    /// gated on. The check skips a frame whose commit wrote a property, a paint or an offset, a
+    /// frame that shifted, one after a frame that kept its damage, and one that redraws the whole
+    /// output, because the compositor redraws for those on its own account. On by default only
+    /// when `ZGUI_INVARIANTS` is set.
+    pub fn set_check_damage_containment(&mut self, check: bool) {
+        self.check_damage = check;
+    }
+
     /// How many of this frame's primitives carry the name of a coordinate system.
     ///
     /// Zero for a window that was never asked to keep them, and the non-vacuity control for any
@@ -1359,8 +1366,8 @@ impl Window {
 impl Window {
     /// Draws this window translucent or opaque from the next configuration on.
     ///
-    /// A translucent window configures its renderer with
-    /// [`RenderTarget::translucent`](zgui_render::RenderTarget::translucent) and paints with
+    /// A translucent window configures its renderer with a target that is not opaque
+    /// and paints with
     /// ordinary text coverage, so every pixel it composes is a premultiplied colour that can be
     /// composited over something else.
     pub(crate) fn set_translucent(&mut self, translucent: bool) {

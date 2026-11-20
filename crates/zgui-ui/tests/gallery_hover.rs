@@ -189,15 +189,18 @@ fn hovering_every_gallery_button_keeps_every_label() {
     grab::forget();
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let failures = Mutex::new(Vec::new());
-    zgui::app()
-        .with_title("gallery")
-        .with_size(crate::app::WIDTH, crate::app::HEIGHT)
-        .with_stylesheet(crate::shell::SHEET)
-        .with_renderer(Box::new(device::factory(&log)))
-        .run_on(drive(&log, &failures), || {
-            (Grab, view! { Gallery() }.into_view())
-        })
-        .expect("the gallery ran");
+    device::drawn_on(
+        zgui::app()
+            .with_title("gallery")
+            .with_size(crate::app::WIDTH, crate::app::HEIGHT)
+            .with_stylesheet(crate::shell::SHEET),
+        device::Pipeline::Scene,
+        &log,
+    )
+    .run_on(drive(&log, &failures), || {
+        (Grab, view! { Gallery() }.into_view())
+    })
+    .expect("the gallery ran");
     let failures = failures
         .into_inner()
         .unwrap_or_else(|held| held.into_inner());

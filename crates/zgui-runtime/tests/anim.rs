@@ -29,10 +29,6 @@ use zgui_platform::SurfaceEvent;
 use zgui_profile::{COUNTERS_ENABLED, counter};
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 
@@ -259,16 +255,9 @@ where
         .with_title("anim")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(
-            |_surface: &Arc<dyn zgui_platform::Surface>, target: RenderTarget| {
-                let mut renderer = DamageLog {
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, zgui_runtime::AppError>(Box::new(renderer))
-            },
-        ))
+        .with_probe(std::rc::Rc::new(DamageLog))
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
                 zgui_testkit_scene::MonoShaper::new(),
@@ -280,55 +269,21 @@ where
 }
 
 thread_local! {
-    /// The bounds of the damage of every frame drawn on this thread, oldest first.
+    /// The bounds of the region every frame on this thread painted again, oldest first.
     static DAMAGE: RefCell<Vec<Option<zgui_geom::Rect<i32, zgui_geom::Device>>>> =
         const { RefCell::new(Vec::new()) };
 }
 
-/// A renderer that records the damage of every frame and draws nothing.
-struct DamageLog {
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
-}
+/// A probe that records the region every frame's paint walk was gated on.
+struct DamageLog;
 
-impl Renderer for DamageLog {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, _scene: &zgui_scene::Scene, damage: &zgui_bits::DamageSet) -> FrameOutcome {
-        DAMAGE.with_borrow_mut(|frames| frames.push(damage.bounds()));
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
+impl zgui_runtime::FrameProbe for DamageLog {
+    fn frame_ended(&self, window: &zgui_runtime::Window) {
+        let painted = window
+            .last_frame_report()
+            .expect("a frame that ended has a report")
+            .painted;
+        DAMAGE.with_borrow_mut(|frames| frames.push(painted.bounds()));
     }
 }
 

@@ -22,7 +22,7 @@
 //! # The hold is a servo, not a schedule
 //!
 //! No phase is estimated and nothing is asked of the window system. The one observation is
-//! [`Renderer::acquire_block`](zgui_render::Renderer::acquire_block) — how long the last frame
+//! [`Renderer::acquire_block`](compositor_api::Renderer::acquire_block) — how long the last frame
 //! waited to be handed a surface — and a frame that waited a long time was started far too early
 //! while one that did not wait at all has already missed the handover it was aiming at. Driving
 //! that wait towards a small positive `BUDGET` is the same thing as starting each frame just

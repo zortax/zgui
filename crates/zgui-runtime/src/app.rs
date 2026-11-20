@@ -22,12 +22,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use compositor_api::{Compositor, Renderer};
+use compositor_types::RenderTarget;
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
     AppHandler, Clock, CloseReason, IdlePolicy, PlatformCx, PlatformError, Surface,
     SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,
 };
-use zgui_render::{RenderTarget, Renderer};
 use zgui_view::{Anchor, BuildCx};
 
 use crate::commands::{CloseResponse, WindowCommand, WindowCommands, WindowSpec, WindowToken};
@@ -37,11 +38,14 @@ use crate::timer::Timers;
 use crate::wake::{FrameGate, RuntimeWaker};
 use crate::window::{Window, WindowContent};
 
-/// Builds the renderer one surface draws through.
+/// Builds the renderer that draws one surface's frames.
 ///
 /// It is a callback rather than a fixed type because the graphics backend is a decision an
 /// application makes, and because the whole loop has to be exercisable with a renderer that draws
 /// nowhere — which is not a fallback for a real window but a different thing entirely.
+///
+/// Every renderer draws the frames of one output of the application's compositor, see
+/// [`App::with_compositor`].
 pub type RendererFactory =
     Box<dyn FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, AppError>>;
 
@@ -125,7 +129,9 @@ pub struct App {
     attributes: SurfaceAttributes,
     /// What the window should hold.
     options: WindowContent,
-    /// What draws it.
+    /// What builds the frames of every window.
+    compositor: Option<Box<dyn Compositor>>,
+    /// What draws them.
     renderer: Option<RendererFactory>,
     /// What shapes its text.
     text: Option<TextFactory>,
@@ -163,6 +169,7 @@ impl App {
         Self {
             attributes: SurfaceAttributes::new("zgui"),
             options: WindowContent::default(),
+            compositor: None,
             renderer: None,
             text: None,
             metrics: None,
@@ -357,6 +364,15 @@ impl App {
         self
     }
 
+    /// Installs the compositor every window draws through.
+    ///
+    /// Each window is a client of it with an output of its own. Without a compositor no window
+    /// opens.
+    pub fn with_compositor(mut self, compositor: Box<dyn Compositor>) -> Self {
+        self.compositor = Some(compositor);
+        self
+    }
+
     /// Installs what builds the renderer each window draws through.
     pub fn with_renderer(mut self, factory: RendererFactory) -> Self {
         self.renderer = Some(factory);
@@ -497,6 +513,8 @@ pub struct Runtime {
     /// icons and task-bar grouping against, and a window opened while the application runs belongs
     /// to the same application as the one it was opened from.
     application_id: Option<zgui_vocab::SharedString>,
+    /// The compositor every window draws through, when the application installed one.
+    compositor: Option<crate::compositor::Shared>,
     /// What builds a renderer.
     renderer: RendererFactory,
     /// What builds a text engine.
@@ -700,8 +718,15 @@ impl Runtime {
             menu_keys: crate::desktop::MenuKeys::default(),
             documents: crate::documents::Documents::default(),
             application_id: application_id.clone(),
+            compositor: app
+                .compositor
+                .map(|compositor| Rc::new(RefCell::new(compositor))),
             renderer: app.renderer.unwrap_or_else(|| {
-                Box::new(|_, _| Err(AppError::GpuUnavailable(zgui_render::GpuUnavailable::new())))
+                Box::new(|_, _| {
+                    Err(AppError::GpuUnavailable(
+                        compositor_types::GpuUnavailable::default(),
+                    ))
+                })
             }),
             text: app
                 .text
@@ -847,16 +872,17 @@ impl Runtime {
         let scale = surface.scale_factor();
         let size = first_extent(surface.size(), self.live[index].spec.attributes.size, scale);
         let translucent = self.live[index].spec.attributes.transparent;
-        let target = RenderTarget::new(size, zgui_geom::Scale::new(scale as f32));
         // A window asked to be transparent is composed translucent from its first frame: the
         // renderer picks a premultiplied presentation for it, and the paint gives its text ordinary
         // coverage.
-        let target = if translucent {
-            target.translucent()
-        } else {
-            target
+        let target = RenderTarget {
+            size: [size.width.max(0) as u32, size.height.max(0) as u32],
+            scale: scale as f32,
+            opaque: !translucent,
         };
+        let compositor = self.compositor.clone().ok_or(AppError::NoCompositor)?;
         let renderer = (self.renderer)(&surface, target)?;
+        let compositor = crate::compositor::Client::open(compositor, target);
         // Before the view is built, not after: a view that asks for anything while it is being
         // built asks through a waker that has to already know which surface it belongs to.
         let waker = Arc::clone(
@@ -896,6 +922,7 @@ impl Runtime {
                 Arc::clone(&surface),
                 document.take().expect("the document is taken once"),
                 renderer,
+                compositor,
                 text,
                 metrics,
                 clock,

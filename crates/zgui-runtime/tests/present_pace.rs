@@ -20,18 +20,18 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use zgui_bits::DamageSet;
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+};
 use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::{Surface, SurfaceEvent};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    Renderer, TextureHandle,
-};
-use zgui_scene::Scene;
 use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 
-use zgui_runtime::{App, AppError, Runtime};
+use zgui_runtime::{App, AppError, FrameProbe, Runtime, Window};
 use zgui_view::{BuildCx, IntoView, View};
+
+mod support;
 
 const CSS: &str = "root { display: block; width: 400px; height: 300px }
                    column { display: block; width: 400px; height: 300px;
@@ -40,10 +40,19 @@ const CSS: &str = "root { display: block; width: 400px; height: 300px }
 /// What a window presenting to a display with one image spare is made to wait.
 const BLOCKS: Duration = Duration::from_millis(10);
 
-/// How many frames a renderer has drawn, shared with the test that installed it.
+/// How many frames a window has run, shared with the test that installed it.
 type Frames = Rc<Cell<u64>>;
 
-/// A renderer that reports having been made to wait, and counts what it drew.
+/// A probe that counts the frames a window ran.
+struct Counting(Frames);
+
+impl FrameProbe for Counting {
+    fn frame_ended(&self, _window: &Window) {
+        self.0.set(self.0.get() + 1);
+    }
+}
+
+/// A renderer that reports having been made to wait.
 ///
 /// The wait is the only thing about it that matters. It is what a swap chain with every image
 /// spoken for does to the frame that asks for the next one, and it is the sole observation the
@@ -51,12 +60,8 @@ type Frames = Rc<Cell<u64>>;
 struct Waiting {
     /// How long each frame is reported to have waited for a surface to present into.
     blocks: Duration,
-    /// How many frames have been drawn.
-    frames: Frames,
     /// The surface being drawn for.
     target: Option<RenderTarget>,
-    /// Somewhere for rasterised content to go.
-    atlas: zgui_atlas::MemorySink,
 }
 
 impl Renderer for Waiting {
@@ -72,33 +77,20 @@ impl Renderer for Waiting {
         self.target
     }
 
-    fn draw(&mut self, _scene: &Scene, _damage: &DamageSet) -> FrameOutcome {
-        self.frames.set(self.frames.get() + 1);
-        FrameOutcome::Presented(FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
+    fn target_age(&self) -> BufferAge {
+        BufferAge::Unknown
+    }
+
+    fn draw(&mut self, _frame: &Frame) -> FrameOutcome {
+        FrameOutcome::Presented(FrameStats::default())
     }
 
     fn acquire_block(&self) -> Duration {
         self.blocks
     }
 
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
     fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
+        MemoryReport::default()
     }
 }
 
@@ -114,19 +106,18 @@ fn window_waiting(
     frames: &Frames,
     moves: &Moves,
 ) -> zgui_platform_headless::Harness<Runtime> {
-    let counted = Rc::clone(frames);
     let seen = Rc::clone(moves);
     let handler = App::new()
         .with_title("present-pace")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
+        .with_probe(Rc::new(Counting(Rc::clone(frames))))
+        .with_compositor(support::compositor())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
                 let mut renderer = Waiting {
                     blocks,
-                    frames: Rc::clone(&counted),
                     target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
                 };
                 renderer.configure(target);
                 Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))

@@ -19,12 +19,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use compositor_api::Renderer;
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
 use zgui_geom::{Device, Size};
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::ContentCache;
-use zgui_render::Renderer;
 use zgui_vocab::Timestamp;
 
 use crate::replaced::IntrinsicTable;
@@ -45,9 +45,8 @@ pub struct EmbedSyncCx<'a> {
     pub layout: &'a Rc<RefCell<LayoutStore>>,
     /// The drawn frame's matrices, which put a fragment's ink on the device.
     pub placements: &'a zgui_space::Placements,
-    /// The renderer, for registering and releasing externals — and, through
-    /// [`Renderer::as_any_mut`], for whatever the backend companion needs that the contract
-    /// cannot name.
+    /// The window's renderer, reached through [`Renderer::as_any_mut`] for what a backend
+    /// companion needs that the contract cannot name.
     pub renderer: &'a mut dyn Renderer,
     /// Where a surface node's external texture is attached for the emit walk to find.
     pub content: &'a mut ContentCache,
@@ -75,7 +74,7 @@ pub struct EmbedSyncCx<'a> {
 
 /// The resources a maintenance-only deadline may trim without painting or presenting.
 pub struct EmbedMaintenanceCx<'a> {
-    /// The renderer, for releasing callback-owned external registrations.
+    /// The window's renderer, for releasing callback-owned textures.
     pub renderer: &'a mut dyn Renderer,
     /// Replaced attachments, for detaching released callback textures.
     pub content: &'a mut ContentCache,

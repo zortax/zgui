@@ -23,6 +23,7 @@ pub mod stacking;
 
 use std::borrow::Cow;
 
+use compositor_types::RenderCapabilities;
 use zgui_atlas::AtlasKey;
 use zgui_bits::DamageSet;
 use zgui_dom::side::BoxKey;
@@ -31,7 +32,6 @@ use zgui_layout::fragment::FragmentFlags;
 use zgui_layout::fragment::diff::pixels;
 use zgui_layout::{FragKey, Fragment, FragmentKind, LayoutStore};
 use zgui_profile::{Counter, counter};
-use zgui_render::RenderCapabilities;
 use zgui_scene::{PropertyOwner, Scene};
 
 use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, VectorSource};
@@ -293,7 +293,6 @@ pub struct Painter {
 /// The containers one emit walk fills, empty between walks.
 #[derive(Debug, Default)]
 struct WalkScratch {
-    bands: Vec<BoxKey>,
     alpha: Vec<f32>,
     opaque: Vec<bool>,
     outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
@@ -307,7 +306,6 @@ struct WalkScratch {
 impl WalkScratch {
     /// Empties every container and keeps its allocation.
     fn clear(&mut self) {
-        self.bands.clear();
         self.alpha.clear();
         self.opaque.clear();
         self.outlines.clear();
@@ -390,7 +388,6 @@ impl Painter {
                 ..PaintReport::default()
             },
             root,
-            bands: scratch.bands,
             alpha: scratch.alpha,
             opaque: scratch.opaque,
             outlines: scratch.outlines,
@@ -403,7 +400,6 @@ impl Painter {
         stacking::walk(input.store, root, &mut pass);
         let Pass {
             mut report,
-            bands,
             alpha,
             opaque,
             outlines,
@@ -415,7 +411,6 @@ impl Painter {
             ..
         } = pass;
         self.scratch = WalkScratch {
-            bands,
             alpha,
             opaque,
             outlines,
@@ -531,13 +526,6 @@ struct Pass<'a, 'b> {
     ///
     /// [`Visitor::descends`]: stacking::Visitor::descends
     root: BoxKey,
-    /// The boxes whose order band is open, innermost last.
-    ///
-    /// A box that is going to be moved by writing its coordinate system is ordered against the
-    /// whole region its movement visits rather than against where it happens to be, because the
-    /// write happens after this walk has assigned every order. Opened as the box is entered and
-    /// closed as it is left, like the alpha stack beside it and for the same reason.
-    bands: Vec<BoxKey>,
     /// The folded alpha in force, innermost last.
     alpha: Vec<f32>,
     /// Whether the target in force is opaque, innermost last.
@@ -1337,13 +1325,6 @@ impl stacking::Visitor for Pass<'_, '_> {
         // The two stacks are pushed once per entered box and popped once per leave, whatever the
         // box turned out to have: a push made conditionally and a pop made on a different condition
         // is how the alpha in force comes to belong to somebody else's subtree.
-        if let Some(fragment) = own
-            && fragment.flags.contains(FragmentFlags::HAS_TRANSFORM)
-            && let Some(space) = fragment.transform
-            && self.scene.open_place_band(space).is_some()
-        {
-            self.bands.push(key);
-        }
         if let Some(fragment) = own {
             self.report.primitives += group::backdrop(
                 self.scene,
@@ -1407,9 +1388,5 @@ impl stacking::Visitor for Pass<'_, '_> {
         self.opaque.pop();
         self.decorations.leave();
         self.text_fills.leave();
-        if self.bands.last() == Some(&key) {
-            self.bands.pop();
-            self.scene.close_place_band();
-        }
     }
 }

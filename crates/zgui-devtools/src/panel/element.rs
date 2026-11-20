@@ -138,13 +138,13 @@ pub(crate) fn ElementPanel(
 /// The routes selected by one element, using the concrete general backend where one was needed.
 fn routes(
     routes: zgui_paint::VectorRoutes,
-    backend: Option<zgui::render::VectorBackend>,
+    backend: Option<compositor_types::VectorBackend>,
 ) -> String {
     let atlas = routes.contains(zgui_paint::VectorRoute::AtlasMask);
     let general = match backend {
-        Some(zgui::render::VectorBackend::Vello) => "Vello",
-        Some(zgui::render::VectorBackend::Coverage) => "coverage rasterizer",
-        Some(zgui::render::VectorBackend::Other) => "general vector rasterizer",
+        Some(compositor_types::VectorBackend::Compute) => "Vello",
+        Some(compositor_types::VectorBackend::Raster) => "coverage rasterizer",
+        Some(_) => "general vector rasterizer",
         None => "general vector rasterizer (pending)",
     };
     let rest = match (
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(routes(both, None), "atlas / CPU-rasterized mask");
         both.insert(zgui_paint::VectorRoute::GeneralRaster);
         assert_eq!(
-            routes(both, Some(zgui::render::VectorBackend::Vello)),
+            routes(both, Some(compositor_types::VectorBackend::Compute)),
             "atlas / CPU mask + Vello"
         );
 
@@ -228,7 +228,7 @@ mod tests {
         );
         both.insert(zgui_paint::VectorRoute::Analytic);
         assert_eq!(
-            routes(both, Some(zgui::render::VectorBackend::Vello)),
+            routes(both, Some(compositor_types::VectorBackend::Compute)),
             "analytic quads + atlas / CPU mask + Vello"
         );
         assert_eq!(routes(zgui_paint::VectorRoutes::NONE, None), "none");
@@ -240,13 +240,13 @@ mod tests {
         assert_eq!(routes(marks, None), "analytic quads + marks");
         marks.insert(zgui_paint::VectorRoute::GeneralRaster);
         assert_eq!(
-            routes(marks, Some(zgui::render::VectorBackend::Vello)),
+            routes(marks, Some(compositor_types::VectorBackend::Compute)),
             "analytic quads + marks + Vello"
         );
 
         marks.insert(zgui_paint::VectorRoute::PathGlyphs);
         assert_eq!(
-            routes(marks, Some(zgui::render::VectorBackend::Vello)),
+            routes(marks, Some(compositor_types::VectorBackend::Compute)),
             "analytic quads + marks + path glyphs + Vello"
         );
 

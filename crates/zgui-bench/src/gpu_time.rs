@@ -9,8 +9,11 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use zgui::render::Renderer;
-use zgui_render_wgpu::{GpuTiming, WgpuRenderer};
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+};
+use compositor_wgpu::{GpuTiming, WgpuRenderer};
 
 use crate::scenario::band::Spread;
 
@@ -26,7 +29,9 @@ thread_local! {
 pub(crate) fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
-        std::env::var_os("ZGUI_BENCH_GPU").is_some() && zgui_render_wgpu::gpu::timing::requested()
+        std::env::var_os("ZGUI_BENCH_GPU").is_some()
+            && (zgui_render_wgpu::gpu::timing::requested()
+                || compositor_wgpu::gpu_timing_requested())
     })
 }
 
@@ -113,25 +118,25 @@ impl Drop for Timed {
 }
 
 impl Renderer for Timed {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
+    fn capabilities(&self) -> RenderCapabilities {
         self.inner.capabilities()
     }
 
-    fn configure(&mut self, target: zgui::render::RenderTarget) {
+    fn configure(&mut self, target: RenderTarget) {
         self.inner.configure(target);
     }
 
-    fn target(&self) -> Option<zgui::render::RenderTarget> {
+    fn target(&self) -> Option<RenderTarget> {
         self.inner.target()
     }
 
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let before = self.inner.gpu_timed_frames();
-        let outcome = self.inner.draw(scene, damage);
+        let outcome = self.inner.draw(frame);
         if let (Some(before), Some(after)) = (before, self.inner.gpu_timed_frames())
             && let Some(phase) = CURRENT.with(|current| current.borrow().clone())
         {
@@ -143,42 +148,23 @@ impl Renderer for Timed {
         outcome
     }
 
-    fn register_external(
-        &mut self,
-        texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.inner.register_external(texture)
+    fn present_held(&mut self) -> FrameOutcome {
+        self.inner.present_held()
     }
 
-    fn release_external(&mut self, handle: zgui::render::TextureHandle) {
-        self.inner.release_external(handle);
+    fn acquire_block(&self) -> core::time::Duration {
+        self.inner.acquire_block()
     }
 
-    fn memory(&self) -> zgui::render::MemoryReport {
+    fn set_subpixel_order(&mut self, order: compositor_types::SubpixelOrder) {
+        self.inner.set_subpixel_order(order);
+    }
+
+    fn memory(&self) -> MemoryReport {
         self.inner.memory()
     }
 
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.inner.texture_sink()
-    }
-
-    fn vector_status(&self) -> zgui::render::VectorStatus {
-        self.inner.vector_status()
-    }
-
-    fn shifts_composed_pixels(&self) -> bool {
-        self.inner.shifts_composed_pixels()
-    }
-
-    fn composed_survives_configure(&self) -> bool {
-        self.inner.composed_survives_configure()
-    }
-
-    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
-        self.inner.shift_composed(shift);
-    }
-
-    fn target_pool(&self) -> zgui::render::TargetPoolReport {
+    fn target_pool(&self) -> compositor_types::TargetPoolReport {
         self.inner.target_pool()
     }
 
@@ -190,8 +176,12 @@ impl Renderer for Timed {
         self.inner.release_idle_resources()
     }
 
-    fn acquire_block(&self) -> core::time::Duration {
-        self.inner.acquire_block()
+    fn vector_status(&self) -> compositor_types::VectorStatus {
+        self.inner.vector_status()
+    }
+
+    fn extra_stats(&self, out: &mut dyn FnMut(&'static str, u64)) {
+        self.inner.extra_stats(out);
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {

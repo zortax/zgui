@@ -77,11 +77,16 @@ where
         .with_title("shader")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
+        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
         .with_renderer(Box::new(
             |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = zgui_testkit_scene::CaptureRenderer::new().shading();
-                zgui_render::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
+                let mut renderer =
+                    zgui_testkit_compositor::Kept::new(compositor_types::RenderCapabilities {
+                        custom_shaders: true,
+                        ..compositor_types::RenderCapabilities::MINIMAL
+                    });
+                compositor_api::Renderer::configure(&mut renderer, target);
+                Ok(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
             },
         ))
         .with_text_engine(Box::new(|| {

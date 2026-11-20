@@ -16,12 +16,13 @@
 
 use std::time::{Duration, Instant};
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RwSignal};
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError, Runtime};
 use zgui::view::{Anchor, BuildCx};
 use zgui_bench::reference::sample;
@@ -66,88 +67,13 @@ fn placements() -> String {
         .collect()
 }
 
-/// A texture sink that accepts every upload and holds nothing.
-struct NullSink;
-
-impl zgui::atlas::TextureSink for NullSink {
-    fn create_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _size: Size<i32, zgui::geom::Device>,
-        _format: zgui::atlas::TextureFormat,
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn write_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _bounds: zgui::geom::Rect<i32, zgui::geom::Device>,
-        _format: zgui::atlas::TextureFormat,
-        _bytes: &[u8],
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn destroy_texture(&mut self, _texture: zgui::atlas::TextureId) {}
-}
-
-/// A renderer that accepts a frame and does nothing with it, so the number is the pipeline's.
-struct Nowhere {
-    /// The surface it was configured for.
-    target: Option<RenderTarget>,
-    /// Where tiles are uploaded.
-    sink: NullSink,
-}
-
-impl Renderer for Nowhere {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(
-        &mut self,
-        _scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        zgui::render::TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.sink
-    }
-}
-
-/// Builds the renderer a window draws through.
+/// Builds the renderer a window draws through: one that accepts a frame and does nothing with it,
+/// so the number is the pipeline's.
 fn nowhere(
     _surface: &std::sync::Arc<dyn zgui::platform::Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
-    Ok(Box::new(Nowhere {
-        target: Some(target),
-        sink: NullSink,
-    }))
+    Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target)))
 }
 
 /// The text of one label at one zoom step, different at every step and from every other label.
@@ -165,6 +91,7 @@ fn opened(zoom: RwSignal<usize, LocalStorage>) -> Harness<Runtime> {
         .with_title("label-churn")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(format!("{SHEET}\n{}", placements()))
+        .with_compositor(zgui::app::compositor(&fonts))
         .with_renderer(Box::new(nowhere))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

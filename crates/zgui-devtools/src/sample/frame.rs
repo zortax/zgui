@@ -10,14 +10,14 @@
 //! been open; the delta tells you what this frame cost, which is the only form in which "hovering
 //! one row restyled four hundred elements" is a sentence anybody can act on.
 
+use compositor_types::MemoryReport;
+use compositor_types::VectorStatus;
 use zgui::geom::{Device, Rect};
-use zgui::render::MemoryReport;
-use zgui::render::VectorStatus;
 use zgui::runtime::Window;
 use zgui::runtime::budget::{CacheId, CacheUnit};
 
 /// What the last frame did.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Frame {
     /// How many primitives are in the display list.
     pub(crate) primitives: usize,
@@ -88,26 +88,6 @@ impl Held {
         match self.limit {
             None => 0,
             Some(limit) => self.resident.saturating_sub(limit),
-        }
-    }
-}
-
-impl Default for Frame {
-    fn default() -> Self {
-        Self {
-            primitives: 0,
-            batches: 0,
-            passes: 0,
-            damage: Vec::new(),
-            full_damage: false,
-            surface: (0, 0),
-            counters: Vec::new(),
-            memory: MemoryReport::ZERO,
-            budget: Vec::new(),
-            nodes: 0,
-            document: 0,
-            vector: VectorStatus::default(),
-            vello_causes: Vec::new(),
         }
     }
 }

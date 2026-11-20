@@ -13,19 +13,17 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use zgui::bits::DamageSet;
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+};
+use compositor_wgpu::WgpuRenderer;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::{Surface, SurfaceEvent};
-use zgui::render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
 use zgui::runtime::{AppError, Runtime};
-use zgui::scene::Scene;
 use zgui::view::{Anchor, BuildCx};
 use zgui_platform_headless::Harness;
 use zgui_profile::counter::{self, Counters};
-use zgui_render_wgpu::WgpuRenderer;
 
 /// One refresh at 60 Hz, which is what each step advances the clock by.
 pub const TICK: Duration = Duration::from_micros(16_667);
@@ -61,7 +59,7 @@ pub fn variant_or_each(all: &[&str]) -> String {
 /// What a probe's window draws through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Device {
-    /// A renderer that records the scene and draws nothing, so every number is the CPU's.
+    /// A renderer that draws nothing, so every number is the CPU's.
     Capture,
     /// This machine's device, offscreen.
     Gpu,
@@ -217,19 +215,23 @@ impl Renderer for Counted {
         self.inner.target()
     }
 
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let before = self.device().and_then(|device| device.gpu_timed_frames());
-        let outcome = self.inner.draw(scene, damage);
+        let outcome = self.inner.draw(frame);
         let after = self.device().and_then(|device| device.gpu_timed_frames());
         let surface = self.inner.target().map_or(0, |target| {
-            i64::from(target.size.width) * i64::from(target.size.height)
+            i64::from(target.size[0]) * i64::from(target.size[1])
         });
         {
             let mut log = self.log.borrow_mut();
             let draw = log.drawn.len();
             log.drawn.push(Drawn {
                 presented: matches!(outcome, FrameOutcome::Presented(_)),
-                damage_px: damage.area().unwrap_or(surface),
+                damage_px: frame.damage.draw.area().unwrap_or(surface),
                 gpu_ms: None,
             });
             if let (Some(before), Some(after)) = (before, after) {
@@ -243,35 +245,15 @@ impl Renderer for Counted {
         outcome
     }
 
-    fn shifts_composed_pixels(&self) -> bool {
-        self.inner.shifts_composed_pixels()
-    }
-
-    fn composed_survives_configure(&self) -> bool {
-        self.inner.composed_survives_configure()
-    }
-
-    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
-        self.inner.shift_composed(shift);
-    }
-
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
     }
 
-    fn vector_status(&self) -> zgui::render::VectorStatus {
+    fn vector_status(&self) -> compositor_types::VectorStatus {
         self.inner.vector_status()
     }
 
-    fn target_pool(&self) -> zgui::render::TargetPoolReport {
+    fn target_pool(&self) -> compositor_types::TargetPoolReport {
         self.inner.target_pool()
     }
 
@@ -285,10 +267,6 @@ impl Renderer for Counted {
 
     fn acquire_block(&self) -> Duration {
         self.inner.acquire_block()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
@@ -307,21 +285,15 @@ fn renderer(device: Device, log: DrawLog) -> zgui::runtime::RendererFactory {
               target: RenderTarget|
               -> Result<Box<dyn Renderer>, AppError> {
             let inner: Box<dyn Renderer> = match device {
-                Device::Capture => {
-                    let mut capture = zgui_testkit_scene::CaptureRenderer::new();
-                    capture.configure(target);
-                    Box::new(capture)
-                }
+                Device::Capture => Box::new(crate::renderers::NullRenderer::new(target)),
                 Device::Gpu => {
-                    let mut gpu = zgui_render_wgpu::Builder::new()
-                        .offscreen(
-                            target,
-                            zgui_render_wgpu::wgpu::TextureFormat::Bgra8Unorm,
-                            false,
-                        )
-                        .map_err(AppError::GpuUnavailable)?;
-                    zgui_render_vector_vello::attach(&mut gpu, target.size);
-                    if zgui_render_wgpu::gpu::timing::requested() && !gpu.gpu_timing_enabled() {
+                    let timed = zgui_render_wgpu::gpu::timing::requested()
+                        || compositor_wgpu::gpu_timing_requested();
+                    if timed {
+                        compositor_wgpu::enable_gpu_timing();
+                    }
+                    let gpu = crate::renderers::device(target)?;
+                    if timed && !gpu.gpu_timing_enabled() {
                         eprintln!(
                             "GPU timing was asked for, but {} has no timestamp queries",
                             gpu.gpu().describe()
@@ -370,12 +342,14 @@ where
         .register(Arc::new(FONT), Some(FONT_FAMILY))
         .map_err(|error| format!("font: {error:?}"))?;
     let metrics = fonts.clone();
-    let shaping = fonts;
+    let shaping = fonts.clone();
+    let raster = fonts.clone();
     let draws = DrawLog::default();
     let runtime = zgui::runtime::App::new()
         .with_title(title)
         .with_size(width, height)
         .with_stylesheet(sheet)
+        .with_compositor(zgui::app::compositor(&fonts))
         .with_renderer(renderer(device, Rc::clone(&draws)))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

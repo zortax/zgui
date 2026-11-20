@@ -179,30 +179,16 @@ counters! {
     /// frame served without asking the style engine anything.
     TierCPlacements => tier_c_placements, Group::BackendNeutral;
 
-    /// Transform changes served by writing one coordinate system and damaging what it moved.
+    /// Transform changes served by writing the coordinate system a box established.
     ///
-    /// The skip [`Counter::PlaceWritesWithReemit`] is measured against: a box whose matrix moved
-    /// used to cost its fragments being composed again and its primitives being emitted again, and
-    /// what it costs here is one write into the node the box established plus the union of where
-    /// its ink was and where it is.
+    /// The skip [`Counter::PlaceWritesWithReemit`] is measured against: a write moves the box and
+    /// everything it painted without composing or painting any of it again.
     PlaceWritesWithoutReemit => place_writes_without_reemit,
         Group::Skip { done: Counter::PlaceWritesWithReemit };
 
-    /// Transform changes that had to be composed again rather than written.
-    ///
-    /// An interactive transform with no declared travel, and a keyframed one that left the travel
-    /// it declared. Both are correct and both cost what a transform used to cost, so this is the
-    /// denominator the skip above is only meaningful against.
+    /// Transform changes that had to be composed again rather than written, because the box has
+    /// no coordinate system of its own to write yet.
     PlaceWritesWithReemit => place_writes_with_reemit, Group::BackendNeutral;
-
-    /// Frames on which a moving box left the order band its animation declared.
-    ///
-    /// Draw order is assigned once, before anything moves, and a box given its own band is ordered
-    /// against the whole of where its animation said it would go. Leaving that region means the
-    /// order it holds can no longer be trusted against its neighbours, so the frame composes it
-    /// again and inserts it afresh. Anything other than zero over a run whose animations stay
-    /// inside their keyframes is a travel union that was computed too small.
-    OrderBandEscapes => order_band_escapes, Group::BackendNeutral;
 
     /// Offscreen targets allocated for groups that must be composited as a unit.
     GroupTargets => group_targets, Group::BackendNeutral;
@@ -212,6 +198,13 @@ counters! {
 
     /// Cached primitive ranges reused by offsetting them rather than re-encoding them.
     ChunksTranslated => chunks_translated, Group::Skip { done: Counter::ChunksReencoded };
+
+    /// Chunks recorded again that the compositor found identical to the recording they replaced,
+    /// so they damaged nothing.
+    ChunksIdentical => chunks_identical, Group::Skip { done: Counter::ChunksReencoded };
+
+    /// Entries the paint order's lists inserted or removed in the compositor's order tree.
+    OrderEntriesDiffed => order_entries_diffed, Group::BackendNeutral;
 
     /// Encodings thrown away because something they drew had nowhere to go.
     ///

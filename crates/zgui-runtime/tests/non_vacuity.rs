@@ -147,3 +147,24 @@ fn primitives_are_culled_when_the_document_reaches_past_the_port_and_never_when_
         }),
     );
 }
+
+#[test]
+fn a_recording_that_draws_what_it_replaced_is_identical_and_one_that_recolours_is_not() {
+    assert_non_vacuous(
+        Counter::ChunksIdentical,
+        Scenario::new(
+            "a document painted again after its paint records were forgotten",
+            || {
+                let lit = RwSignal::new(false);
+                let mut harness = document(OVERFLOWING, lit);
+                harness.settle(64);
+                harness.app_mut().windows_mut()[0].forget_caches();
+                harness.settle(64);
+            },
+        ),
+        Scenario::new(
+            "a row restyled with a background colour it shows",
+            opened_then_one_row_changed,
+        ),
+    );
+}

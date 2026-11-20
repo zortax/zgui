@@ -136,13 +136,16 @@ pub fn runs() -> Option<&'static Runs> {
 /// Runs one document to a standstill and hands back what each of its frames drew.
 fn run<V: IntoView + 'static>(title: &str, view: impl FnMut() -> V + 'static) -> Vec<Recorded> {
     let log: Log = Arc::new(Mutex::new(Vec::new()));
-    zgui::app()
-        .with_title(title)
-        .with_size(SURFACE as f32, SURFACE as f32)
-        .with_stylesheet(SHEET)
-        .with_renderer(Box::new(device::factory(&log, BACKDROP)))
-        .run_on(buffers, view)
-        .expect("the application ran");
+    device::drawn(
+        zgui::app()
+            .with_title(title)
+            .with_size(SURFACE as f32, SURFACE as f32)
+            .with_stylesheet(SHEET),
+        &log,
+        BACKDROP,
+    )
+    .run_on(buffers, view)
+    .expect("the application ran");
     let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
     assert!(
         !frames.is_empty(),

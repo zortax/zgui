@@ -21,6 +21,8 @@ zgui = { path = "../zgui", version = "0.1.0" }
 
 [dev-dependencies]
 zgui-testkit-view = { path = "../zgui-testkit-view", version = "0.1.0" }
+# A renderer that draws nowhere, for a window whose display list a test reads or draws itself.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 # Driving a real window over buffers, with no display server and no graphics device. An icon that
 # reaches the document and paints nothing is a blank space nothing above this line can see, so the
 # component is asserted on where an application meets it: a frame, and what was in it.

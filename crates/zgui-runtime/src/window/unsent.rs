@@ -1,16 +1,15 @@
-//! A texture sink for the atlas zgui still fills.
+//! The destination of the texture uploads zgui's own atlas still queues.
 
 use zgui_atlas::{SinkError, TextureFormat, TextureId, TextureSink};
 use zgui_geom::{Device, Rect, Size};
 
 /// A texture sink that accepts every upload and keeps nothing.
 ///
-/// The compositor rasterises and atlases glyphs itself, so the tiles zgui's own atlas uploads are
-/// drawn by nothing.
+/// The compositor rasterises and atlases what it draws, so no frame samples these textures.
 #[derive(Debug, Default)]
-pub(crate) struct Discard;
+pub(crate) struct Unsent;
 
-impl TextureSink for Discard {
+impl TextureSink for Unsent {
     fn create_texture(
         &mut self,
         _texture: TextureId,

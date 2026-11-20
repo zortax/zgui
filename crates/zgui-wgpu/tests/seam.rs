@@ -21,6 +21,14 @@ use zgui_runtime::{App, AppError, Runtime};
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 use zgui_wgpu::SurfaceElementExt;
 
+/// The compositor the window draws through, with glyphs drawn as boxes.
+fn compositor() -> Box<dyn compositor_api::Compositor> {
+    let mut compositor =
+        zgui_testkit_compositor::compositor().unwrap_or_else(|why| panic!("no compositor: {why}"));
+    zgui_testkit_compositor::with_fake_text(&mut *compositor);
+    compositor
+}
+
 /// An application whose window records rather than draws, with a deterministic shaper behind it.
 fn app<V>(css: &str, view: V) -> Harness<Runtime>
 where
@@ -30,11 +38,12 @@ where
         .with_title("seam")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
+        .with_compositor(compositor())
         .with_renderer(Box::new(
             |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-                zgui_render::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
+                let mut renderer = zgui_testkit_compositor::Screen::new();
+                compositor_api::Renderer::configure(&mut renderer, target);
+                Ok(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
             },
         ))
         .with_text_engine(Box::new(|| {

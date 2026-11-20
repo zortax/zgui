@@ -9,7 +9,8 @@ use zgui_view::{BuildCx, IntoView, View};
 /// An application with one window.
 fn window() -> Harness<Runtime> {
     let handler = App::new()
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(support::screen))
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::column().into_view().build(cx))
         })

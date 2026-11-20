@@ -1,9 +1,9 @@
 //! The same document drawn at several device pixel ratios, read back off the graphics device.
 //!
 //! Every stage a window runs is run here: the events are dispatched, the reactive work flushed,
-//! the document restyled, laid out, painted into a display list and drawn by the real
-//! `zgui-render-wgpu` renderer. The one difference from a window on a screen is that the renderer
-//! presents to a texture rather than to a compositor, which is what makes the pixels readable.
+//! the document restyled, laid out, painted, composited and drawn by the real `compositor-wgpu`
+//! renderer. The one difference from a window on a screen is that the renderer presents to a
+//! texture rather than to a surface, which is what makes the pixels readable.
 //!
 //! ```text
 //! cargo run --release -p zgui --example scale_capture -- /tmp/out 1.0 1.2 1.25 1.5 2.0
@@ -26,12 +26,14 @@
 
 use std::sync::{Arc, Mutex};
 
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+};
+use compositor_wgpu::{Builder, Pixels, wgpu};
 use zgui::prelude::*;
-use zgui_bits::DamageSet;
-use zgui_geom::{Device, DevicePx, Rect, Scale, Size};
+use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_platform::{Surface, SurfaceEvent};
-use zgui_render::{FrameOutcome, RenderTarget, Renderer};
-use zgui_render_wgpu::{Builder, Pixels, wgpu};
 
 #[path = "support/gallery.rs"]
 mod gallery;
@@ -42,16 +44,16 @@ type Readback = Arc<Mutex<Option<Pixels>>>;
 /// A real renderer that also keeps a copy of every frame it drew.
 ///
 /// The copy is taken inside `draw`, so what it holds is the frame that was presented rather than a
-/// second render of the same scene.
+/// second render of the same frame.
 struct Recording {
     /// The renderer under test.
-    inner: zgui_render_wgpu::WgpuRenderer,
+    inner: compositor_wgpu::WgpuRenderer,
     /// Where the last frame's pixels go.
     into: Readback,
 }
 
 impl Renderer for Recording {
-    fn capabilities(&self) -> zgui_render::RenderCapabilities {
+    fn capabilities(&self) -> RenderCapabilities {
         self.inner.capabilities()
     }
 
@@ -63,31 +65,20 @@ impl Renderer for Recording {
         self.inner.target()
     }
 
-    fn draw(&mut self, scene: &zgui_scene::Scene, damage: &DamageSet) -> FrameOutcome {
-        let outcome = self.inner.draw(scene, damage);
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        let outcome = self.inner.draw(frame);
         if let Some(pixels) = self.inner.read_presented() {
             *self.into.lock().expect("the readback is not poisoned") = Some(pixels);
         }
         outcome
     }
 
-    fn register_external(
-        &mut self,
-        texture: zgui_render::ExternalTexture,
-    ) -> zgui_render::TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: zgui_render::TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
-    fn memory(&self) -> zgui_render::MemoryReport {
+    fn memory(&self) -> MemoryReport {
         self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
@@ -166,15 +157,12 @@ fn open(
         .with_title("scale-capture")
         .with_size(gallery::WIDTH, gallery::HEIGHT)
         .with_stylesheet(gallery::SHEET)
-        .with_renderer(Box::new(move |surface: &Arc<dyn Surface>, _target| {
-            let size = surface.size();
-            let target = RenderTarget::new(
-                Size::new(size.width.0 as i32, size.height.0 as i32),
-                Scale::new(surface.scale_factor() as f32),
-            );
-            let inner = Builder::new()
-                .offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
+        .with_compositor(zgui::app::compositor(&fonts))
+        .with_renderer(Box::new(move |_surface: &Arc<dyn Surface>, target| {
+            let mut inner = Builder::new()
+                .offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)
                 .map_err(zgui_runtime::AppError::GpuUnavailable)?;
+            inner.configure(target);
             Ok(Box::new(Recording {
                 inner,
                 into: Arc::clone(&into),

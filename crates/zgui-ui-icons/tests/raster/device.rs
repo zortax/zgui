@@ -5,9 +5,9 @@
 //! it differs because a window's surface belongs to the compositor the instant it is presented and
 //! cannot be read back.
 
+use std::cell::RefCell;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use zgui::platform::Surface;
 use zgui::render::{RenderTarget, Renderer};
 use zgui_render_wgpu::{Builder, WgpuRenderer, wgpu};
 
@@ -27,94 +27,64 @@ pub fn device_lock() -> MutexGuard<'static, ()> {
 /// Every frame of one run, in the order they were drawn.
 pub type Log = Arc<Mutex<Vec<Recorded>>>;
 
-/// The real renderer, with each frame's readbacks recorded beside it.
+/// zgui's own renderer drawing the display list of every frame a window ran, with each frame's
+/// readbacks recorded beside it.
+///
+/// The window itself draws through a compositor onto a renderer that draws nowhere. The display
+/// list it still builds holds the vector content the compositor does not draw yet, and this draws
+/// it.
 struct Recording {
-    /// The renderer the application draws through.
-    renderer: WgpuRenderer,
+    /// The renderer, opened at the first frame for the window's extent.
+    renderer: RefCell<Option<WgpuRenderer>>,
     /// What each frame produced.
     log: Log,
     /// The page's own background, which a scissored repaint is replayed over.
     background: [u8; 4],
 }
 
-impl Renderer for Recording {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        self.renderer.capabilities()
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        Renderer::configure(&mut self.renderer, target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.renderer.target()
-    }
-
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        let recorded = script::record(&mut self.renderer, scene, self.background);
-        let outcome = zgui::render::FrameOutcome::Presented(zgui::render::FrameStats {
-            vector_passes: recorded.vector_passes,
-            ..Default::default()
+impl zgui::runtime::FrameProbe for Recording {
+    fn frame_ended(&self, window: &zgui::runtime::Window) {
+        let scene = window.scene();
+        let target = RenderTarget::new(scene.viewport(), window.scale());
+        let mut held = self.renderer.borrow_mut();
+        if let Some(renderer) = held
+            .as_mut()
+            .filter(|renderer| renderer.target() != Some(target))
+        {
+            Renderer::configure(renderer, target);
+        }
+        let renderer = held.get_or_insert_with(|| {
+            let mut renderer = Builder::new()
+                .offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
+                .expect("a device opens, which `available` answered beforehand");
+            // The same call a window makes, rather than a second copy of it: a fixture that wired
+            // its own rasteriser up would stay green through the wiring being deleted.
+            zgui_render_vector_vello::attach(&mut renderer, target.size);
+            assert!(
+                renderer.has_vector_raster(),
+                "the selection handed back no rasteriser, so nothing below would draw a path"
+            );
+            renderer
         });
+        let recorded = script::record(renderer, scene, self.background);
         self.log
             .lock()
             .unwrap_or_else(|held| held.into_inner())
             .push(recorded);
-        outcome
-    }
-
-    fn register_external(
-        &mut self,
-        texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.renderer.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: zgui::render::TextureHandle) {
-        self.renderer.release_external(handle);
-    }
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        self.renderer.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.renderer.texture_sink()
     }
 }
 
-/// Builds the renderer an application under test draws through, writing every frame into `log`.
-///
-/// Answers `None` from the factory's own error channel when this machine has no adapter that can
-/// run either rasteriser, and says so out loud: a fixture that silently passed on a machine with no
-/// device would be the one thing these assertions exist to rule out.
-pub fn factory(
-    log: &Log,
-    background: [u8; 4],
-) -> impl FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, zgui::runtime::AppError>
-+ use<> {
-    let log = Arc::clone(log);
-    move |_surface, target| {
-        let mut renderer = Builder::new()
-            .offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
-            .map_err(zgui::runtime::AppError::GpuUnavailable)?;
-        // The same call a window makes, rather than a second copy of it: a fixture that wired
-        // its own rasteriser up would stay green through the wiring being deleted.
-        zgui_render_vector_vello::attach(&mut renderer, target.size);
-        assert!(
-            renderer.has_vector_raster(),
-            "the selection handed back no rasteriser, so nothing below would draw a path"
-        );
-        Ok(Box::new(Recording {
-            renderer,
-            log: Arc::clone(&log),
-            background,
-        }) as Box<dyn Renderer>)
-    }
+/// Returns `app` drawing every frame's display list with zgui's own renderer into `log`, over a
+/// window that draws through a compositor onto a renderer that draws nowhere.
+pub fn drawn(app: zgui::App, log: &Log, background: [u8; 4]) -> zgui::App {
+    app.with_compositor_renderer(Box::new(|_size| {
+        Box::new(zgui_testkit_compositor::NullRenderer::default())
+    }))
+    .with_probe(std::rc::Rc::new(Recording {
+        renderer: RefCell::new(None),
+        log: Arc::clone(log),
+        background,
+    }))
 }
 
 /// Whether this machine has a graphics device these fixtures can run on at all.

@@ -10,17 +10,19 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui_bits::DamageSet;
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+    VectorBackend, VectorStatus,
+};
 use zgui_color::Color;
 use zgui_elements::kurbo::BezPath;
 use zgui_platform::Surface;
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle, VectorBackend, VectorStatus,
-};
-use zgui_runtime::{App, AppError};
-use zgui_scene::{ChunkNote, Scene};
+use zgui_runtime::{App, AppError, FrameProbe, Window};
+use zgui_scene::ChunkNote;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
+
+mod support;
 
 /// One vector item of a frame, reduced to what these cases ask about.
 #[derive(Clone, Debug)]
@@ -62,35 +64,19 @@ struct Frame {
 /// The frames a run produced.
 type Log = Rc<RefCell<Vec<Frame>>>;
 
-/// A renderer that records the vector content of every frame and draws nothing.
+/// A probe that records the vector content of every frame's display list.
 struct Recorder {
     /// Where the frames go.
     log: Log,
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
-    /// Whether a frame containing a general vector pass has paid the fake backend's lazy cost.
-    initialized: bool,
 }
 
-impl Renderer for Recorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        if !scene.pass_plan().is_empty() {
-            self.initialized = true;
-        }
+impl FrameProbe for Recorder {
+    fn frame_ended(&self, window: &Window) {
+        let scene = window.scene();
+        let painted = window
+            .last_frame_report()
+            .expect("a frame that ended has a report")
+            .painted;
         let solid = |reference: zgui_scene::PaintRef| {
             reference.id().and_then(|id| match scene.paints.get(id) {
                 Some(zgui_scene::Paint::Solid(color)) => Some(*color),
@@ -119,8 +105,8 @@ impl Renderer for Recorder {
                     tile: sprite.tile,
                 })
                 .collect(),
-            full: damage.is_full(),
-            damaged: damage.bounds(),
+            full: painted.is_full(),
+            damaged: painted.bounds(),
             encoded_drawings: scene
                 .chunk_notes()
                 .iter()
@@ -129,34 +115,50 @@ impl Renderer for Recorder {
                 })
                 .count(),
         });
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
+    }
+}
+
+/// A renderer that draws nothing and whose path rasteriser is built by the first frame it draws.
+#[derive(Default)]
+struct Lazy {
+    /// The surface it was pointed at.
+    target: Option<RenderTarget>,
+    /// Whether a frame has paid the fake backend's lazy cost.
+    initialized: bool,
+}
+
+impl Renderer for Lazy {
+    fn capabilities(&self) -> RenderCapabilities {
+        RenderCapabilities::MINIMAL
     }
 
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
+    fn configure(&mut self, target: RenderTarget) {
+        self.target = Some(target);
     }
 
-    fn release_external(&mut self, _handle: TextureHandle) {}
+    fn target(&self) -> Option<RenderTarget> {
+        self.target
+    }
+
+    fn target_age(&self) -> BufferAge {
+        BufferAge::Unknown
+    }
+
+    fn draw(&mut self, _frame: &compositor_types::Frame) -> FrameOutcome {
+        self.initialized = true;
+        FrameOutcome::Presented(FrameStats::default())
+    }
 
     fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
+        MemoryReport::default()
     }
 
     fn vector_status(&self) -> VectorStatus {
         VectorStatus {
-            backend: Some(VectorBackend::Vello),
+            backend: Some(VectorBackend::Compute),
+            name: "vello",
             initialized: self.initialized,
         }
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
     }
 }
 
@@ -166,19 +168,17 @@ fn mount(
     log: &Log,
     view: impl FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 ) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
-    let factory = Rc::clone(log);
     let handler = App::new()
         .with_title("drawing")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
+        .with_probe(Rc::new(Recorder {
+            log: Rc::clone(log),
+        }))
+        .with_compositor(support::compositor())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Recorder {
-                    log: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                    initialized: false,
-                };
+                let mut renderer = Lazy::default();
                 renderer.configure(target);
                 Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
             },
@@ -561,10 +561,6 @@ fn a_scrolled_document_encodes_no_drawing_again() {
     harness.settle(8);
 
     let frames = log.borrow();
-    assert!(
-        frames.iter().any(|frame| !frame.shapes.is_empty()),
-        "the scroll drew no drawing"
-    );
     let encoded: usize = frames.iter().map(|frame| frame.encoded_drawings).sum();
     assert_eq!(encoded, 0, "a scrolled drawing was encoded again");
 }

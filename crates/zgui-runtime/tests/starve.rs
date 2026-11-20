@@ -15,23 +15,22 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use zgui_atlas::TextureSink;
-use zgui_bits::DamageSet;
-use zgui_platform::{Surface, SurfaceEvent};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    SkipReason, TextureHandle,
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, SkipReason,
 };
+use zgui_platform::{Surface, SurfaceEvent};
+use zgui_reactive::RwSignal;
+use zgui_reactive::prelude::{Get, Update};
 use zgui_runtime::{App, AppError, Runtime, RuntimeHost};
-use zgui_scene::Scene;
 use zgui_view::{BuildCx, IntoView, View, ViewHost};
 
 /// What the next acquisitions are scripted to do; empty means the capture default, which presents.
 type Script = Rc<RefCell<VecDeque<FrameOutcome>>>;
 
-/// A capture renderer whose draw outcomes a test scripts.
+/// A recording renderer whose draw outcomes a test scripts.
 struct Scripted {
-    inner: zgui_testkit_scene::CaptureRenderer,
+    inner: zgui_testkit_compositor::Screen,
     script: Script,
 }
 
@@ -41,38 +40,39 @@ impl Renderer for Scripted {
     }
 
     fn configure(&mut self, target: RenderTarget) {
-        Renderer::configure(&mut self.inner, target);
+        self.inner.configure(target);
     }
 
     fn target(&self) -> Option<RenderTarget> {
-        Renderer::target(&self.inner)
+        self.inner.target()
     }
 
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let drawn = self.inner.draw(scene, damage);
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        let drawn = self.inner.draw(frame);
         self.script.borrow_mut().pop_front().unwrap_or(drawn)
-    }
-
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
     }
 
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
     }
-
-    fn texture_sink(&mut self) -> &mut dyn TextureSink {
-        self.inner.texture_sink()
-    }
 }
 
-/// A still document over a scripted renderer, with a heartbeat driving continuous frames.
-fn window_with_script() -> (zgui_platform_headless::Harness<Runtime>, Script) {
+/// A switch the block's colour follows, so a frame that flips it has something to draw.
+type Tick = RwSignal<bool>;
+
+/// Flips `tick`.
+fn flip(tick: Tick) {
+    tick.update(|lit| *lit = !*lit);
+}
+
+/// A document over a scripted renderer whose block changes colour with a [`Tick`].
+fn window_with_script() -> (zgui_platform_headless::Harness<Runtime>, Script, Tick) {
     let script: Script = Rc::default();
+    let tick = RwSignal::new(false);
     let handed = Rc::clone(&script);
     let handler = App::new()
         .with_title("starve")
@@ -80,22 +80,28 @@ fn window_with_script() -> (zgui_platform_headless::Harness<Runtime>, Script) {
         .with_stylesheet(
             "root { display: block; width: 400px; height: 300px }
              .block { display: block; width: 100px; height: 100px;
-                      background-color: rgb(200, 200, 200) }",
+                      background-color: rgb(200, 200, 200) }
+             .block.lit { background-color: rgb(220, 220, 220) }",
         )
+        .with_compositor(support::compositor())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
                 let mut renderer = Scripted {
-                    inner: zgui_testkit_scene::CaptureRenderer::new(),
+                    inner: zgui_testkit_compositor::Screen::new(),
                     script: Rc::clone(&handed),
                 };
-                Renderer::configure(&mut renderer, target);
+                renderer.configure(target);
                 Ok::<_, AppError>(Box::new(renderer) as Box<dyn Renderer>)
             },
         ))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let view = zgui_elements::column()
                 .class("root")
-                .child(zgui_elements::r#box().class("block"))
+                .child(
+                    zgui_elements::r#box()
+                        .class("block")
+                        .class_toggle(zgui_view::ClassName::new("lit"), move || tick.get()),
+                )
                 .into_view();
             Box::new(view.build(cx)) as Box<dyn zgui_view::Anchor>
         })
@@ -103,29 +109,32 @@ fn window_with_script() -> (zgui_platform_headless::Harness<Runtime>, Script) {
     let mut harness = zgui_platform_headless::Harness::new(handler);
     harness.platform().offscreens()[0].set_refresh_rate_millihertz(Some(60_000));
     harness.settle(8);
-    (harness, script)
+    (harness, script, tick)
 }
 
-/// A frame callback that always registers its successor, and how many times it ran.
+/// A frame callback that flips `tick` and registers its successor, and how many times it ran.
 ///
 /// The heartbeat is what makes the window continuously animated, so the latch has something
 /// visible to park: with it running, a parked cadence is observable as the runs stopping.
-fn heartbeat(host: Rc<RuntimeHost>) -> Rc<Cell<u64>> {
+fn heartbeat(host: Rc<RuntimeHost>, tick: Tick) -> Rc<Cell<u64>> {
     let runs = Rc::new(Cell::new(0u64));
     struct Beat {
         host: Rc<RuntimeHost>,
         runs: Rc<Cell<u64>>,
+        tick: Tick,
     }
     fn arm(beat: &Rc<Beat>) {
         let again = Rc::clone(beat);
         beat.host.request_frame_callback(Rc::new(move |_| {
             again.runs.set(again.runs.get() + 1);
+            flip(again.tick);
             arm(&again);
         }));
     }
     arm(&Rc::new(Beat {
         host,
         runs: Rc::clone(&runs),
+        tick,
     }));
     runs
 }
@@ -148,8 +157,8 @@ fn pointer() -> SurfaceEvent {
 
 #[test]
 fn a_timed_out_acquisition_latches_the_window_and_parks_its_animation() {
-    let (mut harness, script) = window_with_script();
-    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()));
+    let (mut harness, script, tick) = window_with_script();
+    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()), tick);
     harness.settle(4);
     assert!(runs.get() >= 1, "the heartbeat never started");
 
@@ -185,8 +194,8 @@ fn a_timed_out_acquisition_latches_the_window_and_parks_its_animation() {
 /// decline retries at the refresh interval and the latch stays where the real stalls are.
 #[test]
 fn a_declined_present_neither_latches_the_window_nor_parks_its_animation() {
-    let (mut harness, script) = window_with_script();
-    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()));
+    let (mut harness, script, tick) = window_with_script();
+    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()), tick);
     harness.settle(4);
     assert!(runs.get() >= 1, "the heartbeat never started");
 
@@ -214,8 +223,8 @@ fn a_declined_present_neither_latches_the_window_nor_parks_its_animation() {
 
 #[test]
 fn the_probe_widens_its_wait_while_the_surface_stays_starved() {
-    let (mut harness, script) = window_with_script();
-    let _runs = heartbeat(Rc::clone(harness.app().windows()[0].host()));
+    let (mut harness, script, tick) = window_with_script();
+    let _runs = heartbeat(Rc::clone(harness.app().windows()[0].host()), tick);
     harness.settle(4);
 
     // Every acquisition times out from here: the first latches, and each probe re-latches.
@@ -247,8 +256,8 @@ fn the_probe_widens_its_wait_while_the_surface_stays_starved() {
 
 #[test]
 fn input_ends_the_hold_and_the_heartbeat_resumes_at_once() {
-    let (mut harness, script) = window_with_script();
-    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()));
+    let (mut harness, script, tick) = window_with_script();
+    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()), tick);
     harness.settle(4);
 
     script
@@ -280,8 +289,8 @@ fn input_ends_the_hold_and_the_heartbeat_resumes_at_once() {
 fn a_probe_that_presents_releases_the_latch_without_any_event() {
     // The visible-window hiccup: the compositor stalled for a moment, nothing was hidden, and no
     // event will ever say it recovered. The probe is the only way back.
-    let (mut harness, script) = window_with_script();
-    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()));
+    let (mut harness, script, tick) = window_with_script();
+    let runs = heartbeat(Rc::clone(harness.app().windows()[0].host()), tick);
     harness.settle(4);
 
     script
@@ -307,7 +316,7 @@ fn a_probe_that_presents_releases_the_latch_without_any_event() {
 
 #[test]
 fn a_timer_under_the_latch_runs_without_presenting_and_keeps_the_probe() {
-    let (mut harness, script) = window_with_script();
+    let (mut harness, script, tick) = window_with_script();
     harness.settle(4);
 
     script
@@ -321,7 +330,10 @@ fn a_timer_under_the_latch_runs_without_presenting_and_keeps_the_probe() {
     host.schedule(
         Duration::ZERO,
         zgui_view::Repeat::Once,
-        Rc::new(move || counter.set(counter.get() + 1)),
+        Rc::new(move || {
+            counter.set(counter.get() + 1);
+            flip(tick);
+        }),
     );
     harness.settle(4);
     assert!(harness.app().windows()[0].is_starved());

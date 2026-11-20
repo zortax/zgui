@@ -26,6 +26,7 @@
 //! testing under a stationary pointer** is what stops a dropdown that opens under the cursor from
 //! never being hovered.
 
+use compositor_types::{FrameOutcome, RenderTarget, SkipReason, SubpixelOrder};
 use web_time::Instant;
 
 use zgui_bits::{DamageSet, Dirty};
@@ -35,7 +36,6 @@ use zgui_layout::tree::LayoutTree;
 use zgui_paint::PaintInput;
 use zgui_platform::Clock;
 use zgui_profile::{Counter, counter};
-use zgui_render::{FrameOutcome, RenderTarget, SkipReason};
 
 use crate::window::Window;
 
@@ -62,6 +62,8 @@ pub struct FrameReport {
     pub paint_elapsed: std::time::Duration,
     /// What the renderer made of it.
     pub outcome: FrameOutcome,
+    /// The device pixels whose content the paint walk recorded again.
+    pub painted: DamageSet,
     /// Whether anything asked for another frame from inside this one.
     pub needs_another_frame: bool,
     /// How many elements the restyle touched.
@@ -335,13 +337,6 @@ impl Window {
         self.frame_started();
         self.gate.begin_frame();
         self.document.borrow().begin_frame();
-        // Both are this frame's answers about this frame's movement, and a frame that inherited
-        // either would decide what to draw from what the last one moved.
-        self.rigid_moves = zgui_layout::fragment::diff::RigidMoves::default();
-        self.damage_before_layout = DamageSet::new();
-        self.damage_after_layout = DamageSet::new();
-        self.layout_passes = 0;
-        self.scrolled_this_frame.clear();
 
         // The starvation probe. The retry deadline this frame was woken at is the one attempt the
         // latch allows, so the frame runs unlatched — its present is the probe — and the next
@@ -566,11 +561,10 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
-            self.damage_extent = self.renderer.target().map(|target| target.size);
-            // The chunk notes were consumed by the same submission. A skipped frame keeps them
-            // for the next drawn one, and anything noted after this point — a budget eviction —
-            // stands until then.
-            self.scene.clear_chunk_notes();
+            self.damage_extent = self
+                .renderer
+                .target()
+                .map(|target| device_size(target.size));
         }
         // A drawing drawn from a stretched layer, or deferred by the layer budget, is encoded
         // again on the next frame that reaches it. Its rectangles are what reaches it, and the
@@ -585,12 +579,6 @@ impl Window {
         // late in the frame, is kept for the next frame's layout pass.
         if self.owes_scrolls() {
             self.request_frame();
-        }
-        if matches!(outcome, zgui_render::FrameOutcome::Recovered) {
-            // The renderer rebuilt its device and holds nothing resident. Re-noting every
-            // record's chunk lets the next frame restore residence in one pass of uploads,
-            // rather than serving each chunk transiently until its fragment encodes again.
-            self.painter.renote_chunks(&mut self.scene);
         }
 
         // After the renderer, and before the arenas are recycled. After, because what a screen
@@ -686,6 +674,7 @@ impl Window {
             elapsed: started.elapsed(),
             paint_elapsed,
             outcome,
+            painted: self.painted,
             needs_another_frame,
             restyled,
             timers_fired,
@@ -831,11 +820,6 @@ impl Window {
     pub(crate) fn maintain(&mut self, timestamp: zgui_vocab::Timestamp) {
         self.maintenance_due = None;
         self.renderer.release_idle_resources();
-        // The release gave back the chunks the renderer held resident, and a chunk is made
-        // resident again only when it is noted. Content that never encodes again would otherwise
-        // be uploaded afresh by every frame that draws it, for the rest of the window's life; noted
-        // here, the next drawn frame makes the whole cache resident in one pass.
-        self.painter.renote_chunks(&mut self.scene);
         let mut cx = crate::embed::EmbedMaintenanceCx {
             renderer: &mut *self.renderer,
             content: &mut self.content,
@@ -847,7 +831,6 @@ impl Window {
     /// Runs the embed host's sync step, and folds what it reported into the animation gate.
     fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
         let placements = self.host.placements();
-        // Measured on this frame's matrices, so kept apart for a scroll that moves composed pixels.
         let mut damage = DamageSet::new();
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
@@ -877,7 +860,6 @@ impl Window {
         let report = self.embed.sync(&mut cx);
         self.embed_animating = report.animating;
         self.damage.absorb_set(&damage);
-        self.damage_after_layout.absorb_set(&damage);
     }
 
     /// Whether anything in the document is animating.
@@ -978,10 +960,10 @@ impl Window {
             device = self.renderer.capabilities().subpixel_text,
             "text is drawn with {}",
             match order {
-                Some(zgui_render::SubpixelOrder::RedToBlue) => {
+                Some(SubpixelOrder::RedToBlue) => {
                     "one coverage for each colour stripe, red to blue"
                 }
-                Some(zgui_render::SubpixelOrder::BlueToRed) => {
+                Some(SubpixelOrder::BlueToRed) => {
                     "one coverage for each colour stripe, blue to red"
                 }
                 None => "one coverage for each pixel",
@@ -1030,21 +1012,19 @@ impl Window {
                 self.refresh_interval().as_micros()
             )
         });
-        let target = RenderTarget::new(
-            Size::new(size.width.0 as i32, size.height.0 as i32),
-            zgui_geom::Scale::new(self.scale),
-        );
-        let target = if self.translucent {
-            target.translucent()
-        } else {
-            target
+        let target = RenderTarget {
+            size: [size.width.0 as u32, size.height.0 as u32],
+            scale: self.scale,
+            opaque: !self.translucent,
         };
         let was = self.renderer.target();
         self.renderer.configure(target);
+        self.compositor.configure(target);
         let widest = |a: Size<i32, zgui_geom::Device>, b: Size<i32, zgui_geom::Device>| {
             Size::new(a.width.max(b.width), a.height.max(b.height))
         };
-        let extent = was.map_or(target.size, |was| widest(was.size, target.size));
+        let size = device_size(target.size);
+        let extent = was.map_or(size, |was| widest(device_size(was.size), size));
         self.damage_extent = Some(
             self.damage_extent
                 .map_or(extent, |held| widest(held, extent)),
@@ -1053,12 +1033,8 @@ impl Window {
         // larger extent exposes. A change of scale or opacity changes every pixel there is, and so
         // does a first configure, which has no picture to keep.
         match was {
-            Some(was)
-                if was.scale == target.scale
-                    && was.opaque == target.opaque
-                    && self.renderer.composed_survives_configure() =>
-            {
-                for band in exposed(was.size, target.size) {
+            Some(was) if was.scale == target.scale && was.opaque == target.opaque => {
+                for band in exposed(device_size(was.size), size) {
                     self.damage.absorb(band);
                 }
             }
@@ -1455,12 +1431,6 @@ impl Window {
         // re-renders — reports both passes' moves, and the accessibility stage drains them.
         let mut marks = zgui_layout::fragment::diff::DocumentMarks::for_document(&mut document)
             .recording_moves(&mut self.a11y_moves);
-        // Before the first walk of the frame and no other: what stands here on a later pass is
-        // mostly the earlier pass's own movement, which is the one thing this must not collect.
-        if self.layout_passes == 0 {
-            self.damage_before_layout = self.damage;
-        }
-        self.layout_passes += 1;
         counter::bump(Counter::LayoutPasses);
         // Damage the pass finds outside every extent the surface has had since the last drawn
         // frame is cut away as it is absorbed, rather than merged first and clipped after.
@@ -1468,7 +1438,7 @@ impl Window {
             self.damage_extent
                 .map(|extent| zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), extent)),
         );
-        let mut moved = zgui_layout::fragment::diff::rebuild_in(
+        zgui_layout::fragment::diff::rebuild_in(
             &mut self.diff_scratch,
             &mut layout,
             &mut self.hit,
@@ -1477,17 +1447,6 @@ impl Window {
             root,
             &mut self.damage,
         );
-        // A pass measures old ink on the placements the pass before it published. After a pass
-        // that moved a content space, those are the places a pixel move puts the drawn pixels, so
-        // that old ink is not moved again.
-        if self.rigid_moves.count > 0 {
-            moved.beyond.absorb_set(&moved.drawn);
-            moved.drawn = DamageSet::new();
-        }
-        // Merged rather than assigned: a scroll delivered to a listener can re-render and relay
-        // out inside the frame that delivered it, so the frame's answer is every pass's together.
-        // The walk seeds its own `beyond` from whatever the frame had already damaged.
-        self.rigid_moves = self.rigid_moves.and(moved);
         drop(drawn);
         layout.reclaim_paragraphs();
         // The fragments name their matrices by an index into the table that was just filled, so
@@ -1500,7 +1459,6 @@ impl Window {
         // wants one; only what has already been sent can be left describing where a box used to be,
         // and until a frame has sent one there is nothing to correct. This is the same test the
         // accessibility tree itself is built behind, for the same reason.
-        self.moved_spaces.clear();
         // And only when the tree was written to at all: a document that is not animating,
         // not scrolling something sticky and not being restructured re-establishes every
         // coordinate system it had with the matrix it had, and nothing can have moved.
@@ -1584,52 +1542,16 @@ impl Window {
         let mut capabilities = self.renderer.capabilities();
         // What the device can blend is narrowed to what this window draws on its display.
         capabilities.subpixel_text = self.subpixel_order.is_some();
-        // Decided inside the borrow below, performed after it: the copy belongs in the renderer's
-        // own frame, and the renderer is not reachable while the layout store is borrowed.
-        let shift: Option<zgui_render::ScrollShift>;
         let vector_report;
         let transaction;
         {
             let layout = self.layout.borrow();
             // Before anything reads the set. What a scroll absorbs is where every moved fragment
             // was and is, which for a document taller than its window reaches far past the surface
-            // on both sides; the renderer would cut that to the surface anyway, and until it is
-            // cut the emit walk's subtree skip cannot refuse anything, so a scroll of one screenful
-            // walks and paints the whole document.
-            // Before the damage is read, and before it is grown: a scroll that can be answered by
-            // moving pixels the renderer already has replaces the whole port with the bands the
-            // move leaves undefined, and everything the frame damaged for any *other* reason is
-            // kept and drawn over them.
-            shift = self.scroll_shift(viewport).ok();
-            if let Some(shift) = shift {
-                // Everything this frame owes that the copy does not answer: what it owed before
-                // any layout pass, what the passes damaged beyond their movement, what the stages
-                // after them damaged, and the bands the copy uncovers. What is dropped is exactly
-                // the movement's own damage, which is the whole port and is what the copy is for.
-                //
-                // What was owed before layout names pixels of the drawn frame: inherited damage,
-                // owed layers, and the old and new places of what the animation stage moved and
-                // recoloured, measured before layout wrote the content space. So does the old ink
-                // of what the passes removed or changed. The copy moves those pixels, so that
-                // damage moves with them.
-                self.damage = DamageSet::new();
-                shift.carry_set(&self.damage_before_layout, &mut self.damage);
-                shift.carry_set(&self.rigid_moves.drawn, &mut self.damage);
-                self.damage.absorb_set(&self.rigid_moves.beyond);
-                self.damage.absorb_set(&self.damage_after_layout);
-                shift.expose_into(&mut self.damage);
-            }
+            // on both sides. Until it is cut to the surface the emit walk's subtree skip cannot
+            // refuse anything, so a scroll of one screenful walks and paints the whole document.
             self.damage
                 .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));
-            zgui_profile::latency::note_with("d.postshift", || {
-                format!(
-                    "by={:?} inherited={:?} beyond={:?} after={:?}",
-                    shift.map(|s| s.by),
-                    self.damage_before_layout.rects(),
-                    self.rigid_moves.beyond.rects(),
-                    self.damage.rects()
-                )
-            });
             mark("p.expand");
             zgui_paint::expand(
                 &layout,
@@ -1650,6 +1572,9 @@ impl Window {
                     &self.host.placements(),
                 );
             }
+            self.painted = self.damage;
+            // No renderer reads the chunk notes, so they stay readable until the next paint.
+            self.scene.clear_chunk_notes();
             self.scene.begin_frame(viewport);
             // What this frame's application effects are told about it. Nothing the framework draws
             // reads any of it, so a document with no effect in it pays three floats.
@@ -1844,7 +1769,7 @@ impl Window {
         // result: the bytes did not move, the geometry did not move, and the pixels are plausible.
         self.scene.check_spatial_dependencies();
         mark("p.upload");
-        match self.content.flush(self.renderer.texture_sink()) {
+        match self.content.flush(&mut crate::window::unsent::Unsent) {
             // Every queued write reached the device, so a shared attachment's tile can stand in
             // for its host texels from here on: the cache gives its copies back, and the loader
             // gives back its own for every tile the cache vouches is resident. Small pictures
@@ -1888,13 +1813,26 @@ impl Window {
         zgui_profile::latency::note_with("p.draw", || {
             format!("{}x{}", viewport.width, viewport.height)
         });
-        // Handed over before the draw and after the occlusion check, because a window that is not
-        // going to draw is not going to have anything to move either — and a shift recorded now and
-        // drawn against a later frame would move pixels a different scroll offset already moved.
-        if let Some(shift) = shift {
-            self.renderer.shift_composed(shift);
+        let interval = self.refresh_interval();
+        let outcome = self
+            .compositor
+            .draw(&mut *self.renderer, self.subpixel_order, interval);
+        if let Some(built) = self.compositor.take_built() {
+            crate::window::counters::built(&built);
+            self.renderer_totals.drawn(&outcome, &*self.renderer);
+            if self.check_damage
+                && let Some(committed) = &self.committed
+            {
+                crate::window::containment::check(
+                    self.compositor.frame(),
+                    committed,
+                    self.retired,
+                    &self.painted,
+                );
+            }
+            self.retired = outcome.retires_damage();
         }
-        let outcome = self.renderer.draw(&self.scene, &self.damage);
+        self.committed = None;
         let vector_after = self.renderer.vector_status();
         if !vector_before.initialized && vector_after.initialized {
             // Once per renderer: the build is the costliest single step a frame can take, so the
@@ -1906,7 +1844,7 @@ impl Window {
                 first = ?complex_this_frame.first(),
                 "the general vector rasteriser was built"
             );
-            if vector_after.backend == Some(zgui_render::VectorBackend::Vello) {
+            if vector_after.backend == Some(compositor_types::VectorBackend::Compute) {
                 self.vello_initializers = complex_this_frame;
             }
         }
@@ -1934,6 +1872,12 @@ fn exposed(
         )
     });
     right.into_iter().chain(bottom)
+}
+
+/// Returns a target's size in device pixels.
+fn device_size(size: [u32; 2]) -> Size<i32, zgui_geom::Device> {
+    let [width, height] = size.map(|side| i32::try_from(side).unwrap_or(i32::MAX));
+    Size::new(width, height)
 }
 
 /// Whether layout batches ride the pool, which `ZGUI_LAYOUT_BATCHES=0` opts a run out of.

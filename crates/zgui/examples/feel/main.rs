@@ -27,9 +27,9 @@ mod todo;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use compositor_types::RenderTarget;
 use zgui::prelude::*;
 use zgui_platform::{AppHandler, PlatformError, Surface};
-use zgui_render::RenderTarget;
 
 use crate::counter::CounterProps;
 use crate::gallery::GalleryProps;

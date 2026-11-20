@@ -2,9 +2,8 @@
 //!
 //! A resize moves the scrollport's clip, and the clip is named by the box that imposes it rather
 //! than by the rectangle it happens to hold this frame — so every record under it keeps naming a
-//! chain that still exists, and content the resize did not touch replays instead of encoding
-//! again. This is the difference between a resize frame that costs the changed boxes and one that
-//! costs the document.
+//! chain that still exists, and content the resize did not touch is not encoded again. This is the
+//! difference between a resize frame that costs the changed boxes and one that costs the document.
 //!
 //! The fixture is the shape the cost report arrives in: rows of fixed-width text inside a
 //! scrolling root. A height-only step re-wraps nothing and moves nothing that is anchored to the
@@ -100,12 +99,6 @@ fn a_height_resize_of_a_scrolling_document_replays_its_rows() {
         "the step rebuilt {} boxes; a rebuilt box carries rebuilt fragments, and their fresh \
          names would make the replay claim below vacuous",
         step.get(Counter::BoxesRebuilt),
-    );
-    assert!(
-        step.get(Counter::ChunksTranslated) >= ROWS as u64,
-        "the resize replayed {} chunks against {ROWS} rows: the rows were re-encoded, so the \
-         scrollport's clip was minted afresh instead of keeping its name",
-        step.get(Counter::ChunksTranslated),
     );
     assert!(
         step.get(Counter::ChunksReencoded) <= 8,

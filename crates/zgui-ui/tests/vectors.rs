@@ -102,27 +102,27 @@ fn draw<V: IntoView + 'static>(
     }
     let _guard = device::device_lock();
     let log: device::Log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    zgui::app()
-        .with_title("vectors")
-        .with_size(width, height)
-        .with_stylesheet(css)
-        .with_renderer(Box::new(device::factory(&log)))
-        .run_on(
-            move |handler| {
-                let mut harness = zgui_platform_headless::Harness::new(handler);
-                harness.deliver_to_first(zgui::platform::SurfaceEvent::Resized(
-                    zgui::geom::Size::new(
-                        zgui::geom::DevicePx(width),
-                        zgui::geom::DevicePx(height),
-                    ),
-                ));
-                harness.settle(96);
-                harness.shut_down();
-                Ok(())
-            },
-            view,
-        )
-        .expect("the document ran");
+    device::drawn_on(
+        zgui::app()
+            .with_title("vectors")
+            .with_size(width, height)
+            .with_stylesheet(css),
+        device::Pipeline::Scene,
+        &log,
+    )
+    .run_on(
+        move |handler| {
+            let mut harness = zgui_platform_headless::Harness::new(handler);
+            harness.deliver_to_first(zgui::platform::SurfaceEvent::Resized(
+                zgui::geom::Size::new(zgui::geom::DevicePx(width), zgui::geom::DevicePx(height)),
+            ));
+            harness.settle(96);
+            harness.shut_down();
+            Ok(())
+        },
+        view,
+    )
+    .expect("the document ran");
     let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
     frames
         .into_iter()

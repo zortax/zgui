@@ -22,15 +22,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui_bits::DamageSet;
 use zgui_geom::{Css, CssPx, Point};
-use zgui_platform::{Surface, SurfaceEvent};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
-use zgui_runtime::{App, AppError, Runtime};
-use zgui_scene::Scene;
+use zgui_platform::SurfaceEvent;
+use zgui_runtime::{App, FrameProbe, Runtime, Window};
 use zgui_view::BuildCx;
 use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
 
@@ -75,41 +69,19 @@ impl Drawn {
 /// The frames, in the order they were drawn.
 type Log = Rc<RefCell<Vec<Drawn>>>;
 
-/// A renderer that draws through a compositor and records the quads the output shows.
+/// A probe that records the quads the output shows after every frame.
 struct Recorder {
     /// Where the frames go.
     log: Log,
-    /// The compositor renderer the frames are drawn with.
-    inner: Box<dyn Renderer>,
 }
 
-impl Recorder {
-    /// Returns what the output shows, or `None` before the first frame.
-    fn shown(&self) -> Option<zgui_testkit_compositor::Drawing> {
-        let bridge = self
-            .inner
-            .as_any()?
-            .downcast_ref::<zgui_runtime::compositor::CompositorRenderer>()?;
-        zgui_testkit_compositor::drawing_of(bridge.renderer())
-    }
-}
-
-impl Renderer for Recorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.inner.configure(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.inner.target()
-    }
-
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let outcome = self.inner.draw(scene, damage);
-        let drawing = self.shown().expect("the compositor drew a frame");
+impl FrameProbe for Recorder {
+    fn frame_ended(&self, window: &Window) {
+        let painted = window
+            .last_frame_report()
+            .expect("a frame that ended has a report")
+            .painted;
+        let drawing = support::drawing(window);
         self.log.borrow_mut().push(Drawn {
             quads: drawing
                 .quads()
@@ -120,33 +92,8 @@ impl Renderer for Recorder {
                     Some((top, height, green))
                 })
                 .collect(),
-            undamaged: damage.is_empty(),
+            undamaged: painted.is_empty(),
         });
-        outcome
-    }
-
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
-    fn memory(&self) -> MemoryReport {
-        self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        self.inner.texture_sink()
-    }
-
-    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
-        self.inner.as_any_mut()
-    }
-
-    fn as_any(&self) -> Option<&dyn core::any::Any> {
-        self.inner.as_any()
     }
 }
 
@@ -168,21 +115,16 @@ fn sheet() -> String {
 
 /// A window holding one scroll port, smaller than the window, with [`ROWS`] coloured rows in it.
 fn listing(log: &Log) -> zgui_platform_headless::Harness<Runtime> {
-    let factory = Rc::clone(log);
     let css: &'static str = Box::leak(sheet().into_boxed_str());
     let handler = App::new()
         .with_title("arrival")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(
-            move |surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let renderer = Recorder {
-                    log: Rc::clone(&factory),
-                    inner: support::compositor(surface, target)?,
-                };
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
+        .with_probe(Rc::new(Recorder {
+            log: Rc::clone(log),
+        }))
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
                 zgui_testkit_scene::MonoShaper::new(),

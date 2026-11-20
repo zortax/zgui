@@ -21,10 +21,10 @@ mod support;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui_platform::{AppHandler, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId};
 use zgui_platform_headless::Harness;
-use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::Builder;
 use zgui_runtime::{App, AppError};
 use zgui_view::{BuildCx, IntoView, View};
 
@@ -104,40 +104,41 @@ impl<A: AppHandler> AppHandler for StopWhenDrawn<A> {
 ///
 /// This is the one place the two backends differ, and the difference is asked for rather than known:
 /// a surface either offers native handles a graphics API can draw into or it does not. A window
-/// does, and gets the real renderer, with the surface created from the same instance the device
+/// does, and gets a real renderer, with the surface created from the same instance the device
 /// will come from. A buffer does not, and gets one that records. Nothing here names a backend.
 fn renderer(
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
-        let mut recording = zgui_testkit_scene::CaptureRenderer::new();
+        let mut recording = zgui_testkit_compositor::Screen::new();
         recording.configure(target);
         return Ok(Box::new(recording));
     };
 
     // The notify only when asked for, matching the application default.
-    let builder = Builder::new();
-    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
-        let presented = Arc::clone(surface);
-        builder.with_pre_present(Box::new(move |_| {
-            presented.pre_present_notify();
-        }))
-    } else {
-        builder
-    };
+    let pre_present = matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify")
+        .then(|| {
+            let presented = Arc::clone(surface);
+            Box::new(move |_| presented.pre_present_notify())
+                as Box<dyn Fn(RenderTarget) + Send + Sync>
+        });
     // The surface has to be created from the instance the device is opened from, which is why the
     // window's handles are handed to the renderer rather than the other way round. The shared
     // handle keeps the window alive for as long as anything draws through it.
-    builder.for_surface(target, handles).map_or_else(
-        |unavailable| {
+    zgui_testkit_compositor::Windows::new()
+        .renderer(
+            target,
+            handles,
+            zgui_testkit_compositor::Pacing::Display,
+            pre_present,
+        )
+        .map_err(|unavailable| {
             // A machine with no usable device is a fact about the machine, not a defect. It is
             // recorded so the program can say so out loud rather than report a silent zero.
             NO_DEVICE.store(true, Ordering::Relaxed);
-            Err(AppError::from(unavailable))
-        },
-        |renderer| Ok(Box::new(renderer) as Box<dyn Renderer>),
-    )
+            AppError::Platform(PlatformError::Backend(unavailable.to_string()))
+        })
 }
 
 /// The application, built the same way for both backends.
@@ -146,6 +147,7 @@ fn application() -> Result<zgui_runtime::Runtime, AppError> {
         .with_title("both backends")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
+        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
         .with_renderer(Box::new(renderer))
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(

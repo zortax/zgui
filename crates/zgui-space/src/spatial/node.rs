@@ -37,11 +37,8 @@ pub enum Anchoring {
     /// Moves with every scroll offset above it. The overwhelming majority.
     Scrolling,
     /// Its shift is measured against a scrollport it does not travel with, so it holds still while
-    /// its neighbours slide past.
-    Sticky {
-        /// The scrollable region the shift is measured against.
-        port: ScrollFrameId,
-    },
+    /// its neighbours slide past. Its local matrix holds the shift.
+    Sticky(StickyPort),
     /// Takes none of the scroll offsets above it, so it does not move at all when they change.
     Fixed,
     /// The content of a scroll container: its own transform is the container's scroll offset.
@@ -55,6 +52,37 @@ impl Anchoring {
     /// Reports whether the node is the content of a scroll container.
     pub const fn is_content(&self) -> bool {
         matches!(self, Self::Content(_))
+    }
+}
+
+/// What holds a sticky box inside the scrollport its shift is measured against.
+///
+/// The rectangles are in the coordinate system above the box, measured as if nothing were shifted.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct StickyPort {
+    /// The scrollable region the shift is measured against.
+    pub port: ScrollFrameId,
+    /// The box's border box where the flow puts it.
+    pub rect: Rect<DevicePx, Device>,
+    /// The rectangle the box may not leave: its containing block's content box.
+    pub limit: Rect<DevicePx, Device>,
+    /// The insets from the port's edges, as `[top, right, bottom, left]` device pixels, `None` for
+    /// an edge left free.
+    pub inset: [Option<f32>; 4],
+    /// The shift at the current scroll offsets, which the node's local matrix applies.
+    pub shift: (f32, f32),
+}
+
+impl StickyPort {
+    /// A sticky box at `rect` with no room to move and no shift, sticking to `port`.
+    pub const fn still(port: ScrollFrameId, rect: Rect<DevicePx, Device>) -> Self {
+        Self {
+            port,
+            rect,
+            limit: rect,
+            inset: [None; 4],
+            shift: (0.0, 0.0),
+        }
     }
 }
 
@@ -98,11 +126,12 @@ impl OwnSpace {
     /// a box positioned against the viewport takes none of the scroll offsets above it. Everything
     /// else — which is nearly everything — answers `None` and shares the space it is drawn in.
     ///
-    /// Sticky and viewport anchoring are two values of one property and never both apply.
+    /// Sticky and viewport anchoring are two values of one property and never both apply. A sticky
+    /// box's local matrix applies its shift after its own transform.
     ///
     /// ```
     /// use zgui_geom::{Device, DevicePx, Matrix4, Rect, Size};
-    /// use zgui_space::{Anchoring, OwnSpace, ScrollFrameId};
+    /// use zgui_space::{Anchoring, OwnSpace, ScrollFrameId, StickyPort};
     ///
     /// assert_eq!(OwnSpace::of(None, None, false), None, "drawn in the space above it");
     ///
@@ -116,27 +145,29 @@ impl OwnSpace {
     ///     OwnSpace::of(None, None, true).map(|own| own.anchoring),
     ///     Some(Anchoring::Fixed),
     /// );
+    /// let held = StickyPort::still(ScrollFrameId(3), Rect::ZERO);
     /// assert_eq!(
-    ///     OwnSpace::of(None, Some(ScrollFrameId(3)), false).map(|own| own.anchoring),
-    ///     Some(Anchoring::Sticky { port: ScrollFrameId(3) }),
+    ///     OwnSpace::of(None, Some(held), false).map(|own| own.anchoring),
+    ///     Some(Anchoring::Sticky(held)),
     /// );
     /// ```
     pub fn of(
         matrix: Option<Matrix4>,
-        sticky_port: Option<ScrollFrameId>,
+        sticky: Option<StickyPort>,
         ignores_scroll: bool,
     ) -> Option<Self> {
-        let anchoring = match (sticky_port, ignores_scroll) {
-            (Some(port), _) => Anchoring::Sticky { port },
+        let anchoring = match (sticky, ignores_scroll) {
+            (Some(sticky), _) => Anchoring::Sticky(sticky),
             (None, true) => Anchoring::Fixed,
             (None, false) => Anchoring::Scrolling,
         };
         if matrix.is_none() && anchoring == Anchoring::Scrolling {
             return None;
         }
-        Some(Self {
-            local: matrix.unwrap_or(Matrix4::IDENTITY),
-            anchoring,
-        })
+        let mut local = matrix.unwrap_or(Matrix4::IDENTITY);
+        if let Some(sticky) = sticky {
+            local = local.then(&Matrix4::translation(sticky.shift.0, sticky.shift.1, 0.0));
+        }
+        Some(Self { local, anchoring })
     }
 }

@@ -28,7 +28,8 @@ fn bar_and_window() -> (Harness<Runtime>, WindowHandle, WindowHandle) {
                 .with_size(0.0, 34.0)
                 .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(34.0))),
         )
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(support::screen))
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::column().into_view().build(cx))
         })

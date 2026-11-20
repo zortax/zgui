@@ -35,15 +35,15 @@ use crate::sample::frame::Held;
 use crate::state::DevTools;
 
 /// One component of the renderer's report: what it is called and how to read it out.
-type Component = (&'static str, fn(&zgui::render::MemoryReport) -> u64);
+type Component = (&'static str, fn(&compositor_types::MemoryReport) -> u64);
 
 /// The renderer's report, in the order the bar stacks them.
 const COMPONENTS: [Component; 5] = [
     ("fixed", |it| it.fixed),
     ("targets", |it| it.targets),
-    ("scratch", |it| it.scratch),
-    ("atlases", |it| it.atlases),
-    ("buffers", |it| it.buffers),
+    ("vector", |it| it.vector),
+    ("atlas", |it| it.atlas),
+    ("chunks", |it| it.chunks),
 ];
 
 /// The memory tab.
@@ -135,11 +135,11 @@ pub(crate) fn MemoryPanel(
 }
 
 /// The lazy general-vector state, in the words the inspector shows.
-pub(crate) fn vector_status(status: zgui::render::VectorStatus) -> String {
+pub(crate) fn vector_status(status: compositor_types::VectorStatus) -> String {
     let backend = match status.backend {
-        Some(zgui::render::VectorBackend::Vello) => "Vello",
-        Some(zgui::render::VectorBackend::Coverage) => "coverage fallback",
-        Some(zgui::render::VectorBackend::Other) => "other",
+        Some(compositor_types::VectorBackend::Compute) => "Vello",
+        Some(compositor_types::VectorBackend::Raster) => "coverage fallback",
+        Some(_) => "other",
         None => return "not configured".to_owned(),
     };
     if status.initialized {
@@ -225,13 +225,14 @@ mod tests {
 
     #[test]
     fn vector_status_says_whether_vello_has_paid_its_lazy_cost() {
-        let lazy = zgui::render::VectorStatus {
-            backend: Some(zgui::render::VectorBackend::Vello),
+        let lazy = compositor_types::VectorStatus {
+            backend: Some(compositor_types::VectorBackend::Compute),
+            name: "vello",
             initialized: false,
         };
         assert_eq!(vector_status(lazy), "Vello — lazy, not initialized");
         assert_eq!(
-            vector_status(zgui::render::VectorStatus {
+            vector_status(compositor_types::VectorStatus {
                 initialized: true,
                 ..lazy
             }),

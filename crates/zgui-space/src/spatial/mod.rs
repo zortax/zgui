@@ -53,7 +53,7 @@ pub mod tree;
 mod tests;
 
 pub use crate::spatial::id::{PropertyId, PropertyOwner, SPATIAL_DOMAIN, SpatialId};
-pub use crate::spatial::node::{Anchoring, OwnSpace, ScrollPort, SpatialNode};
+pub use crate::spatial::node::{Anchoring, OwnSpace, ScrollPort, SpatialNode, StickyPort};
 pub use crate::spatial::placements::Placements;
 pub use crate::spatial::space::SpatialTree;
 pub use crate::spatial::tree::{PropertyNode, PropertyTree, TreeVersion};

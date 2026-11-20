@@ -5,8 +5,8 @@
 //! the layout where it knows it, the application or the user can state it, and one function
 //! decides from both.
 
+use compositor_types::SubpixelOrder;
 use zgui_platform::SubpixelLayout;
-use zgui_render::SubpixelOrder;
 
 /// The environment variable that states [`TextAntialiasing`] for every window of a process.
 const VARIABLE: &str = "ZGUI_TEXT_AA";
@@ -81,7 +81,7 @@ impl TextAntialiasing {
     ///
     /// ```
     /// use zgui_platform::SubpixelLayout;
-    /// use zgui_render::SubpixelOrder;
+    /// use compositor_types::SubpixelOrder;
     /// use zgui_runtime::TextAntialiasing;
     ///
     /// let auto = TextAntialiasing::Auto;
@@ -108,8 +108,8 @@ impl TextAntialiasing {
 
 #[cfg(test)]
 mod tests {
+    use compositor_types::SubpixelOrder;
     use zgui_platform::SubpixelLayout;
-    use zgui_render::SubpixelOrder;
 
     use super::TextAntialiasing;
 

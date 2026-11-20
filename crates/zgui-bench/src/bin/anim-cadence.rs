@@ -37,14 +37,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use zgui::atlas::TextureSink;
-use zgui::bits::DamageSet;
-use zgui::prelude::*;
-use zgui::render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
 };
-use zgui::scene::Scene;
+use zgui::prelude::*;
 use zgui::view;
 use zgui_ui::prelude::*;
 use zgui_ui_tokens::prelude::*;
@@ -269,38 +266,7 @@ fn open_device(
     surface: &Arc<dyn zgui::platform::Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, zgui::Error> {
-    let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
-        zgui::Error::Platform(zgui::platform::PlatformError::Backend(
-            "this window offers no handles a graphics API can draw into".to_owned(),
-        ))
-    })?;
-    // Wired as the application wires it — a bench wired differently from the loop it measures
-    // reports a cadence no application shows. A platform that paces its own frames is told about
-    // every present and decides when a composed frame is handed over; elsewhere the notify only
-    // when asked for.
-    let platform = matches!(
-        surface.present_pacing(),
-        zgui::platform::PresentPacing::Platform
-    );
-    let notify =
-        platform || matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify");
-    let mut builder = zgui_render_wgpu::Builder::new();
-    if platform {
-        builder = builder.with_present_pacing(zgui_render_wgpu::PresentPacing::Platform);
-    }
-    if notify {
-        let presented = Arc::clone(surface);
-        builder = builder.with_pre_present(Box::new(move |target| {
-            presented.pre_present_frame(target.size, f64::from(target.scale.get()));
-        }));
-    }
-    let mut renderer = builder.for_surface(target, handles)?;
-    if platform {
-        let gate = Arc::clone(surface);
-        renderer.set_present_gate(Box::new(move || gate.present_now()));
-    }
-    zgui_render_vector_vello::attach(&mut renderer, target.size);
-    Ok(Box::new(renderer))
+    Ok(Box::new(zgui_bench::renderers::window(surface, target)?))
 }
 
 /// A renderer that stamps every frame it is asked to draw and then draws it.
@@ -361,20 +327,24 @@ impl Renderer for Stamping {
         self.inner.target()
     }
 
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let at = Instant::now();
         // A frame cost set from outside, so that a cadence can be measured against frames that do
         // and do not fit the interval.
         while at.elapsed() < self.burn {
             std::hint::spin_loop();
         }
-        let outcome = self.inner.draw(scene, damage);
+        let outcome = self.inner.draw(frame);
         // Only a frame that reached the screen counts. A skipped one is the renderer declining, and
         // counting it would report a cadence the output never showed. A held one counts when it is
         // presented, stamped with when it arrived here.
         match outcome {
             FrameOutcome::Presented(_) => self.stamp(at),
-            FrameOutcome::Skipped(zgui::render::SkipReason::Held) => self.held_at = Some(at),
+            FrameOutcome::Skipped(compositor_types::SkipReason::Held) => self.held_at = Some(at),
             _ => {
                 self.skipped.fetch_add(1, Ordering::Relaxed);
             }
@@ -391,31 +361,15 @@ impl Renderer for Stamping {
         outcome
     }
 
-    fn shifts_composed_pixels(&self) -> bool {
-        self.inner.shifts_composed_pixels()
-    }
-
-    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
-        self.inner.shift_composed(shift);
-    }
-
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
     }
 
-    fn vector_status(&self) -> zgui::render::VectorStatus {
+    fn vector_status(&self) -> compositor_types::VectorStatus {
         self.inner.vector_status()
     }
 
-    fn target_pool(&self) -> zgui::render::TargetPoolReport {
+    fn target_pool(&self) -> compositor_types::TargetPoolReport {
         self.inner.target_pool()
     }
 
@@ -431,10 +385,6 @@ impl Renderer for Stamping {
     // reads as a loop that is never made to wait and keeps the hold at nothing.
     fn acquire_block(&self) -> core::time::Duration {
         self.inner.acquire_block()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {

@@ -4,12 +4,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
 use zgui::reactive::{LocalStorage, RwSignal};
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError, Runtime};
 use zgui::view::{Anchor, BuildCx, ClassName};
 use zgui::{component, view};
@@ -113,7 +114,7 @@ pub(crate) fn opened(rows: usize, height: f32) -> Opened {
     let render = move |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
                        target: RenderTarget|
           -> Result<Box<dyn Renderer>, AppError> {
-        let mut inner = zgui_testkit_scene::CaptureRenderer::new();
+        let mut inner = zgui_bench::renderers::NullRenderer::default();
         inner.configure(target);
         let mut watching = Watching::new(Box::new(inner), Rc::clone(&for_renderer));
         watching.configure(target);
@@ -130,6 +131,7 @@ pub(crate) fn opened(rows: usize, height: f32) -> Opened {
         .with_title("list-slope")
         .with_size(WIDTH, height)
         .with_stylesheet(sheet(height))
+        .with_compositor(zgui::app::compositor(&fonts))
         .with_renderer(Box::new(render))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

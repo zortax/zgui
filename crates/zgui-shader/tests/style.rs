@@ -17,7 +17,6 @@ use compositor_types::{
 };
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
-use zgui_runtime::compositor::CompositorRenderer;
 use zgui_runtime::{App, AppError, Runtime};
 use zgui_shader::{NoParams, ShaderEffect, ShaderParams, shader};
 use zgui_testkit_compositor::{Instance, Screen};
@@ -102,14 +101,12 @@ fn app(css: &str) -> Harness<Runtime> {
         .with_title("style")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
+        .with_compositor(zgui_testkit_compositor::compositor().expect("the test compositor exists"))
         .with_renderer(Box::new(
             |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let compositor =
-                    zgui_testkit_compositor::compositor().expect("the test compositor exists");
-                let mut renderer =
-                    CompositorRenderer::new(compositor, Box::new(Shading::default()));
-                zgui_render::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
+                let mut renderer = Shading::default();
+                compositor_api::Renderer::configure(&mut renderer, target);
+                Ok(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
             },
         ))
         .with_text_engine(Box::new(|| {
@@ -131,8 +128,7 @@ fn drawn(app: &mut Harness<Runtime>) -> (Vec<zgui_scene::ShadedQuad>, Vec<Instan
     let drawing = window
         .renderer()
         .as_any()
-        .and_then(|any| any.downcast_ref::<CompositorRenderer>())
-        .and_then(|bridge| bridge.renderer().as_any()?.downcast_ref::<Shading>())
+        .and_then(|any| any.downcast_ref::<Shading>())
         .and_then(|shading| shading.0.drawing())
         .expect("the window drew a frame through its compositor");
     (shaded, drawing.quads().into_iter().cloned().collect())

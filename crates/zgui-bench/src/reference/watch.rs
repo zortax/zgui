@@ -14,12 +14,10 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use zgui::bits::DamageSet;
-use zgui::render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
+use compositor_api::Renderer;
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
 };
-use zgui::scene::Scene;
 
 /// What one drawn frame damaged.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -92,7 +90,7 @@ impl Renderer for Watching {
     }
 
     fn configure(&mut self, target: RenderTarget) {
-        self.surface = f64::from(target.size.width) * f64::from(target.size.height);
+        self.surface = f64::from(target.size[0]) * f64::from(target.size[1]);
         self.inner.configure(target);
     }
 
@@ -100,12 +98,17 @@ impl Renderer for Watching {
         self.inner.target()
     }
 
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
     #[expect(
         clippy::cast_precision_loss,
         reason = "a damaged area in device pixels is bounded by the surface, which is millions"
     )]
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let outcome = self.inner.draw(scene, damage);
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        let outcome = self.inner.draw(frame);
+        let damage = &frame.damage.draw;
         if matches!(outcome, FrameOutcome::Presented(_)) && self.surface > 0.0 {
             let fraction = if damage.is_full() {
                 1.0
@@ -121,20 +124,8 @@ impl Renderer for Watching {
         outcome
     }
 
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {

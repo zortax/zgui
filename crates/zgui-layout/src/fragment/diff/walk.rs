@@ -144,14 +144,14 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             if own.contains(Dirty::REPAINT)
                 && !(is_box && flags.contains(FragmentFlags::PAINTS_NOTHING))
             {
-                self.damage_beyond_a_move(self.device_now(ink, anchor), admitted);
+                self.damage_in(self.device_now(ink, anchor), admitted);
             }
             if is_box
                 && own.contains(Dirty::REPAINT)
                 && flags.contains(FragmentFlags::GROUPS_SUBTREE)
             {
                 let was = self.device_before(subtree_ink, anchor);
-                self.damage_drawn_beyond_a_move(was, admitted);
+                self.damage_in(was, admitted);
             }
         }
         true

@@ -9,13 +9,15 @@
 
 use std::sync::Arc;
 
+use compositor_api::{Compositor, Renderer};
+use compositor_types::RenderTarget;
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
-use zgui_render::{RenderTarget, Renderer};
 use zgui_runtime::{App, AppError, MAINTENANCE_DELAY, Runtime};
 use zgui_view::{Anchor, BuildCx};
 
-/// Builds an application whose window holds `view` and draws through [`compositor`].
+/// Builds an application whose window holds `view` and draws through [`compositor`] onto a
+/// [`screen`].
 pub fn app<V>(css: &str, view: V) -> Harness<Runtime>
 where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
@@ -24,7 +26,8 @@ where
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(compositor))
+        .with_compositor(compositor())
+        .with_renderer(Box::new(screen))
         .into_handler(view)
         .expect("the reactive runtime installs");
     Harness::new(handler)
@@ -73,7 +76,8 @@ where
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(compositor))
+        .with_compositor(compositor())
+        .with_renderer(Box::new(screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
                 zgui_testkit_scene::MonoShaper::new(),
@@ -162,22 +166,23 @@ pub fn lines_on_device(
     found
 }
 
-/// A renderer that draws through a compositor, onto a recording renderer whose last frame is what
-/// the window shows.
+/// The compositor the windows of a test draw through.
 ///
-/// The compositor's glyph rasteriser draws every glyph as a box on the baseline, half the em size
-/// wide and three quarters of it high.
-pub fn compositor(
-    _surface: &Arc<dyn Surface>,
-    target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
+/// Its glyph rasteriser draws every glyph as a box on the baseline, half the em size wide and
+/// three quarters of it high.
+pub fn compositor() -> Box<dyn Compositor> {
     let mut compositor =
         zgui_testkit_compositor::compositor().unwrap_or_else(|why| panic!("no compositor: {why}"));
     zgui_testkit_compositor::with_fake_text(&mut *compositor);
-    let mut renderer = zgui_runtime::compositor::CompositorRenderer::new(
-        compositor,
-        Box::new(zgui_testkit_compositor::Screen::new()),
-    );
+    compositor
+}
+
+/// A recording renderer whose last frame is what the window shows.
+pub fn screen(
+    _surface: &Arc<dyn Surface>,
+    target: RenderTarget,
+) -> Result<Box<dyn Renderer>, AppError> {
+    let mut renderer = zgui_testkit_compositor::Screen::new();
     renderer.configure(target);
     Ok(Box::new(renderer))
 }
@@ -186,29 +191,22 @@ pub fn compositor(
 ///
 /// # Panics
 ///
-/// Panics when the window does not draw through [`compositor`], or has drawn no frame.
+/// Panics when the window does not draw onto a [`screen`], or has drawn no frame.
 pub fn drawing(window: &zgui_runtime::window::Window) -> zgui_testkit_compositor::Drawing {
-    let bridge = window
-        .renderer()
-        .as_any()
-        .and_then(|any| any.downcast_ref::<zgui_runtime::compositor::CompositorRenderer>())
-        .expect("the window draws through a compositor");
-    zgui_testkit_compositor::drawing_of(bridge.renderer()).expect("the window drew a frame")
+    zgui_testkit_compositor::drawing_of(window.renderer()).expect("the window drew a frame")
 }
 
-/// Returns how many frames the compositor of `window` has drawn.
+/// Returns how many frames the renderer of `window` has drawn.
 ///
 /// # Panics
 ///
-/// Panics when the window does not draw through [`compositor`].
+/// Panics when the window does not draw onto a [`screen`].
 pub fn frames_drawn(window: &zgui_runtime::window::Window) -> u64 {
     window
         .renderer()
         .as_any()
-        .and_then(|any| any.downcast_ref::<zgui_runtime::compositor::CompositorRenderer>())
-        .and_then(|bridge| bridge.renderer().as_any())
         .and_then(|any| any.downcast_ref::<zgui_testkit_compositor::Screen>())
-        .expect("the window draws through a compositor onto a screen")
+        .expect("the window draws onto a screen")
         .frames()
 }
 
@@ -253,16 +251,6 @@ pub fn world(instance: &zgui_testkit_compositor::Instance) -> [f32; 4] {
         .map(|c| c.1)
         .fold(f32::NEG_INFINITY, f32::max);
     [left, top, right - left, bottom - top]
-}
-
-/// A renderer that records the display list instead of drawing it.
-pub fn capture(
-    _surface: &Arc<dyn Surface>,
-    target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
 }
 
 /// Replays every accessibility update the window published into the consumer that really reads

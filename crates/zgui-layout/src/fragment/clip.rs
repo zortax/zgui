@@ -32,7 +32,8 @@ pub fn clips_children(style: &ComputedStyle) -> bool {
 ///
 /// The clip is the *padding* box, because a scrollport's content is clipped inside the border and
 /// not inside the padding, and it takes the box's own corner radii so that content is cut to the
-/// curve rather than to the corner it is inscribed in.
+/// curve rather than to the corner it is inscribed in. A box that shows `scrollbar` room also cuts
+/// its children to the padding box without that room, as a second link.
 ///
 /// `owner` names the box, and the name is the chain's identity: the same box under the same parent
 /// chain is the same chain whatever this frame's layout gave it, so a resize rewrites the stored
@@ -61,6 +62,7 @@ pub fn chain_for_children(
     style: &ComputedStyle,
     declared: CustomProperties,
     padding_box: Rect<DevicePx, Device>,
+    scrollbar: Size<DevicePx, Device>,
     border: Edges<DevicePx>,
     scale: f32,
     shift: Size<DevicePx, Device>,
@@ -71,7 +73,7 @@ pub fn chain_for_children(
         return parent;
     }
     let radii = inner_radii(style, padding_box, border, scale);
-    clips.push_named(
+    let clip = clips.push_named(
         parent,
         ClipLink::RoundedRect {
             rect: padding_box,
@@ -84,7 +86,19 @@ pub fn chain_for_children(
         },
         shift,
         owner,
-    )
+    );
+    if scrollbar.width.0 <= 0.0 && scrollbar.height.0 <= 0.0 {
+        return clip;
+    }
+    // The scrollbars take their room from the padding box, and nothing scrolls under them.
+    let port = Rect::new(
+        padding_box.origin,
+        Size::new(
+            DevicePx((padding_box.size.width.0 - scrollbar.width.0).max(0.0)),
+            DevicePx((padding_box.size.height.0 - scrollbar.height.0).max(0.0)),
+        ),
+    );
+    clips.push_named(clip, ClipLink::rect_in(port, space), shift, owner.content())
 }
 
 /// A box's four corner radii, in device pixels, resolved against its own border box.
@@ -182,6 +196,7 @@ mod tests {
             &style,
             CustomProperties::ALL,
             rect(),
+            UNMOVED,
             Edges::ZERO,
             1.0,
             UNMOVED,
@@ -205,6 +220,7 @@ mod tests {
             &style,
             CustomProperties::ALL,
             rect(),
+            UNMOVED,
             Edges::ZERO,
             1.0,
             UNMOVED,
@@ -222,6 +238,7 @@ mod tests {
             &style,
             CustomProperties::ALL,
             rect().translate(by),
+            UNMOVED,
             Edges::ZERO,
             1.0,
             by,
@@ -249,6 +266,7 @@ mod tests {
             &style,
             CustomProperties::ALL,
             rect(),
+            UNMOVED,
             Edges::ZERO,
             1.0,
             UNMOVED,
@@ -267,6 +285,7 @@ mod tests {
             &style,
             CustomProperties::ALL,
             wider,
+            UNMOVED,
             Edges::ZERO,
             1.0,
             UNMOVED,

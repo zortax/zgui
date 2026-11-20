@@ -8,7 +8,7 @@
 //! device, offscreen, at scale one.
 //!
 //! After the first frame and again after thirty animated steps, the probe prints what
-//! [`Renderer::memory`](zgui::render::Renderer::memory) reports, what the group pool holds and the
+//! [`Renderer::memory`](compositor_api::Renderer::memory) reports, what the group pool holds and the
 //! most targets it lent at once, and the totals of the device allocator's report. The animated
 //! steps are printed as the other probes print them, with GPU time under `ZGUI_GPU_TIMING=1`.
 //!
@@ -20,11 +20,11 @@
 
 #![forbid(unsafe_code)]
 
+use compositor_wgpu::{WgpuRenderer, wgpu};
 use zgui::view;
 use zgui::view::{Anchor, AnyView, BuildCx, IntoView, View};
 use zgui_bench::probe::{self, Device};
 use zgui_platform_headless::Harness;
-use zgui_render_wgpu::{GroupPool, WgpuRenderer};
 
 /// Steps run before the reported ones, past the first paint.
 const WARM: usize = 8;
@@ -134,7 +134,9 @@ fn memory(stage: &str, harness: &Harness<zgui::runtime::Runtime>, size: (f32, f3
         clippy::cast_sign_loss,
         reason = "a surface extent in device pixels"
     )]
-    let full_target = (size.0 as u64) * (size.1 as u64) * bytes_per_texel(GroupPool::FORMAT);
+    // The format a group target is held in at high precision.
+    let full_target =
+        (size.0 as u64) * (size.1 as u64) * bytes_per_texel(wgpu::TextureFormat::Rgba16Float);
     let report = device.gpu().device().generate_allocator_report();
     println!(
         "MEM\t{stage}\tfixed={}\ttargets={}\tscratch={}\tatlases={}\tbuffers={}\ttotal={}\t\
@@ -143,9 +145,9 @@ fn memory(stage: &str, harness: &Harness<zgui::runtime::Runtime>, size: (f32, f3
          alloc_blocks={}\talloc_allocations={}",
         memory.fixed,
         memory.targets,
-        memory.scratch,
-        memory.atlases,
-        memory.buffers,
+        memory.vector,
+        memory.atlas,
+        memory.chunks,
         memory.total(),
         pool.resident,
         groups.peak(),
@@ -164,7 +166,7 @@ fn memory(stage: &str, harness: &Harness<zgui::runtime::Runtime>, size: (f32, f3
 }
 
 /// The bytes one texel of `format` takes.
-fn bytes_per_texel(format: zgui_render_wgpu::wgpu::TextureFormat) -> u64 {
+fn bytes_per_texel(format: wgpu::TextureFormat) -> u64 {
     format.block_copy_size(None).map_or(0, u64::from)
 }
 

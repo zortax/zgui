@@ -145,22 +145,13 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             anchor: Some(anchor),
             bound: fragment.flags.intersection(FragmentFlags::BOUND),
         };
-        // The frame cannot answer this by moving pixels: what was under the subtree is now
-        // something else, and so is what is under where it went. Both land beyond any rigid move
-        // the frame reports, so a caller that moves the pixels of a content space in the same
-        // frame still draws them.
+        // What was under the subtree is now something else, and so is what is under where it
+        // went.
         let admitted = self.admitted(moved.clip);
         let was = self.device_before(before, anchor);
-        self.damage_drawn_beyond_a_move(was, super::Admitted::everything());
+        self.damage_in(was, super::Admitted::everything());
         let is = self.device_now(folded.subtree_ink, anchor);
-        self.damage_beyond_a_move(is, admitted);
-        // Inside a content space that moved, the frame may move the port's pixels by the space's
-        // vector, and the subtree's old pixels go with them. For a row that layout moved in the
-        // frame the port scrolled, no box above damages that rectangle.
-        if let Some(by) = self.chase.by {
-            let carried = was.translate(Size::new(DevicePx(by.0), DevicePx(by.1)));
-            self.damage_beyond_a_move(carried, admitted);
-        }
+        self.damage_in(is, admitted);
 
         let scale = self.tables.device.scale;
         let mut walk = Walk::over(self.store, self.hit, self.tables, self.dirty, moved, scale);

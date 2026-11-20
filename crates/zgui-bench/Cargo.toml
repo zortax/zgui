@@ -26,7 +26,6 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
@@ -36,10 +35,14 @@ zgui-a11y = { path = "../zgui-a11y", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
-# The compositor a scenario draws through when `ZGUI_BENCH_COMPOSITOR` is set.
+# The window renderer's contract, and the device renderer a measurement may draw through.
 compositor-api.workspace = true
 compositor-core.workspace = true
-compositor-text.workspace = true
+compositor-types.workspace = true
+compositor-vello.workspace = true
+compositor-wgpu.workspace = true
+
+[dev-dependencies]
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [features]

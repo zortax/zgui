@@ -142,14 +142,6 @@ pub fn rebuild_in(
         .filter(|piece| !paints_nothing_itself(piece.kind, piece.flags))
         .map(|piece| (piece.subtree_ink, piece.anchor))
         .collect();
-    // Deliberately *not* seeded with what the set already holds. A frame runs this walk more than
-    // once — a scroll is delivered to the document between two of them — and the damage standing at
-    // entry is the earlier pass's, which for a scrolling document is mostly that pass's own rigid
-    // movement. Folding it in here would label a movement as something other than a movement on
-    // every frame that reports a scroll, which is every frame of a glide. What the frame damaged
-    // before *any* pass ran is the caller's to remember, because only the caller knows which pass
-    // was the first.
-    let bound = damage.bound();
     let mut pass = Pass {
         store,
         hit,
@@ -161,7 +153,7 @@ pub fn rebuild_in(
         renumber: false,
         born_order: None,
         anchors,
-        moves: RigidMoves::bounded(bound),
+        moves: RigidMoves::default(),
         // Read once, here, rather than once per moved subtree: how a frame is being measured is
         // decided before the frame and must not change part-way through one.
         passes: split::current(),
@@ -173,7 +165,7 @@ pub fn rebuild_in(
     for (gone, anchor) in vacated {
         // Taken whole rather than cut to anything: the chain it was drawn under belongs to a frame
         // that is gone.
-        pass.damage_drawn_beyond_a_move(pass.device_before(gone, anchor), Admitted::everything());
+        pass.damage_in(pass.device_before(gone, anchor), Admitted::everything());
     }
     match walk::mode() {
         walk::Mode::Off => {
@@ -330,100 +322,24 @@ fn viewport_of(store: &LayoutStore, fallback: BoxKey) -> Size<DevicePx, Device> 
         .unwrap_or(Size::new(DevicePx(0.0), DevicePx(0.0)))
 }
 
-/// What this pass's rigid moves add up to, for a caller deciding whether pixels already on the
-/// screen can be shifted instead of drawn again.
+/// The content spaces a walk moved, and whether they all moved by one vector.
 ///
-/// A scroll moves every pixel of a scrollport, so the damage it raises is the whole port and the
-/// emit walk reaches every fragment in it. That is only unavoidable if the pixels have to be
-/// *derived* again — and they do not, when the frame moved one thing rigidly and changed nothing
-/// else. This is what says whether the frame was that frame; it is a report about the walk and
-/// decides nothing on its own, because whether the pixels may be shifted also depends on what else
-/// is drawn over the region, which this walk never looks at.
-#[derive(Clone, Copy, Debug)]
+/// A scroll of a container that draws its children in a content space writes the space and
+/// composes none of the children, so it is recorded here once for the whole container.
+#[derive(Clone, Copy, Debug, Default)]
 pub struct RigidMoves {
-    /// Whether every pass's moves can stand for the frame.
+    /// The offset the content spaces moved by, when every one of them moved by the same one.
     ///
-    /// Held true by the walk itself — everything a walk does that a move cannot express lands in
-    /// [`RigidMoves::beyond`] instead — and false only when a caller combines it with a pass that
-    /// said otherwise.
-    pub settled: bool,
-    /// The offset the rigid moves took, when every one of them took the same one.
-    ///
-    /// `None` for a pass that moved nothing, and for one whose moves disagreed — two scrollers
-    /// gliding at once, say, which is a frame no single shift can answer.
+    /// `None` for a walk that moved none, and for one whose moves disagreed, such as two scrollers
+    /// gliding at once.
     pub by: Option<(f32, f32)>,
     /// Whether two moves disagreed, which is why `by` may be `None` after something moved.
     pub conflicted: bool,
-    /// How many subtrees were moved: one for each content space a scroll wrote.
+    /// How many content spaces were moved.
     pub count: u32,
-    /// Everything this pass damaged for a reason other than a subtree moving rigidly.
-    ///
-    /// A caller that answers the movement by translating pixels drops the movement's own damage and
-    /// keeps this, because this is what the translation does not cover. It is a strict subset of
-    /// the pass's damage set and is never a substitute for it: a caller that refuses the
-    /// translation must use the whole set, or it will not draw where things moved.
-    ///
-    /// Speaks for the walk and not for the frame: what the frame damaged before any walk ran is
-    /// the caller's to add, because only the caller knows which walk was the first.
-    ///
-    /// Measured on this pass's placements. What the pass measured on the placements it started
-    /// from is in [`RigidMoves::drawn`].
-    pub beyond: DamageSet,
-    /// What this pass damaged beyond a move where the placements it started from put it.
-    ///
-    /// The old places of pieces that left, changed or moved for another reason. For the first
-    /// pass of a frame, these are pixels of the drawn frame. A caller that moves those pixels
-    /// moves this damage with them, because the pixels it names have moved. A caller that keeps
-    /// the pixels where they are uses it as it is.
-    pub drawn: DamageSet,
-}
-
-impl Default for RigidMoves {
-    fn default() -> Self {
-        Self {
-            settled: true,
-            by: None,
-            conflicted: false,
-            count: 0,
-            beyond: DamageSet::new(),
-            drawn: DamageSet::new(),
-        }
-    }
 }
 
 impl RigidMoves {
-    /// No moves, with damage cut to `bound` as the pass's own damage set is.
-    fn bounded(bound: Option<Rect<i32, Device>>) -> Self {
-        let mut moves = Self::default();
-        moves.beyond.set_bound(bound);
-        moves.drawn.set_bound(bound);
-        moves
-    }
-
-    /// Both passes' moves, for a frame that ran the walk more than once.
-    ///
-    /// A scroll delivered to a listener can re-render and relay out inside the same frame, so the
-    /// frame's answer is every pass's answer together: it moved rigidly only if *each* pass did,
-    /// and it moved by one vector only if they agree on it.
-    #[must_use]
-    pub fn and(mut self, other: Self) -> Self {
-        self.settled &= other.settled;
-        self.conflicted |= other.conflicted;
-        match (self.by, other.by) {
-            (_, None) => {}
-            (None, Some(by)) => self.by = Some(by),
-            (Some(held), Some(by)) if held == by => {}
-            (Some(_), Some(_)) => {
-                self.by = None;
-                self.conflicted = true;
-            }
-        }
-        self.count += other.count;
-        self.beyond.absorb_set(&other.beyond);
-        self.drawn.absorb_set(&other.drawn);
-        self
-    }
-
     /// Records one content space moving by `by`.
     fn moved(&mut self, by: (f32, f32)) {
         self.count += 1;
@@ -476,10 +392,6 @@ struct Held {
     transform_hash: u64,
     /// Its flags.
     flags: FragmentFlags,
-    /// The union of its ink and everything below it.
-    subtree_ink: Rect<DevicePx, Device>,
-    /// Its padding box, which is a scroll container's port.
-    padding_box: Rect<DevicePx, Device>,
     /// The coordinate system its ink was measured in.
     anchor: zgui_space::SpatialId,
 }
@@ -491,8 +403,6 @@ impl Held {
             transform: fragment.transform,
             transform_hash: store.fragment_extra(fragment).transform_hash,
             flags: fragment.flags,
-            subtree_ink: fragment.subtree_ink,
-            padding_box: fragment.padding_box(),
             anchor: fragment.anchor,
         }
     }
@@ -673,34 +583,11 @@ struct Resolved {
 }
 
 impl<D: FrameDirty> Pass<'_, '_, D> {
-    /// Damages a rectangle for a reason other than a subtree moving rigidly.
-    ///
-    /// Every absorb in this walk goes through either this or the pair in
-    /// [`rigid`](crate::fragment::diff::rigid), and the split is the whole of what
-    /// [`RigidMoves::only`] reports: a caller may shift pixels it already has only when nothing was
-    /// composed, removed or repainted in place, and this is where "something was" is recorded.
-    ///
-    /// For new ink, measured by [`Pass::device_now`]. Old ink goes through
-    /// [`Pass::damage_drawn_beyond_a_move`].
-    fn damage_beyond_a_move(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
-        let Some(rect) = admitted.cut(rect) else {
-            return;
-        };
-        absorb(&mut self.moves.beyond, rect);
-        absorb(self.damage, rect);
-    }
-
-    /// Damages old ink for a reason other than a subtree moving rigidly.
-    ///
-    /// For ink measured by [`Pass::device_before`], on the placements this pass started from. It
-    /// goes into [`RigidMoves::drawn`], because a caller that moves those pixels moves this damage
-    /// with them.
-    fn damage_drawn_beyond_a_move(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
-        let Some(rect) = admitted.cut(rect) else {
-            return;
-        };
-        absorb(&mut self.moves.drawn, rect);
-        absorb(self.damage, rect);
+    /// Damages the part of `rect` that `admitted` lets a fragment draw in.
+    fn damage_in(&mut self, rect: Rect<DevicePx, Device>, admitted: Admitted) {
+        if let Some(rect) = admitted.cut(rect) {
+            absorb(self.damage, rect);
+        }
     }
 
     /// `rect`, measured in `anchor` as this walk composes it, in device pixels.
@@ -816,6 +703,15 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         let Some(mut placed) = build::place(self.store, self.tables, key, from) else {
             return Folded::empty();
         };
+        // A sticky box whose shift moved stands somewhere else among the content around it,
+        // though none of its pieces moved.
+        if placed.sticky_moved {
+            let node = self.store.node(key).source;
+            if self.states_geometry(node) {
+                self.dirty.moved(node);
+            }
+            self.hit.note_space_moved();
+        }
         let owed = self.owed_by(key, generator);
         let own = owed.own;
         // Read before the write replaces them: whether the matrix this box's children are drawn
@@ -851,7 +747,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             placed.descent = placed.content_descent(content.id);
             leading = own.difference(Dirty::SCROLL);
             if space_stable && let Some(by) = content.moved {
-                self.scroll_content(&placed, previous, by);
+                self.scroll_content(&placed, by);
                 content_moved = Some(by);
             }
         }
@@ -1097,22 +993,6 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             self.refused = outer;
             return again;
         }
-        // The frame may answer the content's move by moving the port's pixels. A box that does
-        // not move with the content then owes where those pixels put it, and a fixed box also
-        // owes where it is.
-        if let Some(by) = here.by
-            && (placed.fixed || moved)
-        {
-            let admitted = self.admitted(placed.clip);
-            if let Some(held) = previous {
-                let was = self.device_before(held.subtree_ink, held.anchor);
-                let carried = was.translate(Size::new(DevicePx(by.0), DevicePx(by.1)));
-                self.damage_beyond_a_move(carried, admitted);
-            }
-            if placed.fixed {
-                self.damage_beyond_a_move(self.device_now(subtree_ink, placed.anchor), admitted);
-            }
-        }
         Folded {
             subtree_ink,
             blending,
@@ -1241,24 +1121,22 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         }
     }
 
-    /// Records a scroll that moved only a content space.
+    /// Records a scroll that moved only a content space by `by`.
     ///
-    /// The scroll moved every pixel of the port and nothing else, so the port is the move's damage
-    /// and the move is recorded once, for the whole container. Settled children are not visited,
-    /// so nothing else is damaged on their behalf. A child born or changed in the same frame is
-    /// composed and damages what it draws. The hit index is told that what is under a point
-    /// changed, because no entry did.
-    fn scroll_content(&mut self, placed: &Placed, previous: Option<Held>, by: (f32, f32)) {
+    /// The scroll moved every pixel of the port and nothing else, so the move is recorded once,
+    /// for the whole container. The content that stays in view keeps what it painted, and the
+    /// compositor moves it with the space. So only the bands of the port that content scrolled
+    /// into are damaged, because what is drawn there may never have been painted. Settled children
+    /// are not visited, so nothing else is damaged on their behalf. A child born or changed in the
+    /// same frame is composed and damages what it draws. The hit index is told that what is under
+    /// a point changed, because no entry did.
+    fn scroll_content(&mut self, placed: &Placed, by: (f32, f32)) {
         self.moves.moved(by);
-        if let Some(held) = previous {
-            absorb(
-                self.damage,
-                self.device_before(held.padding_box, held.anchor),
-            );
-        }
         let port = self.device_now(placed.padding_box, placed.anchor);
         if let Some(port) = self.admitted(placed.descent.clip).cut(port) {
-            absorb(self.damage, port);
+            for band in damage::arrived(port, by) {
+                absorb(self.damage, band);
+            }
         }
         self.hit.note_space_moved();
     }
@@ -1596,10 +1474,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             else {
                 continue;
             };
-            self.damage_drawn_beyond_a_move(
-                self.device_before(gone, anchor),
-                Admitted::everything(),
-            );
+            self.damage_in(self.device_before(gone, anchor), Admitted::everything());
         }
         self.scratch.stale.truncate(mark);
         // The index is not touched here: `truncate_fragments` records what it destroyed, and the
@@ -1974,7 +1849,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 let vacuous =
                     kind == FragmentKind::Box && next.flags.contains(FragmentFlags::PAINTS_NOTHING);
                 if own.intersects(REPAINTS_IN_PLACE) && !vacuous {
-                    self.damage_beyond_a_move(self.device_now(next.ink, next.anchor), admitted);
+                    self.damage_in(self.device_now(next.ink, next.anchor), admitted);
                 }
                 if own.contains(Dirty::REHIT) {
                     self.touch_hit(frag, change, false);
@@ -1994,9 +1869,9 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 }
                 if let Some(previous) = &previous {
                     let was = self.device_before(previous.ink, previous.anchor);
-                    self.damage_drawn_beyond_a_move(was, Admitted::everything());
+                    self.damage_in(was, Admitted::everything());
                 }
-                self.damage_beyond_a_move(self.device_now(next.ink, next.anchor), admitted);
+                self.damage_in(self.device_now(next.ink, next.anchor), admitted);
                 self.touch_hit(frag, change, false);
             }
             Change::Changed => {
@@ -2043,16 +1918,16 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                         // Only the strips along the edges that moved paint anything different.
                         Some(strips) => {
                             for strip in strips.into_iter().flatten() {
-                                self.damage_beyond_a_move(strip, Admitted::everything());
+                                self.damage_in(strip, Admitted::everything());
                             }
                         }
                         None => {
                             if let Some(previous) = &previous {
                                 let was = self.device_before(previous.ink, previous.anchor);
-                                self.damage_drawn_beyond_a_move(was, Admitted::everything());
+                                self.damage_in(was, Admitted::everything());
                             }
                             let is = self.device_now(next.ink, next.anchor);
-                            self.damage_beyond_a_move(is, admitted);
+                            self.damage_in(is, admitted);
                         }
                     }
                 }
@@ -2082,12 +1957,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 .is_some_and(|fragment| fragment.flags.contains(FragmentFlags::GROUPS_SUBTREE));
             if groups || previous.flags.contains(FragmentFlags::GROUPS_SUBTREE) {
                 let was = self.device_before(previous.subtree_ink, previous.anchor);
-                self.damage_drawn_beyond_a_move(was, admitted);
+                self.damage_in(was, admitted);
                 let shift = next.border_box.origin - previous.border_box.origin;
                 if shift != zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)) {
                     let carried = previous.subtree_ink.translate(Size::new(shift.x, shift.y));
                     let carried = self.device_now(carried, next.anchor);
-                    self.damage_beyond_a_move(carried, admitted);
+                    self.damage_in(carried, admitted);
                 }
             }
         }

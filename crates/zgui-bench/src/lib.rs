@@ -12,6 +12,8 @@
 //! [`reference::watch`] records what a frame damaged, which is a fraction and therefore already
 //! dimensionless.
 //!
+//! [`renderers`] is what a measured window draws through.
+//!
 //! [`probe`] serves the diagnostic probes. They gate nothing, so they print absolute numbers:
 //! per-frame counters, wall time and GPU time.
 
@@ -19,3 +21,4 @@
 
 pub mod probe;
 pub mod reference;
+pub mod renderers;

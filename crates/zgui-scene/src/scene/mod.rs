@@ -25,7 +25,6 @@ use crate::ops::PaintOp;
 use crate::order::BoundsTree;
 use crate::paint::PaintTable;
 use crate::pass::ScenePassPlan;
-use crate::place::band::Travels;
 use crate::prim::PrimitiveKind;
 use crate::scene::resolve::Unresolved;
 use crate::shader::{FrameClock, ShaderParamsTable};
@@ -161,11 +160,6 @@ pub struct Scene {
     /// The tree's [write stamp](crate::PropertyTree::writes) when `kept_placements` was resolved;
     /// zero before that.
     kept_stamp: u64,
-    /// The region each moving coordinate system declared it would visit.
-    ///
-    /// Read when a matrix is written after the ordering is done, which is the one moment the
-    /// order a primitive already holds can stop being the right one. See [`mod@crate::place`].
-    pub(crate) travel: Travels,
     /// Orders forced by an explicitly pushed layer, innermost last.
     layer_stack: Vec<DrawOrder>,
     /// The order the next primitive pushed is to take, set for the length of one replayed push.
@@ -329,7 +323,6 @@ impl Scene {
             clip_cull: None,
             kept_placements: crate::spatial::Placements::new(),
             kept_stamp: 0,
-            travel: Travels::new(),
             layer_stack: Vec::new(),
             forced_orders: Vec::new(),
             markers: Markers::default(),
@@ -433,11 +426,6 @@ impl Scene {
     /// how the two come to disagree.
     pub fn order(&self) -> &BoundsTree {
         &self.order
-    }
-
-    /// The draw-order assigner, for a caller that has to insert into it directly.
-    pub(crate) fn order_mut(&mut self) -> &mut BoundsTree {
-        &mut self.order
     }
 
     /// The highest draw order assigned this frame.

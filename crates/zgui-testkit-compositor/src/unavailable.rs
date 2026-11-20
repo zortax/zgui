@@ -28,6 +28,11 @@ impl Unavailable {
             "ZGUI_RENDERER=wgpu found no usable device: {error}"
         ))
     }
+
+    /// A window no adapter presents to.
+    pub(crate) fn window(error: &dyn fmt::Display) -> Self {
+        Self(format!("no adapter presents to the window: {error}"))
+    }
 }
 
 impl fmt::Display for Unavailable {

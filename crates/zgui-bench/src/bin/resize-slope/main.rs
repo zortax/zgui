@@ -30,11 +30,12 @@
 
 use std::time::Duration;
 
+use compositor_api::Renderer;
+use compositor_types::RenderTarget;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
 use zgui::reactive::RwSignal;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError, Runtime};
 use zgui::view::{Anchor, BuildCx};
 use zgui_platform_headless::Harness;
@@ -64,7 +65,7 @@ const SHEET: &str = "root { display: block; width: 100%; height: 100%; overflow:
                              background-color: rgb(40, 44, 56) }
                      .warm .cell { background-color: rgb(90, 60, 40) }";
 
-/// A renderer that records the display list and draws nowhere.
+/// A renderer that draws nowhere.
 ///
 /// The measurement is of the pipeline that *produces* a frame — restyle, layout, paint, encode —
 /// and a real graphics device would add a submission and a present whose cost is the driver's
@@ -73,7 +74,7 @@ fn capture(
     _surface: &std::sync::Arc<dyn zgui::platform::Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
+    let mut renderer = zgui_bench::renderers::NullRenderer::default();
     renderer.configure(target);
     Ok(Box::new(renderer))
 }
@@ -84,6 +85,7 @@ fn opened(rows: usize, warm: RwSignal<bool, zgui::reactive::LocalStorage>) -> Ha
         .with_title("resize-slope")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(SHEET)
+        .with_compositor(zgui_bench::renderers::compositor())
         .with_renderer(Box::new(capture))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let mut root = zgui::elements::column()

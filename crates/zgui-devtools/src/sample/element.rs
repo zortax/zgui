@@ -137,7 +137,7 @@ pub(crate) struct VectorRendering {
     /// Routes selected by the element and all descendants, for wrappers such as icon spans.
     pub(crate) subtree: zgui_paint::VectorRoutes,
     /// The configured backend for any general-raster routes.
-    pub(crate) backend: Option<zgui::render::VectorBackend>,
+    pub(crate) backend: Option<compositor_types::VectorBackend>,
     /// Whether the element was present when Vello paid its lazy initialization cost.
     pub(crate) initialized_vello: bool,
 }
