@@ -229,7 +229,7 @@ counters! {
     /// Bytes of chunk, transient and resolved-remap content copied into the persistent arenas.
     ChunkBytesUploaded => chunk_bytes_uploaded, Group::RendererSpecific;
 
-    /// Primitives added to the scene, and compositor items a frame drew or culled.
+    /// Primitives added to the scene, and compositor items a frame drew.
     PrimitivesEmitted => primitives_emitted, Group::BackendNeutral;
 
     /// Primitives dropped before reaching the scene, and compositor items a frame culled, because
