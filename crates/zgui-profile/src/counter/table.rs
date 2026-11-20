@@ -236,6 +236,10 @@ counters! {
     /// nothing damaged could see them.
     PrimitivesCulled => primitives_culled, Group::Skip { done: Counter::PrimitivesEmitted };
 
+    /// Subtrees the paint walk did not enter, because nothing damaged could see them or they are
+    /// faded to nothing.
+    PaintSubtreesCulled => paint_subtrees_culled, Group::Skip { done: Counter::NodesVisited };
+
     /// Sprites whose resource had to be looked up again after the whole frame had been pushed.
     ///
     /// A sprite names the content it samples; where that content landed in a texture is a separate

@@ -34,8 +34,7 @@ fn the_counters_are_compiled_into_this_build() {
 /// A scrollport with rows in it, one of which can be lit.
 const CSS: &str = "root { display: block; width: 400px; height: 300px; overflow: scroll }
                    .row { display: block; width: 400px; height: 20px; background-color: #202020 }
-                   .lit { background-color: #f0f0f0 }
-                   .icon { display: block; width: 10px; height: 10px }";
+                   .lit { background-color: #f0f0f0 }";
 
 /// How many rows a document has to hold before it reaches past the bottom of the scrollport.
 ///
@@ -48,8 +47,6 @@ const OVERFLOWING: usize = 60;
 const LIT_ROW: usize = 3;
 
 /// A document of `rows` rows, the fourth of which carries `lit`.
-///
-/// Every row holds a label and an icon.
 fn document(
     rows: usize,
     lit: RwSignal<bool>,
@@ -61,19 +58,7 @@ fn document(
             if index == LIT_ROW {
                 row = row.class_toggle(ClassName::new("lit"), move || lit.get());
             }
-            // The icon is drawn through the scene, which is what bumps the counter of primitives
-            // emitted.
-            let icon = zgui_elements::vector()
-                .class("icon")
-                .view_box(0.0, 0.0, 24.0, 24.0)
-                .paths([
-                    zgui_elements::kurbo::BezPath::from_svg("M0 0 L24 0 L24 24 Z")
-                        .expect("the fixture parses"),
-                ]);
-            root = root.child(
-                row.child(zgui_elements::text().child(format!("row {index}")))
-                    .child(icon),
-            );
+            root = root.child(row.child(zgui_elements::text().child(format!("row {index}"))));
         }
         Box::new(root.into_view().build(cx))
     })
@@ -132,12 +117,12 @@ fn a_cached_range_is_replayed_on_a_repaint_and_never_on_a_first_paint() {
 }
 
 #[test]
-fn primitives_are_culled_when_the_document_reaches_past_the_port_and_never_when_it_fits() {
+fn subtrees_are_culled_when_the_document_reaches_past_the_port_and_never_when_it_fits() {
     // The pair the other two cannot stand in for: culling is decided against what can be seen
     // rather than against what has changed, so the silent half is a *smaller document* and not an
     // earlier frame. A document that fits inside its scrollport has nothing to refuse.
     assert_non_vacuous(
-        Counter::PrimitivesCulled,
+        Counter::PaintSubtreesCulled,
         Scenario::new(
             "a document five times the height of the scrollport holding it",
             opened_then_one_row_changed,
@@ -146,6 +131,73 @@ fn primitives_are_culled_when_the_document_reaches_past_the_port_and_never_when_
             opened(6);
         }),
     );
+}
+
+#[test]
+fn items_are_culled_when_a_frame_redraws_one_row_and_never_when_it_draws_them_all() {
+    // The compositor culls against the frame's damage, so the fired half needs a frame that redraws
+    // less than the output: one row changed under a kept target. The silent half is the first
+    // frame, which draws every row of a document that fits.
+    assert_non_vacuous(
+        Counter::PrimitivesCulled,
+        Scenario::new(
+            "one row restyled in a document drawn onto a kept target",
+            || {
+                let lit = RwSignal::new(false);
+                let mut harness = kept_document(lit);
+                harness.settle(64);
+                lit.set(true);
+                harness.settle(64);
+            },
+        ),
+        Scenario::new(
+            "the first frame of a document that fits, drawn onto a kept target",
+            || {
+                let lit = RwSignal::new(false);
+                let mut harness = kept_document(lit);
+                harness.settle(64);
+            },
+        ),
+    );
+}
+
+/// A document of six rows, the fourth of which carries `lit`, drawn onto a kept target.
+///
+/// Each frame after the first then draws only its damage.
+fn kept_document(lit: RwSignal<bool>) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
+    let handler = zgui_runtime::App::new()
+        .with_title("culling")
+        .with_size(400.0, 300.0)
+        .with_stylesheet(CSS)
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(
+            |_surface: &std::sync::Arc<dyn zgui_platform::Surface>,
+             target: compositor_types::RenderTarget| {
+                let mut renderer = zgui_testkit_compositor::Kept::new(
+                    compositor_types::RenderCapabilities::MINIMAL,
+                );
+                compositor_api::Renderer::configure(&mut renderer, target);
+                Ok::<Box<dyn compositor_api::Renderer>, zgui_runtime::AppError>(Box::new(renderer))
+            },
+        ))
+        .with_text_engine(Box::new(|| {
+            Box::new(zgui_layout::Paragraphs::new(
+                zgui_testkit_scene::MonoShaper::new(),
+            ))
+        }))
+        .into_handler(move |cx: &mut BuildCx<'_>| {
+            let mut root = zgui_elements::column().class("root");
+            for index in 0..6 {
+                let mut row = zgui_elements::column().class("row");
+                if index == LIT_ROW {
+                    row = row.class_toggle(ClassName::new("lit"), move || lit.get());
+                }
+                root = root.child(row.child(zgui_elements::text().child(format!("row {index}"))));
+            }
+            Box::new(root.into_view().build(cx))
+        })
+        .expect("the reactive runtime installs");
+    zgui_platform_headless::Harness::new(handler)
 }
 
 #[test]

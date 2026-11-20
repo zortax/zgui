@@ -118,6 +118,7 @@ fn the_declared_skips_are_exactly_the_ones_this_workspace_has_registered() {
             "chunks_translated",
             "chunks_identical",
             "primitives_culled",
+            "paint_subtrees_culled",
             "sprites_resolved_at_push"
         ]
     );

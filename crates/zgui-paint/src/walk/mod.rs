@@ -1329,7 +1329,7 @@ impl stacking::Visitor for Pass<'_, '_> {
         if !self.reaches(ink) {
             counter::bump(Counter::NodesVisited);
             self.report.skipped_subtrees += 1;
-            counter::add(Counter::PrimitivesCulled, 1);
+            counter::bump(Counter::PaintSubtreesCulled);
             return false;
         }
         true
@@ -1346,7 +1346,7 @@ impl stacking::Visitor for Pass<'_, '_> {
             };
             if !self.reaches(ink) {
                 self.report.skipped_subtrees += 1;
-                counter::add(Counter::PrimitivesCulled, 1);
+                counter::bump(Counter::PaintSubtreesCulled);
                 return false;
             }
         } else {
@@ -1410,7 +1410,7 @@ impl stacking::Visitor for Pass<'_, '_> {
                 sync.drop_extra(key, crate::sync::Part::Backdrop);
             }
             self.report.skipped_subtrees += 1;
-            counter::add(Counter::PrimitivesCulled, 1);
+            counter::bump(Counter::PaintSubtreesCulled);
             return false;
         }
         // The two stacks are pushed once per entered box and popped once per leave, whatever the

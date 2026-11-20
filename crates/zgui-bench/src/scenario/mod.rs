@@ -78,8 +78,10 @@ pub(crate) struct Outcome {
 pub(crate) struct Escalation {
     /// How many primitives reached the display list.
     pub(crate) primitives_emitted: u64,
-    /// How many were refused by a clip before they got there.
+    /// How many the compositor culled, and the scene refused by a clip.
     pub(crate) primitives_culled: u64,
+    /// How many subtrees the paint walk did not enter.
+    pub(crate) paint_subtrees_culled: u64,
     /// How many insertions the draw-order tree took.
     pub(crate) bounds_tree_inserts: u64,
     /// How many recorded paintings were encoded from scratch.
@@ -104,6 +106,7 @@ pub(crate) fn counters(moved: &zgui_profile::Counters) -> Escalation {
     Escalation {
         primitives_emitted: moved.primitives_emitted,
         primitives_culled: moved.primitives_culled,
+        paint_subtrees_culled: moved.paint_subtrees_culled,
         bounds_tree_inserts: moved.bounds_tree_inserts,
         chunks_reencoded: moved.chunks_reencoded,
         chunks_translated: moved.chunks_translated,
@@ -197,13 +200,14 @@ pub(crate) fn print(outcome: &Outcome) {
         println!("NOTE\t{}\t{note}", outcome.scenario);
     }
     println!(
-        "ESCALATION\t{}\t{}\t{}\t{}\t{}\t{}",
+        "ESCALATION\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         outcome.scenario,
         outcome.counters.primitives_emitted,
         outcome.counters.primitives_culled,
         outcome.counters.bounds_tree_inserts,
         outcome.counters.chunks_reencoded,
         outcome.counters.chunks_translated,
+        outcome.counters.paint_subtrees_culled,
     );
     for measurement in &outcome.measurements {
         println!("  {measurement}");
