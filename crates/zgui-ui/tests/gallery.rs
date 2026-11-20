@@ -130,7 +130,7 @@ fn run() -> Option<&'static Opened> {
     static OPENED: std::sync::OnceLock<Option<Opened>> = std::sync::OnceLock::new();
     OPENED
         .get_or_init(|| {
-            if !device::available_on(device::Pipeline::Compositor) {
+            if !device::available() {
                 return None;
             }
             let _guard = device::device_lock();
@@ -141,7 +141,7 @@ fn run() -> Option<&'static Opened> {
                 .with_title("gallery")
                 .with_size(crate::app::WIDTH, crate::app::HEIGHT)
                 .with_stylesheet(crate::shell::SHEET);
-            device::drawn_on(app, device::Pipeline::Compositor, &log)
+            device::drawn_on(app, &log)
                 .run_on(buffers(&found), || (Grab, view! { Gallery() }.into_view()))
                 .expect("the gallery ran");
             let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));

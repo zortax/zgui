@@ -29,7 +29,6 @@ use zgui_ui_icons::prelude::*;
 use zgui_ui_icons::set::status::ALERT_TRIANGLE;
 use zgui_ui_tokens::prelude::*;
 
-use crate::device::Pipeline;
 use crate::painted::stage::{HEIGHT, SETTLED, Stage, WIDTH};
 use crate::painted::words::{aim, ink};
 
@@ -44,14 +43,10 @@ const SHEET: &str = ":root {
 /// Half of the dialog's 200ms entrance: a frame the animation is unmistakably mid-flight in.
 const MID_FLIGHT: Duration = Duration::from_millis(100);
 
-/// Opens the fixture, drawn through the compositor or through `pipeline`, or reports the run
-/// skipped on a machine with no graphics device.
+/// Opens the fixture, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        staged!(Pipeline::Compositor, $view)
-    };
-    ($pipeline:expr, $view:expr) => {
-        match Stage::open_on($pipeline, SHEET, $view) {
+        match Stage::open(SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");

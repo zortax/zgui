@@ -75,29 +75,43 @@ fn opacity_row(cx: &mut BuildCx<'_>) -> Box<dyn Anchor> {
 #[test]
 fn a_translucent_box_after_a_filtered_sibling_is_still_drawn() {
     let drawn = frames(OPACITY_CSS, opacity_row);
-    let quads = drawn.quads();
+    let sequence = drawn.sequence();
+    let at = |kind: &str| sequence.iter().position(|item| item.kind() == kind);
 
-    let opaque = quads
-        .iter()
-        .find(|quad| quad.color("fill").is_some_and(|[.., alpha]| alpha >= 1.0))
-        .expect("the filtered swatch is missing, so there is nothing to compare against");
-    let faded = quads
-        .iter()
-        .find(|quad| {
-            // The compositor carries the alpha in eight bits.
-            quad.color("fill")
-                .is_some_and(|[.., alpha]| (alpha - 0.45).abs() <= 1.0 / 255.0)
+    let opened = at("group_begin")
+        .expect("the filtered sibling opened no target, so this case cannot see its own defect");
+    let closed = at("group_end").expect("a group that is opened is closed");
+
+    let quad = |test: &dyn Fn(f32) -> bool| {
+        sequence.iter().enumerate().find(|(_, item)| {
+            item.kind() == "quad" && item.color("fill").is_some_and(|[.., alpha]| test(alpha))
         })
+    };
+    let (opaque_at, opaque) = quad(&|alpha| alpha >= 1.0)
+        .expect("the filtered swatch is missing, so there is nothing to compare against");
+    assert!(
+        opaque_at > opened && opaque_at < closed,
+        "the control is wrong: the filtered swatch must be drawn *inside* its own target, or the \
+         assertion below is about nothing:\n{drawn}"
+    );
+
+    // The compositor carries the alpha in eight bits.
+    let (faded_at, faded) = quad(&|alpha| (alpha - 0.45).abs() <= 1.0 / 255.0)
         .unwrap_or_else(|| panic!("`opacity: 0.45` drew no quad at all:\n{drawn}"));
-    let faded = support::world(faded);
+    let bounds = support::world(faded);
     assert_eq!(
-        faded[2..],
+        bounds[2..],
         [40.0, 40.0],
         "the translucent box is drawn at its own size"
     );
     assert!(
-        faded[0] > support::world(opaque)[0],
+        bounds[0] > support::world(opaque)[0],
         "it is drawn where the layout put it, beside the sibling rather than under it"
+    );
+    assert!(
+        faded_at > closed,
+        "the translucent box is drawn inside a group that has already closed, so it is drawn \
+         into that group's target:\n{drawn}"
     );
 }
 

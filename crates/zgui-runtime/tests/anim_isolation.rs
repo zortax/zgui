@@ -59,7 +59,7 @@ fn repaint_all(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runti
 fn transcript(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<String> {
     let drawing = support::drawing(&harness.app().windows()[0]);
     let mut lines: Vec<String> = drawing
-        .instances()
+        .sequence()
         .iter()
         .map(|instance| instance.text().to_owned())
         .collect();
@@ -85,8 +85,8 @@ fn an_animated_box_reaches_the_display_list_a_fresh_build_produces() {
 
     let (moved, built) = (transcript(&animated), transcript(&fresh));
     assert!(
-        !built.is_empty(),
-        "the fresh build drew nothing: {built:#?}"
+        !built.is_empty() && built.iter().any(|line| line.starts_with("group_begin")),
+        "the fresh build isolates nothing, so the two paths cannot differ here: {built:#?}"
     );
     assert_eq!(
         moved, built,

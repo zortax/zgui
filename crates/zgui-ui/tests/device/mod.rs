@@ -1,11 +1,8 @@
 //! A graphics device under the gallery, drawing to a texture instead of to a window.
 //!
-//! A fixture draws through one of two pipelines, picked with a [`Pipeline`]. The compositor draws
-//! everything zgui records onto its reference renderer, see [`compositor`]. zgui's own renderer
-//! draws what the display list still holds, see [`recording`], with the same builder, format
-//! rules and rasteriser selection an opened window went through. Only the destination differs,
-//! because a window's surface belongs to the platform's compositor the instant it is presented and
-//! cannot be read back.
+//! The compositor draws everything zgui records onto its reference renderer, see [`compositor`].
+//! Only the destination differs from an opened window, because a window's surface belongs to the
+//! platform's compositor the instant it is presented and cannot be read back.
 
 #![allow(
     dead_code,
@@ -19,11 +16,7 @@ pub mod ink;
 pub mod picture;
 pub mod shot;
 
-use std::cell::RefCell;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
-
-use zgui::render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{Builder, WgpuRenderer, wgpu};
 
 use crate::device::frame::Frame;
 
@@ -68,117 +61,14 @@ pub fn real_damage() -> bool {
     REAL_DAMAGE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// zgui's own renderer drawing the display list of every frame a window ran, with each frame
-/// recorded beside it.
-///
-/// The window itself draws through a compositor onto a renderer that draws nowhere. This draws what
-/// the display list it still builds holds.
-struct Recording {
-    /// The renderer, opened at the first frame for the window's extent.
-    renderer: RefCell<Option<WgpuRenderer>>,
-    /// What each frame produced.
-    log: Log,
+/// Returns `app` drawing every window through the compositor onto the device, with each frame
+/// written into `log`.
+pub fn drawn_on(app: zgui::App, log: &Log) -> zgui::App {
+    app.with_compositor_renderer(compositor::factory(log))
+        .with_probe(compositor::repainting())
 }
 
-impl Recording {
-    /// Returns the renderer for a window at `viewport` and `scale`, opened or reconfigured as needed.
-    fn renderer(
-        held: &mut Option<WgpuRenderer>,
-        viewport: zgui::geom::Size<i32, zgui::geom::Device>,
-        scale: f32,
-    ) -> &mut WgpuRenderer {
-        let target = RenderTarget::new(viewport, zgui::geom::Scale::new(scale));
-        if let Some(renderer) = held
-            .as_mut()
-            .filter(|renderer| renderer.target() != Some(target))
-        {
-            renderer.configure(target);
-        }
-        held.get_or_insert_with(|| {
-            let mut renderer = Builder::new()
-                .offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
-                .expect("a device opens, which `available` answered beforehand");
-            // The same call a window makes, rather than a second copy of it.
-            zgui_render_vector_vello::attach(&mut renderer, target.size);
-            assert!(
-                renderer.has_vector_raster(),
-                "the selection handed back no rasteriser, so nothing below would draw a path"
-            );
-            renderer
-        })
-    }
-}
-
-impl zgui::runtime::FrameProbe for Recording {
-    fn frame_ended(&self, window: &zgui::runtime::Window) {
-        let scene = window.scene();
-        let mut held = self.renderer.borrow_mut();
-        let renderer = Self::renderer(&mut held, scene.viewport(), window.scale().get());
-        // Over the whole surface, whatever the application asked for. The question is what the
-        // gallery *contains*, and a scissored frame answers it only for the rectangle it redrew.
-        // The real damage set when a fixture asks for it: the composed target then retains what
-        // earlier frames drew, which is what a surface shows.
-        let damage = match window.last_frame_report() {
-            Some(report) if real_damage() => report.painted,
-            _ => zgui::bits::DamageSet::full(),
-        };
-        let outcome = renderer.draw(scene, &damage);
-        let recorded = Frame::record(renderer, scene, &outcome);
-        self.log
-            .lock()
-            .unwrap_or_else(|held| held.into_inner())
-            .push(recorded);
-    }
-}
-
-/// Builds the probe that draws every frame's display list with zgui's own renderer into `log`.
-pub fn recording(log: &Log) -> std::rc::Rc<dyn zgui::runtime::FrameProbe> {
-    std::rc::Rc::new(Recording {
-        renderer: RefCell::new(None),
-        log: Arc::clone(log),
-    })
-}
-
-/// The renderer a window under test draws through.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Pipeline {
-    /// The compositor, which draws boxes and text.
-    Compositor,
-    /// zgui's own renderer, which draws what the display list still holds.
-    Scene,
-}
-
-/// Returns `app` drawing every window through `pipeline`, with each frame written into `log`.
-pub fn drawn_on(app: zgui::App, pipeline: Pipeline, log: &Log) -> zgui::App {
-    match pipeline {
-        Pipeline::Compositor => app.with_compositor_renderer(compositor::factory(log)),
-        Pipeline::Scene => app
-            .with_compositor_renderer(Box::new(|_size| {
-                Box::new(zgui_testkit_compositor::NullRenderer::default())
-            }))
-            .with_probe(recording(log)),
-    }
-}
-
-/// Reports whether this machine has a graphics device `pipeline` runs on.
-pub fn available_on(pipeline: Pipeline) -> bool {
-    match pipeline {
-        Pipeline::Compositor => compositor::available(),
-        Pipeline::Scene => available(),
-    }
-}
-
-/// Whether this machine has a graphics device these fixtures can run on at all.
+/// Reports whether this machine has a graphics device these fixtures can run on.
 pub fn available() -> bool {
-    static ANSWER: OnceLock<bool> = OnceLock::new();
-    *ANSWER.get_or_init(|| {
-        let target = RenderTarget::new(zgui::geom::Size::new(64, 64), zgui::geom::Scale::new(1.0));
-        match Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false) {
-            Ok(_) => true,
-            Err(failure) => {
-                eprintln!("skipped: no usable graphics device ({failure})");
-                false
-            }
-        }
-    })
+    compositor::available()
 }

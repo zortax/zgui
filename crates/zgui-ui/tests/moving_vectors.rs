@@ -13,7 +13,6 @@ use zgui::view;
 use zgui::view::AnyView;
 use zgui::vocab::{PropValue, SharedString};
 
-use crate::device::Pipeline;
 use crate::painted::stage::Stage;
 
 const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-family: sans-serif }
@@ -149,7 +148,7 @@ fn partial_repaints_of_a_moving_graph_match_a_full_redraw() {
         zoom: RwSignal::new(1.0),
         dragged: RwSignal::new((100.0, 240.0)),
     };
-    let Some(mut stage) = Stage::open_on(Pipeline::Compositor, SHEET, graph(scene)) else {
+    let Some(mut stage) = Stage::open(SHEET, graph(scene)) else {
         eprintln!("skipped: no usable graphics device");
         return;
     };

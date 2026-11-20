@@ -107,7 +107,6 @@ fn draw<V: IntoView + 'static>(
             .with_title("vectors")
             .with_size(width, height)
             .with_stylesheet(css),
-        device::Pipeline::Scene,
         &log,
     )
     .run_on(
@@ -201,6 +200,12 @@ fn every_mark_in_a_row_of_isolated_controls_is_drawn() {
         frame.drawings.len() >= 6,
         "six ticked checkboxes produced only {} drawings",
         frame.drawings.len()
+    );
+    assert!(
+        frame.pass_regions.len() >= 6,
+        "six drawings in six isolated controls were planned as {} passes; one composite cannot \
+         be recorded in six targets at once",
+        frame.pass_regions.len()
     );
     // A checkbox carries both of its marks and shows one: a ticked box draws its tick and not the
     // dash it would show if it were part-way. The mark that is not showing is hidden with

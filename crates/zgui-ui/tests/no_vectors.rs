@@ -78,8 +78,8 @@ fn a_stock_interface_never_asks_for_a_path_rasteriser() {
     let (items, passes) = vectors_drawn();
     assert_eq!(
         items, 0,
-        "an ordinary interface put {items} vector items in the display list; the first of them \
-         builds a path rasteriser, at about a third of a second and a hundred and seventy megabytes"
+        "an ordinary interface handed {items} paths to the path rasteriser; the first of them \
+         builds it, at about a third of a second and a hundred and seventy megabytes"
     );
     assert_eq!(passes, 0);
 }

@@ -16,7 +16,7 @@ use zgui_platform_headless::Harness;
 
 use crate::desktop::census::Census;
 use crate::desktop::grab::{self, Grab, Handles};
-use crate::device::{self, Log, Pipeline};
+use crate::device::{self, Log};
 
 /// How wide the surface every fixture opens is, in device pixels.
 pub const WIDTH: f32 = 900.0;
@@ -51,8 +51,6 @@ pub struct Stage {
     handles: Handles,
     /// Every frame the device drew, in order.
     log: Log,
-    /// The renderer the window draws through.
-    pipeline: Pipeline,
     /// The surface's size, in device pixels.
     extent: (f32, f32),
     /// Where the pointer is, so a press lands where the last move left it.
@@ -78,20 +76,7 @@ impl Stage {
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
-        Self::open_on(Pipeline::Compositor, sheet, view)
-    }
-
-    /// Opens `view` the way [`Stage::open`] does, drawn through `pipeline`.
-    ///
-    /// # Panics
-    ///
-    /// Panics as [`Stage::open`] does.
-    pub fn open_on<F, V>(pipeline: Pipeline, sheet: &str, view: F) -> Option<Self>
-    where
-        F: FnMut() -> V + 'static,
-        V: IntoView,
-    {
-        if !device::available_on(pipeline) {
+        if !device::available() {
             return None;
         }
         let turn = exclusive();
@@ -100,7 +85,7 @@ impl Stage {
         let log: Log = Log::default();
         let mut view = view;
         let app = zgui::app().with_size(WIDTH, HEIGHT).with_stylesheet(sheet);
-        let handler = device::drawn_on(app, pipeline, &log)
+        let handler = device::drawn_on(app, &log)
             .into_handler(move || (Grab, view().into_view()))
             .expect("the application builds");
         let mut inner: Option<Box<dyn AppHandler>> = None;
@@ -122,7 +107,6 @@ impl Stage {
             harness,
             handles,
             log,
-            pipeline,
             extent: (WIDTH, HEIGHT),
             pointer: Point::new(CssPx(0.0), CssPx(0.0)),
             entered: false,
@@ -219,35 +203,57 @@ impl Stage {
     /// everywhere the frame did not touch — which is not a picture of the window and is not what
     /// anybody is looking at.
     ///
-    /// A surface that comes back from being hidden owes a full redraw, because nothing observed
-    /// what the compositor did to it while it was away. That is the event asked for here: it is one
-    /// a real desktop sends, it costs one frame, and what it produces is the whole window.
+    /// A surface that comes back from being hidden owes a full redraw. That is the event asked
+    /// for here: it is one a real desktop sends, and the frame that answers it runs.
     ///
-    /// The window paces that redraw as it paces a configure: when the last full redraw ran at the
-    /// same moment, the redraw waits for its deadline. The clock moves on one output frame at a
-    /// time until the redraw ran.
+    /// With every frame covering the whole window, the compositor builds no frame when nothing
+    /// changed, so the last frame drawn is already the whole picture. With the real damage set,
+    /// the window is resized by a pixel and back first, which makes the compositor redraw the
+    /// whole output from what it holds. The resize lays the window out again, so the picture
+    /// matches the one before only once the window is at rest.
     ///
-    /// The compositor builds no frame when nothing changed, and otherwise every frame covers the
-    /// whole window, so the last frame drawn is already the whole picture. With the real damage
-    /// set, the window is resized by a pixel and back instead, which makes the compositor redraw
-    /// the whole output. The resize lays the window out again, so the picture matches the one
-    /// before only once the window is at rest.
+    /// The window paces these redraws as it paces a configure, so the clock moves on one output
+    /// frame at a time until the whole repaint ran.
     ///
     /// # Panics
     ///
     /// Panics when the window draws nothing after a few output frames.
     pub fn repaint(&mut self) {
-        let whole = self.pipeline == Pipeline::Scene || device::real_damage();
-        let before = if whole { self.frames_drawn() } else { 0 };
-        if self.pipeline == Pipeline::Compositor && device::real_damage() {
+        let whole = device::real_damage();
+        let before = self.frames_drawn();
+        if whole {
             let (width, height) = self.extent;
             self.resize(width + 1.0, height);
             self.resize(width, height);
         }
+        self.shown_again(whole.then_some(before));
+    }
+
+    /// Makes the window record its whole surface again from nothing and draw it over the whole
+    /// output, and waits for it.
+    ///
+    /// Nothing is laid out again, so the picture is the one of the same moment, also while a
+    /// scroll glides.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the window draws nothing after a few output frames.
+    pub fn redraw_from_nothing(&mut self) {
+        let before = self.frames_drawn();
+        device::compositor::repaint_after_next_frame();
+        self.shown_again(Some(before));
+    }
+
+    /// Hides the window and shows it again, and waits until the device has drawn more than
+    /// `before` frames, when given.
+    fn shown_again(&mut self, before: Option<usize>) {
         self.harness.deliver_to_first(SurfaceEvent::Occluded(true));
         self.harness.settle(64);
         self.harness.deliver_to_first(SurfaceEvent::Occluded(false));
         self.harness.settle(64);
+        let Some(before) = before else {
+            return;
+        };
         for _ in 0..4 {
             if self.frames_drawn() > before {
                 return;

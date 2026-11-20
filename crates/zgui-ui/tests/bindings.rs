@@ -30,7 +30,6 @@ use zgui::{reactive, view};
 use zgui_ui::prelude::*;
 use zgui_ui_tokens::prelude::*;
 
-use crate::device::Pipeline;
 use crate::painted::stage::{SETTLED, Stage};
 
 /// The page every fixture is laid out on: a flat white surface with room around the controls.
@@ -46,14 +45,10 @@ const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-fam
 /// these changes actually paints.
 const MOVED: f32 = 0.01;
 
-/// Opens `view`, drawn through the compositor or through `pipeline`, or reports the run skipped
-/// on a machine with no graphics device.
+/// Opens `view`, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        staged!(Pipeline::Compositor, $view)
-    };
-    ($pipeline:expr, $view:expr) => {
-        match Stage::open_on($pipeline, SHEET, $view) {
+        match Stage::open(SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");

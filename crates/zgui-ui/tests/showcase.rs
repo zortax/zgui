@@ -53,8 +53,8 @@ use zgui_ui_tokens::prelude::{ColorScheme, ThemeProviderProps};
 
 use crate::desktop::census::Census;
 use crate::desktop::grab::{self, Grab};
+use crate::device::Log;
 use crate::device::frame::{Drawing, Frame};
-use crate::device::{Log, Pipeline};
 use crate::section::{ArtworkProps, StyledTextProps, SvgProps};
 
 /// How wide the surface is drawn, in device pixels.
@@ -290,7 +290,7 @@ fn run(part: Part) -> Option<&'static Opened> {
         [const { std::sync::OnceLock::new() }; Part::ALL.len()];
     OPENED[part as usize]
         .get_or_init(|| {
-            if !device::available_on(Pipeline::Compositor) {
+            if !device::available() {
                 return None;
             }
             let _guard = device::device_lock();
@@ -301,7 +301,7 @@ fn run(part: Part) -> Option<&'static Opened> {
                 .with_title("gallery")
                 .with_size(WIDTH, HEIGHT)
                 .with_stylesheet(crate::shell::SHEET);
-            device::drawn_on(app, Pipeline::Compositor, &log)
+            device::drawn_on(app, &log)
                 .run_on(buffers(part, &found), move || (Grab, part.view()))
                 .expect("the gallery ran");
             let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));

@@ -1,4 +1,4 @@
-//! A target read back off either renderer, as red, green, blue and alpha.
+//! A target read back off the device, as red, green, blue and alpha.
 
 use zgui::geom::{Device, Size};
 
@@ -10,13 +10,7 @@ pub struct Picture {
 }
 
 impl Picture {
-    /// Copies the pixels of zgui's own renderer.
-    pub fn of_scene(pixels: &zgui_render_wgpu::Pixels) -> Self {
-        let size = pixels.size();
-        Self::copied(pixels.bytes(), pixels.is_bgra(), size.width, size.height)
-    }
-
-    /// Copies the pixels of the compositor's renderer.
+    /// Copies the pixels of the device.
     pub fn of_compositor(pixels: &zgui_testkit_compositor::Pixels) -> Self {
         let size = pixels.size();
         Self::copied(pixels.bytes(), pixels.is_bgra(), size.width, size.height)

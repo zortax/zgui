@@ -1,4 +1,4 @@
-//! A frame of the compositor, read off its transcript.
+//! A frame of the compositor, read off its transcript and its vector plan.
 
 use zgui::geom::{Device, DevicePx, Rect};
 use zgui_testkit_compositor as testkit;
@@ -41,8 +41,13 @@ impl Tile {
 }
 
 impl Frame {
-    /// Reads the instances `drawing` drew, beside the composed target `pixels`.
-    pub fn composed(drawing: &testkit::Drawing, pixels: &testkit::Pixels) -> Self {
+    /// Reads the instances `drawing` drew and the vector passes `frame` planned, beside the
+    /// composed target `pixels`.
+    pub fn composed(
+        frame: &compositor_types::Frame,
+        drawing: &testkit::Drawing,
+        pixels: &testkit::Pixels,
+    ) -> Self {
         let quads: Vec<Filled> = drawing
             .quads()
             .into_iter()
@@ -108,10 +113,20 @@ impl Frame {
             shapes,
             quads,
             glyphs,
-            passes: 0,
-            culled: 0,
-            rasterised: 0,
-            pass_regions: Vec::new(),
+            pass_regions: frame
+                .vector_plan
+                .passes
+                .iter()
+                .map(|pass| {
+                    let region = pass.region;
+                    let region = Rect::new(
+                        zgui::geom::Point::new(region.origin.x, region.origin.y),
+                        zgui::geom::Size::new(region.size.width, region.size.height),
+                    );
+                    let items = pass.items.start as usize..pass.items.end as usize;
+                    (region, items, pass.instanced)
+                })
+                .collect(),
         }
     }
 }

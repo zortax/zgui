@@ -1,10 +1,7 @@
 //! The compositor's reference renderer under the gallery, drawing to a texture.
-//!
-//! A window draws everything zgui records through the compositor. What the display list still
-//! holds is drawn through [`recording`](crate::device::recording) instead.
 
 use std::sync::OnceLock;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use compositor_api::Renderer;
 use compositor_types::{
@@ -36,7 +33,7 @@ impl Renderer for Recording {
     // An unknown age makes every frame the compositor builds cover the whole output, so each
     // transcript is the whole window. The real damage set keeps the device's own age.
     fn target_age(&self) -> BufferAge {
-        if real_damage() {
+        if real_damage() && !WHOLE.load(Ordering::Relaxed) {
             self.device.target_age()
         } else {
             BufferAge::Unknown
@@ -45,6 +42,7 @@ impl Renderer for Recording {
 
     fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let outcome = self.device.draw(frame);
+        WHOLE.store(false, Ordering::Relaxed);
         let drawing = self
             .device
             .shown()
@@ -61,13 +59,45 @@ impl Renderer for Recording {
         self.log
             .lock()
             .unwrap_or_else(|held| held.into_inner())
-            .push(frame::Frame::composed(&drawing, &pixels));
+            .push(frame::Frame::composed(frame, &drawing, &pixels));
         outcome
     }
 
     fn memory(&self) -> MemoryReport {
         self.device.memory()
     }
+}
+
+/// Whether the next frame is drawn over the whole output, whatever the damage set.
+static WHOLE: AtomicBool = AtomicBool::new(false);
+
+/// Whether the window records its whole surface again from nothing after the next frame ends.
+static RESYNC: AtomicBool = AtomicBool::new(false);
+
+/// Makes the window draw its whole picture again from nothing once the next frame ends.
+///
+/// The window records its whole surface into its compositor again, and the frame that follows
+/// covers the whole output.
+pub fn repaint_after_next_frame() {
+    RESYNC.store(true, Ordering::Relaxed);
+}
+
+/// A probe that asks for the whole repaint of [`repaint_after_next_frame`].
+struct Repainting;
+
+impl zgui::runtime::FrameProbe for Repainting {
+    fn frame_ended(&self, window: &zgui::runtime::Window) {
+        if RESYNC.swap(false, Ordering::Relaxed) {
+            WHOLE.store(true, Ordering::Relaxed);
+            window.forget_compositor_sync();
+            window.request_frame();
+        }
+    }
+}
+
+/// Builds the probe that asks for the whole repaint of [`repaint_after_next_frame`].
+pub fn repainting() -> std::rc::Rc<dyn zgui::runtime::FrameProbe> {
+    std::rc::Rc::new(Repainting)
 }
 
 /// Builds the renderer the compositor of the application under test draws through, writing every

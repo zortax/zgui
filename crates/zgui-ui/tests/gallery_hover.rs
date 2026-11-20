@@ -194,7 +194,6 @@ fn hovering_every_gallery_button_keeps_every_label() {
             .with_title("gallery")
             .with_size(crate::app::WIDTH, crate::app::HEIGHT)
             .with_stylesheet(crate::shell::SHEET),
-        device::Pipeline::Scene,
         &log,
     )
     .run_on(drive(&log, &failures), || {
