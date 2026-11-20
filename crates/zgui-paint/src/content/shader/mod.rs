@@ -1,9 +1,9 @@
 //! The seam a style sheet's shader name is resolved through.
 //!
 //! A style sheet names an effect as a word — `--zgui-shader: cursor-trail` — and the paint stage
-//! has to turn that word into the handle a display list carries. What an effect *is* belongs to
-//! the renderer's own companion crate, well above this one, so what crosses here is a lookup and
-//! nothing else: a name in, a handle and the two facts the paint stage decides with out.
+//! turns that word into the handle its items draw the effect by. An application declares its
+//! effects with [`declare`], and what crosses here is a lookup: a name in, a handle and the facts
+//! the paint stage decides with out.
 
 mod declared;
 
@@ -44,7 +44,7 @@ pub trait ShaderSource {
 /// What the paint stage learns about one registered effect.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ShaderBinding {
-    /// The handle a display list carries.
+    /// The handle items draw the effect by.
     pub id: ShaderId,
     /// What the effect does, which decides whether its rectangle replaces a background or covers
     /// it.
@@ -77,9 +77,8 @@ impl ShaderSource for NoShaders {
 
 /// The effects the process declared, if the device can draw one.
 ///
-/// The capability is held here rather than asked per box, because it decides what the display list
-/// should *contain* rather than how it is drawn: a device that cannot draw an effect makes every
-/// box fall back to the painting it would have had, which is a picture rather than a hole.
+/// A device that cannot draw an application's own shader makes every box fall back to the painting
+/// it would have had.
 #[derive(Clone, Copy, Debug)]
 pub struct DeclaredShaders {
     /// Whether the device can draw an application's own shader.

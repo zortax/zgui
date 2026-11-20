@@ -95,7 +95,7 @@ struct Slot {
 /// parameters through either is seen through both.
 #[derive(Debug)]
 pub struct ShaderHandle<P> {
-    /// The handle a display list names the effect by.
+    /// The handle the effect was declared under.
     id: ShaderId,
     /// What the effect reads that changes on its own.
     reads: ShaderReads,
@@ -156,7 +156,7 @@ impl<P: ShaderParams> ShaderHandle<P> {
         });
     }
 
-    /// The handle a display list names this effect by.
+    /// The handle the effect was declared under, which items draw it by.
     pub fn id(&self) -> ShaderId {
         self.id
     }
