@@ -6824,6 +6824,7 @@ dependencies = [
  "zgui-render-vector-vello",
  "zgui-render-wgpu",
  "zgui-testkit-compositor",
+ "zgui-testkit-scene",
  "zgui-testkit-view",
  "zgui-ui-icons",
  "zgui-ui-primitives",
@@ -6840,6 +6841,7 @@ dependencies = [
  "zgui-render-vector-vello",
  "zgui-render-wgpu",
  "zgui-testkit-compositor",
+ "zgui-testkit-scene",
  "zgui-testkit-view",
 ]
 
