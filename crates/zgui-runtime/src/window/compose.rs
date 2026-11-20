@@ -9,8 +9,16 @@ impl Window {
     /// Opens the frame's transaction.
     ///
     /// The first call attaches a sync to the painter, so the walk records every fragment it
-    /// visits.
+    /// visits. After [`Window::forget_compositor_sync`], the client is registered again with
+    /// nothing and the whole surface is damaged first.
     pub(super) fn open_transaction(&mut self) {
+        if self.resync.take() {
+            self.compositor.restart();
+            if let Some(sync) = self.painter.compositor() {
+                sync.reset();
+            }
+            self.damage = DamageSet::full();
+        }
         let transaction = self.compositor.transaction();
         if self.painter.compositor().is_none() {
             self.painter
@@ -19,6 +27,14 @@ impl Window {
         if let Some(sync) = self.painter.compositor() {
             sync.open(transaction);
         }
+    }
+
+    /// Makes the next frame drop everything this window recorded into its compositor and record
+    /// the whole surface again from nothing.
+    ///
+    /// No frame is asked for.
+    pub fn forget_compositor_sync(&self) {
+        self.resync.set(true);
     }
 
     /// Commits the frame's transaction.

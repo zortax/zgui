@@ -5922,6 +5922,7 @@ name = "zgui-bench"
 version = "0.1.0"
 dependencies = [
  "compositor-api",
+ "compositor-capture",
  "compositor-core",
  "compositor-types",
  "compositor-vello",
@@ -5935,9 +5936,7 @@ dependencies = [
  "zgui-platform-headless",
  "zgui-platform-winit",
  "zgui-profile",
- "zgui-render-wgpu",
  "zgui-testkit-compositor",
- "zgui-testkit-scene",
  "zgui-text-parley",
  "zgui-ui",
  "zgui-ui-icons",
@@ -6711,15 +6710,8 @@ name = "zgui-testkit-scene"
 version = "0.1.0"
 dependencies = [
  "smallvec",
- "web-time",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
  "zgui-geom",
- "zgui-platform",
  "zgui-profile",
- "zgui-render",
- "zgui-scene",
  "zgui-space",
  "zgui-text",
  "zgui-text-style",
@@ -6810,8 +6802,6 @@ dependencies = [
  "zgui",
  "zgui-layout",
  "zgui-platform-headless",
- "zgui-render-vector-vello",
- "zgui-render-wgpu",
  "zgui-testkit-compositor",
  "zgui-testkit-view",
  "zgui-ui-icons",

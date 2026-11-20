@@ -92,16 +92,13 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
             // legal" and "the window has something in it" are not the same claim: an offset one
             // pixel inside its limit composes the subtree one pixel below the port, and every
             // assertion about clamping passes over a window that is blank.
-            live_full.wanted.set(true);
-            crate::verify::repaint_everything(harness, false);
-            live_full.wanted.set(false);
+            crate::verify::repaint_everything(harness);
             let at_top = live_full
-                .taken()
+                .drawing()
                 .expect("a repaint against every pixel was drawn")
-                .lines()
-                .filter(|line| line.starts_with("  "))
-                .count();
-            println!("  a screenful at the top is {at_top} display-list lines");
+                .instances()
+                .len();
+            println!("  a screenful at the top is {at_top} drawn instances");
             harness.deliver_to_first(pointer(PointerAction::Moved, middle));
             harness.settle(96);
             harness.deliver_to_first(wheel(middle, 90.0));
@@ -175,25 +172,15 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
             }
             report(harness, "bottom of a 800 tall");
             sized(harness, WIDTH, 1800.0);
-            // What a viewer arriving now would be handed, which is a frame drawn against every
-            // pixel rather than whatever the last one happened to answer.
-            //
-            // Taken from the recorder and not from the window's own scene. A scene holds one
-            // frame's emission, and the frame that answers a full repaint is followed by the small
-            // ones a settle produces — a caret phase, a transition ending — each of which replaces
-            // it with its own handful of primitives. Reading the window afterwards therefore counts
-            // the last small frame and calls a document that is drawn perfectly well a blank one.
-            live_full.wanted.set(true);
-            crate::verify::repaint_everything(harness, false);
-            live_full.wanted.set(false);
-            let transcript = live_full
-                .taken()
-                .expect("a repaint against every pixel was drawn");
-            let drawn = transcript
-                .lines()
-                .filter(|line| line.starts_with("  "))
-                .count();
-            println!("  a full repaint here emits {drawn} display-list lines");
+            // What a viewer arriving now would be handed, which is a frame drawn over the whole
+            // output rather than whatever the last one happened to answer.
+            crate::verify::repaint_everything(harness);
+            let drawn = live_full
+                .drawing()
+                .expect("a repaint against every pixel was drawn")
+                .instances()
+                .len();
+            println!("  a full repaint here draws {drawn} instances");
             let stranded = crate::resize::containers(&harness.app().windows()[0])
                 .into_iter()
                 .filter(|container| !container.within())
@@ -210,7 +197,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
             // because the document's size is the parameter this phase is swept over.
             assert!(
                 drawn * 2 >= at_top,
-                "a full repaint drew {drawn} display-list lines where a screenful at the top drew \
+                "a full repaint drew {drawn} instances where a screenful at the top drew \
                  {at_top}, so most of the document is not reaching the window"
             );
             0

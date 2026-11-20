@@ -25,8 +25,7 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # The counters have to be compiled in, or every band stays green while measuring nothing.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
@@ -37,13 +36,11 @@ zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
 # The window renderer's contract, and the device renderer a measurement may draw through.
 compositor-api.workspace = true
+compositor-capture.workspace = true
 compositor-core.workspace = true
 compositor-types.workspace = true
 compositor-vello.workspace = true
 compositor-wgpu.workspace = true
-
-[dev-dependencies]
-zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [features]
 # The allocation tags `mem-probe` charges each allocation to. A feature of its own, so the timed

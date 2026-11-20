@@ -1,18 +1,20 @@
-//! The standing gate over what a frame *is*: the live window's display list against a rebuild's.
+//! The standing gate over what a frame *is*: the live window's picture against a rebuild's.
 //!
 //! The oldest of the compositor programme's gates. Two windows are opened on one document at one
-//! size and driven through the same 42-step script event for event; one of them throws every held
-//! layout result away before each turn of its loop. After every step both are damaged whole, both
-//! redraw everything they hold, and the two finished display lists are compared line for line —
-//! along with every fragment's resolved border box, which is the half that sees a subtree drawn
-//! somewhere else entirely.
+//! size and driven through the same script event for event. Both draw every frame over the whole
+//! output through the compositor. One of them throws every held layout result away before each
+//! turn of its loop, and records its whole surface into its compositor again from nothing. After
+//! every step both are settled, and the drawings of their last frames, as compositor transcripts,
+//! are compared line for line, along with every fragment's resolved border box, which is the half
+//! that sees a subtree drawn somewhere else entirely.
 //!
 //! # What a green run means, exactly
 //!
 //! **Every saving the incremental engine took was sound at every step of the script, at seven
-//! document sizes.** A frame that declined to lay a box out again, to shape a run again, to emit a
-//! primitive again, produced the frame an engine that declined nothing produces — the same
-//! primitives, in the same painting order, with the same paints, clips, transforms and geometry.
+//! document sizes.** A frame that declined to lay a box out again, to shape a run again, or to
+//! record a chunk again, produced the picture an engine that declined nothing produces: the same
+//! instances, in the same order where they overlap, with the same paints, clips, transforms and
+//! geometry.
 //!
 //! It does not mean the picture is *right*. Both windows draw through one renderer and one layout
 //! engine, so an error in either is made twice and cancels; correctness is what the golden
@@ -348,11 +350,12 @@ mod tests {
             !s1.unstable.is_empty(),
             "s1 is the size with the open Theme defect"
         );
+        // Step 67 is a fault `s1` is known for, so every run carries it.
         for faults in [
-            "faults=none",
-            "faults=37,38",
-            "faults=39,40,41,60,61",
-            "faults=70,71",
+            "faults=67",
+            "faults=37,38,67",
+            "faults=39,40,41,60,61,67",
+            "faults=67,70,71",
         ] {
             let line = LINE
                 .replace("size=s13", "size=s1")

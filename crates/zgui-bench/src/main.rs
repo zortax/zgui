@@ -178,6 +178,11 @@ fn main() {
     // The picture differential is two photographs of one state taken a little apart in time, so the
     // document it compares is mounted with its endless animations stopped. See [`STILL_SHEET`].
     STILL.with(|still| still.set(phase == "pixels"));
+    // The comparisons read the picture a window shows, so their windows draw every frame whole.
+    crate::draw::draw_whole(matches!(
+        phase.as_str(),
+        "verify" | "theme-check" | "scroll-resize"
+    ));
 
     zgui_profile::latency::start_epoch();
 

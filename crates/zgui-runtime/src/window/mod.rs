@@ -294,6 +294,8 @@ pub struct Window {
     check_damage: bool,
     /// What the last commit did, until the frame it belongs to is checked.
     committed: Option<compositor_types::CommitCounters>,
+    /// See [`Window::forget_compositor_sync`].
+    resync: std::cell::Cell<bool>,
     /// Whether the last frame the compositor built retired its damage.
     retired: bool,
     /// What is hovered, pressed, focused and captured.
@@ -770,6 +772,7 @@ impl Window {
             renderer_totals: crate::window::counters::Totals::default(),
             check_damage: zgui_scene::invariant::enabled(),
             committed: None,
+            resync: std::cell::Cell::new(false),
             retired: false,
             router: Router::new(),
             pending_focus: Vec::new(),

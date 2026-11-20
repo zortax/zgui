@@ -30,8 +30,7 @@ pub(crate) fn enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
     *ENABLED.get_or_init(|| {
         std::env::var_os("ZGUI_BENCH_GPU").is_some()
-            && (zgui_render_wgpu::gpu::timing::requested()
-                || compositor_wgpu::gpu_timing_requested())
+            && zgui_bench::renderers::gpu_timing_requested()
     })
 }
 

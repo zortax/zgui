@@ -53,7 +53,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
             // rather than nothing. A step that draws no frame leaves the last readback standing,
             // which is right — but at the smallest document sizes the first step of the script
             // draws nothing at all, and without a picture behind it there is nothing to leave.
-            crate::verify::repaint_everything(harness, false);
+            crate::verify::repaint_everything(harness);
             let shoot = || {
                 (
                     capture
@@ -85,7 +85,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 // below it while the offset stays exactly where it was.
                 let placed_before = crate::verify::geometry(&harness.app().windows()[0]);
                 capture.full_lists.borrow_mut().clear();
-                crate::verify::repaint_everything(harness, false);
+                crate::verify::repaint_everything(harness);
                 let (whole, whole_composed) = shoot();
                 let scrolled_after = scroll_signature(&harness.app().windows()[0]);
                 let placed_after = crate::verify::geometry(&harness.app().windows()[0]);
@@ -122,7 +122,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 // differs by a channel step or two over the whole band it covers. What that cannot
                 // do is exceed the same instrument's own disagreement with itself, so that is what a
                 // difference has to beat to be a fault.
-                crate::verify::repaint_everything(harness, false);
+                crate::verify::repaint_everything(harness);
                 let (again, _) = shoot();
                 let noise = again.max_difference(&whole);
                 if again != whole {

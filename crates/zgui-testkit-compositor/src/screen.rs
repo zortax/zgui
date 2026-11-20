@@ -46,6 +46,13 @@ impl Screen {
         Self::default()
     }
 
+    /// Returns the renderer showing its frames through `shown`.
+    #[must_use]
+    pub fn showing_into(mut self, shown: Shown) -> Self {
+        self.shown = shown;
+        self
+    }
+
     /// Returns what the output shows, or `None` before the first frame.
     pub fn drawing(&self) -> Option<Drawing> {
         self.shown.drawing()

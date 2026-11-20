@@ -1,4 +1,4 @@
-//! Whether the frames an incremental engine produces are the frames a thorough one would.
+//! Whether the pictures an incremental engine draws are the pictures a thorough one would.
 //!
 //! Every saving in this area is the engine declining to do something, and declining is how a
 //! window comes to show what the previous frame showed. So a saving is checked against the only
@@ -8,46 +8,43 @@
 //! # The two documents
 //!
 //! Two windows are opened on the same view at the same size and fed **the same input, event for
-//! event**. One is left alone. The other has every held layout result thrown away immediately
-//! before each turn of the loop — [`mark_all_dirty`](zgui_layout::tree::dirty::mark_all_dirty)
-//! empties the per-box caches, the baselines and the resolved inline lines, and forgets which
-//! viewport the store was last laid out for — so every frame it runs recomputes from the root and
-//! it can hold nothing. It is not asked for extra frames: it runs exactly the frames the first one
-//! runs, and does all the work inside each.
+//! event**. Both draw every frame over the whole output, so the last frame each drew is the picture
+//! it shows. One is left alone. The other has every held layout result thrown away immediately
+//! before each turn of the loop, and its compositor sync with it: the next frame records the whole
+//! surface into its compositor again from nothing (see [`forget`]). It is not asked for extra
+//! frames: it runs exactly the frames the first one runs, and does all the work inside each.
 //!
 //! After every step the two are compared on two things:
 //!
-//! * **geometry** — every fragment's border box, in tree order, to a bit;
-//! * **the display list** — the finished scene rendered as a transcript, which is every primitive
-//!   in draw order with its paint, clip, transform and geometry resolved through the side tables.
+//! * **geometry**: every fragment's border box, in tree order, to a bit;
+//! * **the picture**: the drawing of each window's last frame, as the compositor's transcript of
+//!   every instance with its paint, clip, transform and geometry resolved.
 //!
-//! A difference in the first is a stale layout; a difference in the second is a stale pixel. The
-//! damage is deliberately left out of the transcript, because the two windows are entitled to
-//! differ on it: the thorough one repaints what it recomputed.
+//! A difference in the first is a stale layout; a difference in the second is a stale pixel.
 //!
 //! # What the two windows are *not* compared on
 //!
-//! Two things reach a transcript that are not the picture, and each is dealt with in a module of its
+//! Some of what reaches a transcript is not the picture, and each is dealt with in a module of its
 //! own rather than absorbed into a tolerance:
 //!
-//! * where in the texture atlas a glyph was rasterised, and the sequence that puts the sprites of
-//!   one painting order in — [`canon`];
+//! * the compositor's batches, atlas addresses and paint spaces, see [`canon`];
 //! * the last few bits of a float, which two engines that reach one position by different routes
-//!   never agree on — [`apart`], which classifies every disagreement by what differs and how far,
-//!   so a rounding and a stale pixel are never counted with one word.
+//!   never agree on: [`apart`] classifies every disagreement by what differs and how far, so a
+//!   rounding and a stale pixel are never counted with one word.
 //!
-//! Neither is a threshold on the comparison. Every primitive, paint, clip, transform and position in
-//! the painting order is compared exactly.
+//! Neither is a threshold on the comparison.
 
 mod apart;
 mod canon;
+mod capture;
 pub(crate) mod gradient;
 
 pub(crate) use crate::verify::apart::{Apart, GRID};
+pub(crate) use crate::verify::capture::{Capture, Recorded};
 
-use zgui::bits::DamageSet;
 use zgui::geom::{Device, DevicePx, Rect};
 use zgui_platform_headless::Harness;
+use zgui_testkit_compositor::{Drawing, Shown};
 
 /// Every fragment's border box, in the store's own order, where the frame put it on the screen.
 ///
@@ -91,22 +88,17 @@ pub(crate) fn resolved(
     out
 }
 
-/// The finished display list as text, with the damage left out.
-pub(crate) fn transcript(window: &zgui::runtime::Window) -> String {
-    zgui_testkit_scene::transcript::of(window.scene(), &DamageSet::default()).into_string()
-}
-
-/// Throws away everything a window is holding about where things are.
+/// Throws away everything a window is holding about where things are and what it recorded.
 ///
-/// Two things, and the second one is not an extra: every held layout result, so the next frame
-/// recomputes from the root — and the index that answers what is under a point, which is kept up to
-/// date one entry at a time by the pass that writes the fragments and would otherwise be the one
-/// thing the thorough window carries over from every frame it has ever run. A comparison whose cold
-/// side holds an index built incrementally since the window opened is comparing two incremental
-/// indexes.
+/// Three things: every held layout result, so the next frame recomputes from the root; the index
+/// that answers what is under a point, which is kept up to date one entry at a time by the pass
+/// that writes the fragments; and what the window recorded into its compositor, so the next frame
+/// records its whole surface from nothing. A comparison whose cold side held any of them since the
+/// window opened would be comparing two incremental windows.
 pub(crate) fn forget(harness: &mut Harness<zgui::runtime::Runtime>) -> u32 {
     let window = &mut harness.app_mut().windows_mut()[0];
     window.forget_hit_index();
+    window.forget_compositor_sync();
     zgui_layout::tree::dirty::mark_all_dirty(&mut window.layout().borrow_mut())
 }
 
@@ -184,124 +176,53 @@ pub(crate) fn run_down(harness: &mut Harness<zgui::runtime::Runtime>, cold: bool
 /// to spare rather than a duration chosen to look long.
 const RUN_DOWN_TURNS: u32 = zgui::runtime::caret::blink::PHASES + 8;
 
-/// Damages the whole surface without changing a thing in the document, and settles what follows.
+/// Draws the whole picture of a window again, from nothing, without changing a thing in the
+/// document, and settles what follows.
 ///
-/// # Why a comparison cannot be taken without this
-///
-/// The emit walk is gated on damage: a frame emits what the damage reaches and nothing else, and
-/// the renderer keeps the rest of the target from the frame before. So a window's display list is
-/// not *what is on the screen* — it is what the last frame it happened to run redrew. Two windows
-/// that ran a different number of frames therefore hold different fractions of the same picture,
-/// and comparing those fractions compares which frames ran rather than what they drew.
-///
-/// The two windows here *always* run a different number of frames: the thorough one recomputes its
-/// layout before every turn, which buys frames the incremental one never asks for. Left alone, that
-/// makes the display-list half of the comparison read whichever window last happened to redraw
-/// something — and, when the last frame on both sides drew nothing at all, makes it compare two
-/// empty lists and report agreement.
-///
-/// Coming back from occlusion is the one event that damages every pixel while changing no input to
-/// any of them: nothing reflows, no string is shaped again, and every glyph is drawn through the
-/// slot it named when it was shaped. So both windows are put through it before every comparison,
-/// and both then hold the whole document, emitted from whatever each of them is holding. The frame
-/// that answers it is paced — offered once, declined while the reconfiguration it owes could not
-/// yet have been seen, and asked for again by the deadline — so the clock is moved past that
-/// deadline before the frame the comparison reads is expected to have run.
-pub(crate) fn repaint_everything(harness: &mut Harness<zgui::runtime::Runtime>, cold: bool) {
-    let settle = |harness: &mut Harness<zgui::runtime::Runtime>| {
-        if cold {
-            settle_cold(harness, 96);
-        } else {
-            harness.settle(96);
-        }
-    };
-    let trace = std::env::var_os("REPAINT_TRACE").is_some();
-    let mut was = geometry(&harness.app().windows()[0]);
-    let mut note = |stage: &str, harness: &Harness<zgui::runtime::Runtime>| {
-        if !trace {
-            return;
-        }
-        let now = geometry(&harness.app().windows()[0]);
-        let moved = was
-            .iter()
-            .zip(now.iter())
-            .filter(|(one, two)| one != two)
-            .count()
-            + was.len().abs_diff(now.len());
-        eprintln!(
-            "    REPAINT TRACE {stage}: {moved} moved, {} fragments",
-            now.len()
-        );
-        was = now;
-    };
-    run_down(harness, cold);
-    note("run_down", harness);
-    harness.deliver_to_first(zgui::platform::SurfaceEvent::Occluded(true));
-    settle(harness);
-    note("occluded", harness);
-    harness.deliver_to_first(zgui::platform::SurfaceEvent::Occluded(false));
-    settle(harness);
-    note("shown", harness);
+/// The clock is first carried past everything the window owes (see [`run_down`]). Then the window
+/// records its whole surface into its compositor again, and the next frame is drawn over the whole
+/// output. Nothing reflows and no string is shaped again, so the frame shows the state the window
+/// was in, drawn from nothing.
+pub(crate) fn repaint_everything(harness: &mut Harness<zgui::runtime::Runtime>) {
+    run_down(harness, false);
+    crate::draw::next_whole();
+    let window = &mut harness.app_mut().windows_mut()[0];
+    window.forget_compositor_sync();
+    window.request_frame();
+    harness.settle(96);
+    // The frame is paced: offered once, declined while the configure it owes could not yet have
+    // been seen, and asked for again by the deadline.
     harness.advance(std::time::Duration::from_millis(50));
-    settle(harness);
-    note("settled", harness);
+    harness.settle(96);
 }
 
-/// The display list of the last frame one window painted against the whole surface.
-///
-/// A window's *current* scene is not this: it is whatever its last frame emitted, against whatever
-/// damage that frame was built for, and the frame that answers a full repaint is routinely followed
-/// by a small one that overwrites it. So the list is taken as each frame ends, and only for the
-/// frames that were painted against every pixel, which are the only frames that hold the whole
-/// document.
-#[derive(Default)]
+/// Carries the clock past everything a window drawing every frame whole owes, so the picture it
+/// shows is the settled one.
+pub(crate) fn settled(harness: &mut Harness<zgui::runtime::Runtime>, cold: bool) {
+    run_down(harness, cold);
+    if cold {
+        settle_cold(harness, 96);
+    } else {
+        harness.settle(96);
+    }
+}
+
+/// The picture a window drawing every frame whole shows, as the drawing of its last frame.
 pub(crate) struct FullFrame {
-    /// Whether the list is kept. Off for the measuring phases, which must not pay for
-    /// rendering a transcript on every frame they are timing.
-    pub(crate) wanted: std::cell::Cell<bool>,
-    /// The last one kept.
-    pub(crate) last: std::cell::RefCell<Option<String>>,
+    /// What the window's renderer last drew.
+    shown: Shown,
 }
 
 impl FullFrame {
-    /// Keeps `scene` if it was painted against the whole surface and anyone asked for it.
-    pub(crate) fn observe(&self, scene: &zgui::scene::Scene, damage: &DamageSet) {
-        if self.wanted.get() && damage.is_full() {
-            *self.last.borrow_mut() = Some(
-                zgui_testkit_scene::transcript::of(scene, &DamageSet::default()).into_string(),
-            );
-        }
+    /// Returns a recorder reading what `shown` shows.
+    pub(crate) fn new(shown: Shown) -> Self {
+        Self { shown }
     }
 
-    /// The list kept, and nothing if no such frame has been drawn since it was last emptied.
-    pub(crate) fn taken(&self) -> Option<String> {
-        self.last.borrow_mut().take()
-    }
-}
-
-/// A probe that keeps the display list of every frame painted against the whole surface.
-///
-/// A probe rather than a field on each renderer, because a comparison needs the list whichever
-/// renderer a window draws through: the device's, the device's under a readback, or the one that
-/// draws nothing at all.
-pub(crate) struct Listed {
-    /// Where a full frame's list is left.
-    pub(crate) full: std::rc::Rc<FullFrame>,
-    /// Where every frame's region and list go when the window draws under a readback.
-    pub(crate) capture: Option<std::rc::Rc<Capture>>,
-}
-
-impl zgui::runtime::FrameProbe for Listed {
-    fn frame_ended(&self, window: &zgui::runtime::Window) {
-        let scene = window.scene();
-        let painted = window
-            .last_frame_report()
-            .map_or_else(DamageSet::new, |report| report.painted);
-        self.full.observe(scene, &painted);
-        crate::phase::observe(scene, &painted);
-        if let Some(capture) = &self.capture {
-            capture.observe(scene, &painted);
-        }
+    /// Returns the drawing of the last frame, or `None` before the first one or when the window
+    /// does not draw every frame whole.
+    pub(crate) fn drawing(&self) -> Option<Drawing> {
+        self.shown.drawing()
     }
 }
 
@@ -442,106 +363,6 @@ pub(crate) fn compare_readings(
         first_line,
         apart,
     })
-}
-
-/// What one frame was drawn against: whether the whole surface, and the rectangles otherwise.
-pub(crate) type Drawn = (bool, Vec<zgui::geom::Rect<i32, Device>>);
-
-/// The pixels a window last presented, and the display lists its frames painted, kept for a
-/// comparison to read.
-///
-/// A window owns its renderer, so the only place a readback can be taken from is inside the
-/// renderer itself — after the draw and before anything else can touch the target.
-#[derive(Default)]
-pub(crate) struct Capture {
-    /// Whether the next frame should be read back, which is off by default because a readback is
-    /// a full device synchronisation and a measurement must not pay for one.
-    pub(crate) want: std::cell::Cell<bool>,
-    /// What the last frame that was asked for presented.
-    pub(crate) last: std::cell::RefCell<Option<compositor_wgpu::Pixels>>,
-    /// The persistent target that frame was composed into, which is the one a partial repaint
-    /// accumulates in and the one a stale pixel would survive in.
-    pub(crate) composed: std::cell::RefCell<Option<compositor_wgpu::Pixels>>,
-    /// Every region a paint walk was gated on since the last time the list was emptied.
-    pub(crate) damages: std::cell::RefCell<Vec<Drawn>>,
-    /// The display list of every frame painted against the whole surface.
-    pub(crate) full_lists: std::cell::RefCell<Vec<String>>,
-    /// Whether the list of *every* frame is kept, not only the ones drawn against every pixel.
-    ///
-    /// A step is a sequence of frames and a displacement is introduced by one of them, so which one
-    /// is the question a full-damage frame on its own cannot answer. Off by default because it
-    /// renders a transcript per frame.
-    pub(crate) transcribe: std::cell::Cell<bool>,
-    /// Every frame's list since the run was last emptied, with what it was drawn against.
-    pub(crate) every_list: std::cell::RefCell<Vec<(String, String)>>,
-}
-
-impl Capture {
-    /// Keeps the region of a frame's paint walk and the display list it painted, as asked for.
-    fn observe(&self, scene: &zgui::scene::Scene, damage: &DamageSet) {
-        self.damages
-            .borrow_mut()
-            .push((damage.is_full(), damage.rects().to_vec()));
-        if damage.is_full() {
-            self.full_lists
-                .borrow_mut()
-                .push(zgui_testkit_scene::transcript::of(scene, damage).into_string());
-        }
-        if self.transcribe.get() {
-            let against = if damage.is_full() {
-                "full".to_owned()
-            } else {
-                format!("{:?}", damage.rects())
-            };
-            self.every_list.borrow_mut().push((
-                against,
-                zgui_testkit_scene::transcript::of(scene, &DamageSet::default()).into_string(),
-            ));
-        }
-    }
-}
-
-/// This machine's device, with a readback taken whenever one is asked for.
-pub(crate) struct Recorded {
-    /// The renderer that does the work.
-    pub(crate) inner: compositor_wgpu::WgpuRenderer,
-    /// Where a readback is left.
-    pub(crate) capture: std::rc::Rc<Capture>,
-}
-
-impl compositor_api::Renderer for Recorded {
-    fn capabilities(&self) -> compositor_types::RenderCapabilities {
-        self.inner.capabilities()
-    }
-
-    fn configure(&mut self, target: compositor_types::RenderTarget) {
-        self.inner.configure(target);
-    }
-
-    fn target(&self) -> Option<compositor_types::RenderTarget> {
-        self.inner.target()
-    }
-
-    fn target_age(&self) -> compositor_types::BufferAge {
-        self.inner.target_age()
-    }
-
-    fn draw(&mut self, frame: &compositor_types::Frame) -> compositor_types::FrameOutcome {
-        let outcome = self.inner.draw(frame);
-        if self.capture.want.get() {
-            *self.capture.last.borrow_mut() = self.inner.read_presented();
-            *self.capture.composed.borrow_mut() = Some(self.inner.read_composed());
-        }
-        outcome
-    }
-
-    fn memory(&self) -> compositor_types::MemoryReport {
-        self.inner.memory()
-    }
-
-    fn vector_status(&self) -> compositor_types::VectorStatus {
-        self.inner.vector_status()
-    }
 }
 
 #[cfg(test)]

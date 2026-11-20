@@ -70,7 +70,7 @@ pub(crate) struct Driver {
     pub(crate) ticks: Ledger,
 }
 
-pub(crate) use crate::phase::passes::observe;
+pub(crate) use crate::phase::passes::Planned;
 
 /// Runs the phase called `phase`, and returns how many frames it drew.
 ///

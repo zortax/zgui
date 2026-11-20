@@ -47,8 +47,6 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 DevicePx(HEIGHT),
             )));
             born.settle(256);
-            born_full.wanted.set(true);
-            live_full.wanted.set(true);
             live_scheme.set(ColorScheme::Dark);
             harness.settle(256);
             // A theme flip starts a transition on everything that names a duration, and a
@@ -60,14 +58,16 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 born.advance(std::time::Duration::from_micros(16_667));
                 born.pump();
             }
-            crate::verify::repaint_everything(harness, false);
-            crate::verify::repaint_everything(&mut born, false);
+            crate::verify::repaint_everything(harness);
+            crate::verify::repaint_everything(&mut born);
             let flipped = live_full
-                .taken()
-                .expect("the flipped window redrew everything");
+                .drawing()
+                .expect("the flipped window redrew everything")
+                .to_string();
             let opened = born_full
-                .taken()
-                .expect("the born-dark window redrew everything");
+                .drawing()
+                .expect("the born-dark window redrew everything")
+                .to_string();
             let differing = flipped
                 .lines()
                 .zip(opened.lines())
@@ -78,7 +78,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
             // primitive is a blank window on startup. So both sides have to have drawn something
             // before their agreement means anything.
             for (which, list) in [("flipped", &flipped), ("opened", &opened)] {
-                let primitives = list.lines().filter(|line| line.starts_with("  ")).count();
+                let primitives = list.lines().filter(|line| line.starts_with("    ")).count();
                 assert!(
                     primitives > 0,
                     "the {which} window answered full damage with no primitive at all, so nothing \

@@ -331,10 +331,7 @@ pub(crate) fn run_step(harness: &mut Harness<Runtime>, step: &Step, window: &Dri
                 }
                 let ran = harness.pump();
                 if std::env::var_os("THEME_TRACE").is_some() {
-                    eprintln!(
-                        "  TRACE cold={cold} ran={ran} prims={}",
-                        harness.app().windows()[0].scene().primitives.len()
-                    );
+                    eprintln!("  TRACE cold={cold} ran={ran}");
                 }
             }
         }

@@ -204,8 +204,7 @@ pub(crate) fn custom(
         .with_size(crate::gallery::WIDTH, crate::gallery::HEIGHT)
         .with_stylesheet(sheet)
         .with_compositor(zgui::app::compositor(&fonts))
-        .with_renderer(Box::new(crate::draw::renderer))
-        .with_probe(crate::draw::recorder())
+        .with_renderer(crate::draw::renderer())
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))

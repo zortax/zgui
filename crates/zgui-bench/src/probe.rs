@@ -287,8 +287,7 @@ fn renderer(device: Device, log: DrawLog) -> zgui::runtime::RendererFactory {
             let inner: Box<dyn Renderer> = match device {
                 Device::Capture => Box::new(crate::renderers::NullRenderer::new(target)),
                 Device::Gpu => {
-                    let timed = zgui_render_wgpu::gpu::timing::requested()
-                        || compositor_wgpu::gpu_timing_requested();
+                    let timed = crate::renderers::gpu_timing_requested();
                     if timed {
                         compositor_wgpu::enable_gpu_timing();
                     }

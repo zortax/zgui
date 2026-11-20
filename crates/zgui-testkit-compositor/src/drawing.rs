@@ -13,6 +13,7 @@ pub struct Drawing {
     transcript: Transcript,
     instances: Vec<Instance>,
     objects: Vec<Instance>,
+    sequence: Vec<Instance>,
 }
 
 /// One instance a frame draws, such as a quad or a glyph sprite.
@@ -37,11 +38,27 @@ impl Drawing {
             .map(Instance::of)
             .filter(|object| OBJECTS.contains(&object.kind()))
             .collect();
+        let sequence = transcript
+            .lines()
+            .filter_map(|line| {
+                if let Some(instance) = line.strip_prefix("    ") {
+                    return (!instance.starts_with(' ')).then(|| Instance::of(instance));
+                }
+                let object = Instance::of(line.strip_prefix("  ")?);
+                OBJECTS.contains(&object.kind()).then_some(object)
+            })
+            .collect();
         Self {
             transcript,
             instances,
             objects,
+            sequence,
         }
+    }
+
+    /// Returns every instance and every object the frame draws one at a time, in draw order.
+    pub fn sequence(&self) -> &[Instance] {
+        &self.sequence
     }
 
     /// Returns the objects of `kind` the frame draws one at a time, such as `backdrop`,

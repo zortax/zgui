@@ -75,11 +75,19 @@ impl Client {
             Err(error) => error,
         };
         tracing::error!(target: "zgui::compositor", ?error, "a transaction was rejected");
+        drop(compositor);
 
+        self.restart();
+        Err(error)
+    }
+
+    /// Registers the client again with nothing, so the next transaction has to create everything
+    /// the client draws again.
+    pub(crate) fn restart(&mut self) {
+        let mut compositor = self.compositor.borrow_mut();
         compositor.unregister_client(self.client);
         let (client, _ids) = compositor.register_client();
         self.client = client;
-        Err(error)
     }
 
     /// Points the output at a new or resized target.

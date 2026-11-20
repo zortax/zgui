@@ -1,6 +1,7 @@
 //! What a measured window draws through: no device, this machine's device offscreen, or a window
 //! on the desktop.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use compositor_api::{Compositor, Renderer};
@@ -92,7 +93,7 @@ pub fn device(target: RenderTarget) -> Result<WgpuRenderer, AppError> {
 fn attach_vello(renderer: &mut WgpuRenderer) {
     let options = VelloOptions {
         adapter: None,
-        cache_directory: zgui_render_wgpu::gpu::pipeline_cache::directory(),
+        cache_directory: pipeline_cache_directory(),
     };
     renderer.set_vector_factory(
         Box::new(move |gpu: &Arc<Gpu>, size| {
@@ -101,6 +102,25 @@ fn attach_vello(renderer: &mut WgpuRenderer) {
         VectorBackend::Compute,
         "vello",
     );
+}
+
+/// Returns the directory compiled vello pipelines are kept in: the one `ZGUI_CACHE_DIR` names,
+/// else `zgui/pipelines` in the user's cache directory, or `None` when there is no such directory.
+fn pipeline_cache_directory() -> Option<PathBuf> {
+    if let Some(named) = std::env::var_os("ZGUI_CACHE_DIR") {
+        return Some(PathBuf::from(named));
+    }
+    let home = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".cache")))?;
+    Some(home.join("zgui").join("pipelines"))
+}
+
+/// Reports whether this run asks for its GPU passes to be timed, with `ZGUI_GPU_TIMING` or the
+/// compositor's own variable.
+pub fn gpu_timing_requested() -> bool {
+    std::env::var_os("ZGUI_GPU_TIMING").is_some_and(|value| !value.is_empty() && value != "0")
+        || compositor_wgpu::gpu_timing_requested()
 }
 
 /// Opens this machine's device for the window `surface` is, wired as an application's window is.
