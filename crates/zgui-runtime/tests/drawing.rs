@@ -16,6 +16,7 @@ use zgui_elements::kurbo::BezPath;
 use zgui_profile::{Counter, counter};
 use zgui_runtime::App;
 use zgui_testkit_compositor::{Drawing, Instance};
+use zgui_testkit_scene::counters::Recording;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 /// One path the compositor drew for a frame, reduced to what these cases ask about.
@@ -122,6 +123,8 @@ fn mount(
 /// Runtime diagnostics keep the emitter's real choice and aggregate it through an icon wrapper.
 #[test]
 fn vector_diagnostics_name_the_route_and_the_wrapper() {
+    // The counters are shared by the process, so every window in this file measures alone.
+    let _recording = Recording::begin();
     let log: Log = Rc::default();
     let mut app = mount(CSS, &log, |cx| {
         Box::new(
@@ -180,6 +183,8 @@ fn frames(
     css: &'static str,
     view: impl FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 ) -> Vec<Frame> {
+    // The counters are shared by the process, so every window in this file measures alone.
+    let _recording = Recording::begin();
     let log: Log = Rc::default();
     let mut harness = mount(css, &log, view);
     harness.settle(4);
@@ -323,6 +328,8 @@ fn swapping_the_outlines_redraws_the_icon_and_damages_no_more_than_it() {
     /// edge leans, so it stays a mask: a filled square is drawn as a quad.
     const SQUARE: &str = "M0 0 L24 0 L23 24 L0 24 Z";
     let swapped = zgui_reactive::RwSignal::new(false);
+    // The counters are shared by the process, so every window in this file measures alone.
+    let _recording = Recording::begin();
     let log: Log = Rc::default();
     let mut app = mount(CSS, &log, move |cx| {
         Box::new(
@@ -444,6 +451,8 @@ fn a_scrolled_document_encodes_no_drawing_again() {
          .art { display: block; width: 32px; height: 32px; transform: rotate(1deg) }
          .tail { flex: none; height: 2000px }";
     // Turned, so each drawing stays a general vector item rather than a CPU layer.
+    // The counters are shared by the process, so every window in this file measures alone.
+    let _recording = Recording::begin();
     let log: Log = Rc::default();
     let mut harness = mount(PORT, &log, |cx| {
         let mut row = zgui_elements::r#box().class("row");
