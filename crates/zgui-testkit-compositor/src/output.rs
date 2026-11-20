@@ -18,6 +18,7 @@ pub struct TestOutput {
     renderer: Box<dyn Renderer>,
     client: ClientId,
     output: OutputId,
+    config: OutputConfig,
     frame: Frame,
 }
 
@@ -47,6 +48,7 @@ impl TestOutput {
             renderer,
             client,
             output,
+            config,
             frame: Frame::default(),
         })
     }
@@ -75,10 +77,28 @@ impl TestOutput {
 
     /// Builds the output's next frame and draws it, if there is one to draw.
     pub fn draw(&mut self) -> Built {
+        self.draw_aged(self.renderer.target_age())
+    }
+
+    /// Builds and draws a frame of the whole output.
+    ///
+    /// The output is configured as translucent and back, which damages the whole output.
+    pub fn redraw(&mut self) -> Built {
+        let translucent = OutputConfig {
+            opaque: !self.config.opaque,
+            ..self.config
+        };
+        self.compositor.configure_output(self.output, translucent);
+        self.compositor.configure_output(self.output, self.config);
+        self.draw_aged(BufferAge::Unknown)
+    }
+
+    /// Builds the output's next frame for a target of `age` and draws it, if there is one to draw.
+    fn draw_aged(&mut self, age: BufferAge) -> Built {
         let caps = self.renderer.capabilities();
         let request = FrameRequest {
             caps: &caps,
-            age: self.renderer.target_age(),
+            age,
             clock: FrameClock::default(),
             subpixel: None,
         };

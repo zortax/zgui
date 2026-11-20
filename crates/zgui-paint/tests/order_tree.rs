@@ -30,8 +30,9 @@ fn stack() -> Harness {
     )
 }
 
-/// The fills of the quads the last frame drew, in the order it drew them.
-fn fills(output: &Recorded) -> Vec<&'static str> {
+/// The fills of the quads a frame of the whole output draws, in the order it draws them.
+fn fills(output: &mut Recorded) -> Vec<&'static str> {
+    output.output.redraw();
     let drawing = output.output.drawing().unwrap_or_default();
     drawing
         .lines()
@@ -55,7 +56,7 @@ fn a_z_index_change_rebuilds_only_the_list_of_the_parent() {
     };
     let mut harness = stack();
     output.frame_everything(&mut harness);
-    let before = fills(&output);
+    let before = fills(&mut output);
 
     let red = harness.element("r");
     harness.edit_and_restyle(|edit| edit.add_class(red, ClassName::new("over")));
@@ -65,12 +66,12 @@ fn a_z_index_change_rebuilds_only_the_list_of_the_parent() {
 
     if !before.is_empty() {
         assert_eq!(before, ["red", "green", "blue"]);
-        assert_eq!(fills(&output), ["green", "blue", "red"]);
+        assert_eq!(fills(&mut output), ["green", "blue", "red"]);
     }
-    // The stack's three entries out and in again, and the raised square's own chunk in the node
-    // it now gets as a stacking context. Nothing of the list beside them.
-    assert_eq!(written.report.order_entries, 7, "{written:?}");
-    assert_eq!(written.commit.keys_spliced, 7, "{written:?}");
+    // The raised square's chunk out of the stack's list, its new node in at the end, and its chunk
+    // in that node. Nothing of the green and blue squares, and nothing of the list beside them.
+    assert_eq!(written.report.order_entries, 3, "{written:?}");
+    assert_eq!(written.commit.keys_spliced, 3, "{written:?}");
 }
 
 #[test]
@@ -94,7 +95,7 @@ fn a_box_that_stops_being_a_stacking_context_goes_back_into_its_parent_list() {
         output.frame_everything(&mut harness);
     }
 
-    let fills = fills(&output);
+    let fills = fills(&mut output);
     if !fills.is_empty() {
         assert_eq!(fills, ["red", "green", "blue"]);
     }

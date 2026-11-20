@@ -12,10 +12,11 @@
 //! - A child sorts by the place of other boxes, such as an absolutely positioned box ranked where
 //!   it was written. No mark covers those boxes, so the list is rebuilt on every sync.
 //!
-//! A rebuilt list is written as one splice of the part that differs, and a list that did not
-//! change writes nothing.
+//! A rebuilt list is written as one splice per run of entries that differs, and a list that did
+//! not change writes nothing.
 
 mod effect;
+mod splice;
 
 use compositor_types::{OrderEntry, OrderId, OrderNode, OutputId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -27,6 +28,8 @@ use crate::emit::group::GroupEffect;
 use crate::sync::key::{self, Part};
 use crate::sync::mirror::Mirror;
 use crate::walk::stacking;
+
+use self::splice::splice;
 
 /// The order node an output draws, and the order node of every box that has one.
 #[derive(Debug, Default)]
@@ -382,22 +385,4 @@ fn push_backdrop(backdropped: &dyn Fn(BoxKey) -> bool, key: BoxKey, entries: &mu
     if backdropped(key) {
         entries.push(OrderEntry::Chunk(key::at(key.as_u64(), 0, Part::Backdrop)));
     }
-}
-
-/// Replaces `old` with `new` as the list of `node`, with one splice of the part between their
-/// common prefix and suffix, and returns the number of entries removed and inserted.
-fn splice(tx: &mut Transaction, node: OrderId, old: &[OrderEntry], new: &[OrderEntry]) -> usize {
-    let prefix = old.iter().zip(new).take_while(|(a, b)| a == b).count();
-    let suffix = old[prefix..]
-        .iter()
-        .rev()
-        .zip(new[prefix..].iter().rev())
-        .take_while(|(a, b)| a == b)
-        .count();
-    let removed = old.len() - prefix - suffix;
-    let inserted = &new[prefix..new.len() - suffix];
-    if removed > 0 || !inserted.is_empty() {
-        tx.splice(node, prefix as u32, removed as u32, inserted);
-    }
-    removed + inserted.len()
 }
