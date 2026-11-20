@@ -44,6 +44,13 @@ impl Holds {
         }
     }
 
+    /// Ends every hold of `holder`, which is gone.
+    pub(crate) fn forget(&mut self, holder: impl Into<AnyId>) {
+        for id in self.held.remove(&holder.into()).unwrap_or_default() {
+            self.release(id);
+        }
+    }
+
     /// Notes that the chunk being recorded names `id`.
     pub(crate) fn name(&mut self, id: impl Into<AnyId>) {
         self.recording.push(id.into());

@@ -1,5 +1,7 @@
 //! Groups: the subtrees that have to be drawn into a target of their own and composited once.
 //!
+//! A group is drawn through the effect of the order node the compositor sync gives its box.
+//!
 //! # The decision, and the one part of it that is geometric
 //!
 //! A blend mode, a filter, an explicit `isolation`, a `clip-path` shape and a three-dimensional
@@ -21,10 +23,12 @@
 //! other engines and not in this one, and whether it did would depend on where a sibling happened to
 //! sit.
 
-use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+mod filter;
+
+use std::sync::Arc;
+
 use zgui_layout::{Fragment, FragmentFlags};
-use zgui_profile::{Counter, counter};
-use zgui_scene::{BackdropFilter, ClipId, ClipLink, GroupBoundary, Scene, SpatialId};
+use zgui_scene::{BackdropFilter, ClipId, ClipLink, Scene, SpatialId};
 
 use crate::lower::PaintStyle;
 
@@ -106,94 +110,61 @@ pub fn isolation(style: &PaintStyle, fragment: &Fragment) -> Isolation {
     Isolation::Target
 }
 
-/// What a group writes, in the coordinate system `space` it composites under.
-///
-/// The fragment's subtree ink is in its anchor's space, through the matrix `space` had when the
-/// fragment was composed, and the anchor's matrix puts it on the device. A place write moves
-/// `space` and composes nothing, so a device rectangle goes stale while the content drawn under
-/// `space` moves on. In the coordinates of `space` the rectangle moves with the content, as the
-/// rectangle of every primitive does.
-///
-/// The fragment's own ink and local ink are one rectangle on the two sides of the composition
-/// matrix, which gives the way back for a translation and a scale. A matrix that turns, skews or
-/// flips, or a fragment with no ink of its own, maps back through the current matrix instead, as
-/// the box around the result.
-fn local_bounds(scene: &Scene, fragment: &Fragment, space: SpatialId) -> Rect<DevicePx, Device> {
-    let device = fragment.on_device_in(fragment.subtree_ink, &scene.spatial);
-    let Some(matrix) = scene.spatial.resolve(space) else {
-        return device;
-    };
-    let [x_axis, y_axis, ..] = matrix.columns;
-    let axis_aligned = x_axis[1] == 0.0 && y_axis[0] == 0.0 && x_axis[0] > 0.0 && y_axis[1] > 0.0;
-    let (ink, local) = (
-        fragment.on_device_in(fragment.ink, &scene.spatial),
-        fragment.local_ink,
-    );
-    let fits = |device: f32, local: f32| device > 0.0 && local > 0.0;
-    if !axis_aligned
-        || !fits(ink.size.width.0, local.size.width.0)
-        || !fits(ink.size.height.0, local.size.height.0)
-    {
-        return matrix.invert().map_or(device, |inverse| {
-            zgui_geom::transformed_bounds(&inverse, device)
-        });
-    }
-    let scale_x = local.size.width.0 / ink.size.width.0;
-    let scale_y = local.size.height.0 / ink.size.height.0;
-    Rect::new(
-        Point::new(
-            DevicePx(local.origin.x.0 + (device.origin.x.0 - ink.origin.x.0) * scale_x),
-            DevicePx(local.origin.y.0 + (device.origin.y.0 - ink.origin.y.0) * scale_y),
-        ),
-        Size::new(
-            DevicePx(device.size.width.0 * scale_x),
-            DevicePx(device.size.height.0 * scale_y),
-        ),
-    )
+/// What a group composites its subtree with, in the compositor's vocabulary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupEffect {
+    /// The clip chain the composited group is cut to.
+    pub clip: ClipId,
+    /// The multiplier on the group.
+    pub opacity: f32,
+    /// How the group is composited onto what is beneath it.
+    pub blend: compositor_types::BlendMode,
+    /// The filters applied to the group's content, in sequence.
+    pub filters: Arc<[compositor_types::Filter]>,
+    /// Whether the subtree is drawn into a group whatever the other fields say.
+    pub isolate: bool,
+    /// How many filter steps the compositor has no counterpart for, and which are left out.
+    pub omitted: usize,
 }
 
-/// Opens a group for a fragment, and returns the marker to close it with.
+/// Returns the effect a fragment's subtree is drawn with under `isolation`, or `None` when it is
+/// drawn in place.
 ///
-/// The marker is returned rather than looked up again on the way out, because a group's closing
-/// marker must be the same shape as its opening one: half a pair leaves a target open, or composites
-/// one that was never begun.
-pub fn open(
-    scene: &mut Scene,
+/// A subtree folded to zero alpha is drawn with an opacity of zero, which draws nothing.
+pub fn effect(
     style: &PaintStyle,
     fragment: &Fragment,
-    clip: ClipId,
-    shaders: &dyn crate::content::shader::ShaderSource,
-    scale: f32,
-) -> GroupBoundary {
-    let transform = fragment.transform.filter(|id| *id != SpatialId::VIEWPORT);
-    let bounds = transform.map_or(fragment.subtree_ink, |space| {
-        local_bounds(scene, fragment, space)
-    });
-    let mut filters = style.group.filters.clone();
-    // After the chain the `filter` property wrote, rather than among it: the two are separate
-    // properties with no order between them, and the step nothing can look inside goes last.
-    if let Some(step) = crate::emit::shader::filter_step(
-        scene,
-        style
-            .shader
-            .as_ref()
-            .and_then(|shader| shader.filter.as_ref()),
-        shaders,
-        scale,
-    ) {
-        filters.push(step);
+    isolation: Isolation,
+) -> Option<GroupEffect> {
+    match isolation {
+        Isolation::Target => {
+            let mut filters = Vec::new();
+            let mut omitted = filter::convert(&style.group.filters, &mut filters);
+            omitted += usize::from(
+                style
+                    .shader
+                    .as_ref()
+                    .is_some_and(|shader| shader.filter.is_some()),
+            );
+            Some(GroupEffect {
+                clip: fragment.clip,
+                opacity: style.group.opacity,
+                blend: filter::blend(style.group.blend),
+                filters: filters.into(),
+                isolate: true,
+                omitted,
+            })
+        }
+        Isolation::Folded(alpha) if alpha <= 0.0 => Some(GroupEffect {
+            clip: ClipId::ROOT,
+            opacity: 0.0,
+            blend: compositor_types::BlendMode::NORMAL,
+            filters: Arc::from([]),
+            isolate: false,
+            omitted: 0,
+        }),
+        Isolation::None | Isolation::Folded(_) => None,
     }
-    let mut boundary =
-        GroupBoundary::start(bounds, style.group.opacity, style.group.blend, filters).clipped(clip);
-    boundary.transform = transform;
-    counter::bump(Counter::GroupTargets);
-    scene.push_group(boundary.clone());
-    boundary
-}
-
-/// Closes a group opened by [`open`].
-pub fn close(scene: &mut Scene, boundary: &GroupBoundary) {
-    scene.push_group(boundary.end());
 }
 
 /// Emits a fragment's `backdrop-filter`, which samples what has already been drawn beneath it.
@@ -419,33 +390,6 @@ mod tests {
             zgui_geom::Point::new(zgui_geom::DevicePx(x), zgui_geom::DevicePx(y)),
             zgui_geom::Size::new(zgui_geom::DevicePx(width), zgui_geom::DevicePx(height)),
         )
-    }
-
-    /// A slide: the fragment was composed with its system 40 pixels right, and a place write has
-    /// since moved the system back to where layout put it. The group's bounds are in the system's
-    /// own coordinates, so they do not depend on where the system is now.
-    #[test]
-    fn a_group_is_bounded_in_its_own_coordinates_whatever_its_system_moved_to() {
-        let mut fragment = fragment(false, false);
-        fragment.local_ink = rect(10.0, 10.0, 20.0, 20.0);
-        fragment.ink = rect(50.0, 10.0, 20.0, 20.0);
-        fragment.subtree_ink = rect(45.0, 5.0, 40.0, 30.0);
-        for now in [40.0, 0.0] {
-            let mut scene = zgui_scene::Scene::new();
-            let owner = zgui_scene::PropertyOwner::new(7).expect("a handle");
-            let own = zgui_scene::OwnSpace::of(
-                Some(zgui_geom::Matrix4::translation(now, 0.0, 0.0)),
-                None,
-                false,
-            );
-            let viewport = scene.spatial.viewport();
-            let space = scene.spatial.space_of(viewport, owner, own);
-            assert_eq!(
-                super::local_bounds(&scene, &fragment, space),
-                rect(5.0, 5.0, 40.0, 30.0),
-                "with the system at {now}"
-            );
-        }
     }
 
     /// A backdrop is measured in the box's own coordinate system, as the box's other rectangles

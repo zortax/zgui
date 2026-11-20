@@ -244,57 +244,6 @@ static GLASS: ShaderEffect<NoParams> = shader! {
     "#,
 };
 
-/// The window's group boundaries.
-fn groups(app: &mut Harness<Runtime>) -> Vec<zgui_scene::GroupBoundary> {
-    app.app_mut().windows_mut()[0]
-        .scene()
-        .primitives
-        .groups
-        .clone()
-}
-
-#[test]
-fn a_filter_effect_becomes_a_step_of_the_group_the_box_is_composited_through() {
-    let _ = GLASS.register();
-    let mut app = app(&sheet("--zgui-filter: style-glass"));
-    app.settle(16);
-
-    let opened: Vec<zgui_scene::GroupBoundary> = groups(&mut app)
-        .into_iter()
-        .filter(|g| g.is_start)
-        .collect();
-    assert_eq!(opened.len(), 1, "a filtered box is composited on its own");
-    assert!(
-        opened[0]
-            .filters
-            .iter()
-            .any(|filter| matches!(filter, zgui_scene::Filter::Custom { .. })),
-        "and the effect is a step of its chain: {:?}",
-        opened[0].filters
-    );
-}
-
-/// The whole reason an effect declares how far it reads: the group has to be told to read outside
-/// what it writes, or a partial redraw feeds the filter its own previous output.
-#[test]
-fn the_reach_an_effect_declared_reaches_the_group_that_runs_it() {
-    let _ = GLASS.register();
-    let mut app = app(&sheet("--zgui-filter: style-glass"));
-    app.settle(16);
-
-    let opened: Vec<zgui_scene::GroupBoundary> = groups(&mut app)
-        .into_iter()
-        .filter(|g| g.is_start)
-        .collect();
-    let boundary = &opened[0];
-    assert!(
-        boundary.source.origin.x.0 < boundary.bounds.origin.x.0,
-        "the group reads outside the rectangle it writes: {:?} vs {:?}",
-        boundary.source,
-        boundary.bounds
-    );
-}
-
 /// A backdrop filter reads what was drawn *beneath* the box rather than what the box drew, so it
 /// reaches the display list as a backdrop rather than as a step of the box's own chain.
 #[test]
@@ -335,26 +284,6 @@ fn a_backdrop_effect_reads_as_far_outside_itself_as_it_declared() {
     assert!(
         !backdrops[0].reads_only_what_it_writes(),
         "this effect declared a reach, so it reads outside its own rectangle"
-    );
-}
-
-/// The property says the effect filters, and an effect that draws a rectangle is refused.
-#[test]
-fn a_rectangle_effect_named_as_a_filter_is_refused() {
-    let _ = WASH.register();
-    let mut app = app(&sheet("--zgui-filter: style-wash"));
-    app.settle(16);
-
-    let opened: Vec<zgui_scene::GroupBoundary> = groups(&mut app)
-        .into_iter()
-        .filter(|g| g.is_start)
-        .collect();
-    assert!(
-        opened.iter().all(|g| !g
-            .filters
-            .iter()
-            .any(|f| matches!(f, zgui_scene::Filter::Custom { .. }))),
-        "nothing filters"
     );
 }
 

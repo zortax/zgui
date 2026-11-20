@@ -56,10 +56,6 @@ fn assert_all_inside(harness: &Harness, bounds: Rect<DevicePx, Device>, drawn: u
         assert_contains(bounds, external.ink(), "external quad");
         counted += 1;
     }
-    for group in &primitives.groups {
-        assert_contains(bounds, group.source, "group source");
-        counted += 1;
-    }
     for backdrop in &primitives.backdrops {
         assert_contains(bounds, backdrop.source, "backdrop source");
         counted += 1;
@@ -127,7 +123,23 @@ fn an_offset_outline_stays_inside_the_reported_ink() {
 fn a_filters_bleed_stays_inside_the_reported_ink() {
     let harness = one("background: #eee; filter: blur(6px)");
     let bounds = reported(&harness, "subject");
-    assert_all_inside(&harness, bounds, 2);
+    assert_all_inside(&harness, bounds, 1);
+    // The group's read extent, which the compositor derives from the ink of its content.
+    let content = harness.scene.primitives.quads[0].ink();
+    let [x, y, width, height] = compositor_types::read_extent(
+        [
+            content.origin.x.0,
+            content.origin.y.0,
+            content.size.width.0,
+            content.size.height.0,
+        ],
+        &[compositor_types::Filter::Blur(6.0)],
+    );
+    let read = Rect::new(
+        zgui_geom::Point::new(DevicePx(x), DevicePx(y)),
+        zgui_geom::Size::new(DevicePx(width), DevicePx(height)),
+    );
+    assert_contains(bounds, read, "group's read extent");
     let border_box = harness
         .store
         .fragment(harness.fragment_of("subject"))

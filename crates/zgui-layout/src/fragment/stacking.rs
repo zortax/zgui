@@ -54,7 +54,7 @@ pub fn establishes(store: &LayoutStore, key: BoxKey) -> bool {
 }
 
 /// [`establishes`], for a box already in hand.
-fn establishes_node(node: &BoxNode) -> bool {
+pub(crate) fn establishes_node(node: &BoxNode) -> bool {
     if node.parent.is_none() {
         // The root box's context is the one everything else is painted into.
         return true;

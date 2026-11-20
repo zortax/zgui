@@ -9,12 +9,14 @@
 //! | `scroll` | which axes reserve a scrollbar gutter |
 //! | `laid_out` | the viewport the results now held were produced for |
 //! | `roster` | the boxes whose style puts them in a class some pass has to visit |
+//! | `order_dirty` | the boxes whose children may paint in a different order |
 
 pub(crate) mod content;
 pub(crate) mod engine_styles;
 mod fragments;
 mod inline;
 pub mod laid_out;
+mod order_dirty;
 mod resolved;
 pub(crate) mod roster;
 mod scroll;
@@ -27,6 +29,9 @@ use zgui_css::ComputedStyle;
 use zgui_dom::NodeKey;
 use zgui_dom::side::{BoxKey, BoxList};
 use zgui_profile::{Counter, counter};
+use zgui_space::ChangeCoverage;
+
+pub use self::order_dirty::OrderVersion;
 
 use crate::boxtree::absolute::Declared;
 use crate::fragment::custom_properties::CustomProperties;
@@ -163,6 +168,8 @@ pub struct LayoutStore {
     /// Without this the names of deleted boxes are never given back, and the dense buffer they are
     /// the index of grows for the life of the process.
     retired_boxes: Vec<BoxKey>,
+    /// The boxes whose children may paint in a different order than they did.
+    order_dirty: order_dirty::OrderJournal,
     /// Every fragment whose filter chain reads pixels outside every rectangle it writes.
     ///
     /// Sparse: empty in almost every document, a handful of entries in one with a blurred dialog
@@ -257,6 +264,7 @@ impl LayoutStore {
             retired: Vec::new(),
             retired_paint: Vec::new(),
             retired_boxes: Vec::new(),
+            order_dirty: order_dirty::OrderJournal::new(),
             read_extents: Vec::new(),
             flattenings: 0,
             laid_out: None,
@@ -364,12 +372,23 @@ impl LayoutStore {
             .flatten()
             .and_then(|slot| self.styles.declared(slot, &node.style));
         let sorted = (!only_colours).then(|| crate::fragment::stacking::sort_inputs(node));
+        let established = crate::fragment::stacking::establishes_node(node);
         node.style = style.clone();
+        let establishes = crate::fragment::stacking::establishes_node(node);
+        let parent = node.parent;
         if let Some(sorted) = sorted
             && crate::fragment::stacking::sort_inputs(node) != sorted
-            && let Some(parent) = node.parent
+            && let Some(parent) = parent
         {
             self.forget_layout_order(parent);
+        }
+        // A box that starts or stops establishing a stacking context changes how its parent
+        // lists it.
+        if establishes != established
+            && let Some(parent) = parent
+        {
+            self.order_dirty.mark(parent);
+            self.order_dirty.mark(key);
         }
         let slot = self.styles.intern(style);
         let none = Some(CustomProperties::NONE);
@@ -640,16 +659,40 @@ impl LayoutStore {
         if let Some(parent) = self.boxes.get(slot(key))?.parent {
             self.forget_layout_order(parent);
         }
+        self.order_dirty.mark(key);
         let node = self.boxes.get_mut(slot(key))?;
         node.layout_order.clear();
         Some(node)
     }
 
-    /// Clears the memo of whether `key`'s children paint in layout order.
+    /// Clears the memo of whether `key`'s children paint in layout order, and marks their order
+    /// as possibly changed.
     fn forget_layout_order(&mut self, key: BoxKey) {
+        self.order_dirty.mark(key);
         if let Some(node) = self.boxes.get_mut(slot(key)) {
             node.layout_order.clear();
         }
+    }
+
+    /// Returns the current version of the order journal.
+    pub fn order_version(&self) -> OrderVersion {
+        self.order_dirty.version()
+    }
+
+    /// Appends every box marked order-dirty since `version` into `marked`.
+    ///
+    /// A box is marked when its child list, a child's sort key or whether a child establishes a
+    /// stacking context may have changed, and when it starts or stops establishing one itself. A
+    /// box marked more than once may be appended more than once.
+    ///
+    /// [`ChangeCoverage::All`] means the caller must refresh every box instead. It is returned
+    /// for a version of another store, and for a version older than the history the store keeps.
+    pub fn order_dirty_since(
+        &self,
+        version: OrderVersion,
+        marked: &mut Vec<BoxKey>,
+    ) -> ChangeCoverage {
+        self.order_dirty.since(version, marked)
     }
 
     /// The record for one box, which must exist.

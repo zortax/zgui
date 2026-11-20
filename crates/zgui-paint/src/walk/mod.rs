@@ -12,9 +12,7 @@
 //! rows near the pointer; and a fragment whose own cull rectangle misses it is skipped while its
 //! children are still visited, because a child can paint outside its parent.
 //!
-//! Two things are never skipped. A group's markers are matched pairs — dropping one leaves a target
-//! open, or composites one that was never begun — and neither is anything when the damage says the
-//! whole surface is being redrawn.
+//! Nothing is skipped when the damage says the whole surface is being redrawn.
 
 pub mod corners;
 pub mod decorate;
@@ -34,7 +32,7 @@ use zgui_layout::fragment::diff::pixels;
 use zgui_layout::{FragKey, Fragment, FragmentKind, LayoutStore};
 use zgui_profile::{Counter, counter};
 use zgui_render::RenderCapabilities;
-use zgui_scene::{GroupBoundary, PropertyOwner, Scene};
+use zgui_scene::{PropertyOwner, Scene};
 
 use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, VectorSource};
 use crate::emit::group::{self, Isolation};
@@ -296,7 +294,6 @@ pub struct Painter {
 /// The containers one emit walk fills, empty between walks.
 #[derive(Debug, Default)]
 struct WalkScratch {
-    open: Vec<(BoxKey, GroupBoundary)>,
     bands: Vec<BoxKey>,
     alpha: Vec<f32>,
     opaque: Vec<bool>,
@@ -311,7 +308,6 @@ struct WalkScratch {
 impl WalkScratch {
     /// Empties every container and keeps its allocation.
     fn clear(&mut self) {
-        self.open.clear();
         self.bands.clear();
         self.alpha.clear();
         self.opaque.clear();
@@ -395,7 +391,6 @@ impl Painter {
                 ..PaintReport::default()
             },
             root,
-            open: scratch.open,
             bands: scratch.bands,
             alpha: scratch.alpha,
             opaque: scratch.opaque,
@@ -409,7 +404,6 @@ impl Painter {
         stacking::walk(input.store, root, &mut pass);
         let Pass {
             mut report,
-            open,
             bands,
             alpha,
             opaque,
@@ -422,7 +416,6 @@ impl Painter {
             ..
         } = pass;
         self.scratch = WalkScratch {
-            open,
             bands,
             alpha,
             opaque,
@@ -539,8 +532,6 @@ struct Pass<'a, 'b> {
     ///
     /// [`Visitor::descends`]: stacking::Visitor::descends
     root: BoxKey,
-    /// The groups currently open, innermost last, with the box that opened each.
-    open: Vec<(BoxKey, GroupBoundary)>,
     /// The boxes whose order band is open, innermost last.
     ///
     /// A box that is going to be moved by writing its coordinate system is ordered against the
@@ -1261,6 +1252,12 @@ impl stacking::Visitor for Pass<'_, '_> {
         let isolation = own.map_or(Isolation::None, |fragment| {
             group::isolation(&style, fragment)
         });
+        if let Some(sync) = &mut self.painter.sync {
+            sync.isolate(
+                key,
+                own.and_then(|fragment| group::effect(&style, fragment, isolation)),
+            );
+        }
         // A subtree at zero alpha composites nothing. Every fragment under it is already refused
         // one at a time by `order::vanished`, so what this saves is the walk itself: the ink
         // query, the lowered style and its copy, the animation lookup and the sorted child list,
@@ -1295,15 +1292,7 @@ impl stacking::Visitor for Pass<'_, '_> {
                 self.input.scale,
             );
             if isolation.needs_target() {
-                let boundary = group::open(
-                    self.scene,
-                    &style,
-                    fragment,
-                    fragment.clip,
-                    self.input.shaders,
-                    self.input.scale,
-                );
-                self.open.push((key, boundary));
+                counter::bump(Counter::GroupTargets);
                 self.report.groups += 1;
             }
         }
@@ -1365,10 +1354,6 @@ impl stacking::Visitor for Pass<'_, '_> {
         self.opaque.pop();
         self.decorations.leave();
         self.text_fills.leave();
-        if self.open.last().is_some_and(|(opener, _)| *opener == key) {
-            let (_, boundary) = self.open.pop().expect("just checked");
-            group::close(self.scene, &boundary);
-        }
         if self.bands.last() == Some(&key) {
             self.bands.pop();
             self.scene.close_place_band();

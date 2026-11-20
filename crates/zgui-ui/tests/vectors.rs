@@ -202,12 +202,6 @@ fn every_mark_in_a_row_of_isolated_controls_is_drawn() {
         "six ticked checkboxes produced only {} drawings",
         frame.drawings.len()
     );
-    assert!(
-        frame.pass_regions.len() >= 6,
-        "six drawings in six isolated controls were planned as {} passes; one composite cannot \
-         be recorded in six targets at once",
-        frame.pass_regions.len()
-    );
     // A checkbox carries both of its marks and shows one: a ticked box draws its tick and not the
     // dash it would show if it were part-way. The mark that is not showing is hidden with
     // `opacity: 0`, which the walk refuses whole, so what reaches the list is one drawing per

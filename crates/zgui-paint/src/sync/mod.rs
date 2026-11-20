@@ -6,8 +6,10 @@
 //! - A fragment encoded this frame is recorded as the chunk of its key, replacing it.
 //! - A replayed fragment that moved has its chunk's offset written.
 //! - A retired fragment's chunk is removed.
-//! - The tables' changes become node and slot writes, and a changed set of chunks rewrites the
-//!   order tree.
+//! - The tables' changes become node and slot writes.
+//! - A changed child list, set of fragments or group effect rewrites the order nodes of the boxes
+//!   concerned.
+//! - Nodes and slots that no chunk and no node names any more are removed.
 //!
 //! Fragments outside the frame's damage are not visited, and their chunks stay as they are.
 
@@ -57,15 +59,15 @@ pub struct SyncReport {
     pub offsets: usize,
     /// Chunks removed.
     pub removed: usize,
-    /// Node and slot writes from the tables' changes.
+    /// Node and slot writes from the tables' changes, and group effects written.
     pub table_writes: usize,
     /// Order entries replaced.
     pub order_entries: usize,
-    /// Primitives of kinds the chunks do not record yet.
+    /// Primitives of kinds the chunks do not record yet, and filter steps groups leave out.
     pub omitted_primitives: usize,
     /// Glyph runs at a variation instance, recorded at the default instance.
     pub omitted_instances: usize,
-    /// Nodes and slots removed because no chunk and no node referred to them any more.
+    /// Nodes and slots removed because no chunk and no node names them any more.
     pub released: usize,
 }
 
@@ -93,8 +95,8 @@ impl CompositorSync {
         self.transaction = Some(transaction);
     }
 
-    /// Writes what the walk changed in `scene`'s tables, rewrites the order tree if the set of
-    /// chunks changed, and returns the transaction.
+    /// Writes what the walk changed in `scene`'s tables and in the order of `store`, removes the
+    /// nodes and slots nothing names any more, and returns the transaction.
     ///
     /// Returns `None` when no transaction is open.
     pub fn close(&mut self, store: &LayoutStore, scene: &mut Scene) -> Option<Transaction> {
@@ -102,7 +104,14 @@ impl CompositorSync {
         self.release_forgotten(scene);
         // The walk's replays rewrite the slots of the clips they carry along.
         self.report.table_writes += self.mirror.sync(&mut transaction, scene);
-        self.report.order_entries += self.order.sync(&mut transaction, store);
+        let order = self.order.sync(&mut order::Context {
+            tx: &mut transaction,
+            store,
+            mirror: &mut self.mirror,
+            scene,
+        });
+        self.report.order_entries += order.entries;
+        self.report.table_writes += order.effects;
         self.report.released += self.mirror.settle(&mut transaction, scene);
         Some(transaction)
     }
@@ -114,7 +123,9 @@ impl CompositorSync {
 
     /// Forgets every chunk, node and slot, for a compositor that dropped them.
     ///
-    /// The open transaction is dropped, and the next transaction mirrors everything again.
+    /// The open transaction is dropped, and the next transaction mirrors everything again. The
+    /// zgui table holds of the forgotten mirror are given back with the next scene the sync is
+    /// handed.
     pub fn reset(&mut self) {
         let mut held = self.mirror.held();
         if let Some(earlier) = self.forgotten.take() {
@@ -142,8 +153,9 @@ impl CompositorSync {
     /// Makes the next write of the offset of `scroll` adopt the compositor's scrolling up to
     /// `serial`.
     ///
-    /// The offset is then written with `acknowledge_scroll` at the next `close`, which keeps the
-    /// compositor's motion going, instead of `scroll_to`, which ends it.
+    /// The offset then goes out with `acknowledge_scroll`, which keeps the compositor's motion
+    /// going, instead of `scroll_to`, which ends it. An offset that did not change is
+    /// acknowledged at the value last written.
     pub fn adopt_scroll(&mut self, scroll: ScrollId, serial: u64) {
         self.mirror.spaces.adopt(scroll, serial);
     }
@@ -153,6 +165,14 @@ impl CompositorSync {
         if let Some(held) = self.forgotten.take() {
             held.release(scene);
         }
+    }
+
+    /// Notes the group effect the box `key` is drawn with this frame, `None` for none.
+    pub(crate) fn isolate(&mut self, key: BoxKey, effect: Option<crate::emit::group::GroupEffect>) {
+        if let Some(effect) = &effect {
+            self.report.omitted_primitives += effect.omitted;
+        }
+        self.order.isolate(key, effect);
     }
 
     /// Reports whether the fragment `key` is recorded.
@@ -188,7 +208,7 @@ impl CompositorSync {
             self.report.removed += 1;
         }
         if self.owners.insert(key, fragment.key) != Some(fragment.key) {
-            self.order.invalidate();
+            self.order.fragments_changed(fragment.box_);
         }
         let omitted = lower::record(transaction, &mut self.mirror, scene, key, chunk);
         self.mirror.recorded(key);
@@ -231,7 +251,9 @@ impl CompositorSync {
             {
                 self.mirror.chunk_removed(chunk.key);
                 self.report.removed += 1;
-                self.order.invalidate();
+                if let Some(owner) = BoxKey::from_u64(chunk.key.owner) {
+                    self.order.fragments_changed(owner);
+                }
             }
         }
     }

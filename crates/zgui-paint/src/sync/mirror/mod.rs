@@ -79,6 +79,21 @@ impl Mirror {
         self.clips.ensure(tx, &mut self.holds, sources, id)
     }
 
+    /// Returns the node of the clip chain `id`, for a node that holds it.
+    pub(crate) fn held_clip(
+        &mut self,
+        tx: &mut Transaction,
+        scene: &mut Scene,
+        id: zgui_scene::ClipId,
+    ) -> Option<compositor_types::ClipId> {
+        let mut sources = Sources {
+            table: &mut scene.clips,
+            spaces: &mut self.spaces,
+            tree: &scene.spatial,
+        };
+        self.clips.mirror(tx, &mut self.holds, &mut sources, id)
+    }
+
     /// Returns the slot and kind of the paint `id`, for the chunk being recorded.
     ///
     /// An image paint, which the compositor has no slot for, is `None`.

@@ -35,26 +35,10 @@ use zgui_view::{Anchor, BuildCx, IntoView, View};
 /// One quad of a frame, reduced to what these cases ask about.
 #[derive(Clone, Copy, Debug)]
 struct Quad {
-    /// Where it falls in the painting order.
-    ///
-    /// The order is the whole of the opacity case. A primitive that is *in* the display list is
-    /// not thereby drawn where it belongs: a group's closing marker is a primitive too, and a quad
-    /// that sorts ahead of one is drawn into a target that has already finished and clipped away
-    /// by that target's bounds. An assertion over the array alone cannot see that, and passes.
-    order: u32,
     /// Its solid fill, when it has one.
     fill: Option<Color>,
     /// Its rectangle, as `[x, y, width, height]`.
     bounds: [f32; 4],
-}
-
-/// One group marker of a frame.
-#[derive(Clone, Copy, Debug)]
-struct Marker {
-    /// Where it falls in the painting order.
-    order: u32,
-    /// Whether it opens the group rather than closing it.
-    is_start: bool,
 }
 
 /// One decoration line of a frame.
@@ -75,8 +59,6 @@ struct Frame {
     quads: Vec<Quad>,
     /// Its decoration lines.
     lines: Vec<Line>,
-    /// The group markers it pushed.
-    markers: Vec<Marker>,
     /// The rectangle each outer shadow is cast from, as `[x, y, width, height]`.
     shadows: Vec<[f32; 4]>,
 }
@@ -114,7 +96,6 @@ impl Renderer for Recorder {
                 .quads
                 .iter()
                 .map(|quad| Quad {
-                    order: quad.order,
                     fill: quad.fill.id().and_then(|id| match scene.paints.get(id) {
                         Some(zgui_scene::Paint::Solid(color)) => Some(*color),
                         _ => None,
@@ -137,15 +118,6 @@ impl Renderer for Recorder {
                 .shadows
                 .iter()
                 .map(|shadow| shadow.element_bounds)
-                .collect(),
-            markers: scene
-                .primitives
-                .groups
-                .iter()
-                .map(|group| Marker {
-                    order: group.order,
-                    is_start: group.is_start,
-                })
                 .collect(),
         });
         FrameOutcome::Presented(zgui_render::FrameStats {
@@ -252,30 +224,12 @@ fn a_translucent_box_after_a_filtered_sibling_is_still_drawn() {
     let drawn = frames(OPACITY_CSS, opacity_row);
     let first = &drawn[0];
 
-    let opened = first
-        .markers
-        .iter()
-        .find(|marker| marker.is_start)
-        .copied()
-        .expect("the filtered sibling opened no target, so this case cannot see its own defect");
-    let closed = first
-        .markers
-        .iter()
-        .find(|marker| !marker.is_start)
-        .copied()
-        .expect("a group that is opened is closed");
-
     let opaque = first
         .quads
         .iter()
         .find(|quad| quad.fill.is_some_and(|fill| fill.alpha() >= 1.0))
         .copied()
         .expect("the filtered swatch is missing, so there is nothing to compare against");
-    assert!(
-        opaque.order > opened.order && opaque.order < closed.order,
-        "the control is wrong: the filtered swatch must be drawn *inside* its own target, or the \
-         assertion below is about nothing — swatch {opaque:?} in {opened:?}..{closed:?}"
-    );
 
     let faded = first
         .quads
@@ -294,12 +248,6 @@ fn a_translucent_box_after_a_filtered_sibling_is_still_drawn() {
     assert!(
         faded.bounds[0] > opaque.bounds[0],
         "it is drawn where the layout put it, beside the sibling rather than under it"
-    );
-    assert!(
-        faded.order > closed.order,
-        "the translucent box sorts inside a group that has already closed, so it is drawn into \
-         that group's target and clipped away by its bounds: box {faded:?}, the group closing at \
-         {closed:?}"
     );
 }
 

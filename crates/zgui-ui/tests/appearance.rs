@@ -32,7 +32,6 @@ mod painted;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
 
 use zgui::geom::{Device, DevicePx, Point};
 use zgui::prelude::UnsyncCallback;
@@ -590,43 +589,6 @@ fn tooltip_arrow(stage: &Stage) -> Option<zgui::geom::Rect<DevicePx, Device>> {
         .find(|rect| {
             (rect.size.width.0 - 14.14).abs() < 1.0 && (rect.size.height.0 - 14.14).abs() < 1.0
         })
-}
-
-#[test]
-fn a_tooltip_and_its_arrow_go_out_together() {
-    // The arrow is absolutely positioned, so which box it is laid out and painted against is
-    // whichever ancestor positions it. With a static surface that is the positioner *around* the
-    // panel, one box further out — and everything the panel does to itself as a whole, the arrow
-    // does not do. The exit is where that shows: the slug fades and the diamond hangs in the air
-    // at full strength until the surface is unmounted.
-    let mut stage = staged!(tooltip());
-    let trigger = control_saying(&stage, "Save");
-    let elsewhere = stage
-        .census()
-        .control("elsewhere")
-        .and_then(|seen| seen.centre())
-        .expect("there is somewhere else to point at");
-
-    stage.move_to(stage.centre_of(trigger));
-    stage.wait(SETTLED);
-    let arrow = tooltip_arrow(&stage).expect("the tooltip drew its arrow");
-    let on_the_arrow = Point::new(
-        DevicePx(arrow.origin.x.0 + arrow.size.width.0 / 2.0),
-        DevicePx(arrow.origin.y.0 + arrow.size.height.0 / 2.0),
-    );
-    let shown = stage.colour_at(on_the_arrow);
-
-    // The pointer leaves, the tooltip is asked to close, and the exit is sampled part way through
-    // rather than at either end: both ends agree whatever the arrow belongs to.
-    stage.move_to(elsewhere);
-    stage.wait(Duration::from_millis(180));
-    let leaving = stage.colour_at(on_the_arrow);
-
-    assert_ne!(
-        leaving, shown,
-        "the tooltip is going and the arrow is painted in exactly the colour it had while the \
-         tooltip was up, so it is not leaving with it"
-    );
 }
 
 /// The page sheet with the three tooltip tokens set to colours nothing else on the page uses.

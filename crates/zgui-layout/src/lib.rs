@@ -100,7 +100,7 @@ pub use crate::node::kind::{BoxKind, FormattingContext, PseudoKind};
 pub use crate::style::DeviceStyle;
 pub use crate::text::Paragraphs;
 pub use crate::tree::LayoutTree;
-pub use crate::tree::store::{LayoutStore, ResolvedLayout};
+pub use crate::tree::store::{LayoutStore, OrderVersion, ResolvedLayout};
 
 /// A generation-checked name for one box of the box tree.
 ///
