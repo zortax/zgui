@@ -127,48 +127,12 @@ impl ContentCache {
         self.atlas.set_soft_bytes(bytes);
     }
 
-    /// Rasterises on `pool` the glyphs the next emit walk is expected to ask for, and returns how
-    /// many it rasterised.
+    /// Borrows everything one emit walk needs into a source of glyphs, of replaced content and of
+    /// vector content.
     ///
-    /// Only a cache that holds no glyph does this, once: on the first frame with text of a window,
-    /// and again after [`ContentCache::clear`]. Every other frame asks for few new glyphs, and
-    /// reading every line to find them would cost more than the walk saves. A prediction of fewer
-    /// than 128 misses also stays serial.
-    ///
-    /// The walk takes the answers in place of calls to `raster` and allocates every tile where it
-    /// would have without them, so the atlas holds the same tiles at the same places. Answers the
-    /// walk does not ask for are dropped at [`ContentCache::end_frame`].
-    pub fn prefetch_glyphs(
-        &mut self,
-        store: &LayoutStore,
-        shaped: &dyn ShapedGlyphs,
-        raster: &dyn GlyphRaster,
-        pool: &zgui_layout::tree::parallel::LayoutPool,
-        prediction: crate::content::glyphs::GlyphPrediction,
-    ) -> usize {
-        if store.active_paragraph_count() == 0 || !self.glyphs.take_prefetch_turn() {
-            return 0;
-        }
-        let keys = crate::content::glyphs::prefetch::predict(store, shaped, prediction);
-        if keys.len() < crate::content::glyphs::prefetch::MIN_MISSES {
-            return 0;
-        }
-        let answers = crate::content::glyphs::prefetch::rasterise(keys, raster, pool);
-        let count = answers.len();
-        self.glyphs.prefetch(answers);
-        count
-    }
-
-    /// Borrows everything one emit walk needs into a source of glyphs and of replaced content.
-    ///
-    /// The borrow is the point: the atlas is written during the walk — content nothing has drawn
-    /// before is placed the moment it is reached — while the walk itself only reads. Holding the
-    /// mutation behind this view is what keeps the emit walk a pure reader of the document.
-    ///
-    /// **Nothing here is a device.** Rasterising, allocating a tile and growing the atlas are all
-    /// decided against this window's own state; the texels and the textures they go into are queued
-    /// and performed by [`ContentCache::flush`], which is the only call in the whole of this crate
-    /// that a renderer has to be reachable from.
+    /// The vector caches and the layer rasters are written during the walk while the walk itself
+    /// only reads, so the mutation stays behind this view. Nothing here is a device: texels reach
+    /// the compositor through the frame's transaction.
     ///
     /// ```
     /// use zgui_layout::tree::store::LayoutStore;
@@ -200,12 +164,7 @@ impl ContentCache {
         }
     }
 
-    /// Writes every tile this frame allocated.
-    ///
-    /// Uploads are queued while the walk runs and leave in one batch, so this has to be called
-    /// after emitting and before drawing: a sprite reading a tile whose texels were never written
-    /// samples whatever the texture held before, which is another tile's pixels rather than
-    /// nothing.
+    /// Writes every tile the atlas allocated since the last flush.
     ///
     /// # Errors
     ///
@@ -263,7 +222,7 @@ impl ContentCache {
     }
 }
 
-/// One frame's view of a [`ContentCache`]: where its glyphs and its images are.
+/// One frame's view of a [`ContentCache`]: its shaped lines, its images and its vector caches.
 pub struct FrameContent<'a> {
     /// The fragment tree, for the way back from a paragraph's name to its shaping key.
     store: &'a LayoutStore,
@@ -279,14 +238,7 @@ pub struct FrameContent<'a> {
     writing: RefCell<Rasterising<'a>>,
 }
 
-/// The things a frame writes to while it places tiles.
-///
-/// Borrowed together because they are used together: an eviction from the atlas is forgotten by
-/// every cache that named a tile in it.
-///
-/// There is no device here and there cannot be one. Everything the atlas is asked for during a walk
-/// — allocation, eviction bookkeeping, the queued texels, the queued texture — is arithmetic and
-/// bytes; what a device is asked to do about it is decided afterwards, by whoever has one.
+/// The atlas a frame holds tiles of, and the keys handed out during the walk.
 pub(crate) struct Rasterising<'a> {
     /// The tiles.
     pub(crate) atlas: &'a mut Atlas,

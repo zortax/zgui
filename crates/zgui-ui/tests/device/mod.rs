@@ -1,11 +1,11 @@
 //! A graphics device under the gallery, drawing to a texture instead of to a window.
 //!
 //! A fixture draws through one of two pipelines, picked with a [`Pipeline`]. The compositor draws
-//! boxes and text onto its reference renderer, see [`compositor`]. zgui's own renderer draws the
-//! display list's vector content and images, see [`recording`], with the same builder, format
-//! rules and rasteriser selection an opened window went through. Only the destination differs,
-//! because a window's surface belongs to the platform's compositor the instant it is presented and
-//! cannot be read back.
+//! everything zgui records onto its reference renderer, see [`compositor`]. zgui's own renderer
+//! draws what the scene still holds, external surfaces, built by [`factory`] with the same
+//! builder, format rules and rasteriser selection an opened window goes through. Only the
+//! destination differs, because a window's surface belongs to the platform's compositor the
+//! instant it is presented and cannot be read back.
 
 #![allow(
     dead_code,
@@ -159,7 +159,7 @@ pub fn recording(log: &Log) -> std::rc::Rc<dyn zgui::runtime::FrameProbe> {
 pub enum Pipeline {
     /// The compositor, which draws boxes and text.
     Compositor,
-    /// zgui's own renderer, which draws the display list's vector content, images and groups.
+    /// zgui's own renderer, which draws what the scene still holds: external surfaces.
     Scene,
 }
 

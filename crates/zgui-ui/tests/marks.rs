@@ -58,8 +58,7 @@ const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-fam
 /// this size. The defect this measures is five pixels.
 const SLACK: f32 = 1.5;
 
-/// Opens `view` on zgui's own renderer, which draws the marks, or reports the run skipped on a
-/// machine with no graphics device.
+/// Opens `view`, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
         match Stage::open_on(Pipeline::Compositor, SHEET, $view) {

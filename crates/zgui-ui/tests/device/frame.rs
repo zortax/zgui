@@ -69,8 +69,8 @@ pub struct Glyph {
 
 /// What one of the application's frames produced.
 ///
-/// A frame of zgui's own renderer is read off its display list, which holds vector content, images
-/// and groups but no boxes or text. A frame of the compositor is read off the compositor's
+/// A frame of zgui's own renderer is read off its display list, which holds external surfaces and
+/// no boxes, text or vector content. A frame of the compositor is read off the compositor's
 /// transcript, and its pass counts are zero.
 pub struct Frame {
     /// Whether the frame drew nothing at all.
