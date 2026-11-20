@@ -1,6 +1,7 @@
 //! Paint sources mirrored as paint slots.
 
 use compositor_types::{Paint, PaintId, PaintKind, Transaction};
+use rustc_hash::FxHashMap;
 use zgui_scene::{ChangeCoverage, PaintTable, TableVersion};
 
 use crate::sync::mirror::color;
@@ -12,8 +13,8 @@ use crate::sync::mirror::holds::Holds;
 /// paint.
 #[derive(Debug, Default)]
 pub(crate) struct Paints {
-    slots: Vec<Option<Option<(PaintId, PaintKind)>>>,
-    written: Vec<Option<Paint>>,
+    entries: Vec<Option<Entry>>,
+    slots: FxHashMap<PaintId, u32>,
     version: Option<TableVersion>,
     changed: Vec<zgui_scene::PaintId>,
 }
@@ -53,9 +54,13 @@ impl Paints {
         if self.entries.len() <= index {
             self.entries.resize(index + 1, None);
         }
-        self.slots[index] = Some(mirrored);
-        self.written[index] = paint;
-        mirrored
+        let kind = paint.kind();
+        self.entries[index] = Some(Entry {
+            slot,
+            written: paint,
+        });
+        self.slots.insert(slot, id.0);
+        Some((slot, kind))
     }
 
     /// Rewrites the mirrored paints whose value the table changed since the last call.

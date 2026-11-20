@@ -112,7 +112,16 @@ fn an_offset_outline_stays_inside_the_reported_ink() {
 fn a_filters_bleed_stays_inside_the_reported_ink() {
     let mut harness = one("background: #eee; filter: blur(6px)");
     let bounds = reported(&harness, "subject");
-    assert_all_inside(&mut harness, bounds, 2);
+    assert_all_inside(&mut harness, bounds, 1);
+    // The group's read extent, which the compositor derives from the ink of its content.
+    let content = harness.redraw().quads()[0].bounds();
+    let [x, y, width, height] =
+        compositor_types::read_extent(content, &[compositor_types::Filter::Blur(6.0)]);
+    let read = Rect::new(
+        zgui_geom::Point::new(DevicePx(x), DevicePx(y)),
+        zgui_geom::Size::new(DevicePx(width), DevicePx(height)),
+    );
+    assert_contains(bounds, read, "group's read extent");
     let border_box = harness
         .store
         .fragment(harness.fragment_of("subject"))

@@ -90,7 +90,8 @@ fn an_opacity_over_a_box_alone_folds_into_its_paint() {
     };
 
     assert_eq!(output.output.counters().frame.groups, 0, "{drawing}");
-    assert_holds(&drawing, &["premul[0, 0, 0.5, 0.5]"]);
+    // The colour is carried in the reference at eight bits, so 0.5 is 128 / 255.
+    assert_holds(&drawing, &["premul[0, 0, 0.502, 0.502]"]);
 }
 
 #[test]
@@ -168,8 +169,6 @@ fn a_group_cut_by_a_rounded_frame_holds_the_frame_clip_until_both_go() {
 
     assert_eq!(ungrouped.report.released, 0, "{ungrouped:?}");
     assert!(removed.report.removed > 0, "{removed:?}");
-    assert_eq!(
-        removed.report.released, 2,
-        "the frame's clip and the blue paint: {removed:?}"
-    );
+    // The blue is carried in the quads' paint references, so it held no slot.
+    assert_eq!(removed.report.released, 1, "the frame's clip: {removed:?}");
 }

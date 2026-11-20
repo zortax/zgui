@@ -656,6 +656,9 @@ impl Pass<'_, '_> {
                 continue;
             };
             let mut ink = self.where_drawn(fragment, fragment.subtree_ink);
+            if let Some(drawn) = self.retained(*frag) {
+                ink = ink.union(drawn);
+            }
             if let Some(marks) = crate::damage::marks::extent(
                 fragment,
                 self.input.highlights,
@@ -670,6 +673,18 @@ impl Pass<'_, '_> {
             });
         }
         held
+    }
+
+    /// Where the compositor still draws the chunk of `frag`, when one is attached and has one.
+    ///
+    /// A fragment that moved out of the damage is visited while the damage reaches the place its
+    /// chunk is drawn at, so the chunk follows it there.
+    fn retained(&self, frag: FragKey) -> Option<Rect<DevicePx, Device>> {
+        let sync = self.painter.sync.as_ref()?;
+        if !sync.knows(frag) {
+            return None;
+        }
+        self.painter.cache.drawn(frag)
     }
 
     /// What `key`'s element is currently animating, if anything.
@@ -1036,7 +1051,9 @@ impl Pass<'_, '_> {
         ) {
             cull = cull.union(marks);
         }
-        if !self.reaches(cull) {
+        let reached =
+            self.reaches(cull) || self.retained(frag).is_some_and(|drawn| self.reaches(drawn));
+        if !reached {
             return;
         }
         let clip = fragment.clip;
@@ -1195,6 +1212,7 @@ impl Pass<'_, '_> {
                     Encoding {
                         chunk,
                         items,
+                        drawn: cull,
                         resources: &self.named,
                         // A deferred drawing drew nothing this frame, which a record would replay.
                         complete: self.input.resources.refusals() == refusals

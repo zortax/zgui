@@ -1,8 +1,10 @@
 //! What boxes with animated colours leave in the paint table when they come and go.
 //!
 //! A box whose background animates draws it through a paint slot named after the box. The box
-//! that is unmounted leaves its slot behind, and the runtime sweeps the table on a stride of
-//! frames. A box that stays mounted keeps the paints it draws through every sweep.
+//! that is unmounted leaves its slot behind with no holds, and a list that mounts new animated
+//! boxes for ever would grow the table for ever. The runtime sweeps the table on a stride of
+//! frames, so the table stays at what the last few hundred frames drew. A box that stays mounted
+//! keeps the paints it draws through every sweep.
 //!
 //! The counters are a process-wide block, so this is one test in a target of its own.
 
@@ -128,16 +130,17 @@ fn opened(
 }
 
 #[test]
-fn animated_boxes_that_come_and_go_draw_only_live_paints() {
+fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
     let generation = zgui::reactive::RwSignal::new_local(0_usize);
     let mut harness = opened(generation);
     if !COUNTERS_ENABLED {
         return;
     }
 
-    // The sweep runs on a stride, so the count rises and falls; the peak of one stretch of the
-    // churn is what is read.
+    // The sweep runs on a stride, so the count rises and falls; the peaks of two stretches of
+    // the churn are what is compared.
     let mut earlier = 0;
+    let mut later = 0;
     for next in 1..=GENERATIONS {
         generation.set(next);
         for _ in 0..FRAMES_PER_GENERATION {
@@ -147,6 +150,8 @@ fn animated_boxes_that_come_and_go_draw_only_live_paints() {
         let live = counter::get(Counter::PaintEntriesLive);
         if next > GENERATIONS / 4 && next <= GENERATIONS / 2 {
             earlier = earlier.max(live);
+        } else if next > GENERATIONS * 3 / 4 {
+            later = later.max(live);
         }
     }
     assert!(
@@ -171,6 +176,15 @@ fn animated_boxes_that_come_and_go_draw_only_live_paints() {
             );
         }
     }
+    let mounted = (GENERATIONS * BOXES) as u64;
+    assert!(
+        later < mounted / 4,
+        "{later} live paint entries after {mounted} animated boxes came and went"
+    );
+    assert!(
+        later <= earlier + earlier / 10,
+        "the paint table grew from a peak of {earlier} to one of {later} entries as the churn went on"
+    );
 }
 
 /// Returns what the window of `harness` shows.

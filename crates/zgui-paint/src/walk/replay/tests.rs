@@ -71,6 +71,7 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -115,6 +116,7 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -146,6 +148,7 @@ fn a_fragment_moved_twice_replays_with_the_whole_distance() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -186,6 +189,7 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -215,6 +219,7 @@ fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -247,6 +252,7 @@ fn a_fragment_whose_runs_lose_or_regain_subpixel_coverage_is_encoded_again() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -274,6 +280,7 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -310,6 +317,7 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -341,6 +349,7 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -385,6 +394,7 @@ fn a_moved_drawing_replays_its_vector_item() {
         Encoding {
             chunk,
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -461,6 +471,7 @@ fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
         Encoding {
             chunk,
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -519,6 +530,7 @@ fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
         Encoding {
             chunk,
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -555,6 +567,7 @@ fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -582,6 +595,7 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -615,6 +629,7 @@ fn a_retired_fragment_loses_its_record() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -656,6 +671,7 @@ fn encode_one_quad(
         Encoding {
             chunk,
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -752,6 +768,7 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -799,6 +816,7 @@ fn an_encoding_that_could_not_place_everything_is_not_recorded() {
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: false,
             layer: Default::default(),
@@ -831,6 +849,7 @@ fn a_record_is_given_up_when_a_later_encoding_falls_short() {
             Encoding {
                 chunk: zgui_scene::ChunkPrims::default(),
                 items: 0,
+                drawn: Rect::default(),
                 resources: &[],
                 complete,
                 layer: Default::default(),
@@ -851,6 +870,7 @@ fn layered(cache: &mut PaintCache, scene: &mut Scene, fragment: &Fragment, layer
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
             items: 0,
+            drawn: Rect::default(),
             resources: &[],
             complete: true,
             layer,

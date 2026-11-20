@@ -88,6 +88,8 @@ pub(crate) struct Context<'a> {
     pub(crate) store: &'a LayoutStore,
     pub(crate) mirror: &'a mut Mirror,
     pub(crate) scene: &'a mut Scene,
+    /// Whether a box has an outline chunk.
+    pub(crate) outlined: &'a dyn Fn(BoxKey) -> bool,
 }
 
 impl Order {
@@ -238,11 +240,13 @@ impl Order {
                 entries.push(OrderEntry::Node(self.ensure_node(context, child)));
             } else {
                 push_chunks(store, child, &mut entries);
+                push_outline(context.outlined, child, &mut entries);
                 if self.nodes.contains_key(&child) {
                     self.scratch.orphans.push(child);
                 }
             }
         }
+        push_outline(context.outlined, key, &mut entries);
 
         let Some(node) = self.nodes.get_mut(&key) else {
             return 0;
@@ -339,6 +343,13 @@ fn push_chunks(store: &LayoutStore, key: BoxKey, entries: &mut Vec<OrderEntry>) 
     entries.extend(
         (0..count).map(|ordinal| OrderEntry::Chunk(key::at(key.as_u64(), ordinal, Part::Body))),
     );
+}
+
+/// Appends the outline chunk of the box `key`, when `outlined` says it has one.
+fn push_outline(outlined: &dyn Fn(BoxKey) -> bool, key: BoxKey, entries: &mut Vec<OrderEntry>) {
+    if outlined(key) {
+        entries.push(OrderEntry::Chunk(key::at(key.as_u64(), 0, Part::Outline)));
+    }
 }
 
 /// Replaces `old` with `new` as the list of `node`, with one splice of the part between their

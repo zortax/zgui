@@ -185,6 +185,10 @@ pub struct Record {
     pub prims: Arc<ChunkPrims>,
     /// How many items the fragment recorded into its compositor chunk.
     pub items: usize,
+    /// The device rectangle the walk culled the fragment against when it was encoded.
+    pub drawn: Rect<DevicePx, Device>,
+    /// How far the replays since the encoding moved the fragment.
+    pub moved: Size<DevicePx, Device>,
     /// Which encoding produced [`Record::prims`], distinct per encoding for the life of the cache.
     ///
     /// A consumer that mirrors chunks elsewhere — a persistent GPU copy — keys its residence on
@@ -274,6 +278,8 @@ pub struct Encoding<'a> {
     pub chunk: ChunkPrims,
     /// How many items the fragment recorded into its compositor chunk.
     pub items: usize,
+    /// The device rectangle the walk culled the fragment against.
+    pub drawn: Rect<DevicePx, Device>,
     /// The rasters the encoding named, in the order it named them and with repeats.
     pub resources: &'a [AtlasKey],
     /// Whether everything the fragment meant to draw was drawn.
@@ -595,6 +601,13 @@ impl PaintCache {
             .map(|record| record.painted.anim)
     }
 
+    /// Where `fragment`'s record was last drawn: the rectangle it was culled against when it was
+    /// encoded, moved as its replays moved it.
+    pub fn drawn(&self, fragment: FragKey) -> Option<Rect<DevicePx, Device>> {
+        let record = self.records.get(&fragment)?;
+        Some(record.drawn.translate(record.moved))
+    }
+
     /// The number of the tiled source `fragment`'s record draws, if it draws one.
     pub fn tiled(&self, fragment: FragKey) -> Option<u64> {
         self.records.get(&fragment).and_then(|record| record.tiled)
@@ -628,6 +641,7 @@ impl PaintCache {
         let Encoding {
             chunk,
             items,
+            drawn,
             resources,
             complete,
             layer,
@@ -696,6 +710,8 @@ impl PaintCache {
             Record {
                 prims,
                 items,
+                drawn,
+                moved: Size::default(),
                 revision: self.next_revision,
                 kind: fragment.kind,
                 painted,
@@ -727,6 +743,10 @@ impl PaintCache {
         self.seen.push(fragment.key);
         self.selections += 1;
         if let Some(record) = self.records.get_mut(&fragment.key) {
+            record.moved = Size::new(
+                DevicePx(fragment.border_box.origin.x.0 - record.border_box.origin.x.0),
+                DevicePx(fragment.border_box.origin.y.0 - record.border_box.origin.y.0),
+            );
             // The border box is deliberately NOT updated to the fragment's position. The chunk's
             // bytes are at the position the fragment was *encoded* at, so the offset a later
             // replay applies must be measured from there — an offset measured from the last

@@ -644,6 +644,9 @@ pub(crate) struct Output {
     pub(crate) commit: CommitCounters,
     /// What the last frame drew, `None` when the compositor drew nothing.
     pub(crate) drawing: Option<Drawing>,
+    /// Whether the painter's sync records into this session, which is so when the harness
+    /// attached it.
+    owns_sync: bool,
 }
 
 impl Output {
@@ -655,13 +658,15 @@ impl Output {
             sync: SyncReport::default(),
             commit: CommitCounters::default(),
             drawing: None,
+            owns_sync: false,
         }
     }
 }
 
 /// Emits a frame through `painter` inside one transaction, commits it and draws a frame.
 ///
-/// The fragments `retired` names are retired first, as a frame does.
+/// The fragments `retired` names are retired first, as a frame does. A painter whose sync a test
+/// attached itself only emits, into the transaction the test opened.
 fn emit(
     painter: &mut Painter,
     output: &mut Output,
@@ -669,10 +674,15 @@ fn emit(
     input: &PaintInput<'_>,
     scene: &mut Scene,
 ) -> zgui_paint::PaintReport {
+    if painter.compositor().is_some() && !output.owns_sync {
+        painter.retire(retired, scene, &zgui_paint::walk::replay::hold::NoResources);
+        return painter.emit(input, scene);
+    }
     // A painter with no sync has recorded nothing, so the compositor starts it with nothing.
     if painter.compositor().is_none() {
         output.session.restart_client();
         painter.attach_compositor(CompositorSync::new(output.session.output()));
+        output.owns_sync = true;
     }
     let transaction = output.session.transaction();
     let sync = painter.compositor().expect("attached above");

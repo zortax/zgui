@@ -6,7 +6,9 @@ use support::compositor::Recorded;
 use support::{Element, Harness};
 use zgui_interned::ClassName;
 
-/// Two boxes painted red, the second in a clipping, transformed frame.
+/// Two boxes painted with a red ramp, the second in a clipping, transformed frame.
+///
+/// Ramps, because a ramp is a paint slot and a solid colour is carried in its reference.
 fn boxes() -> Harness {
     Harness::sized(
         Element::new("root").children(vec![
@@ -17,8 +19,8 @@ fn boxes() -> Harness {
          frame { display: block; width: 100px; height: 100px; overflow: hidden;
                  border-radius: 8px; transform: translateX(10px) }
          a, b { display: block; width: 40px; height: 40px }
-         .red { background: red }
-         .blue { background: blue }",
+         .red { background: linear-gradient(red, maroon) }
+         .blue { background: linear-gradient(blue, navy) }",
         200.0,
         200.0,
     )

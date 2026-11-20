@@ -55,19 +55,14 @@ fn repaint_all(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runti
     harness.settle(8);
 }
 
-/// Everything the display list says, in an order that does not depend on how it was produced.
+/// Everything the window shows, in an order that does not depend on how it was produced.
 fn transcript(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<String> {
-    let scene = harness.app().windows()[0].scene();
-    let mut lines: Vec<String> = Vec::new();
-    for quad in &scene.primitives.quads {
-        lines.push(format!("quad {quad:?}"));
-    }
-    for sprite in &scene.primitives.mono_sprites {
-        lines.push(format!("sprite {sprite:?}"));
-    }
-    for group in &scene.primitives.groups {
-        lines.push(format!("group {group:?}"));
-    }
+    let drawing = support::drawing(&harness.app().windows()[0]);
+    let mut lines: Vec<String> = drawing
+        .instances()
+        .iter()
+        .map(|instance| instance.text().to_owned())
+        .collect();
     lines.sort();
     lines
 }

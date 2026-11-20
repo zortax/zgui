@@ -8,8 +8,10 @@
 //! - A box's outline is a chunk of its own, recorded when it changed.
 //! - A retired fragment's chunks are removed at the end of the frame, unless a fragment rebuilt
 //!   in its place recorded the same keys.
-//! - The tables' changes become node and slot writes, and a changed set of chunks rewrites the
-//!   order tree.
+//! - The tables' changes become node and slot writes.
+//! - A changed child list, set of fragments or group effect rewrites the order nodes of the boxes
+//!   concerned.
+//! - Nodes and slots that no chunk and no node names any more are removed.
 //!
 //! Fragments outside the frame's damage are not visited, and their chunks stay as they are.
 
@@ -22,11 +24,12 @@ mod resolve;
 
 pub(crate) use self::resolve::Resolver;
 
-use compositor_types::{ChunkKey, OutputId, Transaction};
+use compositor_types::{ChunkKey, OutputId, ScrollId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Size};
 use zgui_layout::{FragKey, Fragment, LayoutStore};
+use zgui_scene::spatial::PropertyOwner;
 use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId};
 
 use crate::emit::record::{Items, Recorder};
@@ -117,25 +120,38 @@ impl CompositorSync {
     /// Finishes the frame's transaction and returns it.
     ///
     /// The chunks of fragments retired this frame that no fragment recorded again are removed.
-    /// Then the walk's changes to `scene`'s tables are written, and the order tree is rewritten
-    /// if the set of chunks changed.
+    /// Then the walk's changes to `scene`'s tables and to the order of `store` are written, and
+    /// the nodes and slots nothing names any more are removed.
     ///
     /// Returns `None` when no transaction is open.
     pub fn close(&mut self, store: &LayoutStore, scene: &mut Scene) -> Option<Transaction> {
         let mut transaction = self.transaction.take()?;
+        self.release_forgotten(scene);
         for key in self.retired.drain() {
             self.owners.remove(&key);
             self.outlines.remove(&key);
             transaction.remove_chunk(key);
+            self.mirror.chunk_removed(key);
             self.report.removed += 1;
-            self.order.invalidate();
+            if let Some(owner) = BoxKey::from_u64(key.owner) {
+                self.order.fragments_changed(owner);
+            }
         }
         // The walk's replays rewrite the slots of the clips they carry along.
         self.report.table_writes += self.mirror.sync(&mut transaction, scene);
         let outlines = &self.outlines;
         let outlined =
             |owner: BoxKey| outlines.contains_key(&key::at(owner.as_u64(), 0, Part::Outline));
-        self.report.order_entries += self.order.sync(&mut transaction, store, &outlined);
+        let order = self.order.sync(&mut order::Context {
+            tx: &mut transaction,
+            store,
+            mirror: &mut self.mirror,
+            scene,
+            outlined: &outlined,
+        });
+        self.report.order_entries += order.entries;
+        self.report.table_writes += order.effects;
+        self.report.released += self.mirror.settle(&mut transaction, scene);
         Some(transaction)
     }
 
@@ -236,14 +252,14 @@ impl CompositorSync {
             && previous.key != key
             && remove(transaction, &mut self.owners, previous.key, fragment.key)
         {
+            self.mirror.chunk_removed(previous.key);
             self.report.removed += 1;
-            self.order.invalidate();
         }
         // A fragment rebuilt in its box's place records the key its predecessor held, and the
         // compositor compares the two recordings.
         let replaces = self.retired.remove(&key);
         if self.owners.insert(key, fragment.key) != Some(fragment.key) && !replaces {
-            self.order.invalidate();
+            self.order.fragments_changed(fragment.box_);
         }
         let items = if lower::holds_quads(prims) {
             let resolver = Resolver::new(transaction, &mut self.mirror);
@@ -253,6 +269,7 @@ impl CompositorSync {
             items
         };
         flush::record(transaction, &mut self.mirror, scene, key, items);
+        self.mirror.recorded(key);
         self.report.recorded += 1;
         self.report.omitted_primitives += prims.len() - prims.quads.len();
         self.report.omitted_instances += items.instanced;
@@ -289,8 +306,9 @@ impl CompositorSync {
                 self.owners.remove(&key);
                 self.outlined.remove(&fragment.key);
                 transaction.remove_chunk(key);
+                self.mirror.chunk_removed(key);
                 self.report.removed += 1;
-                self.order.invalidate();
+                self.order.fragments_changed(fragment.box_);
             }
             return;
         }
@@ -298,12 +316,15 @@ impl CompositorSync {
             && held.fragment == fragment.key
             && held.items == *items
         {
+            // The ids the emission named are the ones the chunk holds.
+            self.mirror.recorded(key);
             return;
         }
         if !replaces && !self.outlines.contains_key(&key) {
-            self.order.invalidate();
+            self.order.fragments_changed(fragment.box_);
         }
         flush::record(transaction, &mut self.mirror, scene, key, items);
+        self.mirror.recorded(key);
         self.report.recorded += 1;
         self.owners.insert(key, fragment.key);
         self.outlined.insert(fragment.key, key);
@@ -330,8 +351,9 @@ impl CompositorSync {
             self.outlined.remove(&outline.fragment);
             self.retired.remove(&key);
             transaction.remove_chunk(key);
+            self.mirror.chunk_removed(key);
             self.report.removed += 1;
-            self.order.invalidate();
+            self.order.fragments_changed(owner);
         }
     }
 
@@ -391,6 +413,7 @@ pub fn record_chunk(
         clip,
     ));
     flush::record(transaction, &mut mirror, scene, key, &items);
+    mirror.recorded(key);
 }
 
 /// Removes the chunk `key` if `fragment` is what it is recorded for, and reports whether it was.

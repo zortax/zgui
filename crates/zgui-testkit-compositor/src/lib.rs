@@ -26,6 +26,7 @@
 mod device;
 mod drawing;
 mod null;
+mod output;
 mod screen;
 mod select;
 mod session;
@@ -40,6 +41,7 @@ use std::sync::Arc;
 pub use crate::device::{Composed, Device, Pixels};
 pub use crate::drawing::{Drawing, Instance};
 pub use crate::null::NullRenderer;
+pub use crate::output::TestOutput;
 pub use crate::screen::{Screen, Shown, drawing_of};
 pub use crate::select::{CompositorKind, RendererKind};
 pub use crate::session::{FONTS, Session, with_fake_text};

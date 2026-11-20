@@ -119,3 +119,54 @@ fn a_fragment_rebuilt_in_its_boxs_place_records_over_its_chunk() {
         "the new pieces are recorded over the old ones' chunks: {commit:?}"
     );
 }
+
+#[test]
+fn a_row_scrolled_out_of_its_port_does_not_stay_drawn_where_it_was() {
+    // A port under a transform of its own scrolls by moving its rows. The first row's new place
+    // is clipped away, so the damage never reaches it there; its chunk still draws at the old
+    // place, which the damage does reach.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("moved").children(vec![
+            Element::new("port").children(vec![
+                Element::new("first").classes(&["row"]),
+                Element::new("second").classes(&["row"]),
+                Element::new("third").classes(&["row"]),
+            ]),
+        ])]),
+        "root { display: block; width: 200px; height: 200px }
+         moved { display: block; transform: translate(0px, 0px); overflow: hidden }
+         port { display: block; width: 100px; height: 40px; overflow-y: scroll }
+         .row { display: block; height: 20px; background: rgb(0, 0, 255) }
+         first.row { background: rgb(255, 0, 0) }",
+        200.0,
+        200.0,
+    );
+    harness.paint_everything();
+    let red = |harness: &mut Harness| {
+        harness
+            .redraw()
+            .quads()
+            .iter()
+            .filter(|quad| quad.color("fill") == Some([1.0, 0.0, 0.0, 1.0]))
+            .count()
+    };
+    assert_eq!(red(&mut harness), 1, "the control: the first row is drawn");
+
+    harness.clear_damage();
+    harness.scroll_to("port", 0.0, 30.0);
+    harness.paint();
+
+    let drawing = harness.redraw();
+    for quad in drawing.quads() {
+        if quad.color("fill") == Some([1.0, 0.0, 0.0, 1.0]) {
+            let [_, y, _, height] = quad.bounds();
+            let moved = quad
+                .field("paint_origin")
+                .is_some_and(|origin| origin != "[0, 0]");
+            assert!(
+                moved || y + height <= 0.0,
+                "the first row is still drawn where it was: {drawing}"
+            );
+        }
+    }
+}
