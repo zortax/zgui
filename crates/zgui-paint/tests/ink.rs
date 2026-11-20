@@ -11,9 +11,10 @@
 
 mod support;
 
+use support::chunk::Lone;
 use support::{Element, Harness};
-use zgui_geom::{Device, DevicePx, Rect};
-use zgui_paint::{PlacedGlyph, cull_rect};
+use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+use zgui_paint::cull_rect;
 
 /// The rectangle every primitive of `name`'s fragment has to sit inside.
 fn reported(harness: &Harness, name: &str) -> Rect<DevicePx, Device> {
@@ -24,34 +25,20 @@ fn reported(harness: &Harness, name: &str) -> Rect<DevicePx, Device> {
         .union(cull_rect(&harness.store, fragment, harness.scale))
 }
 
-/// Fails if any primitive in the scene reaches outside `bounds`.
-fn assert_all_inside(harness: &Harness, bounds: Rect<DevicePx, Device>, drawn: usize) {
-    let primitives = &harness.scene.primitives;
+/// Fails if anything the compositor or the scene draws reaches outside `bounds`.
+fn assert_all_inside(harness: &mut Harness, bounds: Rect<DevicePx, Device>, drawn: usize) {
+    let drawing = harness.redraw();
     let mut counted = 0;
-    for quad in &primitives.quads {
-        assert_contains(bounds, quad.ink(), "quad");
+    for instance in drawing.instances() {
+        let [x, y, width, height] = instance.bounds();
+        let ink = Rect::new(
+            Point::new(DevicePx(x), DevicePx(y)),
+            Size::new(DevicePx(width), DevicePx(height)),
+        );
+        assert_contains(bounds, ink, instance.kind());
         counted += 1;
     }
-    for shadow in &primitives.shadows {
-        assert_contains(bounds, shadow.ink(), "shadow");
-        counted += 1;
-    }
-    for decoration in &primitives.decorations {
-        assert_contains(bounds, decoration.ink(), "decoration");
-        counted += 1;
-    }
-    for sprite in &primitives.mono_sprites {
-        assert_contains(bounds, sprite.ink(), "mono sprite");
-        counted += 1;
-    }
-    for sprite in &primitives.subpixel_sprites {
-        assert_contains(bounds, sprite.ink(), "subpixel sprite");
-        counted += 1;
-    }
-    for sprite in &primitives.color_sprites {
-        assert_contains(bounds, sprite.ink(), "colour sprite");
-        counted += 1;
-    }
+    let primitives = &harness.scene.primitives;
     for external in &primitives.externals {
         assert_contains(bounds, external.ink(), "external quad");
         counted += 1;
@@ -93,15 +80,16 @@ fn one(css: &str) -> Harness {
 
 #[test]
 fn a_spread_and_blurred_shadow_stays_inside_the_reported_ink() {
-    let harness = one("background: #eee; box-shadow: 8px 12px 10px 6px #000");
-    assert_all_inside(&harness, reported(&harness, "subject"), 2);
+    let mut harness = one("background: #eee; box-shadow: 8px 12px 10px 6px #000");
+    let bounds = reported(&harness, "subject");
+    assert_all_inside(&mut harness, bounds, 2);
 }
 
 #[test]
 fn an_inset_shadow_stays_inside_the_box_that_casts_it() {
-    let harness = one("background: #eee; box-shadow: inset 8px 12px 10px 6px #000");
+    let mut harness = one("background: #eee; box-shadow: inset 8px 12px 10px 6px #000");
     let bounds = reported(&harness, "subject");
-    assert_all_inside(&harness, bounds, 2);
+    assert_all_inside(&mut harness, bounds, 2);
     let border_box = harness
         .store
         .fragment(harness.fragment_of("subject"))
@@ -115,31 +103,16 @@ fn an_inset_shadow_stays_inside_the_box_that_casts_it() {
 
 #[test]
 fn an_offset_outline_stays_inside_the_reported_ink() {
-    let harness = one("background: #eee; outline: 4px solid #06f; outline-offset: 9px");
-    assert_all_inside(&harness, reported(&harness, "subject"), 2);
+    let mut harness = one("background: #eee; outline: 4px solid #06f; outline-offset: 9px");
+    let bounds = reported(&harness, "subject");
+    assert_all_inside(&mut harness, bounds, 2);
 }
 
 #[test]
 fn a_filters_bleed_stays_inside_the_reported_ink() {
-    let harness = one("background: #eee; filter: blur(6px)");
+    let mut harness = one("background: #eee; filter: blur(6px)");
     let bounds = reported(&harness, "subject");
-    assert_all_inside(&harness, bounds, 1);
-    // The group's read extent, which the compositor derives from the ink of its content.
-    let content = harness.scene.primitives.quads[0].ink();
-    let [x, y, width, height] = compositor_types::read_extent(
-        [
-            content.origin.x.0,
-            content.origin.y.0,
-            content.size.width.0,
-            content.size.height.0,
-        ],
-        &[compositor_types::Filter::Blur(6.0)],
-    );
-    let read = Rect::new(
-        zgui_geom::Point::new(DevicePx(x), DevicePx(y)),
-        zgui_geom::Size::new(DevicePx(width), DevicePx(height)),
-    );
-    assert_contains(bounds, read, "group's read extent");
+    assert_all_inside(&mut harness, bounds, 2);
     let border_box = harness
         .store
         .fragment(harness.fragment_of("subject"))
@@ -153,9 +126,9 @@ fn a_filters_bleed_stays_inside_the_reported_ink() {
 
 #[test]
 fn a_backdrop_filters_source_stays_inside_the_reported_ink() {
-    let harness = one("backdrop-filter: blur(6px)");
+    let mut harness = one("backdrop-filter: blur(6px)");
     let bounds = reported(&harness, "subject");
-    assert_all_inside(&harness, bounds, 1);
+    assert_all_inside(&mut harness, bounds, 1);
     let border_box = harness
         .store
         .fragment(harness.fragment_of("subject"))
@@ -210,31 +183,40 @@ fn a_wavy_underline_is_given_a_band_and_stays_inside_the_line_box() {
     };
 
     let mut scene = Scene::new();
-    scene.begin_frame(zgui_geom::Size::new(256, 256));
     let style = zgui_paint::lower::lower(&StyleDraft::initial().build(), 1.0);
-    let pushed = text::emit(
-        &mut scene,
-        &zgui_paint::NoGlyphs,
-        ParagraphId(0),
-        0,
-        &style,
-        text::Inherited {
-            text_fill: None,
-            decorations: core::slice::from_ref(&wavy),
-            inline: &[],
-        },
-        placement,
-    );
+    let mut pushed = 0;
+    let mut lone = Lone::record(&mut scene, (SpatialId::VIEWPORT, ClipId::ROOT), |rec| {
+        pushed = text::emit(
+            rec,
+            &zgui_paint::NoGlyphs,
+            ParagraphId(0),
+            0,
+            &style,
+            text::Inherited {
+                text_fill: None,
+                decorations: core::slice::from_ref(&wavy),
+                inline: &[],
+            },
+            placement,
+        );
+    });
 
     assert_eq!(
         pushed, 3,
         "three lines were declared and the emitter drew {pushed}"
     );
-    for decoration in &scene.primitives.decorations {
-        let ink = decoration.ink();
+    let drawing = lone.redraw();
+    let lines: Vec<_> = drawing.of_kind("line").collect();
+    assert_eq!(lines.len(), 3, "{drawing}");
+    for decoration in lines {
+        let [x, y, width, height] = decoration.bounds();
+        let ink = GeomRect::new(
+            Point::new(DevicePx(x), DevicePx(y)),
+            Size::new(DevicePx(width), DevicePx(height)),
+        );
         assert_contains(line, ink, "decoration");
         assert!(
-            ink.size.height.0 > wavy.thickness,
+            height > wavy.thickness,
             "a wave squeezed into its own stroke is a straight line: {ink:?}"
         );
     }
@@ -246,54 +228,44 @@ fn a_text_shadow_is_drawn_as_a_second_pass_over_the_same_glyphs_at_its_own_offse
     // shadow's colour — and it has to be drawn *before* the glyph, or it covers what it shadows.
     // This runs the emitter over glyphs of its own, because that is the only way to see where the
     // copy landed rather than where a rectangle would have gone.
-    use zgui_atlas::{AtlasTile, TextureId, TextureKind, TileId};
     use zgui_color::Color;
     use zgui_css::StyleDraft;
     use zgui_geom::{Point, Rect as GeomRect, Size};
     use zgui_layout::fragment::ParagraphId;
-    use zgui_paint::emit::text::{self, GlyphRun, GlyphSource, TextPlacement};
+    use zgui_paint::emit::text::{self, GlyphSource, TextPlacement};
     use zgui_paint::lower::ShadowSpec;
     use zgui_scene::{ClipId, Scene, SpatialId};
-    use zgui_text::GlyphFormat;
 
-    /// One glyph at (10, 10), eight by sixteen.
-    struct OneGlyph(PlacedGlyph);
+    /// One glyph ten pixels in, sixteen pixels down to its baseline.
+    struct OneGlyph;
+
+    const GLYPHS: [zgui_text::ShapedGlyph; 1] = [zgui_text::ShapedGlyph {
+        glyph: 5,
+        x: 10.0,
+        y: 16.0,
+    }];
 
     impl GlyphSource for OneGlyph {
         fn visit_line(
             &self,
             _paragraph: ParagraphId,
             _line: u16,
-            _request: zgui_paint::GlyphRequest,
-            visit: &mut dyn FnMut(GlyphRun<'_>),
+            visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
         ) {
-            let glyphs = core::slice::from_ref(&self.0);
-            visit(GlyphRun {
-                content: zgui_paint::RunContent::Tiles(glyphs),
-                format: GlyphFormat::Mono,
-                paint: zgui_scene::PaintSlot(0),
+            visit(zgui_text::ShapedRun {
+                face: zgui_text::FaceId(0),
+                size: 16.0,
+                instance: zgui_text::VariationInstance::DEFAULT,
                 synthetic_bold: 0.0,
+                synthetic_slant: 0.0,
+                has_color: false,
+                brush: zgui_scene::PaintSlot(0),
+                glyphs: &GLYPHS,
                 text_start: 0,
-                shaped: None,
             });
         }
     }
 
-    let placed = PlacedGlyph {
-        resource: AtlasTile {
-            texture: TextureId {
-                kind: TextureKind::Mono,
-                index: 0,
-            },
-            tile: TileId(0),
-            bounds: GeomRect::new(Point::new(0, 0), Size::new(8, 16)),
-        }
-        .into(),
-        bounds: GeomRect::new(
-            Point::new(DevicePx(10.0), DevicePx(10.0)),
-            Size::new(DevicePx(8.0), DevicePx(16.0)),
-        ),
-    };
     let mut style = zgui_paint::lower(&StyleDraft::initial().build(), 1.0);
     style.text_shadows.push(ShadowSpec {
         offset_x: 3.0,
@@ -305,51 +277,50 @@ fn a_text_shadow_is_drawn_as_a_second_pass_over_the_same_glyphs_at_its_own_offse
     });
 
     let mut scene = Scene::new();
-    scene.begin_frame(zgui_geom::Size::new(64, 64));
-    let pushed = text::emit(
-        &mut scene,
-        &OneGlyph(placed),
-        ParagraphId(0),
-        0,
-        &style,
-        text::Inherited::default(),
-        TextPlacement {
-            line: GeomRect::new(
-                Point::new(DevicePx(0.0), DevicePx(0.0)),
-                Size::new(DevicePx(64.0), DevicePx(32.0)),
-            ),
-            clip: ClipId::ROOT,
-            transform: SpatialId::VIEWPORT,
-            opaque_target: true,
-            subpixel_capable: true,
-            scale: 1.0,
-            ellipsis: None,
-        },
-    );
+    let mut pushed = 0;
+    let mut lone = Lone::record(&mut scene, (SpatialId::VIEWPORT, ClipId::ROOT), |rec| {
+        pushed = text::emit(
+            rec,
+            &OneGlyph,
+            ParagraphId(0),
+            0,
+            &style,
+            text::Inherited::default(),
+            TextPlacement {
+                line: GeomRect::new(
+                    Point::new(DevicePx(0.0), DevicePx(0.0)),
+                    Size::new(DevicePx(64.0), DevicePx(32.0)),
+                ),
+                clip: ClipId::ROOT,
+                transform: SpatialId::VIEWPORT,
+                opaque_target: true,
+                subpixel_capable: true,
+                scale: 1.0,
+                ellipsis: None,
+            },
+        );
+    });
     assert_eq!(pushed, 2, "one shadow copy and one glyph");
 
-    let sprites = &scene.primitives.mono_sprites;
-    assert_eq!(sprites.len(), 2, "both copies are the same glyph");
-    let shadow = sprites[0];
-    let glyph = sprites[1];
-    assert!(
-        shadow.order < glyph.order,
-        "the shadow at {} sorts over the glyph at {}",
-        shadow.order,
-        glyph.order
+    let drawing = lone.redraw();
+    let [shadow, glyph] = drawing.glyphs()[..] else {
+        panic!("both copies are the same glyph: {drawing}");
+    };
+    let (shadow_at, glyph_at) = (shadow.bounds(), glyph.bounds());
+    assert_eq!(
+        [shadow_at[0] - glyph_at[0], shadow_at[1] - glyph_at[1]],
+        [3.0, 4.0],
+        "the copy moved by the offset written, and is drawn first: {drawing}"
     );
     assert_eq!(
-        shadow.ink().origin,
-        Point::new(DevicePx(13.0), DevicePx(14.0)),
-        "the copy moved by the offset written"
-    );
-    assert_eq!(
-        shadow.ink().size,
-        glyph.ink().size,
+        shadow_at[2..],
+        glyph_at[2..],
         "a shadow copy is the same glyph"
     );
+    assert_eq!(shadow.color("paint"), Some([1.0, 0.0, 0.0, 1.0]));
     assert_ne!(
-        shadow.color, glyph.color,
+        shadow.color("paint"),
+        glyph.color("paint"),
         "the copy is tinted with the shadow's colour rather than the text's"
     );
 }

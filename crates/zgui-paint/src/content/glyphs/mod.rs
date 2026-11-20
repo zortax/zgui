@@ -16,12 +16,6 @@
 //! rasterised again every frame for ever. Both are the difference between a repaint costing what
 //! its glyphs cost and costing what the whole document's glyphs cost.
 //!
-//! # The runs this module does not tile
-//!
-//! A run the atlas cannot serve — see [`RasterPath`](zgui_text::RasterPath) — is placed as curves
-//! instead, by [`curve`], and nothing about it reaches the atlas or this cache. That is not a
-//! fallback for a failure: the two paths are chosen between before either is asked for anything.
-//!
 //! # What a missing glyph does
 //!
 //! Nothing, silently, and that is deliberate at two of the three points it can happen. A face that
@@ -38,12 +32,10 @@
 //! [`Encoding::complete`](crate::walk::replay::Encoding::complete).
 
 pub(crate) mod cache;
-pub mod curve;
 pub(crate) mod place;
 pub mod prefetch;
 
 pub(crate) use crate::content::glyphs::cache::{GlyphCache, Rasterising};
-pub use crate::content::glyphs::curve::OutlineGlyph;
 pub(crate) use crate::content::glyphs::place::place;
 pub use crate::content::glyphs::prefetch::GlyphPrediction;
 

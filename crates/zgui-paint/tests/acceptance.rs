@@ -301,18 +301,19 @@ fn an_outline_is_drawn_over_the_boxs_own_descendants() {
     );
     harness.paint_everything();
 
-    let quads = &harness.scene.primitives.quads;
-    let outlines: Vec<_> = quads.iter().filter(|quad| quad.border[0] == 2.0).collect();
-    assert_eq!(outlines.len(), 1, "one outline, from {} quads", quads.len());
-    let outline_order = outlines[0].order;
+    let drawing = harness.redraw();
+    let quads = drawing.quads();
+    let outline = quads
+        .iter()
+        .position(|quad| quad.field("border") == Some("[2, 2, 2, 2]"))
+        .unwrap_or_else(|| panic!("one outline: {drawing}"));
     let label = quads
         .iter()
-        .find(|quad| quad.bounds[3] == 20.0)
+        .position(|quad| quad.bounds()[3] == 20.0)
         .expect("the label's own quad");
     assert!(
-        outline_order > label.order,
-        "the outline at {outline_order} sorts under the label at {}",
-        label.order
+        outline > label,
+        "the outline is drawn under the label: {drawing}"
     );
 }
 
@@ -325,16 +326,14 @@ fn nothing_outside_the_damage_reaches_the_display_list() {
         300.0,
         2000.0,
     );
-    harness.paint_everything();
-    let everything = harness.scene.primitives.quads.len();
+    let everything = harness.paint_everything().emitted.len();
 
     harness.clear_damage();
     harness.damage.absorb(rect(0, 0, 300, 40));
-    harness.paint();
-    let damaged = harness.scene.primitives.quads.len();
+    let damaged = harness.paint().emitted.len();
     assert!(
         damaged * 4 < everything,
-        "a two-row damage emitted {damaged} of {everything} quads"
+        "a two-row damage emitted {damaged} of {everything} fragments"
     );
     assert!(
         damaged > 0,
@@ -556,21 +555,22 @@ fn emit_and_hit_agree_on_the_same_matrix() {
         .fragment(frag)
         .expect("a live fragment")
         .border_box;
-    // The name the *emitter* wrote onto what it pushed, not the one the fragment carries: that they
-    // are the same name is half of what is under test.
-    let slot = harness
-        .scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| quad.transform != zgui_scene::SpatialId::VIEWPORT.index())
-        .expect("the card is drawn under a coordinate system of its own")
-        .transform;
+    // The space the compositor draws the card in, which is the mirror of the name the fragment
+    // carries.
     let space = harness
-        .scene
-        .spatial
-        .at(slot)
-        .expect("the slot a primitive names is a live coordinate system");
+        .store
+        .fragment(frag)
+        .and_then(|fragment| fragment.transform)
+        .expect("the card is drawn under a coordinate system of its own");
+    let quad_space = |harness: &mut Harness| {
+        let drawing = harness.redraw();
+        drawing
+            .quads()
+            .iter()
+            .find_map(|quad| quad.field("space").map(str::to_owned))
+            .unwrap_or_else(|| panic!("the card's quad is moved: {drawing}"))
+    };
+    assert_eq!(quad_space(&mut harness), "translate[100, 0]");
 
     let answers = |harness: &Harness, x: f32| {
         harness
@@ -612,8 +612,15 @@ fn emit_and_hit_agree_on_the_same_matrix() {
         },
     );
     assert_eq!(moved, space, "a tick moves a matrix and keeps the name");
+    harness.clear_damage();
+    harness.paint();
 
     assert_eq!(drawn(&harness).origin.x.0, 200.0);
+    assert_eq!(
+        quad_space(&mut harness),
+        "translate[200, 0]",
+        "the compositor draws through the rewritten matrix"
+    );
     assert!(answers(&harness, 220.0), "the hit follows the matrix");
     assert!(
         !answers(&harness, 120.0),

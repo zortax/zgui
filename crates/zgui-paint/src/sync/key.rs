@@ -8,6 +8,8 @@ use zgui_layout::{FragKey, Fragment, LayoutStore};
 pub(crate) enum Part {
     /// Everything but the outline.
     Body = 0,
+    /// The outline, drawn after the box's descendants.
+    Outline = 1,
 }
 
 /// Returns the key of `part` of `fragment`.

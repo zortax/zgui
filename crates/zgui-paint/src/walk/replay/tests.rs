@@ -70,6 +70,7 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -113,6 +114,7 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -143,6 +145,7 @@ fn a_fragment_moved_twice_replays_with_the_whole_distance() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -182,6 +185,7 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -210,6 +214,7 @@ fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -241,6 +246,7 @@ fn a_fragment_whose_runs_lose_or_regain_subpixel_coverage_is_encoded_again() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -267,6 +273,7 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -302,6 +309,7 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -332,6 +340,7 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -375,6 +384,7 @@ fn a_moved_drawing_replays_its_vector_item() {
         painted(0),
         Encoding {
             chunk,
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -389,7 +399,7 @@ fn a_moved_drawing_replays_its_vector_item() {
         Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
         "a still drawing replays"
     );
-    let (source, chunk) = cache.chunk(mark.key).expect("recorded");
+    let (source, chunk, _) = cache.chunk(mark.key).expect("recorded");
     let range = scene.replay_chunk(chunk, Size::default(), source);
     assert_eq!(range.len(), 1, "and the replay re-emits the vector item");
     assert_eq!(scene.primitives.vectors.len(), 1);
@@ -403,7 +413,7 @@ fn a_moved_drawing_replays_its_vector_item() {
         Reuse::Replay(by),
         "a moved drawing replays at the offset"
     );
-    let (source, chunk) = cache.chunk(moved.key).expect("recorded");
+    let (source, chunk, _) = cache.chunk(moved.key).expect("recorded");
     scene.replay_chunk(chunk, by, source);
     let replayed = &scene.primitives.vectors[0];
     assert!(
@@ -450,6 +460,7 @@ fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
         inside,
         Encoding {
             chunk,
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -468,7 +479,7 @@ fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
     let Reuse::Replay(offset) = reuse else {
         unreachable!()
     };
-    let (source, chunk) = cache.chunk(arrived.key).expect("recorded");
+    let (source, chunk, _) = cache.chunk(arrived.key).expect("recorded");
     let range = scene.replay_chunk(chunk, offset, source);
     assert_eq!(range.len(), 1, "the cull admits the arrived quad");
     assert_eq!(
@@ -507,6 +518,7 @@ fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
         painted(0),
         Encoding {
             chunk,
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -519,7 +531,7 @@ fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
     let Reuse::Replay(offset) = cache.reuse(&scene, &scrolled, painted(0), None) else {
         panic!("a scrolled line replays");
     };
-    let (source, chunk) = cache.chunk(scrolled.key).expect("recorded");
+    let (source, chunk, _) = cache.chunk(scrolled.key).expect("recorded");
     let range = scene.replay_chunk(chunk, offset, source);
     assert_eq!(range.len(), 1, "the window moved with the line");
     assert_eq!(
@@ -542,6 +554,7 @@ fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -568,6 +581,7 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -600,6 +614,7 @@ fn a_retired_fragment_loses_its_record() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -640,6 +655,7 @@ fn encode_one_quad(
         painted(0),
         Encoding {
             chunk,
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -735,6 +751,7 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
         under(space),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer: Default::default(),
@@ -781,6 +798,7 @@ fn an_encoding_that_could_not_place_everything_is_not_recorded() {
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: false,
             layer: Default::default(),
@@ -812,6 +830,7 @@ fn a_record_is_given_up_when_a_later_encoding_falls_short() {
             painted(0),
             Encoding {
                 chunk: zgui_scene::ChunkPrims::default(),
+                items: 0,
                 resources: &[],
                 complete,
                 layer: Default::default(),
@@ -831,6 +850,7 @@ fn layered(cache: &mut PaintCache, scene: &mut Scene, fragment: &Fragment, layer
         painted(0),
         Encoding {
             chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
             resources: &[],
             complete: true,
             layer,

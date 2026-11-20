@@ -9,6 +9,13 @@
 //! An implementation that does not exist yet, an unknown value, and a device that cannot be
 //! opened are reported as [`Unavailable`]. The factory never substitutes another implementation.
 //!
+//! A [`Screen`] is a recording renderer whose last frame is the whole picture on its output, for a
+//! window drawing through a compositor.
+//!
+//! A [`Session`] drives the selected compositor as one client drawing into one output, with a
+//! recording renderer under it. Each frame comes back as a [`Drawing`], the instances the frame
+//! draws, read from its capture transcript.
+//!
 //! ```
 //! let compositor = zgui_testkit_compositor::compositor();
 //! assert!(compositor.is_ok() || std::env::var_os("ZGUI_COMPOSITOR").is_some());
@@ -16,9 +23,12 @@
 
 #![forbid(unsafe_code)]
 
+mod device;
+mod drawing;
 mod null;
-mod output;
+mod screen;
 mod select;
+mod session;
 mod unavailable;
 
 use compositor_api::{Compositor, Renderer};
@@ -27,9 +37,12 @@ use compositor_core::CompositorImpl;
 use compositor_text::SwashRaster;
 use std::sync::Arc;
 
+pub use crate::device::{Composed, Device, Pixels};
+pub use crate::drawing::{Drawing, Instance};
 pub use crate::null::NullRenderer;
-pub use crate::output::TestOutput;
+pub use crate::screen::{Screen, Shown, drawing_of};
 pub use crate::select::{CompositorKind, RendererKind};
+pub use crate::session::{FONTS, Session, with_fake_text};
 pub use crate::unavailable::Unavailable;
 
 /// Returns the compositor `ZGUI_COMPOSITOR` selects, with verification of damage hints on and

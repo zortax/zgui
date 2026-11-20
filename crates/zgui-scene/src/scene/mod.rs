@@ -5,7 +5,6 @@ pub mod chunk;
 pub mod depends;
 pub(crate) mod device;
 pub mod finish;
-pub mod glyph_run;
 pub mod insert;
 pub(crate) mod live;
 pub mod opaque;
@@ -34,7 +33,6 @@ use crate::spatial::{SpatialId, SpatialTree};
 
 pub use crate::scene::chunk::{ChunkNote, ChunkPrims, ChunkSlot, TableHolds};
 pub use crate::scene::depends::SpatialFault;
-pub use crate::scene::glyph_run::CapturedRun;
 pub use crate::scene::opaque::OpaqueCover;
 pub use crate::scene::ordering::OrderOverlap;
 pub use crate::scene::primitives::Primitives;

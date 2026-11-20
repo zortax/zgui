@@ -21,7 +21,9 @@ use zgui_color::Color;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Point, Rect};
 use zgui_layout::fragment::ParagraphId;
-use zgui_scene::{ClipId, Quad, Scene, SpatialId};
+use zgui_scene::{ClipId, SpatialId};
+
+use crate::emit::record::{self, Recorder};
 
 /// Whether a rectangle is drawn under the glyphs or over them.
 ///
@@ -117,7 +119,7 @@ impl HighlightSource for NoHighlights {
 /// of no extent draws nothing while still costing a batch.
 #[allow(clippy::too_many_arguments)]
 pub fn emit(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     highlights: &dyn HighlightSource,
     owner: BoxKey,
     paragraph: ParagraphId,
@@ -142,13 +144,14 @@ pub fn emit(
         if color.alpha() == 0.0 {
             return;
         }
-        let paint = scene.paints.add(zgui_scene::Paint::Solid(color));
-        let quad = Quad::filled(highlight.bounds, paint)
-            .clipped(clip)
-            .transformed(transform);
-        if scene.push_quad(quad).is_some() {
-            pushed += 1;
-        }
+        let quad = record::filled(highlight.bounds, [0.0; 8], rec.color(color));
+        let quad = compositor_types::Quad {
+            clip: rec.clip(clip),
+            space: rec.space(transform),
+            ..quad
+        };
+        rec.quad(quad);
+        pushed += 1;
     });
     pushed
 }

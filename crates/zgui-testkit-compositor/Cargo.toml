@@ -20,8 +20,10 @@ include.workspace = true
 compositor-api.workspace = true
 compositor-capture.workspace = true
 compositor-core.workspace = true
+compositor-testing.workspace = true
 compositor-text.workspace = true
 compositor-types.workspace = true
+compositor-vello.workspace = true
 compositor-wgpu.workspace = true
 
 [lints]

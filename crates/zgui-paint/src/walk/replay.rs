@@ -175,13 +175,16 @@ pub struct Painted {
 /// What one fragment painted last time it was painted.
 #[derive(Clone, Debug)]
 pub struct Record {
-    /// The fragment's compiled painting, owned here.
+    /// The scene primitives the fragment pushed, owned here.
     ///
-    /// Owned rather than a range of the scene's log, because the log is cleared every frame: a
-    /// range names whatever occupies those positions now, and a record must stay replayable
-    /// however many frames pass between the encoding and the next visit. Shared, because a
-    /// renderer keeping chunks resident holds the same bytes as its upload source.
+    /// The items the compositor's chunk holds are not among them. Owned rather than a range of
+    /// the scene's log, because the log is cleared every frame: a range names whatever occupies
+    /// those positions now, and a record must stay replayable however many frames pass between
+    /// the encoding and the next visit. Shared, because a renderer keeping chunks resident holds
+    /// the same bytes as its upload source.
     pub prims: Arc<ChunkPrims>,
+    /// How many items the fragment recorded into its compositor chunk.
+    pub items: usize,
     /// Which encoding produced [`Record::prims`], distinct per encoding for the life of the cache.
     ///
     /// A consumer that mirrors chunks elsewhere — a persistent GPU copy — keys its residence on
@@ -266,8 +269,11 @@ pub const PROMOTE_REPLAYS: u8 = 3;
 /// nothing.
 #[derive(Clone, Debug)]
 pub struct Encoding<'a> {
-    /// The fragment's complete painting, captured at the pushes before the cull and the order.
+    /// The scene primitives the fragment pushed, captured at the pushes before the cull and the
+    /// order.
     pub chunk: ChunkPrims,
+    /// How many items the fragment recorded into its compositor chunk.
+    pub items: usize,
     /// The rasters the encoding named, in the order it named them and with repeats.
     pub resources: &'a [AtlasKey],
     /// Whether everything the fragment meant to draw was drawn.
@@ -594,12 +600,12 @@ impl PaintCache {
         self.records.get(&fragment).and_then(|record| record.tiled)
     }
 
-    /// The chunk recorded for `fragment` and its revision, for a caller that has already decided
-    /// to replay it.
-    pub fn chunk(&self, fragment: FragKey) -> Option<(u64, &Arc<ChunkPrims>)> {
+    /// The scene primitives recorded for `fragment`, their revision and how many compositor items
+    /// the fragment recorded, for a caller that has already decided to replay it.
+    pub fn chunk(&self, fragment: FragKey) -> Option<(u64, &Arc<ChunkPrims>, usize)> {
         self.records
             .get(&fragment)
-            .map(|record| (record.revision, &record.prims))
+            .map(|record| (record.revision, &record.prims, record.items))
     }
 
     /// Records what a fragment painted this frame, and counts it as encoded.
@@ -621,6 +627,7 @@ impl PaintCache {
         self.selections += 1;
         let Encoding {
             chunk,
+            items,
             resources,
             complete,
             layer,
@@ -688,6 +695,7 @@ impl PaintCache {
             fragment.key,
             Record {
                 prims,
+                items,
                 revision: self.next_revision,
                 kind: fragment.kind,
                 painted,

@@ -1,9 +1,11 @@
-//! Computed style and fragment geometry into scene primitives: the stage that decides what a
+//! Computed style and fragment geometry into compositor chunks: the stage that decides what a
 //! frame draws.
 //!
 //! Everything above this crate describes a document; everything below it draws rectangles. This is
-//! where the two meet, and it produces a [`Scene`](zgui_scene::Scene) — a value — so the whole
-//! stage is testable with no graphics device anywhere.
+//! where the two meet. Each fragment's painting is recorded as compositor items into a transaction
+//! through a [`CompositorSync`], and the content the compositor does not take yet is pushed into a
+//! [`Scene`](zgui_scene::Scene). Both are values, so the whole stage is testable with no graphics
+//! device anywhere.
 //!
 //! # The stage runs in two halves, and the order between them is load-bearing
 //!
@@ -28,9 +30,9 @@
 //!
 //! Lowering is memoised on the identity of the shared computed-value groups a style is made of
 //! ([`PaintStyleCache`]), so a thousand identically styled buttons lower a handful of paint styles
-//! rather than a thousand. Emission is memoised per fragment: the range of the scene's operation
-//! log a fragment occupied is recorded, and next frame an unchanged fragment replays that range —
-//! translated, if it merely moved — instead of being encoded again.
+//! rather than a thousand. Emission is memoised per fragment: an unchanged fragment keeps its
+//! compositor chunk and costs nothing, a moved one has the chunk's offset written, and only a
+//! changed one is encoded and recorded again.
 //!
 //! ```
 //! use zgui_geom::Size;
@@ -59,7 +61,7 @@ pub mod shiftable;
 pub mod sync;
 pub mod walk;
 
-pub use crate::content::glyphs::{GlyphPrediction, OutlineGlyph};
+pub use crate::content::glyphs::GlyphPrediction;
 pub use crate::content::{
     ContentCache, Drawing, FrameContent, ImageError, MipLevel, NoVectors, TileOwner, VectorCache,
     VectorSource, Vectors,
@@ -70,15 +72,14 @@ pub use crate::emit::highlight::{
     Highlight, HighlightLayer, HighlightRequest, HighlightSource, NoHighlights,
 };
 pub use crate::emit::text::{
-    GlyphPlacementSource, GlyphRequest, GlyphRun, GlyphSource, NoGlyphPlacements, NoGlyphs,
-    PlacedGlyph, RunContent,
+    GlyphPlacementSource, GlyphSource, NoGlyphPlacements, NoGlyphs, PlacedGlyph,
 };
 pub use crate::emit::vector::{VectorRoute, VectorRoutes};
 pub use crate::lower::anim::{AnimOverrides, NoAnim, OwnedPaints};
 pub use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
 pub use crate::lower::key::LoweringKey;
 pub use crate::lower::{PaintStyle, lower};
-pub use crate::sync::{CompositorSync, SyncReport};
+pub use crate::sync::{CompositorSync, SyncReport, record_chunk};
 pub use crate::walk::{PaintInput, PaintReport, Painter, VectorRouteReport};
 /// The sprite primitives glyphs are drawn as, and the brush slot a run names, from the scene
 /// vocabulary.

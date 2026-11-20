@@ -3,39 +3,38 @@
 //! # Where the glyphs come from
 //!
 //! This stage does not shape and does not rasterise. A fragment says *which line of which
-//! paragraph* it draws, and [`GlyphSource`] is the seam that turns that into positioned, already
-//! rasterised glyphs. Keeping it a seam rather than a dependency is what lets the whole paint stage
-//! be exercised with no font files: a test supplies its own glyphs, and the code under test is the
+//! paragraph* it draws, and [`GlyphSource`] is the seam that turns that into shaped runs placed
+//! against the line box. Each run is recorded as one compositor glyph run, which the compositor
+//! rasterises. Keeping it a seam rather than a dependency is what lets the whole paint stage be
+//! exercised with no font files: a test supplies its own glyphs, and the code under test is the
 //! same code.
 //!
 //! The seam is a visitor rather than a slice-returning method on purpose. A run's glyphs live
 //! wherever the text engine put them, and a caller that had to hand out a slice would either have
 //! to own one or allocate one per line, every frame.
 //!
-//! # Which sprite a run becomes
+//! # When a run asks for per-channel coverage
 //!
-//! Three-channel coverage is conditional in two independent ways and both are decided here, because
-//! here is where both answers are known. The device may not have dual-source blending at all; and
-//! the coverage *is* the blend factor, which is meaningless against a destination that is not
-//! opaque — so a run landing inside a group's own target is demoted whatever the device can do.
+//! A run asks for subpixel coverage only when the device can draw it, the target it lands in is
+//! opaque and it sits on the pixel grid. Inside a group's own target the coverage is the blend
+//! factor against a destination that is not opaque, so the run is demoted whatever the device can
+//! do.
 
-use std::sync::Arc;
-
+use compositor_types::{
+    ArenaRange, ClipRef, Color as Premultiplied, FontId, Glyph, GlyphFlags, Line, LineStyle,
+    PaintKind, PaintRef,
+};
+use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_css::parity::Support;
 use zgui_css::values::color::{current, resolve};
 use zgui_css::{ComputedStyle, register_properties};
-use zgui_geom::{Affine2, Device, DevicePx, Point, Rect, Size};
+use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
-use zgui_scene::kurbo::{Affine, Shape};
 use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
-use zgui_scene::{
-    ClipId, ClipLink, ColorSprite, Decoration, MonoSprite, Paint, PaintRef, PaintSlot, Resource,
-    Scene, SpatialId, SubpixelSprite, VectorId, VectorItem,
-};
-use zgui_text::{GlyphFormat, RunSurface, RunTransform};
+use zgui_scene::{ClipId, ClipLink, PaintSlot, Resource, Scene, SpatialId};
 
-use crate::content::glyphs::OutlineGlyph;
+use crate::emit::record::Recorder;
 
 register_properties! {
     text_decoration_line      => Support::Implemented("zgui-paint::emit::text"),
@@ -52,89 +51,21 @@ pub struct PlacedGlyph {
     pub bounds: Rect<DevicePx, Device>,
 }
 
-/// What a run's glyphs arrived as, which is decided by the path the run takes.
-///
-/// The two arms are the two halves of [`RasterPath`](zgui_text::RasterPath): a source has already
-/// asked the run which one it is and answered in kind, so nothing downstream chooses again.
-#[derive(Clone, Copy, Debug)]
-pub enum RunContent<'a> {
-    /// Coverage tiles, drawn as one quad per glyph.
-    Tiles(&'a [PlacedGlyph]),
-    /// Curves, filled by the frame's path rasteriser.
-    Outlines(&'a [OutlineGlyph]),
-}
-
-/// One style-uniform run of glyphs within a line.
-#[derive(Clone, Copy, Debug)]
-pub struct GlyphRun<'a> {
-    /// The glyphs, in logical order, in whichever form the run takes.
-    pub content: RunContent<'a>,
-    /// How the tiles are laid out, which decides which sprite kind the run becomes.
-    ///
-    /// Meaningless for an outline run, which has no tiles: a curve is filled with a brush rather
-    /// than sampled as coverage.
-    pub format: GlyphFormat,
-    /// The brush slot the run's colour is read from.
-    ///
-    /// A slot rather than a colour, because a shaped paragraph outlives the frame that produced it:
-    /// a theme change rewrites the slot and re-colours every cached paragraph without re-shaping a
-    /// single string.
-    pub paint: PaintSlot,
-    /// How much a synthesised bold thickens a stem, in device pixels.
-    ///
-    /// Zero for the atlas path, which has the thickening in its coverage already. An outline run
-    /// carries it because emboldening a curve is a stroke around it, and the curve the face draws
-    /// is the same curve either way.
-    pub synthetic_bold: f32,
-    /// The byte offset in the generated string where the run's text starts, which says which
-    /// nested inline box the run belongs to.
-    pub text_start: u32,
-    /// The shaped run the glyphs came from, when the source has one.
-    ///
-    /// The chunk capture records it by glyph id, for a compositor that rasterises glyphs itself.
-    pub shaped: Option<zgui_text::ShapedRun<'a>>,
-}
-
-/// Where one line's glyphs are wanted, and in what form.
-///
-/// Both fields are decisions the emitter has already made and a source cannot make for itself. The
-/// origin is where the line box landed, which comes from the fragment tree; whether per-channel
-/// coverage is wanted depends on the device and on the target the run lands in, neither of which a
-/// text engine knows about. Handing both down is what lets a source rasterise *once*, in the form
-/// that will actually be drawn, rather than rasterising subpixel coverage that then has to be
-/// drawn as a mask.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct GlyphRequest {
-    /// The line box's top-left corner, in absolute device pixels.
-    pub origin: Point<DevicePx, Device>,
-    /// Whether the glyphs may be rasterised with one coverage value per colour channel.
-    pub subpixel: bool,
-    /// What the surface does to the run: the transform in force and the brush it is painted with.
-    ///
-    /// The other half of what decides [`RasterPath`](zgui_text::RasterPath); the run itself carries
-    /// the rest. A source
-    /// puts the two together and answers in tiles or in curves — which is why the choice cannot be
-    /// made downstream of here, where the answer has already been rasterised one way or the other.
-    pub surface: RunSurface,
-}
-
 /// Where a text fragment's glyphs come from.
 ///
 /// An implementation answers for the lines it knows about and says nothing for the rest; a line
 /// with no glyphs — a blank one, or one whose paragraph has not been shaped — visits nothing, which
 /// is the same answer as a line of spaces and is drawn the same way.
 pub trait GlyphSource {
-    /// Visits each style-uniform run of one line, in the order the runs are drawn.
+    /// Visits each style-uniform shaped run of one line, in the order the runs are drawn.
     ///
-    /// The bounds a run reports are absolute: a source is given where the line box is and places
-    /// its glyphs against it, so nothing downstream has to know how a text engine numbers its own
-    /// coordinates.
+    /// Glyph positions are measured from the line box's top-left corner, each `y` being the
+    /// distance down to the baseline.
     fn visit_line(
         &self,
         paragraph: ParagraphId,
         line: u16,
-        request: GlyphRequest,
-        visit: &mut dyn FnMut(GlyphRun<'_>),
+        visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     );
 }
 
@@ -150,8 +81,7 @@ impl GlyphSource for NoGlyphs {
         &self,
         _paragraph: ParagraphId,
         _line: u16,
-        _request: GlyphRequest,
-        _visit: &mut dyn FnMut(GlyphRun<'_>),
+        _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
     }
 }
@@ -353,29 +283,6 @@ impl TextPlacement {
             self.opaque_target,
         )
     }
-
-    /// The two-dimensional transform in force, or the identity for one that leaves the plane.
-    ///
-    /// A three-dimensional transform is flattened rather than refused, and that matches what the
-    /// rasteriser does with the same matrix: what is lost is the transform, never the run.
-    fn affine(&self, scene: &Scene) -> Affine2 {
-        scene
-            .spatial
-            .resolve(self.transform)
-            .as_ref()
-            .and_then(zgui_geom::Matrix4::to_affine2)
-            .unwrap_or(Affine2::IDENTITY)
-    }
-
-    /// What the surface does to a run drawn through this placement with `brush`.
-    fn surface(&self, scene: &Scene, brush: &RunBrush) -> RunSurface {
-        RunSurface {
-            transform: RunTransform::of(self.affine(scene)),
-            moving: scene.travels(self.transform),
-            solid_brush: matches!(brush, RunBrush::Solid),
-            scale: self.scale,
-        }
-    }
 }
 
 /// Whether a run drawn through `transform` keeps per-channel coverage: the device can draw it
@@ -407,10 +314,8 @@ fn on_pixel_grid(scene: &Scene, transform: SpatialId) -> bool {
 
 /// What paints a run's glyphs.
 ///
-/// Two arms because they are two different mechanisms rather than two values of one: a colour is
-/// multiplied into a coverage tile by the sprite shader, and a paint is a brush a path rasteriser
-/// evaluates across the curve it fills. Only the first can reach the atlas, which is why a run
-/// carrying the second is promoted before it is rasterised at all.
+/// A colour is carried in the run's paint reference and takes the compositor's atlas route. A
+/// paint resolved against the line box, such as a gradient across the text, takes the path route.
 #[derive(Clone, Copy, Debug)]
 enum RunBrush {
     /// One colour, read from the run's own brush slot and falling back to the element's `color`.
@@ -437,7 +342,7 @@ pub struct Inherited<'a> {
     pub inline: &'a [crate::emit::inline::InlinePaint],
 }
 
-/// Emits one line's glyphs and decorations, and returns how many primitives were pushed.
+/// Emits one line's glyph runs and decorations, and returns how many items were recorded.
 ///
 /// The order is CSS's: the shadows behind everything, then the glyphs, then the decoration lines
 /// over them.
@@ -447,7 +352,7 @@ pub struct Inherited<'a> {
 /// descendant of that box. A line box is generated by an anonymous inline root below the element
 /// that carried the declaration, so its own style says nothing about it.
 pub fn emit(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     glyphs: &dyn GlyphSource,
     paragraph: ParagraphId,
     line: u16,
@@ -466,46 +371,35 @@ pub fn emit(
     let brush = match text_fill {
         Some(spec) => {
             match crate::emit::vector::gradient_for_vector(
-                scene,
+                rec.scene(),
                 spec,
                 placement.line,
                 placement.scale,
             ) {
-                Some(reference) => RunBrush::Painted(reference),
+                Some(reference) => RunBrush::Painted(rec.slot(reference)),
                 None => RunBrush::Solid,
             }
         }
         None => RunBrush::Solid,
     };
-    // The path the run takes is settled before the first pass, and every pass takes it: a shadow
-    // drawn from tiles under text drawn from curves is the same silhouette placed by two different
-    // rules, and the two disagree by whatever the tile path rounded.
-    let surface = placement.surface(scene, &brush);
     let mut pushed = 0;
-    let mut pass = 0;
     // The mark goes on under the line's own clip; the line's glyphs go on under a tighter one that
     // stops where the content was cut. Both are decided before the first pass, so a shadow and the
     // text it shadows are cut at the same place.
     let mark = placement.ellipsis;
-    let original = placement;
-    let placement = cut_to_ellipsis(scene, placement);
+    let clip = cut_to_ellipsis(rec, placement);
+    let drawn = Drawn { placement, clip };
     if inline.is_empty() {
         for shadow in &style.text_shadows {
             if shadow.is_invisible() {
                 continue;
             }
             let offset = Size::new(DevicePx(shadow.offset_x), DevicePx(shadow.offset_y));
-            pass += 1;
             pushed += runs(
-                scene,
+                rec,
                 glyphs,
-                Where {
-                    paragraph,
-                    line,
-                    pass,
-                },
-                placement,
-                surface,
+                (paragraph, line),
+                drawn,
                 // A shadowed copy is one colour whatever paints the text itself: a shadow is a
                 // silhouette, and a gradient inside one is a gradient nobody can see.
                 Painting {
@@ -517,15 +411,10 @@ pub fn emit(
             );
         }
         pushed += runs(
-            scene,
+            rec,
             glyphs,
-            Where {
-                paragraph,
-                line,
-                pass: 0,
-            },
-            placement,
-            surface,
+            (paragraph, line),
+            drawn,
             Painting {
                 tint: style.color,
                 brush,
@@ -534,43 +423,34 @@ pub fn emit(
             },
         );
     } else {
-        pushed += emit_parted(
-            scene,
-            glyphs,
-            (paragraph, line),
-            style,
-            inline,
-            placement,
-            (surface, brush),
-        );
+        pushed += emit_parted(rec, glyphs, (paragraph, line), style, inline, drawn, brush);
     }
     pushed += crate::emit::inline::decorations(
-        scene,
+        rec,
         inline,
         crate::emit::inline::Lines::OverGlyphs,
-        placement.clip,
+        clip,
         placement.transform,
     );
     for decoration in decorations {
-        pushed += lines(scene, decoration, placement);
+        pushed += lines(rec, decoration, drawn);
     }
     if let Some(mark) = mark {
+        // Drawn through the line's *untightened* clip, at the boundary the cut fell on. Its own
+        // box still clips it, which is what keeps a mark wider than the box from spilling out.
+        let clip = rec.clip(placement.clip);
         pushed += runs(
-            scene,
+            rec,
             glyphs,
-            Where {
-                paragraph: mark.paragraph,
-                line: 0,
-                pass: 0,
+            (mark.paragraph, 0),
+            Drawn {
+                placement: TextPlacement {
+                    line: mark.rect(placement.line),
+                    ellipsis: None,
+                    ..placement
+                },
+                clip,
             },
-            // Drawn through the line's *untightened* clip, at the boundary the cut fell on. Its own
-            // box still clips it, which is what keeps a mark wider than the box from spilling out.
-            TextPlacement {
-                line: mark.rect(placement.line),
-                ellipsis: None,
-                ..original
-            },
-            surface,
             Painting {
                 tint: style.color,
                 brush: RunBrush::Solid,
@@ -600,26 +480,19 @@ impl EllipsisPaint {
     }
 }
 
-/// The placement a cut line's own glyphs are drawn through.
+/// Returns the clip a line's own glyphs are drawn through.
 ///
-/// The same placement under a tighter clip, so everything past the cut goes undrawn. A clip, and
-/// never a filter over the glyphs: a glyph's ink may reach past its own advance, so dropping glyphs
-/// by position cuts the ink of a cluster that survived or keeps the ink of a hidden one, and the
-/// specification speaks of characters.
+/// A cut line is drawn under a tighter clip than its box's, so everything past the cut goes
+/// undrawn. A clip, and never a filter over the glyphs: a glyph's ink may reach past its own
+/// advance, so dropping glyphs by position cuts the ink of a cluster that survived or keeps the ink
+/// of a hidden one, and the specification speaks of characters.
 ///
-/// The window names the line's own coordinate system, because that is the system the line box and
-/// the cut are measured in. A window named as device pixels is a window in whatever place the
-/// panel above it is *not*: a line inside a dialog held off-centre by its own transform is cut
-/// where it was laid out, so what survives is the slice the two rectangles happen to share and the
-/// rest of the cell is empty.
-///
-/// The window is minted where the line is drawn this frame, and the line's chunk outlives the
-/// frame. The mint is noted on the open capture, so a replay re-interns the window at the chunk's
-/// position — without the note, a scrolled line would be cut against the window of the frame it
-/// was encoded in.
-fn cut_to_ellipsis(scene: &mut Scene, placement: TextPlacement) -> TextPlacement {
+/// The window is measured in the line's own coordinate system, because that is the system the line
+/// box and the cut are measured in. It belongs to the line's chunk, so it moves with the chunk when
+/// the line is scrolled.
+fn cut_to_ellipsis(rec: &mut Recorder<'_>, placement: TextPlacement) -> ClipRef {
     let Some(mark) = placement.ellipsis else {
-        return placement;
+        return rec.clip(placement.clip);
     };
     let line = placement.line;
     let (left, right) = if mark.at_start {
@@ -631,27 +504,17 @@ fn cut_to_ellipsis(scene: &mut Scene, placement: TextPlacement) -> TextPlacement
         Point::new(DevicePx(left), line.origin.y),
         Size::new(DevicePx((right - left).max(0.0)), line.size.height),
     );
-    let clip = scene.clips.push(
+    rec.local_clip(
         placement.clip,
         ClipLink::rect_in(window, placement.transform),
-    );
-    scene.note_minted_clip(clip);
-    TextPlacement { clip, ..placement }
+    )
 }
 
-/// Which line is being drawn, and which of its passes this is.
-///
-/// The pass number is what keeps a shadow's curves from claiming the identity the text's own
-/// curves are cached under: two passes over one line draw the same glyphs at different places, and
-/// a rasteriser that held one encoding for both would re-encode every one of them, every frame.
+/// Where one pass over a line is drawn: the placement, and the clip its items hold.
 #[derive(Clone, Copy, Debug)]
-struct Where {
-    /// The paragraph the line belongs to.
-    paragraph: ParagraphId,
-    /// The line within it.
-    line: u16,
-    /// Which pass over that line this is: zero for the text, one and up for its shadows.
-    pass: u32,
+struct Drawn {
+    placement: TextPlacement,
+    clip: ClipRef,
 }
 
 /// What one pass over a line paints with.
@@ -668,200 +531,128 @@ struct Painting {
     force_mono: bool,
 }
 
-/// Emits one pass over one line's glyphs, and returns how many primitives were pushed.
+/// Emits one pass over one line's glyph runs, and returns how many were recorded.
 ///
 /// The tint is the run's own brush unless one is given, which is what makes a shadow a second pass
 /// over the same glyphs rather than a second set of them.
 fn runs(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     glyphs: &dyn GlyphSource,
-    at: Where,
-    placement: TextPlacement,
-    surface: RunSurface,
+    at: (ParagraphId, u16),
+    drawn: Drawn,
     painting: Painting,
 ) -> usize {
     // A shadowed copy is coverage tinted with one colour, so it is never asked for per-channel
     // coverage: subpixel antialiasing of a blurred silhouette is fringing.
-    let subpixel = placement.keeps_subpixel(scene) && !painting.force_mono;
-    let emitted = collect(glyphs, at, placement, surface, subpixel);
+    let subpixel = drawn.placement.keeps_subpixel(rec.scene_ref()) && !painting.force_mono;
+    let emitted = collect(glyphs, at);
     let mut pushed = 0;
-    let mut index = 0;
     for run in &emitted {
-        pushed += draw(scene, run, at, &mut index, placement, painting, subpixel);
+        pushed += draw(rec, run, drawn, painting, subpixel);
     }
     pushed
 }
 
-/// The runs of one line, placed and rasterised in the form `subpixel` asks for.
-fn collect(
-    glyphs: &dyn GlyphSource,
-    at: Where,
-    placement: TextPlacement,
-    surface: RunSurface,
-    subpixel: bool,
-) -> Vec<Emitted> {
-    let request = GlyphRequest {
-        origin: placement.line.origin,
-        subpixel,
-        surface,
-    };
-    // Collected rather than drawn as they are visited: a source holds the atlas and the glyph
-    // cache open for the length of the visit, and pushing into the scene inside it would need both
-    // at once.
+/// The shaped runs of one line.
+fn collect(glyphs: &dyn GlyphSource, (paragraph, line): (ParagraphId, u16)) -> Vec<Emitted> {
+    // Collected rather than recorded as they are visited: a source holds its caches open for the
+    // length of the visit, and recording inside it would need them and the scene at once.
     let mut emitted: Vec<Emitted> = Vec::new();
-    glyphs.visit_line(at.paragraph, at.line, request, &mut |run| {
+    glyphs.visit_line(paragraph, line, &mut |shaped| {
         emitted.push(Emitted {
-            format: run.format,
-            slot: run.paint,
-            synthetic_bold: run.synthetic_bold,
-            text_start: run.text_start,
-            content: match run.content {
-                RunContent::Tiles(tiles) => Owned::Tiles(tiles.to_vec()),
-                RunContent::Outlines(outlines) => Owned::Outlines(outlines.to_vec()),
-            },
-            shaped: run.shaped.map(|shaped| Shaped {
-                face: shaped.face.0,
-                size: shaped.size,
-                instance: shaped.instance.0,
-                embolden: shaped.synthetic_bold * shaped.size,
-                skew: shaped.synthetic_slant,
-                glyphs: shaped.glyphs.to_vec(),
-            }),
+            slot: shaped.brush,
+            text_start: shaped.text_start,
+            face: shaped.face.0,
+            size: shaped.size,
+            instance: shaped.instance.0,
+            embolden: shaped.synthetic_bold * shaped.size,
+            skew: shaped.synthetic_slant,
+            glyphs: shaped.glyphs.to_vec(),
         });
     });
     emitted
 }
 
-/// Draws one collected run, and returns how many primitives were pushed.
-///
-/// `index` counts the glyphs of the pass drawn so far, which is what names an outlined glyph.
+/// Records one collected run, and returns how many runs were recorded.
 fn draw(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     run: &Emitted,
-    at: Where,
-    index: &mut u32,
-    placement: TextPlacement,
+    drawn: Drawn,
     painting: Painting,
     subpixel: bool,
 ) -> usize {
-    let mut pushed = 0;
-    let color = if painting.force_mono {
-        painting.tint
-    } else {
-        brush(scene, run.slot, painting.tint)
+    if run.glyphs.is_empty() {
+        return 0;
+    }
+    let paint = match painting.brush {
+        RunBrush::Painted(reference) if !painting.force_mono => reference,
+        _ if painting.force_mono => rec.color(painting.tint),
+        _ => {
+            let color = brush(rec.scene_ref(), run.slot, painting.tint);
+            rec.color(color)
+        }
     };
-    if let Some(shaped) = &run.shaped {
-        capture(scene, shaped, placement, painting, color, subpixel);
+    if paint.kind == PaintKind::NONE {
+        return 0;
     }
-    match &run.content {
-        Owned::Tiles(tiles) => {
-            for glyph in tiles {
-                pushed += usize::from(tile(
-                    scene,
-                    placement,
-                    Tiled {
-                        format: run.format,
-                        color,
-                        offset: painting.offset,
-                        subpixel,
-                        force_mono: painting.force_mono,
-                    },
-                    glyph,
-                ));
-                *index += 1;
-            }
-        }
-        Owned::Outlines(outlines) => {
-            // A colour run never reaches here — it has no single outline to fill — so a
-            // shadow pass over one has nothing to suppress, unlike the tile path.
-            let (fill, painted) = match painting.brush {
-                RunBrush::Painted(reference) if !painting.force_mono => (reference, true),
-                _ => (scene.paints.add(Paint::Solid(color)), false),
-            };
-            let affine = placement.affine(scene);
-            for glyph in outlines {
-                pushed += usize::from(outline(
-                    scene,
-                    placement,
-                    affine,
-                    Outlined {
-                        id: outline_id(at, *index),
-                        fill,
-                        painted,
-                        stroke: run.synthetic_bold,
-                        offset: painting.offset,
-                    },
-                    glyph,
-                ));
-                *index += 1;
-            }
-        }
+    let origin = drawn.placement.line.origin;
+    let (x, y) = (
+        origin.x.0 + painting.offset.width.0,
+        origin.y.0 + painting.offset.height.0,
+    );
+    let glyphs: SmallVec<[Glyph; 32]> = run
+        .glyphs
+        .iter()
+        .map(|glyph| Glyph {
+            id: u32::from(glyph.glyph),
+            x: x + glyph.x,
+            y: y + glyph.y,
+        })
+        .collect();
+    let mut flags = GlyphFlags::HINT;
+    if subpixel {
+        flags |= GlyphFlags::SUBPIXEL;
     }
-    pushed
-}
-
-/// Records the run by glyph id in the open chunk capture.
-fn capture(
-    scene: &mut Scene,
-    shaped: &Shaped,
-    placement: TextPlacement,
-    painting: Painting,
-    color: Color,
-    subpixel: bool,
-) {
-    let origin = placement.line.origin;
-    let (dx, dy) = (painting.offset.width.0, painting.offset.height.0);
-    scene.capture_glyph_run(zgui_scene::CapturedRun {
-        at: 0,
-        face: shaped.face,
-        size: shaped.size,
-        instance: shaped.instance,
-        glyphs: shaped
-            .glyphs
-            .iter()
-            .map(|glyph| {
-                (
-                    glyph.glyph,
-                    origin.x.0 + glyph.x + dx,
-                    origin.y.0 + glyph.y + dy,
-                )
-            })
-            .collect(),
-        color: color.to_premultiplied_srgb(),
-        embolden: shaped.embolden,
-        skew: shaped.skew,
-        silhouette: painting.force_mono,
-        subpixel,
-        clip: placement.clip.0,
-        transform: placement.transform.index(),
-    });
-}
-
-impl Emitted {
-    /// How many glyphs the run holds.
-    fn len(&self) -> u32 {
-        let count = match &self.content {
-            Owned::Tiles(tiles) => tiles.len(),
-            Owned::Outlines(outlines) => outlines.len(),
-        };
-        u32::try_from(count).unwrap_or(u32::MAX)
+    if painting.force_mono {
+        flags |= GlyphFlags::SILHOUETTE;
     }
+    let space = rec.space(drawn.placement.transform);
+    rec.glyph_run(
+        compositor_types::GlyphRun {
+            // A face id is the font id, because the text engine's face table is the font registry.
+            font: FontId(run.face),
+            size: run.size,
+            glyphs: ArenaRange::default(),
+            coords: ArenaRange::default(),
+            paint,
+            embolden: run.embolden,
+            skew: run.skew,
+            clip: drawn.clip,
+            space,
+            flags,
+            _pad: [0; 1],
+            palette: 0,
+        },
+        &glyphs,
+        run.instance != 0,
+    );
+    1
 }
 
 /// Emits the shadows and the glyphs of a line that holds nested inline boxes, and returns how
-/// many primitives were pushed.
+/// many items were recorded.
 ///
 /// Each run takes the text shadows and the shift of the innermost box that holds it, and the line's
 /// own when no box does. Every shadow pass goes under every glyph, as on a line without boxes, and
 /// the boxes' underlines and overlines go between the two.
 fn emit_parted(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     glyphs: &dyn GlyphSource,
-    (paragraph, line): (ParagraphId, u16),
+    at: (ParagraphId, u16),
     style: &crate::lower::PaintStyle,
     parts: &[crate::emit::inline::InlinePaint],
-    placement: TextPlacement,
-    (surface, text_brush): (RunSurface, RunBrush),
+    drawn: Drawn,
+    text_brush: RunBrush,
 ) -> usize {
     let owner = |start: u32| {
         parts
@@ -882,26 +673,14 @@ fn emit_parted(
 
     let mut pushed = 0;
     if deepest > 0 {
-        let at = Where {
-            paragraph,
-            line,
-            pass: 1,
-        };
-        let emitted = collect(glyphs, at, placement, surface, false);
+        let emitted = collect(glyphs, at);
         let owners: Vec<Option<usize>> = emitted.iter().map(|run| owner(run.text_start)).collect();
         for pass in 1..=deepest {
-            let at = Where {
-                paragraph,
-                line,
-                pass: u32::try_from(pass).unwrap_or(u32::MAX),
-            };
-            let mut index = 0;
             for (run, owner) in emitted.iter().zip(&owners) {
                 let Some(shadow) = shadows(*owner)
                     .get(pass - 1)
                     .filter(|shadow| !shadow.is_invisible())
                 else {
-                    index += run.len();
                     continue;
                 };
                 // A shadowed copy is one colour whatever paints the text itself.
@@ -914,25 +693,19 @@ fn emit_parted(
                     ),
                     force_mono: true,
                 };
-                pushed += draw(scene, run, at, &mut index, placement, painting, false);
+                pushed += draw(rec, run, drawn, painting, false);
             }
         }
     }
     pushed += crate::emit::inline::decorations(
-        scene,
+        rec,
         parts,
         crate::emit::inline::Lines::UnderGlyphs,
-        placement.clip,
-        placement.transform,
+        drawn.clip,
+        drawn.placement.transform,
     );
-    let at = Where {
-        paragraph,
-        line,
-        pass: 0,
-    };
-    let subpixel = placement.keeps_subpixel(scene);
-    let emitted = collect(glyphs, at, placement, surface, subpixel);
-    let mut index = 0;
+    let subpixel = drawn.placement.keeps_subpixel(rec.scene_ref());
+    let emitted = collect(glyphs, at);
     for run in &emitted {
         let painting = Painting {
             tint: style.color,
@@ -940,34 +713,22 @@ fn emit_parted(
             offset: Size::new(DevicePx(0.0), DevicePx(-shift(owner(run.text_start)))),
             force_mono: false,
         };
-        pushed += draw(scene, run, at, &mut index, placement, painting, subpixel);
+        pushed += draw(rec, run, drawn, painting, subpixel);
     }
     pushed
 }
 
-/// One visited run, held until the source's borrow of the atlas has been given up.
+/// One visited run's shaping, held until the source's borrow of its caches has been given up.
 struct Emitted {
-    /// How the tiles are laid out.
-    format: GlyphFormat,
     /// The run's brush slot.
     slot: PaintSlot,
-    /// How much a synthesised bold thickens a stem, in device pixels.
-    synthetic_bold: f32,
     /// Where the run's text starts in the generated string.
     text_start: u32,
-    /// The glyphs.
-    content: Owned,
-    /// The shaped run the glyphs came from, when the source had one.
-    shaped: Option<Shaped>,
-}
-
-/// A visited run's shaping, owned.
-struct Shaped {
-    /// The face.
+    /// The face, as the text engine numbers it.
     face: u32,
     /// The em size, in device pixels.
     size: f32,
-    /// The variation instance.
+    /// The variation instance, zero for the default.
     instance: u32,
     /// The synthesised bold, in device pixels.
     embolden: f32,
@@ -975,150 +736,6 @@ struct Shaped {
     skew: f32,
     /// The glyph ids and their origins from the line box's top-left corner.
     glyphs: Vec<zgui_text::ShapedGlyph>,
-}
-
-/// A visited run's glyphs, owned.
-enum Owned {
-    /// Coverage tiles.
-    Tiles(Vec<PlacedGlyph>),
-    /// Curves.
-    Outlines(Vec<OutlineGlyph>),
-}
-
-/// Everything one tiled glyph is drawn with.
-#[derive(Clone, Copy, Debug)]
-struct Tiled {
-    /// How the tile's bytes are laid out.
-    format: GlyphFormat,
-    /// What the coverage is multiplied by.
-    color: Color,
-    /// How far this pass is displaced from the text itself.
-    offset: Size<DevicePx, Device>,
-    /// Whether per-channel coverage may be drawn as such.
-    subpixel: bool,
-    /// Whether this pass is a silhouette in one colour rather than the text itself.
-    force_mono: bool,
-}
-
-/// Draws one glyph's tile, and says whether it landed.
-fn tile(scene: &mut Scene, placement: TextPlacement, drawn: Tiled, glyph: &PlacedGlyph) -> bool {
-    let Tiled {
-        format,
-        color,
-        offset,
-        subpixel,
-        force_mono,
-    } = drawn;
-    let bounds = glyph.bounds.translate(offset);
-    let landed = match format {
-        // A colour glyph is a picture rather than a coverage mask, so it carries its own colour
-        // and is not tinted — and a shadow of one has no silhouette to draw, because the alpha it
-        // would be cut from is the picture's own rather than the glyph's.
-        GlyphFormat::Color if force_mono => None,
-        GlyphFormat::Color => {
-            let mut sprite = ColorSprite::new(bounds, glyph.resource).clipped(placement.clip);
-            sprite.transform = placement.transform.index();
-            sprite.opacity = color.alpha();
-            scene.push_color_sprite(sprite)
-        }
-        GlyphFormat::Subpixel if subpixel => {
-            let mut sprite =
-                SubpixelSprite::new(bounds, glyph.resource, color).clipped(placement.clip);
-            sprite.transform = placement.transform.index();
-            scene.push_subpixel_sprite(sprite)
-        }
-        // A source that answered with per-channel coverage where none was asked for is drawn
-        // as a mask rather than trusted: the coverage *is* the blend factor, and against a
-        // destination that is not opaque there is nothing for it to be a factor of.
-        GlyphFormat::Subpixel | GlyphFormat::Mono => {
-            let mut sprite = MonoSprite::new(bounds, glyph.resource, color).clipped(placement.clip);
-            sprite.transform = placement.transform.index();
-            scene.push_mono_sprite(sprite)
-        }
-    };
-    landed.is_some()
-}
-
-/// Everything one outlined glyph is drawn with.
-#[derive(Clone, Copy, Debug)]
-struct Outlined {
-    /// The identity a rasteriser caches this glyph's encoding under.
-    id: VectorId,
-    /// What fills the curve.
-    fill: PaintRef,
-    /// Whether the fill is a paint measured on the line box rather than a colour.
-    painted: bool,
-    /// How wide a stroke stands in for a weight the face does not have; zero for no stroke.
-    stroke: f32,
-    /// How far this pass is displaced from the text itself.
-    offset: Size<DevicePx, Device>,
-}
-
-/// Fills one glyph's curves, and says whether the item landed.
-///
-/// The face's curve is drawn as it is, placed at the pen by a translation. The ink is the curve's
-/// bounds **after** the run's transform, because that is the rectangle the rasteriser will write:
-/// the item is drawn into a scratch covering exactly this rectangle and composited back through
-/// it, so an ink measured before the transform would cut a turned letter off at the edge of the
-/// box it would have occupied upright.
-fn outline(
-    scene: &mut Scene,
-    placement: TextPlacement,
-    affine: Affine2,
-    drawn: Outlined,
-    glyph: &OutlineGlyph,
-) -> bool {
-    let at = Affine::translate(
-        glyph.pen
-            + zgui_scene::kurbo::Vec2::new(
-                f64::from(drawn.offset.width.0),
-                f64::from(drawn.offset.height.0),
-            ),
-    );
-    let bounds = at.transform_rect_bbox(glyph.path.bounding_box());
-    let reach = f64::from(drawn.stroke) * 0.5;
-    let local = Rect::from_corners(
-        Point::new(
-            DevicePx((bounds.x0 - reach) as f32),
-            DevicePx((bounds.y0 - reach) as f32),
-        ),
-        Point::new(
-            DevicePx((bounds.x1 + reach) as f32),
-            DevicePx((bounds.y1 + reach) as f32),
-        ),
-    );
-    let mut item = VectorItem::filled(drawn.id, Arc::clone(&glyph.path), drawn.fill)
-        .placed(at)
-        .clipped(placement.clip);
-    item.ink = affine.transform_rect(local);
-    item.local_ink = local;
-    item.transform = Some(placement.transform);
-    if drawn.painted {
-        // A ramp across the text is measured on the line box, so it is mapped back into the
-        // glyph's own space.
-        item.brush = at.inverse();
-    }
-    if drawn.stroke > 0.0 {
-        // A synthesised bold is a stroke around the face's own curve, in the same brush: the
-        // curve is what the face draws and the weight is what it does not have.
-        item.stroke = Some(zgui_scene::VectorStroke::solid(drawn.fill, drawn.stroke));
-    }
-    scene.push_vector(item).is_some()
-}
-
-/// The identity of one outlined glyph in the display list.
-///
-/// Derived from where the glyph is in the document rather than from what it is, so the same letter
-/// twice on a line is two items. A rasteriser keys its encoding on content, so the two still share
-/// one encoding of the face's curve.
-fn outline_id(at: Where, index: u32) -> VectorId {
-    let mut hash = zgui_scene::ContentHash::new();
-    hash = hash
-        .u32(at.paragraph.0)
-        .u32(u32::from(at.line))
-        .u32(at.pass)
-        .u32(index);
-    VectorId(hash.finish() as u32)
 }
 
 /// The colour a run is drawn in, read from its brush slot and falling back to the element's own.
@@ -1148,25 +765,27 @@ fn brush(scene: &Scene, slot: PaintSlot, fallback: Color) -> Color {
 /// would put ink outside the rectangle the fragment reports — which is what leaves a trail behind
 /// when the text moves. Clamping costs a wave some amplitude on a tight line and nothing at all on
 /// an ordinary one, where the half-leading is already taller than the band.
-fn lines(scene: &mut Scene, style: &DecorationStyle, placement: TextPlacement) -> usize {
+fn lines(rec: &mut Recorder<'_>, style: &DecorationStyle, drawn: Drawn) -> usize {
     if !style.draws_anything() {
         return 0;
     }
-    let line = placement.line;
+    let line = drawn.placement.line;
     let band = style.band().min(line.size.height.0.max(style.thickness));
+    let space = rec.space(drawn.placement.transform);
     let mut pushed = 0;
     let mut draw = |centre: f32| {
         let top =
             (centre - band * 0.5).clamp(line.top().0, (line.bottom().0 - band).max(line.top().0));
-        let rect = Rect::new(
-            Point::new(line.origin.x, DevicePx(top)),
-            Size::new(line.size.width, DevicePx(band)),
-        );
-        let mut drawn = Decoration::new(rect, style.thickness, style.color, style.style)
-            .clipped(placement.clip);
-        drawn.transform = placement.transform.index();
-        let landed = scene.push_decoration(drawn);
-        pushed += usize::from(landed.is_some());
+        rec.line(Line {
+            bounds: [line.origin.x.0, top, line.size.width.0, band],
+            color: Premultiplied(style.color.to_premultiplied_srgb()),
+            thickness: style.thickness,
+            clip: drawn.clip,
+            space,
+            style: LineStyle(style.style as u8),
+            _pad: [0; 3],
+        });
+        pushed += 1;
     };
     if style.underline {
         draw(line.bottom().0 - style.thickness * 0.5);
@@ -1185,7 +804,10 @@ mod tests {
     use zgui_css::StyleDraft;
     use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
 
+    use compositor_types::GlyphFlags;
+
     use super::{DecorationStyle, TextPlacement};
+    use crate::emit::record::Recording;
     use zgui_geom::{DevicePx, Point, Rect, Size};
     use zgui_scene::{ClipId, SpatialId};
 
@@ -1271,138 +893,71 @@ mod tests {
         }
     }
 
-    /// A card that opens from 96 % keeps its text in tiles, so no frame of the opening fills
-    /// outlines. A large scale and a turn fill them, and so does a slight scale at rest, where a
-    /// resampled tile shows as soft text.
-    #[test]
-    fn a_run_under_a_slight_scale_draws_tiles_only_while_an_animation_moves_it() {
-        use zgui_geom::Matrix4;
-        use zgui_text::{RasterPath, RunProfile};
+    /// The glyph every test run holds, six and a half pixels in and twelve down to the baseline.
+    const GLYPHS: [zgui_text::ShapedGlyph; 1] = [zgui_text::ShapedGlyph {
+        glyph: 5,
+        x: 6.5,
+        y: 12.0,
+    }];
 
-        let path = |local: Matrix4, animated: bool| {
-            let (mut scene, space) = under(local);
-            if animated {
-                scene.declare_travel(space, zgui_scene::Travel::over([placement().line]));
-            }
-            let placed = TextPlacement {
-                transform: space,
-                ..placement()
-            };
-            let surface = placed.surface(&scene, &super::RunBrush::Solid);
-            RasterPath::of(&RunProfile {
-                surface,
-                ..RunProfile::BODY_TEXT
-            })
-        };
-        let slight = Matrix4::scale(0.96, 0.96, 1.0);
-        assert_eq!(path(slight, true), RasterPath::Atlas);
-        assert_eq!(
-            path(Matrix4::translation(12.0, 34.0, 0.0).then(&slight), true),
-            RasterPath::Atlas
-        );
-        assert_eq!(path(slight, false), RasterPath::Vector);
-        assert_eq!(
-            path(Matrix4::translation(12.0, 34.0, 0.0), false),
-            RasterPath::Atlas,
-            "a move at rest changes no texel"
-        );
-        assert_eq!(
-            path(Matrix4::scale(2.0, 2.0, 1.0), true),
-            RasterPath::Vector
-        );
-        assert_eq!(
-            path(zgui_geom::Affine2::rotation(0.2).to_matrix4(), true),
-            RasterPath::Vector
-        );
-    }
+    /// A source of one shaped run of one glyph.
+    struct OneRun;
 
-    /// A source of one glyph of a chosen format.
-    struct OneGlyph(zgui_text::GlyphFormat);
-
-    impl super::GlyphSource for OneGlyph {
+    impl super::GlyphSource for OneRun {
         fn visit_line(
             &self,
             _paragraph: zgui_layout::fragment::ParagraphId,
             _line: u16,
-            _request: super::GlyphRequest,
-            visit: &mut dyn FnMut(super::GlyphRun<'_>),
+            visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
         ) {
-            let glyph = super::PlacedGlyph {
-                resource: zgui_atlas::AtlasTile {
-                    texture: zgui_atlas::TextureId {
-                        kind: zgui_atlas::TextureKind::Color,
-                        index: 0,
-                    },
-                    tile: zgui_atlas::TileId(0),
-                    bounds: zgui_geom::Rect::new(
-                        zgui_geom::Point::new(0, 0),
-                        zgui_geom::Size::new(8, 8),
-                    ),
-                }
-                .into(),
-                bounds: Rect::new(
-                    Point::new(DevicePx(0.0), DevicePx(0.0)),
-                    Size::new(DevicePx(8.0), DevicePx(8.0)),
-                ),
-            };
-            visit(super::GlyphRun {
-                content: super::RunContent::Tiles(core::slice::from_ref(&glyph)),
-                format: self.0,
-                paint: zgui_scene::PaintSlot(0),
+            visit(zgui_text::ShapedRun {
+                face: zgui_text::FaceId(1),
+                size: 16.0,
+                instance: zgui_text::VariationInstance::DEFAULT,
                 synthetic_bold: 0.0,
+                synthetic_slant: 0.0,
+                has_color: false,
+                brush: zgui_scene::PaintSlot(0),
+                glyphs: &GLYPHS,
                 text_start: 0,
-                shaped: None,
             });
         }
     }
 
-    /// A run of one line of the given source, over the initial style.
-    fn emit_one(format: zgui_text::GlyphFormat, placement: TextPlacement) -> zgui_scene::Scene {
-        let style = crate::lower::lower(&StyleDraft::initial().build(), 1.0);
+    /// The items one line of [`OneRun`] records with `style`.
+    fn emit_one(style: &crate::lower::PaintStyle, placement: TextPlacement) -> Recording {
         let mut scene = zgui_scene::Scene::new();
-        scene.begin_frame(zgui_geom::Size::new(64, 64));
+        let mut recording = Recording::new();
+        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
         super::emit(
-            &mut scene,
-            &OneGlyph(format),
+            &mut rec,
+            &OneRun,
             zgui_layout::fragment::ParagraphId(0),
             0,
-            &style,
+            style,
             super::Inherited::default(),
             placement,
         );
-        scene
+        recording
     }
 
     #[test]
-    fn a_colour_glyph_takes_the_polychrome_path_and_is_not_tinted() {
-        // A colour glyph is a picture. Drawing it as a coverage mask multiplies the picture by the
-        // text colour, which turns every emoji into a silhouette of itself.
-        let scene = emit_one(zgui_text::GlyphFormat::Color, placement());
-        assert_eq!(scene.primitives.color_sprites.len(), 1);
-        assert!(
-            scene.primitives.mono_sprites.is_empty()
-                && scene.primitives.subpixel_sprites.is_empty(),
-            "a colour glyph must not also have been drawn as coverage"
-        );
-    }
-
-    #[test]
-    fn per_channel_coverage_is_demoted_against_a_target_that_is_not_opaque() {
-        let opaque = emit_one(zgui_text::GlyphFormat::Subpixel, placement());
-        assert_eq!(opaque.primitives.subpixel_sprites.len(), 1);
+    fn a_run_asks_for_per_channel_coverage_only_against_an_opaque_target() {
+        let style = crate::lower::lower(&StyleDraft::initial().build(), 1.0);
+        let opaque = emit_one(&style, placement());
+        assert!(opaque.glyph_runs()[0].flags.contains(GlyphFlags::SUBPIXEL));
 
         let grouped = emit_one(
-            zgui_text::GlyphFormat::Subpixel,
+            &style,
             TextPlacement {
                 opaque_target: false,
                 ..placement()
             },
         );
         assert!(
-            grouped.primitives.subpixel_sprites.is_empty(),
+            !grouped.glyph_runs()[0].flags.contains(GlyphFlags::SUBPIXEL),
             "three-channel coverage is a blend factor, and there is nothing to be a factor of"
         );
-        assert_eq!(grouped.primitives.mono_sprites.len(), 1);
     }
 
     #[test]
@@ -1450,7 +1005,8 @@ mod tests {
     fn a_band_never_reaches_outside_the_line_box_it_decorates() {
         let placement = placement();
         let mut scene = zgui_scene::Scene::new();
-        scene.begin_frame(zgui_geom::Size::new(64, 64));
+        let mut recording = Recording::new();
+        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
         let wavy = DecorationStyle {
             underline: true,
             overline: true,
@@ -1459,171 +1015,25 @@ mod tests {
             thickness: 2.0,
             color: zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0),
         };
-        let pushed = super::lines(&mut scene, &wavy, placement);
+        let drawn = super::Drawn {
+            placement,
+            clip: compositor_types::ClipRef::INHERIT,
+        };
+        let pushed = super::lines(&mut rec, &wavy, drawn);
         assert_eq!(pushed, 3, "three lines were asked for and three were drawn");
-        for line in &scene.primitives.decorations {
-            let ink = line.ink();
+        for line in recording.lines() {
+            let [_, top, _, height] = line.bounds;
             assert!(
-                ink.top().0 >= placement.line.top().0
-                    && ink.bottom().0 <= placement.line.bottom().0,
-                "a band at {ink:?} reaches outside the line box {:?}",
+                top >= placement.line.top().0 && top + height <= placement.line.bottom().0,
+                "a band at {:?} reaches outside the line box {:?}",
+                line.bounds,
                 placement.line
             );
             assert!(
-                ink.size.height.0 >= wavy.thickness,
-                "a band thinner than its own stroke has nothing to draw: {ink:?}"
+                height >= wavy.thickness,
+                "a band thinner than its own stroke has nothing to draw: {:?}",
+                line.bounds
             );
         }
-    }
-
-    /// A face that holds one curve and hands out the same allocation every time.
-    struct OneCurve(zgui_text::GlyphOutline);
-
-    impl zgui_text::GlyphRaster for OneCurve {
-        fn raster(&self, _key: &zgui_text::GlyphKey) -> Option<zgui_text::GlyphImage> {
-            None
-        }
-
-        fn outline(&self, _key: &zgui_text::OutlineKey) -> Option<zgui_text::GlyphOutline> {
-            Some(std::sync::Arc::clone(&self.0))
-        }
-    }
-
-    /// A source of one outlined glyph, placed the way the content cache places one.
-    struct OneOutline(OneCurve);
-
-    impl super::GlyphSource for OneOutline {
-        fn visit_line(
-            &self,
-            _paragraph: zgui_layout::fragment::ParagraphId,
-            _line: u16,
-            request: super::GlyphRequest,
-            visit: &mut dyn FnMut(super::GlyphRun<'_>),
-        ) {
-            let glyphs = [zgui_text::ShapedGlyph {
-                glyph: 5,
-                x: 6.5,
-                y: 12.0,
-            }];
-            let run = zgui_text::ShapedRun {
-                face: zgui_text::FaceId(1),
-                size: 96.0,
-                instance: zgui_text::VariationInstance::DEFAULT,
-                synthetic_bold: 0.0,
-                synthetic_slant: 0.0,
-                has_color: false,
-                brush: zgui_scene::PaintSlot(0),
-                glyphs: &glyphs,
-                text_start: 0,
-            };
-            let mut placed = Vec::new();
-            crate::content::glyphs::curve::place(&self.0, &run, request.origin, &mut placed);
-            visit(super::GlyphRun {
-                content: super::RunContent::Outlines(&placed),
-                format: zgui_text::GlyphFormat::Mono,
-                paint: zgui_scene::PaintSlot(0),
-                synthetic_bold: 0.0,
-                text_start: 0,
-                shaped: None,
-            });
-        }
-    }
-
-    /// A triangle, as a face's curve.
-    fn curve() -> zgui_text::GlyphOutline {
-        let mut path = zgui_scene::kurbo::BezPath::new();
-        path.move_to((0.0, -10.0));
-        path.line_to((8.0, 0.0));
-        path.line_to((0.0, 0.0));
-        path.close_path();
-        std::sync::Arc::new(path)
-    }
-
-    /// One line of the outlined glyph at a line box whose corner is at (20, 30).
-    fn emit_outline(
-        face: zgui_text::GlyphOutline,
-        inherited: super::Inherited<'_>,
-    ) -> zgui_scene::Scene {
-        let style = crate::lower::lower(&StyleDraft::initial().build(), 1.0);
-        let mut scene = zgui_scene::Scene::new();
-        scene.begin_frame(zgui_geom::Size::new(128, 128));
-        let mut placement = placement();
-        placement.line.origin = Point::new(DevicePx(20.0), DevicePx(30.0));
-        super::emit(
-            &mut scene,
-            &OneOutline(OneCurve(face)),
-            zgui_layout::fragment::ParagraphId(0),
-            0,
-            &style,
-            inherited,
-            placement,
-        );
-        scene
-    }
-
-    #[test]
-    fn an_outlined_glyph_draws_the_face_curve_at_its_pen() {
-        let face = curve();
-        let scene = emit_outline(std::sync::Arc::clone(&face), super::Inherited::default());
-        let item = &scene.primitives.vectors[0];
-        assert!(
-            std::sync::Arc::ptr_eq(&item.path, &face),
-            "the face's own curve is drawn, not a placed copy"
-        );
-        assert_eq!(
-            item.placement,
-            zgui_scene::kurbo::Affine::translate((26.5, 42.0))
-        );
-        assert_eq!(item.brush, zgui_scene::kurbo::Affine::IDENTITY);
-        assert_eq!(
-            item.local_ink.origin,
-            Point::new(DevicePx(26.5), DevicePx(32.0))
-        );
-        assert_eq!(
-            item.local_ink.size,
-            Size::new(DevicePx(8.0), DevicePx(10.0))
-        );
-    }
-
-    #[test]
-    fn a_gradient_outline_maps_its_brush_back_to_the_line() {
-        let ramp = crate::lower::background::GradientSpec {
-            shape: crate::lower::background::GradientShape::Linear { angle: 90.0 },
-            stops: smallvec::smallvec![
-                crate::lower::background::SpecStop {
-                    color: zgui_color::Color::BLACK,
-                    position: None,
-                },
-                crate::lower::background::SpecStop {
-                    color: zgui_color::Color::WHITE,
-                    position: None,
-                },
-            ],
-            interpolation: zgui_color::Interpolation::new(zgui_color::ColorSpace::Srgb),
-            repeating: false,
-        };
-        let scene = emit_outline(
-            curve(),
-            super::Inherited {
-                text_fill: Some(&ramp),
-                decorations: &[],
-                inline: &[],
-            },
-        );
-        let item = &scene.primitives.vectors[0];
-        assert!(
-            matches!(
-                item.fill
-                    .and_then(|fill| fill.id())
-                    .and_then(|id| scene.paints.get(id)),
-                Some(zgui_scene::Paint::Gradient { .. })
-            ),
-            "the glyph is filled with the ramp"
-        );
-        assert_eq!(
-            item.brush * item.placement,
-            zgui_scene::kurbo::Affine::IDENTITY,
-            "the ramp is measured on the line box, so the brush undoes the glyph's placement"
-        );
     }
 }

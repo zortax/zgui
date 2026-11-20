@@ -11,9 +11,8 @@ use zgui_layout::tree::store::LayoutStore;
 use zgui_profile::{Counter, counter};
 use zgui_scene::ExternalTextureId;
 use zgui_scene::{ResourceGeneration, ResourceKey, ResourceRegistry};
-use zgui_text::{GlyphRaster, RasterPath, ShapedGlyphs};
+use zgui_text::{GlyphRaster, ShapedGlyphs};
 
-use crate::content::glyphs::OutlineGlyph;
 use crate::content::glyphs::{GlyphCache, Rasterising};
 use crate::content::images::{Content, ImageError};
 use crate::content::vectors::{
@@ -21,9 +20,7 @@ use crate::content::vectors::{
     VectorMaskRequest, VectorMaskSource,
 };
 use crate::emit::replaced::Source;
-use crate::emit::text::{
-    GlyphPlacementSource, GlyphRequest, GlyphRun, GlyphSource, PlacedGlyph, RunContent,
-};
+use crate::emit::text::{GlyphPlacementSource, GlyphSource, PlacedGlyph};
 use crate::walk::order::ReplacedSource;
 use crate::walk::replay::hold::ResourceOwner;
 
@@ -654,74 +651,15 @@ impl GlyphPlacementSource for FrameContent<'_> {
 }
 
 impl GlyphSource for FrameContent<'_> {
-    /// Answers in tiles or in curves, according to what the run and the surface make of each other.
-    ///
-    /// This is the one place the promotion happens, and it happens *before* anything is rasterised:
-    /// a run that leaves the atlas never allocates a tile, never uploads one, and never touches the
-    /// glyph cache, so a page of turned headings does not evict the body text behind it.
     fn visit_line(
         &self,
         paragraph: ParagraphId,
         line: u16,
-        request: GlyphRequest,
-        visit: &mut dyn FnMut(GlyphRun<'_>),
+        visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
-        let Some(key) = self.store.paragraph_key(paragraph) else {
-            return;
-        };
-        let mut placed: Vec<PlacedGlyph> = Vec::new();
-        let mut outlined: Vec<OutlineGlyph> = Vec::new();
-        self.shaped.visit_line(key, line, &mut |run| {
-            if run.raster_path(request.surface) == RasterPath::Vector {
-                outlined.clear();
-                crate::content::glyphs::curve::place(
-                    self.raster,
-                    &run,
-                    request.origin,
-                    &mut outlined,
-                );
-                if !outlined.is_empty() {
-                    visit(GlyphRun {
-                        content: RunContent::Outlines(&outlined),
-                        // A run drawn as curves has no tiles; the format is what a tile's bytes
-                        // mean, and there are none.
-                        format: crate::content::glyphs::format_of(run.raster_style(false)),
-                        paint: run.brush,
-                        synthetic_bold: run.synthetic_bold * run.size,
-                        text_start: run.text_start,
-                        shaped: Some(run),
-                    });
-                    return;
-                }
-                // A face that has no curves at all — a bitmap-only face — is drawn from tiles
-                // however large it is and whatever the transform does to it. A resampled letter is
-                // a letter; the alternative is a run that draws nothing, which is what a promotion
-                // that could not be honoured would silently be.
-            }
-            let style = run.raster_style(request.subpixel);
-            placed.clear();
-            {
-                crate::content::glyphs::place(
-                    &mut self.writing.borrow_mut(),
-                    self.raster,
-                    &run,
-                    style,
-                    request.origin,
-                    &mut placed,
-                );
-            }
-            if placed.is_empty() {
-                return;
-            }
-            visit(GlyphRun {
-                content: RunContent::Tiles(&placed),
-                format: crate::content::glyphs::format_of(style),
-                paint: run.brush,
-                synthetic_bold: 0.0,
-                text_start: run.text_start,
-                shaped: Some(run),
-            });
-        });
+        if let Some(key) = self.store.paragraph_key(paragraph) {
+            self.shaped.visit_line(key, line, visit);
+        }
     }
 }
 

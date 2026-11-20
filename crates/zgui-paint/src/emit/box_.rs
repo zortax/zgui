@@ -5,14 +5,14 @@
 //! last — after the box's descendants, which is why it is emitted separately rather than in the
 //! run below.
 
+use compositor_types::{BorderStyle, Color as Premultiplied, PaintKind, Quad, Shadow};
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Edges, Point, Rect, Size, Vec2};
-use zgui_scene::{
-    ClipId, Paint, PaintOwner, PaintRef, PaintRole, PropertyOwner, Quad, Scene, Shadow, SpatialId,
-};
+use zgui_scene::{ClipId, Paint, PaintOwner, PaintRef, PaintRole, PropertyOwner, Scene, SpatialId};
 
 use crate::emit::paint::gradient_paint;
+use crate::emit::record::{Recorder, flat_radii, local_rect};
 use crate::lower::PaintStyle;
 use crate::lower::anim::{OwnedPaints, border_paint};
 use crate::lower::border::inner_radii;
@@ -52,21 +52,26 @@ impl BoxPlacement {
 }
 
 /// Emits the shadows a box casts outwards, behind everything else it draws.
-pub fn outer_shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement) -> usize {
-    shadows(scene, style, placement, false)
+pub fn outer_shadows(rec: &mut Recorder<'_>, style: &PaintStyle, placement: BoxPlacement) -> usize {
+    shadows(rec, style, placement, false)
 }
 
 /// Emits the shadows a box casts inwards, over its background and under its border.
-pub fn inset_shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement) -> usize {
-    shadows(scene, style, placement, true)
+pub fn inset_shadows(rec: &mut Recorder<'_>, style: &PaintStyle, placement: BoxPlacement) -> usize {
+    shadows(rec, style, placement, true)
 }
 
 /// Emits one direction's shadows, last written first so the first written ends up on top.
 ///
 /// A drop shadow is cast by the border box. An inset shadow is clipped to the padding box, so it
 /// never covers the border, and its hole is concentric with the padding box's corners.
-fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset: bool) -> usize {
-    let (element, element_radii) = if inset {
+fn shadows(
+    rec: &mut Recorder<'_>,
+    style: &PaintStyle,
+    placement: BoxPlacement,
+    inset: bool,
+) -> usize {
+    let (caster, caster_radii) = if inset {
         (
             placement.border_box.inset(placement.border),
             inner_radii(placement.radii, placement.border),
@@ -74,7 +79,7 @@ fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset
     } else {
         (placement.border_box, placement.radii)
     };
-    if inset && element.is_empty() {
+    if inset && caster.is_empty() {
         return 0;
     }
     let mut pushed = 0;
@@ -82,36 +87,44 @@ fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset
         if spec.inset != inset || spec.is_invisible() {
             continue;
         }
-        let mut shadow = if inset {
-            Shadow::inset_shadow(
-                element,
-                (spec.offset_x, spec.offset_y),
-                spec.spread,
-                spec.deviation,
-                spec.color,
-            )
-        } else {
-            Shadow::drop_shadow(
-                element,
-                (spec.offset_x, spec.offset_y),
-                spec.spread,
-                spec.deviation,
-                spec.color,
-            )
-        };
         // A spread grows the shape a drop shadow casts and *shrinks* the one an inset shadow leaves
         // open, so the corners of the two move in opposite directions: an inset shadow's shape is
         // concentric inside the box, and growing its radii would round the hole the wrong way.
         let spread = if inset { -spec.spread } else { spec.spread };
-        shadow.radii = flatten(grow(element_radii, spread));
-        shadow.element_radii = flatten(element_radii);
-        // A shadow is the box's own shape blurred, so it is cut the same way: a squircle casting a
-        // rounded-rectangle shadow shows the shadow's corners outside its own.
-        shadow.shape = style.corner_shape.get();
-        shadow.transform = placement.transform.index();
-        pushed += usize::from(scene.push_shadow(shadow.clipped(placement.clip)).is_some());
+        let shadow = Shadow {
+            shape_bounds: shadow_shape(caster, (spec.offset_x, spec.offset_y), spread),
+            radii: flat_radii(grow(caster_radii, spread)),
+            caster_bounds: local_rect(caster),
+            caster_radii: flat_radii(caster_radii),
+            // A shadow is the box's own shape blurred, so it is cut the same way: a squircle
+            // casting a rounded-rectangle shadow shows the shadow's corners outside its own.
+            shapes: [style.corner_shape.get(); 4],
+            color: Premultiplied(spec.color.to_premultiplied_srgb()),
+            blur: spec.deviation,
+            clip: rec.clip(placement.clip),
+            space: rec.space(placement.transform),
+            inset: u32::from(inset),
+        };
+        rec.shadow(shadow);
+        pushed += 1;
     }
     pushed
+}
+
+/// The shape a shadow blurs: `caster` moved by `offset` and grown by `spread` on every side.
+///
+/// A negative spread shrinks the shape, and the shape never shrinks past its centre.
+fn shadow_shape(caster: Rect<DevicePx, Device>, offset: (f32, f32), spread: f32) -> [f32; 4] {
+    let width = (caster.size.width.0 + 2.0 * spread).max(0.0);
+    let height = (caster.size.height.0 + 2.0 * spread).max(0.0);
+    let center_x = caster.origin.x.0 + offset.0 + caster.size.width.0 * 0.5;
+    let center_y = caster.origin.y.0 + offset.1 + caster.size.height.0 * 0.5;
+    [
+        center_x - width * 0.5,
+        center_y - height * 0.5,
+        width,
+        height,
+    ]
 }
 
 /// Emits a box's background and its border, which are one quad when the background is a flat colour.
@@ -119,38 +132,43 @@ fn shadows(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement, inset
 /// A gradient layer is a quad of its own drawn over the colour, and the border rides on the last
 /// quad pushed so that its stroke is drawn against the outermost fill rather than under it.
 pub fn background_and_border(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     style: &PaintStyle,
     placement: BoxPlacement,
     shaders: &dyn crate::content::shader::ShaderSource,
     pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
 ) -> usize {
-    if let Some(pushed) = shaded(scene, style, placement, shaders, pointer) {
+    if let Some(pushed) = shaded(rec.scene(), style, placement, shaders, pointer) {
         return pushed;
     }
-    let (fills, draws_border) = fills_of(scene, style, placement);
+    let (fills, draws_border) = fills_of(rec.scene(), style, placement);
     let borders = border_widths(placement.border);
     let stroke = match placement.owner_of(PaintRole::BorderSides) {
-        Some(name) if draws_border => scene
-            .paints
-            .owned(name, border_paint(style.border.colors, placement.border)),
-        _ => border_stroke(scene, style, borders, true),
+        Some(name) if draws_border => {
+            let owned = rec
+                .scene()
+                .paints
+                .owned(name, border_paint(style.border.colors, placement.border));
+            rec.slot(owned)
+        }
+        _ => {
+            let stroke = border_stroke(rec.scene(), style, borders, true);
+            rec.paint(stroke)
+        }
     };
+    // An owned background colour is always the first fill.
+    let owned_fill = placement.owner_of(PaintRole::Background).is_some();
     let last = fills.len().saturating_sub(1);
-    let mut pushed = 0;
-    for (index, fill) in fills.into_iter().enumerate() {
-        pushed += usize::from(
-            push(
-                scene,
-                placement,
-                style,
-                fill,
-                (index == last).then_some((borders, stroke, style)),
-            )
-            .is_some(),
-        );
+    for (index, fill) in fills.iter().enumerate() {
+        let fill = if index == 0 && owned_fill {
+            rec.slot(*fill)
+        } else {
+            rec.paint(*fill)
+        };
+        let border = (index == last).then_some((borders, stroke));
+        push(rec, placement, style, fill, border);
     }
-    pushed
+    fills.len()
 }
 
 /// Every paint a box's background resolves to, last written first, and whether it draws a border.
@@ -276,35 +294,43 @@ fn shaded(
     Some(pushed)
 }
 
-/// Pushes one quad of a box, optionally carrying the border.
+/// Records one quad of a box, optionally carrying the border widths and stroke.
 fn push(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     placement: BoxPlacement,
     style: &PaintStyle,
-    fill: PaintRef,
-    border: Option<([f32; 4], PaintRef, &PaintStyle)>,
-) -> Option<zgui_scene::DrawOrder> {
-    let mut quad = Quad::filled(placement.border_box, fill)
-        .clipped(placement.clip)
-        .transformed(placement.transform)
-        .with_radii(placement.radii)
-        .with_corner_shape(style.corner_shape);
-    if let Some((widths, stroke, style)) = border {
-        quad = quad.with_border(widths, stroke, style.border.style.to_scene());
-    }
+    fill: compositor_types::PaintRef,
+    border: Option<([f32; 4], compositor_types::PaintRef)>,
+) {
+    let (widths, stroke) = border.unwrap_or(([0.0; 4], compositor_types::PaintRef::NONE));
     // Only a paint that is read at a point has an origin to be read from, and saying so is what
     // keeps every flat-filled box in the document carrying a zero it does not use.
-    if quad.samples_its_paint() {
-        quad.reanchor_paint(Size::new(
-            placement.border_box.origin.x,
-            placement.border_box.origin.y,
-        ));
-    }
-    scene.push_quad(quad)
+    let samples = [fill, stroke]
+        .iter()
+        .any(|paint| paint.kind == PaintKind::GRADIENT);
+    let origin = placement.border_box.origin;
+    let (clip, space) = (rec.clip(placement.clip), rec.space(placement.transform));
+    rec.quad(Quad {
+        bounds: local_rect(placement.border_box),
+        radii: flat_radii(placement.radii),
+        shapes: [style.corner_shape.get(); 4],
+        border: widths,
+        fill,
+        stroke,
+        paint_origin: if samples {
+            [origin.x.0, origin.y.0]
+        } else {
+            [0.0; 2]
+        },
+        clip,
+        space,
+        style: BorderStyle(style.border.style.to_scene() as u8),
+        _pad: [0; 3],
+    });
 }
 
 /// Emits a box's outline, which is drawn outside the border box and after the box's descendants.
-pub fn outline(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement) -> usize {
+pub fn outline(rec: &mut Recorder<'_>, style: &PaintStyle, placement: BoxPlacement) -> usize {
     let Some(outline) = &style.outline else {
         return 0;
     };
@@ -319,18 +345,29 @@ pub fn outline(scene: &mut Scene, style: &PaintStyle, placement: BoxPlacement) -
         return 0;
     }
     let stroke = match placement.owner_of(PaintRole::Outline) {
-        Some(name) => scene.paints.owned(name, Paint::Solid(outline.color)),
-        None => scene.paints.add(Paint::Solid(outline.color)),
+        Some(name) => {
+            let owned = rec.scene().paints.owned(name, Paint::Solid(outline.color));
+            rec.slot(owned)
+        }
+        None => rec.color(outline.color),
     };
-    let quad = Quad::filled(rect, PaintRef::NONE)
-        .clipped(placement.clip)
-        .transformed(placement.transform)
-        .with_radii(grow(placement.radii, reach))
+    let (clip, space) = (rec.clip(placement.clip), rec.space(placement.transform));
+    rec.quad(Quad {
+        bounds: local_rect(rect),
+        radii: flat_radii(grow(placement.radii, reach)),
         // An outline follows the box it outlines: a squircle with a square outline round it reads
         // as two boxes rather than one.
-        .with_corner_shape(style.corner_shape)
-        .with_border([outline.width; 4], stroke, outline.style.to_scene());
-    usize::from(scene.push_quad(quad).is_some())
+        shapes: [style.corner_shape.get(); 4],
+        border: [outline.width; 4],
+        fill: compositor_types::PaintRef::NONE,
+        stroke,
+        paint_origin: [0.0; 2],
+        clip,
+        space,
+        style: BorderStyle(outline.style.to_scene() as u8),
+        _pad: [0; 3],
+    });
+    1
 }
 
 /// The border widths a quad carries, in top, right, bottom, left order.
@@ -367,20 +404,6 @@ fn border_stroke(scene: &mut Scene, style: &PaintStyle, widths: [f32; 4], sides:
     scene.paints.add(zgui_scene::Paint::Solid(color))
 }
 
-/// The eight-float form of four elliptical radii.
-pub fn flatten(radii: Corners<Vec2<DevicePx>>) -> [f32; 8] {
-    [
-        radii.top_left.x.0,
-        radii.top_left.y.0,
-        radii.top_right.x.0,
-        radii.top_right.y.0,
-        radii.bottom_right.x.0,
-        radii.bottom_right.y.0,
-        radii.bottom_left.x.0,
-        radii.bottom_left.y.0,
-    ]
-}
-
 /// Radii grown outwards by `by`, which is what an outline's and a spread shadow's corners take.
 ///
 /// A square corner stays square however far it is grown: growing a rectangle with a sharp corner
@@ -413,9 +436,10 @@ pub fn padding_radii(
 
 #[cfg(test)]
 mod tests {
-    use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
+    use zgui_geom::{Corners, DevicePx, Point, Rect, Size, Vec2};
 
     use super::{BoxPlacement, grow, inset_shadows, outer_shadows};
+    use crate::emit::record::Recording;
     use crate::lower::PaintStyle;
     use crate::lower::shadow::ShadowSpec;
 
@@ -449,17 +473,35 @@ mod tests {
         style
     }
 
-    /// The corner radii of the only shadow a scene holds.
-    fn only_shadow_radius(style: &PaintStyle, inset: bool) -> f32 {
+    /// The only shadow `emit` records.
+    fn only_shadow(
+        emit: impl FnOnce(&mut crate::emit::record::Recorder<'_>) -> usize,
+    ) -> compositor_types::Shadow {
         let mut scene = zgui_scene::Scene::new();
-        scene.begin_frame(Size::<i32, Device>::new(256, 256));
-        let pushed = if inset {
-            inset_shadows(&mut scene, style, placement())
-        } else {
-            outer_shadows(&mut scene, style, placement())
-        };
-        assert_eq!(pushed, 1, "the fixture has to push exactly one shadow");
-        scene.primitives.shadows[0].radii[0]
+        let mut recording = Recording::new();
+        let mut rec = recording.recorder(
+            &mut scene,
+            zgui_scene::SpatialId::VIEWPORT,
+            zgui_scene::ClipId::ROOT,
+        );
+        assert_eq!(
+            emit(&mut rec),
+            1,
+            "the fixture has to record exactly one shadow"
+        );
+        recording.shadows()[0]
+    }
+
+    /// The corner radii of the only shadow a box with `style` casts.
+    fn only_shadow_radius(style: &PaintStyle, inset: bool) -> f32 {
+        only_shadow(|rec| {
+            if inset {
+                inset_shadows(rec, style, placement())
+            } else {
+                outer_shadows(rec, style, placement())
+            }
+        })
+        .radii[0]
     }
 
     #[test]
@@ -473,7 +515,7 @@ mod tests {
     }
 
     /// The only inset shadow a 48-pixel box with a two-pixel border and six-pixel corners emits.
-    fn bordered_inset(offset: (f32, f32), spread: f32) -> zgui_scene::Shadow {
+    fn bordered_inset(offset: (f32, f32), spread: f32) -> compositor_types::Shadow {
         let mut style = with_shadow(spread, true);
         style.shadows[0].offset_x = offset.0;
         style.shadows[0].offset_y = offset.1;
@@ -486,10 +528,7 @@ mod tests {
             radii: Corners::uniform(Vec2::new(DevicePx(6.0), DevicePx(6.0))),
             ..placement()
         };
-        let mut scene = zgui_scene::Scene::new();
-        scene.begin_frame(Size::<i32, Device>::new(256, 256));
-        assert_eq!(inset_shadows(&mut scene, &style, placement), 1);
-        scene.primitives.shadows[0]
+        only_shadow(|rec| inset_shadows(rec, &style, placement))
     }
 
     #[test]
@@ -497,9 +536,8 @@ mod tests {
         let shadow = bordered_inset((0.0, 0.0), 2.0);
         assert_eq!(shadow.inset, 1);
         // The padding box: the border box less the two-pixel border.
-        assert_eq!(shadow.bounds, [12.0, 12.0, 44.0, 44.0]);
-        assert_eq!(shadow.element_bounds, [12.0, 12.0, 44.0, 44.0]);
-        assert_eq!(shadow.element_radii, [4.0; 8]);
+        assert_eq!(shadow.caster_bounds, [12.0, 12.0, 44.0, 44.0]);
+        assert_eq!(shadow.caster_radii, [4.0; 8]);
         // The hole: the padding box less the spread, with concentric corners.
         assert_eq!(shadow.shape_bounds, [14.0, 14.0, 40.0, 40.0]);
         assert_eq!(shadow.radii, [2.0; 8]);
@@ -508,7 +546,7 @@ mod tests {
     #[test]
     fn an_inset_offset_moves_the_hole_and_keeps_the_painted_box() {
         let shadow = bordered_inset((0.0, 2.0), 0.0);
-        assert_eq!(shadow.bounds, [12.0, 12.0, 44.0, 44.0]);
+        assert_eq!(shadow.caster_bounds, [12.0, 12.0, 44.0, 44.0]);
         assert_eq!(shadow.shape_bounds, [12.0, 14.0, 44.0, 44.0]);
     }
 

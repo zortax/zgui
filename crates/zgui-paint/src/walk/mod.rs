@@ -43,6 +43,7 @@ use crate::emit::{BoxPlacement, NoGlyphs};
 use zgui_dom::NodeKey;
 use zgui_dom::side::AnimOverride;
 
+use crate::emit::record::{Items, Recorder};
 use crate::lower::anim::{AnimOverrides, NoAnim, OwnedPaints};
 use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
 use crate::sync::CompositorSync;
@@ -175,7 +176,7 @@ impl<'a> PaintInput<'a> {
 /// What one emit walk did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaintReport {
-    /// How many primitives reached the display list.
+    /// How many compositor items and scene primitives the visited fragments draw.
     pub primitives: usize,
     /// Which fragments contributed, when the walk was asked to record them.
     pub emitted: Vec<FragKey>,
@@ -289,6 +290,10 @@ pub struct Painter {
     scratch: WalkScratch,
     /// The compositor chunks the walk records fragments as, when one is attached.
     sync: Option<CompositorSync>,
+    /// The items of the fragment being encoded.
+    items: Items,
+    /// The items of the outline being emitted.
+    outline: Items,
 }
 
 /// The containers one emit walk fills, empty between walks.
@@ -339,7 +344,7 @@ impl Painter {
     /// Records every fragment the walk visits as a compositor chunk through `sync`.
     ///
     /// A fragment `sync` has not recorded is encoded when the walk reaches it, even when its
-    /// record would replay.
+    /// record would replay. Without a sync, the walk records its items nowhere.
     pub fn attach_compositor(&mut self, sync: CompositorSync) {
         self.sync = Some(sync);
     }
@@ -962,6 +967,44 @@ impl Pass<'_, '_> {
         );
     }
 
+    /// Emits the outline of the box `key`, whose first fragment is `frag`, into its own chunk
+    /// when the damage reaches it.
+    fn outline(
+        &mut self,
+        store: &LayoutStore,
+        key: BoxKey,
+        frag: FragKey,
+        style_ref: PaintStyleRef,
+        owned: Option<OwnedPaints>,
+    ) {
+        let Some(fragment) = store.fragment(frag) else {
+            return;
+        };
+        if !self.reaches(self.anchored(fragment, fragment.ink)) {
+            return;
+        }
+        let Some(mut style) = self.painter.styles.get(style_ref).cloned() else {
+            return;
+        };
+        if let Some(over) = self.anim_of(store, key) {
+            crate::lower::anim::compose(&mut style, over);
+        }
+        let mut emission = self.emission(fragment, &style, &[], None, &[]);
+        emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
+        let painter = &mut *self.painter;
+        let mut rec = Recorder::new(
+            self.scene,
+            &mut painter.outline,
+            painter.sync.as_mut().and_then(CompositorSync::resolver),
+            crate::lower::transform::of(fragment),
+            fragment.clip,
+        );
+        self.report.primitives += order::outline(&mut rec, &emission);
+        if let Some(sync) = &mut painter.sync {
+            sync.record_outline(store, fragment, &painter.outline, self.scene);
+        }
+    }
+
     /// Emits one fragment, replaying its recorded range when nothing about it changed.
     fn paint(
         &mut self,
@@ -1074,13 +1117,16 @@ impl Pass<'_, '_> {
         match reuse {
             Reuse::Replay(offset) => {
                 self.verify_replay(fragment);
-                let (source, chunk) = self
+                let (source, chunk, items) = self
                     .painter
                     .cache
                     .chunk(fragment.key)
                     .expect("a replayable fragment has a recorded chunk");
-                let range = self.scene.replay_chunk(chunk, offset, source);
-                let pushed = (range.end - range.start) as usize;
+                let mut pushed = items;
+                if !chunk.is_empty() {
+                    let range = self.scene.replay_chunk(chunk, offset, source);
+                    pushed += (range.end - range.start) as usize;
+                }
                 self.report.primitives += pushed;
                 self.painter.cache.replayed(fragment);
                 if let Some(sync) = &mut self.painter.sync {
@@ -1109,16 +1155,25 @@ impl Pass<'_, '_> {
                 // draws that had nowhere to go, and it leaves a hole in the chunk that nothing
                 // downstream can see.
                 let refusals = self.input.resources.refusals();
-                // Everything the emitters push between here and the take is the fragment's own,
-                // captured before the cull so the record is the painting and never one position's
-                // clipped part of it.
+                // Everything the emitters push into the scene between here and the take is the
+                // fragment's own, captured before the cull so the record is the painting and never
+                // one position's clipped part of it.
                 self.scene
                     .begin_chunk_capture(self.painter.cache.take_capture_scratch());
-                let emitted = order::fragment_tracked(self.scene, fragment, &emission);
+                let painter = &mut *self.painter;
+                let mut rec = Recorder::new(
+                    self.scene,
+                    &mut painter.items,
+                    painter.sync.as_mut().and_then(CompositorSync::resolver),
+                    transform,
+                    clip,
+                );
+                let emitted = order::fragment_tracked(&mut rec, fragment, &emission);
                 let chunk = self.scene.take_chunk_capture();
-                if let Some(sync) = &mut self.painter.sync {
-                    sync.record(store, fragment, &chunk, self.scene);
+                if let Some(sync) = &mut painter.sync {
+                    sync.record(store, fragment, &painter.items, &chunk, self.scene);
                 }
+                let items = painter.items.len();
                 self.report.primitives += emitted.pushed;
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
                     && let Some(node) = fragment.node
@@ -1139,6 +1194,7 @@ impl Pass<'_, '_> {
                     painted,
                     Encoding {
                         chunk,
+                        items,
                         resources: &self.named,
                         // A deferred drawing drew nothing this frame, which a record would replay.
                         complete: self.input.resources.refusals() == refusals
@@ -1332,23 +1388,13 @@ impl stacking::Visitor for Pass<'_, '_> {
 
     fn leave(&mut self, store: &LayoutStore, key: BoxKey) {
         // The outline is drawn after the box's descendants, which is Appendix E's step ten.
-        if let Some((frag, style_ref, owned)) = self.outlines.pop().flatten()
-            && let Some(fragment) = store.fragment(frag)
-            && self.reaches(self.anchored(fragment, fragment.ink))
-            && let Some(entry) = self.painter.styles.get(style_ref)
-        {
-            // Copied only for an animating box, for the reason `enter` gives.
-            let style = match self.anim_of(store, key) {
-                Some(over) => {
-                    let mut composed = entry.clone();
-                    crate::lower::anim::compose(&mut composed, over);
-                    Cow::Owned(composed)
+        match self.outlines.pop().flatten() {
+            Some((frag, style_ref, owned)) => self.outline(store, key, frag, style_ref, owned),
+            None => {
+                if let Some(sync) = &mut self.painter.sync {
+                    sync.drop_outline(key);
                 }
-                None => Cow::Borrowed(entry),
-            };
-            let mut emission = self.emission(fragment, &style, &[], None, &[]);
-            emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
-            self.report.primitives += order::outline(self.scene, &emission);
+            }
         }
         self.alpha.pop();
         self.opaque.pop();

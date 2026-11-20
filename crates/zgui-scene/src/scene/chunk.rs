@@ -154,8 +154,6 @@ pub struct ChunkPrims {
     pub backdrops: Vec<BackdropFilter>,
     /// Vector content, rasterised elsewhere and composited back in.
     pub vectors: Vec<VectorItem>,
-    /// The glyph runs the encoding drew, by glyph id, beside the sprites it pushed for them.
-    pub glyph_runs: Vec<crate::scene::CapturedRun>,
     /// The coordinate system each entry was pushed under, parallel to [`ChunkPrims::ops`].
     ///
     /// Empty unless the invariant checks are on — see [`Scene`]'s `spaces`.
@@ -351,7 +349,6 @@ impl ChunkPrims {
         self.externals.clear();
         self.backdrops.clear();
         self.vectors.clear();
-        self.glyph_runs.clear();
         self.spaces.clear();
         self.orders.clear();
         self.span = 0;
@@ -542,6 +539,11 @@ impl Scene {
         if let Some(capture) = &mut self.capture {
             capture.minted.push(id);
         }
+    }
+
+    /// Returns how many operations the open capture holds, or zero outside a capture.
+    pub fn captured(&self) -> usize {
+        self.capture.as_ref().map_or(0, ChunkPrims::len)
     }
 
     /// Closes the capture opened by [`Scene::begin_chunk_capture`] and returns it.

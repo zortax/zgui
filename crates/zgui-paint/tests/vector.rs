@@ -436,10 +436,10 @@ fn the_fill_and_stroke_custom_properties_reach_the_display_list() {
     );
 }
 
-/// A drawing sorts against everything else by the same rule every primitive does, and is clipped by
-/// the same chain — an icon inside a scrollport is not a special case in the scene.
+/// A drawing is clipped by the same chain as everything else its fragment draws — an icon inside a
+/// scrollport is not a special case in the scene.
 #[test]
-fn a_drawing_takes_a_draw_order_and_a_clip_like_any_other_primitive() {
+fn a_drawing_is_clipped_like_any_other_primitive() {
     let css = "root { display: block; width: 200px; height: 100px; overflow: hidden;
                       background: rgb(255, 255, 255) }
                mark { display: block; width: 48px; height: 48px }";
@@ -449,18 +449,6 @@ fn a_drawing_takes_a_draw_order_and_a_clip_like_any_other_primitive() {
 
     let scene = harness.scene();
     let item = &scene.primitives.vectors[0];
-    let backdrop = scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| quad.ink().size.width.0 >= 200.0)
-        .expect("the root painted its background");
-    assert!(
-        item.order > backdrop.order,
-        "a drawing over a background has to sort over it: {} against {}",
-        item.order,
-        backdrop.order
-    );
     assert_ne!(
         item.clip,
         zgui_scene::ClipId::ROOT,

@@ -144,7 +144,7 @@ fn a_translucent_row_of_disjoint_children_allocates_no_group_target() {
         "fifty non-overlapping rows folded their alpha rather than taking fifty targets"
     );
     assert!(
-        measurement.get(Counter::PrimitivesEmitted) >= 50,
+        harness.redraw().quads().len() >= 50,
         "and they were drawn, rather than skipped into a zero that looks like a win"
     );
 }

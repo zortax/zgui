@@ -914,6 +914,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-testing"
+version = "0.1.0"
+dependencies = [
+ "compositor-api",
+ "compositor-damage",
+ "compositor-geom",
+ "compositor-types",
+ "compositor-vector",
+ "png 0.17.16",
+ "pollster",
+ "smallvec",
+ "wgpu",
+]
+
+[[package]]
 name = "compositor-text"
 version = "0.1.0"
 dependencies = [
@@ -2029,7 +2044,7 @@ dependencies = [
  "image-webp",
  "moxcms",
  "num-traits",
- "png",
+ "png 0.18.1",
  "zune-core",
  "zune-jpeg",
 ]
@@ -2403,7 +2418,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "once_cell",
- "png",
+ "png 0.18.1",
  "thiserror 2.0.19",
  "windows-sys 0.61.2",
 ]
@@ -3164,6 +3179,19 @@ dependencies = [
 
 [[package]]
 name = "png"
+version = "0.17.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
+dependencies = [
+ "bitflags 1.3.2",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide",
+]
+
+[[package]]
+name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
@@ -3188,6 +3216,12 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "polycool"
@@ -4687,7 +4721,7 @@ dependencies = [
  "futures-intrusive",
  "log",
  "peniko",
- "png",
+ "png 0.18.1",
  "skrifa",
  "static_assertions",
  "thiserror 2.0.19",
@@ -5825,8 +5859,7 @@ dependencies = [
  "zgui-runtime",
  "zgui-scene",
  "zgui-shader",
- "zgui-space",
- "zgui-testkit-scene",
+ "zgui-testkit-compositor",
  "zgui-text",
  "zgui-text-parley",
  "zgui-tokio",
@@ -5899,6 +5932,7 @@ dependencies = [
  "zgui-profile",
  "zgui-render-vector-vello",
  "zgui-render-wgpu",
+ "zgui-testkit-compositor",
  "zgui-testkit-scene",
  "zgui-text-parley",
  "zgui-ui",
@@ -6516,6 +6550,7 @@ dependencies = [
  "zgui-scroll",
  "zgui-space",
  "zgui-style",
+ "zgui-testkit-compositor",
  "zgui-testkit-scene",
  "zgui-text",
  "zgui-text-style",
@@ -6570,6 +6605,8 @@ dependencies = [
 name = "zgui-shader"
 version = "0.1.0"
 dependencies = [
+ "compositor-api",
+ "compositor-types",
  "trybuild",
  "zgui-custom",
  "zgui-elements",
@@ -6584,6 +6621,7 @@ dependencies = [
  "zgui-scene",
  "zgui-shader-macro",
  "zgui-space",
+ "zgui-testkit-compositor",
  "zgui-testkit-scene",
  "zgui-view",
  "zgui-wgsl",
@@ -6664,8 +6702,10 @@ dependencies = [
  "compositor-api",
  "compositor-capture",
  "compositor-core",
+ "compositor-testing",
  "compositor-text",
  "compositor-types",
+ "compositor-vello",
  "compositor-wgpu",
 ]
 
@@ -6769,13 +6809,15 @@ name = "zgui-ui"
 version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
- "image",
+ "compositor-api",
+ "compositor-types",
  "rustc-hash 2.1.3",
  "zgui",
  "zgui-layout",
  "zgui-platform-headless",
  "zgui-render-vector-vello",
  "zgui-render-wgpu",
+ "zgui-testkit-compositor",
  "zgui-testkit-view",
  "zgui-ui-icons",
  "zgui-ui-primitives",

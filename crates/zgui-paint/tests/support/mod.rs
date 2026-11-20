@@ -7,8 +7,11 @@
 // The harness is compiled into several test targets and each uses a different part of it.
 #![allow(dead_code, unreachable_pub)]
 
+pub(crate) mod chunk;
+
 use std::sync::Arc;
 
+use compositor_types::CommitCounters;
 use zgui_bits::DamageSet;
 use zgui_dom::host::{Intrinsic, ReplacedContent, ReplacedId};
 use zgui_dom::node::flags::NodeFlags;
@@ -20,9 +23,10 @@ use zgui_layout::style::DeviceStyle;
 use zgui_layout::tree::LayoutTree;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_layout::{BoxKey, FragKey};
-use zgui_paint::{PaintInput, Painter};
+use zgui_paint::{CompositorSync, PaintInput, Painter, SyncReport};
 use zgui_scene::Scene;
 use zgui_style::{SheetOrigin, SheetSource, StyleEngine, Viewport};
+use zgui_testkit_compositor::{Drawing, Session};
 use zgui_text::{BreakRequest, BrokenParagraph, ParagraphContent, ParagraphKey, StrutMetrics};
 use zgui_text_style::TextPaint;
 use zgui_text_style::TextStyle;
@@ -133,6 +137,8 @@ pub(crate) struct Harness {
     pub(crate) painter: Painter,
     /// What the last fragment pass said must be redrawn.
     pub(crate) damage: DamageSet,
+    /// The compositor the painter records into, and what the last frame did there.
+    pub(crate) compositor: Output,
     /// The surface extent.
     pub(crate) viewport: Size<i32, Device>,
     /// How many device pixels one CSS pixel is.
@@ -184,6 +190,7 @@ impl Harness {
             scene: Scene::new(),
             painter: Painter::new(),
             damage: DamageSet::new(),
+            compositor: Output::new([width as u32, height as u32]),
             viewport: Size::new(width as i32, height as i32),
             scale: 1.0,
             scroll: zgui_layout::scroll_region::ScrollOffsets::new(),
@@ -296,6 +303,7 @@ impl Harness {
 
     /// Emits a frame against the damage the fragment pass accumulated.
     pub(crate) fn paint(&mut self) -> zgui_paint::PaintReport {
+        let retired = self.store.drain_retired_paint();
         self.scene.begin_frame(self.viewport);
         // Recorded in every profile. The tests below compare what was emitted against what the
         // damage reaches, so a recording that only happened in one profile would leave the other
@@ -304,7 +312,13 @@ impl Harness {
         let mut input = PaintInput::new(&self.store, &self.damage);
         input.record_emitted = true;
         input.placements = Some(&placements);
-        let report = self.painter.emit(&input, &mut self.scene);
+        let report = emit(
+            &mut self.painter,
+            &mut self.compositor,
+            (&self.store, &retired),
+            &input,
+            &mut self.scene,
+        );
         self.scene.finish(&self.damage);
         report
     }
@@ -318,6 +332,7 @@ impl Harness {
         content: &mut zgui_paint::ContentCache,
         raster: &dyn zgui_text::GlyphRaster,
     ) -> zgui_paint::PaintReport {
+        let retired = self.store.drain_retired_paint();
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
         content.begin_frame();
@@ -328,7 +343,13 @@ impl Harness {
                 replaced: &frame,
                 ..PaintInput::new(&self.store, &self.damage)
             };
-            self.painter.emit(&input, &mut self.scene)
+            emit(
+                &mut self.painter,
+                &mut self.compositor,
+                (&self.store, &retired),
+                &input,
+                &mut self.scene,
+            )
         };
         self.scene.finish(&self.damage);
         report
@@ -342,6 +363,7 @@ impl Harness {
         &mut self,
         vectors: &zgui_paint::VectorCache,
     ) -> zgui_paint::PaintReport {
+        let retired = self.store.drain_retired_paint();
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
         let report = {
@@ -352,7 +374,13 @@ impl Harness {
                 ..PaintInput::new(&self.store, &self.damage)
             };
             input.record_emitted = true;
-            self.painter.emit(&input, &mut self.scene)
+            emit(
+                &mut self.painter,
+                &mut self.compositor,
+                (&self.store, &retired),
+                &input,
+                &mut self.scene,
+            )
         };
         self.scene.finish(&self.damage);
         report
@@ -377,6 +405,7 @@ impl Harness {
         raster: &dyn zgui_text::GlyphRaster,
         ready: bool,
     ) -> zgui_paint::PaintReport {
+        let retired = self.store.drain_retired_paint();
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
         content.set_vector_raster_ready(ready);
@@ -392,7 +421,13 @@ impl Harness {
                 ..PaintInput::new(&self.store, &self.damage)
             };
             input.record_emitted = true;
-            self.painter.emit(&input, &mut self.scene)
+            emit(
+                &mut self.painter,
+                &mut self.compositor,
+                (&self.store, &retired),
+                &input,
+                &mut self.scene,
+            )
         };
         self.scene.finish(&self.damage);
         content.end_frame();
@@ -427,6 +462,16 @@ impl Harness {
         &self.scene
     }
 
+    /// Draws the whole output again and returns what the compositor draws.
+    pub(crate) fn redraw(&mut self) -> Drawing {
+        self.compositor.session.redraw()
+    }
+
+    /// Returns what the last frame drew, which is what its damage reached.
+    pub(crate) fn drawing(&self) -> Option<&Drawing> {
+        self.compositor.drawing.as_ref()
+    }
+
     /// The replaced identifier of a named element.
     pub(crate) fn replaced_id(&self, name: &str) -> ReplacedId {
         ReplacedId::new(self.document.store().key_of(self.element(name)))
@@ -456,6 +501,7 @@ impl Harness {
     ///
     /// This is what a window paints after a resize or a scale change.
     pub(crate) fn paint_surface(&mut self) -> zgui_paint::PaintReport {
+        let retired = self.store.drain_retired_paint();
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
         let placements = zgui_scene::Placements::of(&self.scene.spatial);
@@ -466,7 +512,36 @@ impl Harness {
             zgui_geom::Point::new(0, 0),
             self.viewport,
         ));
-        let report = self.painter.emit(&input, &mut self.scene);
+        let report = emit(
+            &mut self.painter,
+            &mut self.compositor,
+            (&self.store, &retired),
+            &input,
+            &mut self.scene,
+        );
+        self.scene.finish(&self.damage);
+        report
+    }
+
+    /// Emits a frame against the damage the fragment pass accumulated, with `anim` overriding
+    /// what each node's animations override.
+    pub(crate) fn paint_animated(
+        &mut self,
+        anim: &dyn zgui_paint::AnimOverrides,
+    ) -> zgui_paint::PaintReport {
+        let retired = self.store.drain_retired_paint();
+        self.scene.begin_frame(self.viewport);
+        let placements = zgui_scene::Placements::of(&self.scene.spatial);
+        let mut input = PaintInput::new(&self.store, &self.damage);
+        input.anim = anim;
+        input.placements = Some(&placements);
+        let report = emit(
+            &mut self.painter,
+            &mut self.compositor,
+            (&self.store, &retired),
+            &input,
+            &mut self.scene,
+        );
         self.scene.finish(&self.damage);
         report
     }
@@ -557,6 +632,59 @@ impl Harness {
         }
         panic!("no element named `{name}`");
     }
+}
+
+/// The compositor a harness paints into, and what its last frame did.
+pub(crate) struct Output {
+    /// The compositor, its output and its recording renderer.
+    pub(crate) session: Session,
+    /// What the painter wrote into the last transaction.
+    pub(crate) sync: SyncReport,
+    /// What committing the last transaction did.
+    pub(crate) commit: CommitCounters,
+    /// What the last frame drew, `None` when the compositor drew nothing.
+    pub(crate) drawing: Option<Drawing>,
+}
+
+impl Output {
+    /// A session over an output of `size` device pixels.
+    fn new(size: [u32; 2]) -> Self {
+        let session = Session::new(size).unwrap_or_else(|why| panic!("no compositor: {why}"));
+        Self {
+            session,
+            sync: SyncReport::default(),
+            commit: CommitCounters::default(),
+            drawing: None,
+        }
+    }
+}
+
+/// Emits a frame through `painter` inside one transaction, commits it and draws a frame.
+///
+/// The fragments `retired` names are retired first, as a frame does.
+fn emit(
+    painter: &mut Painter,
+    output: &mut Output,
+    (store, retired): (&LayoutStore, &[FragKey]),
+    input: &PaintInput<'_>,
+    scene: &mut Scene,
+) -> zgui_paint::PaintReport {
+    // A painter with no sync has recorded nothing, so the compositor starts it with nothing.
+    if painter.compositor().is_none() {
+        output.session.restart_client();
+        painter.attach_compositor(CompositorSync::new(output.session.output()));
+    }
+    let transaction = output.session.transaction();
+    let sync = painter.compositor().expect("attached above");
+    sync.open(transaction);
+    painter.retire(retired, scene, &zgui_paint::walk::replay::hold::NoResources);
+    let report = painter.emit(input, scene);
+    let sync = painter.compositor().expect("attached above");
+    let transaction = sync.close(store, scene).expect("opened above");
+    output.sync = sync.report();
+    output.commit = output.session.commit(transaction);
+    output.drawing = output.session.frame();
+    report
 }
 
 /// A replaced-content source reporting one natural size for everything.
