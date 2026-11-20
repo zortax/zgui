@@ -23,7 +23,7 @@ use crate::clip::ClipTable;
 use crate::id::DrawOrder;
 use crate::ops::PaintOp;
 use crate::order::BoundsTree;
-use crate::paint::{PaintTable, TextPaintTable};
+use crate::paint::PaintTable;
 use crate::pass::ScenePassPlan;
 use crate::place::band::Travels;
 use crate::prim::PrimitiveKind;
@@ -91,8 +91,6 @@ pub struct Scene {
     pub clips: ClipTable,
     /// Every paint source in the document.
     pub paints: PaintTable,
-    /// Every text brush in the document.
-    pub text_paints: TextPaintTable,
     /// Every application effect's parameter block, interned so equal parameters are one draw.
     pub shader_params: ShaderParamsTable,
     /// Every coordinate system in the document.
@@ -312,7 +310,6 @@ impl Scene {
             primitives: Primitives::default(),
             clips: ClipTable::rooted(),
             paints: PaintTable::new(),
-            text_paints: TextPaintTable::new(),
             shader_params: ShaderParamsTable::new(),
             spatial: SpatialTree::with_viewport(),
             ops: Vec::new(),

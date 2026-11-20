@@ -523,8 +523,6 @@ impl Window {
             counter::bump(Counter::HitRetests);
             self.rehit();
         }
-        mark("f.publish_brushes");
-        self.publish_text_brushes();
         // After layout, because where a caret goes is a question about the lines this frame
         // produced; before the paint, because what it damages has to be in the set the emit walk
         // is gated on. A caret that blinked moves no fragment at all, so nothing else in the frame
@@ -1233,7 +1231,7 @@ impl Window {
     /// Writes the text colours the cascade moved through the slots that name them.
     ///
     /// This is the one step of the restyle's tail the style engine cannot own: the table belongs
-    /// to the display list, and the style engine does not depend on it. It runs here — after the
+    /// to the text engine, and the style engine does not depend on it. It runs here — after the
     /// cascade has settled and before anything is laid out — because a paragraph cached from an
     /// earlier frame has to resolve to the new colour in the frame the cascade changed it, and
     /// re-shaping to achieve that is exactly what the indirection exists to avoid.
@@ -1244,7 +1242,6 @@ impl Window {
         }
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
         super::brushes::publish(&self.text_slots, self.text.text_paints());
-        self.brushes_moved |= applied.recoloured;
         if !applied.rewritten.is_empty() {
             self.redraw_inline_text(&applied.rewritten);
         }
@@ -1291,30 +1288,6 @@ impl Window {
         drop(layout);
         let dropped = self.text.forget_paragraphs(&reshape.paragraphs);
         zgui_profile::latency::note_with("t.reshaped", || format!("{dropped}/{}", reshape.boxes));
-    }
-
-    /// Copies the brushes into the display list, which is where the emitter reads them.
-    ///
-    /// Two tables exist because two things need one at times when they cannot share a borrow: the
-    /// text engine claims slots while layout measures, and the display list is read while the emit
-    /// walk runs. Reconciling them is therefore somebody's job, and this is the one place that
-    /// holds both.
-    ///
-    /// It runs **after layout**, not beside [`Window::update_text_brushes`]. A slot is claimed the
-    /// first time a paragraph is flattened, which is inside the layout pass — so a copy taken
-    /// before it would be one slot short for every string that appeared this frame, and every one
-    /// of them would be drawn in its element's own `color` for exactly one frame. That is a defect
-    /// with no symptom at all in a document whose text colour is already the inherited one.
-    fn publish_text_brushes(&mut self) {
-        let table = self.text.text_paints();
-        // A frame that moved no colour and flattened no new paragraph copies nothing: the claim
-        // count is what every claim moves, and the brushes themselves are only ever rewritten by
-        // the step above.
-        if table.claims() == self.scene.text_paints.claims() && !self.brushes_moved {
-            return;
-        }
-        self.brushes_moved = false;
-        self.scene.text_paints = table.clone();
     }
 
     /// Brings the box tree back into agreement with the document, patching it where it can.

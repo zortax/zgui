@@ -34,7 +34,7 @@ use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
 use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
 use zgui_scene::{ClipId, ClipLink, PaintSlot, Scene, SpatialId};
-use zgui_text::{FaceId, ShapedRun};
+use zgui_text::{Brush, FaceId, ShapedRun, TextPaint};
 
 use crate::emit::record::Recorder;
 
@@ -60,6 +60,9 @@ pub trait GlyphSource {
         line: u16,
         visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     );
+
+    /// Returns the colour `brush` stands for, or `None` for a slot no table holds.
+    fn brush(&self, brush: Brush) -> Option<TextPaint>;
 }
 
 /// A glyph source with nothing in it.
@@ -76,6 +79,10 @@ impl GlyphSource for NoGlyphs {
         _line: u16,
         _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
+    }
+
+    fn brush(&self, _brush: Brush) -> Option<TextPaint> {
+        None
     }
 }
 
@@ -514,6 +521,7 @@ fn collect(glyphs: &dyn GlyphSource, (paragraph, line): (ParagraphId, u16)) -> V
     glyphs.visit_line(paragraph, line, &mut |shaped| {
         emitted.push(Emitted {
             slot: shaped.brush,
+            color: glyphs.brush(shaped.brush).map(color_of),
             text_start: shaped.text_start,
             face: shaped.face,
             size: shaped.size,
@@ -540,10 +548,7 @@ fn draw(
     let paint = match painting.brush {
         RunBrush::Painted(reference) if !painting.force_mono => reference,
         _ if painting.force_mono => rec.color(painting.tint),
-        _ => {
-            let color = brush(rec.scene_ref(), run.slot, painting.tint);
-            rec.color(color)
-        }
+        _ => rec.color(run.color.unwrap_or(painting.tint)),
     };
     if paint.kind == PaintKind::NONE {
         return 0;
@@ -647,6 +652,11 @@ fn emit_parted(
 struct Emitted {
     /// The run's brush slot.
     slot: PaintSlot,
+    /// The colour the brush slot stands for.
+    ///
+    /// `None` for a paragraph shaped before its brush was registered, which is drawn in the
+    /// element's `color`: right far more often than whatever was in slot zero.
+    color: Option<Color>,
     /// Where the run's text starts in the generated string.
     text_start: u32,
     face: FaceId,
@@ -678,20 +688,10 @@ impl Emitted {
     }
 }
 
-/// The colour a run is drawn in, read from its brush slot and falling back to the element's own.
-///
-/// A slot that resolves to nothing is a paragraph shaped before the brush was registered; drawing
-/// it in the element's `color` is right far more often than drawing it in whatever was in slot zero.
-fn brush(scene: &Scene, slot: PaintSlot, fallback: Color) -> Color {
-    match scene.text_paints.get(slot) {
-        Some(paint) => Color::srgb(
-            paint.color[0],
-            paint.color[1],
-            paint.color[2],
-            paint.color[3],
-        ),
-        None => fallback,
-    }
+/// Returns the colour of a brush.
+fn color_of(paint: TextPaint) -> Color {
+    let [red, green, blue, alpha] = paint.color;
+    Color::srgb(red, green, blue, alpha)
 }
 
 /// Emits one contributed decoration's lines across one line box.
@@ -860,6 +860,10 @@ mod tests {
                 glyphs: &GLYPHS,
                 text_start: 0,
             });
+        }
+
+        fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+            None
         }
     }
 

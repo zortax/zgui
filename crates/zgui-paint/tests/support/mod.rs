@@ -760,6 +760,10 @@ impl zgui_text::ShapedGlyphs for NoGlyphs {
         _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
     }
+
+    fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        None
+    }
 }
 
 /// Appends one fixture element and everything below it.

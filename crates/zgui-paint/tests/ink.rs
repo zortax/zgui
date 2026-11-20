@@ -272,6 +272,10 @@ fn a_text_shadow_is_drawn_as_a_second_pass_over_the_same_glyphs_at_its_own_offse
                 text_start: 0,
             });
         }
+
+        fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+            None
+        }
     }
 
     let mut style = zgui_paint::lower(&StyleDraft::initial().build(), 1.0);

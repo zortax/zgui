@@ -594,6 +594,10 @@ impl GlyphSource for FrameContent<'_> {
             self.shaped.visit_line(key, line, visit);
         }
     }
+
+    fn brush(&self, brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        self.shaped.brush(brush)
+    }
 }
 
 /// The atlas as a record owner outside a frame — the release half of eviction and teardown.

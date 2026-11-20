@@ -1,6 +1,10 @@
-//! The brush a shaped run carries.
+//! The brush a shaped run carries, and the table it indexes.
 
-/// What a run of glyphs is drawn with: an index into a table the document owns, never a colour.
+mod table;
+
+pub use crate::brush::table::{TextPaint, TextPaintTable};
+
+/// What a run of glyphs is drawn with: an index into a [`TextPaintTable`], never a colour.
 ///
 /// A shaped paragraph is expensive and outlives the frame that produced it. If it stored a colour,
 /// switching theme would invalidate every one of them, and a dark-mode toggle would re-shape every

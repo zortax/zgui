@@ -113,6 +113,10 @@ fn a_ramp_painting_the_text_fills_its_glyphs() {
                 text_start: 0,
             });
         }
+
+        fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+            None
+        }
     }
 
     let ramp = GradientSpec {

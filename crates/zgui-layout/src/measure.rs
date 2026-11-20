@@ -364,6 +364,10 @@ impl zgui_text::ShapedGlyphs for NoContent {
         _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
     }
+
+    fn brush(&self, _brush: Brush) -> Option<zgui_text::TextPaint> {
+        None
+    }
 }
 
 impl ShapedClusters for NoContent {

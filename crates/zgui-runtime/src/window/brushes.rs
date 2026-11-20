@@ -16,9 +16,9 @@ use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
 use zgui_layout::fragment::diff::pixels;
 use zgui_layout::tree::store::LayoutStore;
-use zgui_scene::{TextPaint, TextPaintTable};
 use zgui_space::PaintSlot;
 use zgui_style::{TextPaintUpdate, TextRun};
+use zgui_text::{TextPaint, TextPaintTable};
 use zgui_text_style::TextPaintKey;
 
 use crate::window::Window;
@@ -270,12 +270,6 @@ pub(crate) struct TextSlot {
 pub(crate) struct Applied {
     /// The elements whose text has to be shaped again under a slot of their own.
     pub(crate) split: Vec<SlotKey>,
-    /// Whether any update was drawn in a colour its slot did not hold.
-    ///
-    /// False for a batch in which every element moved to a new cascade result of the same
-    /// colour — a font change, a theme flip that left the text colour alone — which then rewrites
-    /// no brush and owes the display list no copy of the table.
-    pub(crate) recoloured: bool,
     /// The elements whose slot took the new colour where it stands. Their glyphs are drawn again
     /// from the frame's damage only, so the frame owes the lines their text is on.
     pub(crate) rewritten: Vec<NodeKey>,
@@ -342,7 +336,6 @@ pub(crate) fn apply(
         })
         .collect();
 
-    let recoloured_any = recoloured.iter().any(|moved| *moved);
     let mut split = Vec::new();
     let mut rewritten = Vec::new();
     let mut emptied = Vec::new();
@@ -422,11 +415,7 @@ pub(crate) fn apply(
     // through and nothing resolves to. The paragraphs of an element that left a slot still name it
     // until they are shaped again later in the frame, so the slot is released at the frame's end.
     slots.orphaned.extend(emptied);
-    Applied {
-        split,
-        recoloured: recoloured_any,
-        rewritten,
-    }
+    Applied { split, rewritten }
 }
 
 /// The boxes whose lines draw the text of `nodes` for them.
@@ -609,9 +598,9 @@ mod tests {
     use zgui_color::Color;
     use zgui_css::{PinnedGroup, StyleDraft};
     use zgui_dom::NodeKey;
-    use zgui_scene::{TextPaint, TextPaintTable};
     use zgui_space::PaintSlot;
     use zgui_style::{TextPaintUpdate, TextRun};
+    use zgui_text::{TextPaint, TextPaintTable};
     use zgui_text_style::TextPaintKey;
 
     use super::{TextSlot, TextSlots, apply};

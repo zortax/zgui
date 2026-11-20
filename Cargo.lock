@@ -6753,6 +6753,7 @@ dependencies = [
  "accesskit",
  "rustc-hash 2.1.3",
  "smallvec",
+ "zgui-color",
  "zgui-geom",
  "zgui-interned",
  "zgui-profile",

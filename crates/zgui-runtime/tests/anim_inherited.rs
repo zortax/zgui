@@ -96,8 +96,8 @@ fn drawn_grey(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) 
 }
 
 /// How many cascade results the window's brush table still answers to.
-fn brush_keys(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> usize {
-    harness.app().windows()[0].scene().text_paints.keys()
+fn brush_keys(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> usize {
+    harness.app_mut().windows_mut()[0].text_brushes_held().1
 }
 
 /// The label's glyphs are drawn in the colour the transition has reached, on every frame of it.
@@ -146,7 +146,7 @@ fn every_frame_of_a_colour_transition_reaches_the_glyphs() {
     // A cascade result is a new object every frame, and the table is asked for one slot per
     // element, not one per frame: an entry per frame is a table that grows for as long as anything
     // on the screen is animating.
-    let keys = brush_keys(&harness);
+    let keys = brush_keys(&mut harness);
     assert!(
         keys <= 8,
         "the brush table answers to {keys} cascade results after 25 frames of one transition"

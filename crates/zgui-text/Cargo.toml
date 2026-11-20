@@ -17,6 +17,7 @@ include.workspace = true
 # font engine is plugged in *through*, so naming one would make every consumer of the contracts
 # depend on the implementation the contracts exist to keep swappable.
 [dependencies]
+zgui-color = { path = "../zgui-color", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }

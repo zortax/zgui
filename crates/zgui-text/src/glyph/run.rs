@@ -13,7 +13,7 @@
 //! which it already has from the fragment tree, and a paragraph that scrolled by a pixel costs
 //! nothing.
 
-use crate::brush::Brush;
+use crate::brush::{Brush, TextPaint};
 use crate::font::face::FaceId;
 
 /// How much a synthesised bold thickens a stem, as a fraction of the size it is drawn at.
@@ -96,4 +96,7 @@ pub trait ShapedGlyphs {
         line: u16,
         visit: &mut dyn FnMut(ShapedRun<'_>),
     );
+
+    /// Returns the colour `brush` stands for, or `None` for a slot the table does not hold.
+    fn brush(&self, brush: Brush) -> Option<TextPaint>;
 }

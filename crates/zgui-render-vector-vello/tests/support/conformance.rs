@@ -56,6 +56,10 @@ impl zgui_text::ShapedGlyphs for NoShaped {
         _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
     }
+
+    fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        None
+    }
 }
 
 /// A frame of a content cache that allows the path glyph route alone, and keeps mark payloads.

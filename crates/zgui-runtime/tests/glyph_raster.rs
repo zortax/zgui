@@ -43,7 +43,10 @@ fn a_frame_rasterises_only_the_glyphs_no_earlier_commit_named() {
 
     // A window too narrow for both words breaks the paragraph into two lines, and records both.
     counter::reset();
-    app.deliver_to_first(SurfaceEvent::Resized(Size::new(DevicePx(60.0), DevicePx(300.0))));
+    app.deliver_to_first(SurfaceEvent::Resized(Size::new(
+        DevicePx(60.0),
+        DevicePx(300.0),
+    )));
     app.settle(16);
     assert!(
         counter::get(Counter::GlyphsPlaced) > 0,

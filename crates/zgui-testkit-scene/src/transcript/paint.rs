@@ -5,8 +5,9 @@
 //! while drawing identically. So a reference is rendered as the paint it resolves to.
 
 use zgui_color::{Color, ColorSpace, GradientStop, HueInterpolation};
-use zgui_scene::{GradientKind, Paint, PaintKind, PaintRef, PaintTable, TextPaint, TextPaintTable};
+use zgui_scene::{GradientKind, Paint, PaintKind, PaintRef, PaintTable};
 use zgui_space::{PaintId, PaintSlot};
+use zgui_text::{TextPaint, TextPaintTable};
 
 use crate::text::number::{float, list, rect};
 use crate::transcript::tile;

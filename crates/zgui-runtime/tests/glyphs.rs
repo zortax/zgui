@@ -159,11 +159,12 @@ fn glyphs_are_drawn_through_the_brush_table_and_not_the_fallback() {
     });
     app.settle(8);
 
-    let window = &app.app().windows()[0];
+    let (brushes, _) = app.app_mut().windows_mut()[0].text_brushes_held();
     assert!(
-        !window.scene().text_paints.is_empty(),
-        "the scene's brush table is what the emitter reads, and nothing ever filled it"
+        brushes > 0,
+        "the text engine's brush table is what the emitter reads, and nothing ever filled it"
     );
+    let window = &app.app().windows()[0];
     let drawing = support::drawing(window);
     let glyphs = drawing.glyphs();
     assert_eq!(glyphs.len(), 3, "the label drew no glyphs: {drawing}");

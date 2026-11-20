@@ -298,8 +298,6 @@ pub struct Window {
     /// Kept because the change log is drained by the dispatch that reports the scroll to the
     /// document, which happens well before anything decides what to draw.
     scrolled_this_frame: Vec<zgui_scroll::report::Scrolled>,
-    /// Whether the cascade moved a text colour since the display list's brushes were last copied.
-    brushes_moved: bool,
     /// Which brush slot each element's text is drawn through.
     ///
     /// Held per element rather than per cascade result, because a cascade result is a new object
@@ -778,7 +776,6 @@ impl Window {
             damage_after_layout: DamageSet::new(),
             layout_passes: 0,
             scrolled_this_frame: Vec::new(),
-            brushes_moved: false,
             text_slots: crate::window::brushes::TextSlots::default(),
             text,
             renderer,

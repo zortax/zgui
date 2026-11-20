@@ -53,7 +53,7 @@
 //!
 //! # Why a brush is an index
 //!
-//! [`Brush`] is a slot number in a table the document owns, never a colour. A shaped paragraph
+//! [`Brush`] is a slot number in a [`TextPaintTable`], never a colour. A shaped paragraph
 //! outlives the frame that produced it, so storing a colour would mean a theme change invalidated
 //! every one of them; storing an index means the same change is a handful of writes into the table
 //! with nothing re-shaped.
@@ -73,7 +73,7 @@ pub mod paragraph;
 pub mod transform;
 
 pub use crate::a11y::{ClusterGeometry, TextRunAttributes};
-pub use crate::brush::Brush;
+pub use crate::brush::{Brush, TextPaint, TextPaintTable};
 pub use crate::cluster::{ClusterRun, ShapedClusters};
 pub use crate::font::{FaceId, FaceRecord, FontData, FontError, FontSource};
 pub use crate::geometry::{LineGeometry, StrutMetrics, TextGeometry};

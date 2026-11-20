@@ -14,7 +14,7 @@
 //! and a reordered field is a build failure rather than a rendering artefact.
 //!
 //! Everything variable-sized lives in a side table addressed by index from the instance:
-//! [`ClipTable`], [`PaintTable`] and [`TextPaintTable`]; the matrix a primitive is drawn under is
+//! [`ClipTable`] and [`PaintTable`]; the matrix a primitive is drawn under is
 //! addressed the same way, through [`SpatialTree`]. An N-stop `conic-gradient` therefore costs a
 //! quad exactly as many instance bytes as a flat colour does.
 //!
@@ -111,7 +111,7 @@ pub use crate::ops::PaintOp;
 pub use crate::order::BoundsTree;
 pub use crate::paint::{
     GradientKind, Paint, PaintEntry, PaintKind, PaintOwner, PaintRef, PaintRewrite, PaintRole,
-    PaintTable, TextPaint, TextPaintTable,
+    PaintTable,
 };
 pub use crate::pass::{
     MarkBin, MarkPlan, Overlap, PassWarning, PlannedItem, PlannedPass, ScenePassPlan,

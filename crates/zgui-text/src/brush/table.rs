@@ -1,9 +1,9 @@
-//! The fourth table: text brushes, which are mutated rather than interned.
+//! The table brushes index: colours mutated in place rather than interned.
 
 use rustc_hash::FxHashMap;
 use zgui_color::Color;
 
-use crate::id::PaintSlot;
+use zgui_space::PaintSlot;
 
 /// The colour a run of glyphs is drawn in.
 ///
@@ -45,7 +45,7 @@ impl TextPaint {
 ///
 /// ```
 /// use zgui_color::Color;
-/// use zgui_scene::{TextPaint, TextPaintTable};
+/// use zgui_text::{TextPaint, TextPaintTable};
 ///
 /// let mut brushes = TextPaintTable::new();
 /// // The key is the identity of the inherited text style, not the colour itself.
@@ -149,7 +149,7 @@ impl TextPaintTable {
     ///
     /// ```
     /// use zgui_color::Color;
-    /// use zgui_scene::{TextPaint, TextPaintTable};
+    /// use zgui_text::{TextPaint, TextPaintTable};
     ///
     /// let mut brushes = TextPaintTable::new();
     /// let slot = brushes.slot_for(1, || TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0)));
@@ -183,7 +183,7 @@ impl TextPaintTable {
     ///
     /// ```
     /// use zgui_color::Color;
-    /// use zgui_scene::{TextPaint, TextPaintTable};
+    /// use zgui_text::{TextPaint, TextPaintTable};
     ///
     /// let mut brushes = TextPaintTable::new();
     /// let slot = brushes.slot_for(1, || TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0)));
@@ -205,7 +205,7 @@ impl TextPaintTable {
     ///
     /// ```
     /// use zgui_color::Color;
-    /// use zgui_scene::{TextPaint, TextPaintTable};
+    /// use zgui_text::{TextPaint, TextPaintTable};
     ///
     /// let mut brushes = TextPaintTable::new();
     /// let black = TextPaint::new(Color::srgb(0.0, 0.0, 0.0, 1.0));

@@ -47,6 +47,10 @@ impl GlyphSource for Asked {
             text_start: 0,
         });
     }
+
+    fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        None
+    }
 }
 
 /// A line box sixty-four pixels wide at the origin.
