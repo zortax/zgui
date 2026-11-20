@@ -148,7 +148,7 @@ fn every_tab_shows_its_own_answer() {
         (Tab::Frame, "batches"),
         (Tab::Timeline, "whole frame"),
         (Tab::Parity, "implemented"),
-        (Tab::Memory, "atlases"),
+        (Tab::Memory, "what the renderer holds"),
     ] {
         tools.show(tab);
         run(&mut harness, 6);

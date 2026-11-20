@@ -49,6 +49,9 @@ pub(crate) struct Descent {
     pub(crate) shift: (f32, f32),
     /// The clip chain this box is drawn under.
     pub(crate) clip: ClipId,
+    /// The clip chain a `position: fixed` box below is drawn under, which leaves out the scrollbar
+    /// room of the scroll containers above.
+    pub(crate) fixed_clip: ClipId,
     /// The accumulated matrix mapping this box's local space into [`Descent::anchor`], if it is
     /// not the identity. Carried as the matrix rather than as its name so a child composes onto
     /// it without walking the tree.
@@ -120,6 +123,7 @@ impl Descent {
             rounded: (0.0, 0.0),
             shift: (0.0, 0.0),
             clip: ClipId::ROOT,
+            fixed_clip: ClipId::ROOT,
             matrix: None,
             spatial,
             anchor: spatial,
@@ -427,9 +431,10 @@ pub(crate) fn place(
     } else {
         Some(from.spatial)
     };
+    let clip = if fixed { from.fixed_clip } else { from.clip };
     let child_clip = clip::chain_for_children(
         tables.clips,
-        from.clip,
+        clip,
         &node.style,
         declared,
         padding_box,
@@ -442,7 +447,27 @@ pub(crate) fn place(
         space,
         PropertyOwner::of(key),
     );
-    let clips_children = child_clip != from.clip;
+    let clips_children = child_clip != clip;
+    // The same chain less the scrollbar cut, which is the padding box link the call above made.
+    let fixed_clip = if clips_children && (scrollbar.width.0 > 0.0 || scrollbar.height.0 > 0.0) {
+        clip::chain_for_children(
+            tables.clips,
+            clip,
+            &node.style,
+            declared,
+            padding_box,
+            Size::new(DevicePx(0.0), DevicePx(0.0)),
+            border,
+            scale,
+            Size::new(DevicePx(shift.0), DevicePx(shift.1)),
+            space,
+            PropertyOwner::of(key),
+        )
+    } else if clips_children {
+        child_clip
+    } else {
+        from.fixed_clip
+    };
 
     let stacking = if crate::fragment::stacking::establishes(store, key) {
         Some(crate::fragment::stacking::id_of(key))
@@ -543,7 +568,7 @@ pub(crate) fn place(
         ink: device_ink,
         local_ink,
         flags,
-        clip: from.clip,
+        clip,
         clip_transform,
         transform,
         anchor,
@@ -565,6 +590,7 @@ pub(crate) fn place(
             rounded,
             shift: (shift.0 - offset.x.0, shift.1 - offset.y.0),
             clip: child_clip,
+            fixed_clip,
             matrix,
             spatial: space,
             anchor,

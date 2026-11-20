@@ -40,6 +40,8 @@ struct Recording {
     log: Log,
     /// The page's own background, which a scissored repaint is replayed over.
     background: [u8; 4],
+    /// The atlas uploads the renderer has not been sent yet.
+    uploads: RefCell<zgui_testkit_scene::Uploads>,
 }
 
 impl zgui::runtime::FrameProbe for Recording {
@@ -66,11 +68,22 @@ impl zgui::runtime::FrameProbe for Recording {
             );
             renderer
         });
+        self.uploads
+            .borrow_mut()
+            .replay(Renderer::texture_sink(renderer))
+            .expect("the device takes the atlas uploads");
         let recorded = script::record(renderer, scene, self.background);
         self.log
             .lock()
             .unwrap_or_else(|held| held.into_inner())
             .push(recorded);
+    }
+
+    fn atlas_uploads(&self) -> Option<std::cell::RefMut<'_, dyn zgui::atlas::TextureSink>> {
+        Some(std::cell::RefMut::map(
+            self.uploads.borrow_mut(),
+            |uploads| uploads as &mut dyn zgui::atlas::TextureSink,
+        ))
     }
 }
 
@@ -84,6 +97,7 @@ pub fn drawn(app: zgui::App, log: &Log, background: [u8; 4]) -> zgui::App {
         renderer: RefCell::new(None),
         log: Arc::clone(log),
         background,
+        uploads: RefCell::default(),
     }))
 }
 

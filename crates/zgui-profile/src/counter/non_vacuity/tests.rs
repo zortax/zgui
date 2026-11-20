@@ -116,6 +116,7 @@ fn the_declared_skips_are_exactly_the_ones_this_workspace_has_registered() {
             "text_breaks_skipped",
             "place_writes_without_reemit",
             "chunks_translated",
+            "chunks_identical",
             "primitives_culled",
             "sprites_resolved_at_push"
         ]

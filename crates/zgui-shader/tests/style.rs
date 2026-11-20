@@ -435,8 +435,9 @@ fn only_surface(app: &Harness<Runtime>) -> zgui_platform::SurfaceId {
 #[test]
 fn a_shaped_box_is_still_shaped_after_the_window_is_resized() {
     let _ = SQUIRCLE.register();
+    // A width that follows the window's, so every resize lays the box out and paints it again.
     let mut app = app(&sheet(
-        "--zgui-shape: style-shape; --style-shape-exponent: 4",
+        "--zgui-shape: style-shape; --style-shape-exponent: 4; width: 15%",
     ));
     app.settle(16);
     assert_eq!(drawn(&mut app).0.len(), 1, "drawn before any resize");

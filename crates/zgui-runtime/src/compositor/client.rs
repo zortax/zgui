@@ -2,7 +2,8 @@
 
 use compositor_api::{CommitReport, OutputConfig};
 use compositor_types::{
-    ClientId, CommitError, Frame, FrameCounters, OutputId, RenderTarget, Transaction,
+    ClientId, CommitError, CompositorEvent, Frame, FrameCounters, OutputId, RenderTarget,
+    Transaction,
 };
 use web_time::Instant;
 
@@ -22,6 +23,8 @@ pub(crate) struct Client {
     pub(super) started: Instant,
     /// The counters of the last frame built, until they are taken.
     pub(super) built: Option<FrameCounters>,
+    /// The buffer the compositor's events are drained into, kept for its allocation.
+    events: Vec<CompositorEvent>,
 }
 
 impl Client {
@@ -39,6 +42,7 @@ impl Client {
             frame: Frame::default(),
             started: Instant::now(),
             built: None,
+            events: Vec::new(),
         }
     }
 
@@ -52,7 +56,7 @@ impl Client {
         self.compositor.borrow_mut().transaction(self.client)
     }
 
-    /// Commits `transaction`.
+    /// Commits `transaction`, and discards the events the compositor reported since the last commit.
     ///
     /// A rejected transaction is logged, and the client is registered again with nothing, so the
     /// next transaction has to create everything the client draws again.
@@ -62,6 +66,10 @@ impl Client {
     /// Returns the compositor's reason when it rejects the transaction.
     pub(crate) fn commit(&mut self, transaction: Transaction) -> Result<CommitReport, CommitError> {
         let mut compositor = self.compositor.borrow_mut();
+        // Nothing acts on the compositor's events yet, so they are dropped rather than left to
+        // accumulate in the compositor.
+        compositor.drain_events(&mut self.events);
+        self.events.clear();
         let error = match compositor.commit(transaction) {
             Ok(report) => return Ok(report),
             Err(error) => error,

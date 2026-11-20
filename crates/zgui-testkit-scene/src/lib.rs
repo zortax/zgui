@@ -55,6 +55,7 @@ pub mod harness;
 pub mod shaper;
 pub mod text;
 pub mod transcript;
+pub mod uploads;
 
 pub use crate::capture::CaptureRenderer;
 pub use crate::dump::{TreeDump, to_text};
@@ -63,6 +64,7 @@ pub use crate::harness::Harness;
 pub use crate::harness::frame::{FrameCx, Pipeline};
 pub use crate::shaper::{MonoLayout, MonoShaper, glyph_id};
 pub use crate::transcript::Transcript;
+pub use crate::uploads::Uploads;
 
 /// The clock a test moves by hand, re-exported.
 ///

@@ -5,11 +5,16 @@
 //! matrix written into a node the box already owns. The fragments below it are in their own
 //! untransformed space and the hit entries under them are indexed in that space, so nothing else
 //! changes, and the compositor moves what the box recorded.
+//!
+//! A write moves only what the box recorded, and the paint walk records only what is on the
+//! surface. So a box is written only while all of its ink is on the surface, and a box that is
+//! still partly off it is composed again at its new place.
 
 use zgui_anim::{Placed, Placer};
 use zgui_bits::DamageSet;
 use zgui_dom::NodeKey;
 use zgui_dom::side::{AnimOverride, AnimPlacement};
+use zgui_geom::DevicePx;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::Painter;
 use zgui_profile::{Counter, counter};
@@ -32,11 +37,16 @@ pub(crate) struct Writing<'a> {
     pub painter: &'a Painter,
     /// The coordinate systems the writes moved.
     pub moved: Vec<SpatialId>,
+    /// The surface's extent on the device.
+    pub surface: zgui_geom::Size<i32, zgui_geom::Device>,
 }
 
 impl Placer for Writing<'_> {
     fn place(&mut self, node: NodeKey, placement: &AnimPlacement) -> Placed {
-        let Some((space, matrix)) = self.moved_to(node, placement) else {
+        let Some((space, matrix)) = self
+            .moved_to(node, placement)
+            .filter(|(space, _)| self.on_surface(node, *space))
+        else {
             counter::bump(Counter::PlaceWritesWithReemit);
             return Placed::Recomposed;
         };
@@ -72,6 +82,32 @@ impl Writing<'_> {
                 self.damage.absorb(whole(ink));
             }
         }
+    }
+
+    /// Reports whether all of the ink of `node`'s box lies on the surface where `space` puts it
+    /// now.
+    fn on_surface(&self, node: NodeKey, space: SpatialId) -> bool {
+        let Some(box_key) = self.layout.boxes_of(node).first() else {
+            return false;
+        };
+        let Some(matrix) = self.scene.spatial.resolve(space) else {
+            return false;
+        };
+        let surface = zgui_geom::Rect::new(
+            zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)),
+            zgui_geom::Size::new(
+                DevicePx(self.surface.width as f32),
+                DevicePx(self.surface.height as f32),
+            ),
+        );
+        self.layout
+            .fragments_of_box(*box_key)
+            .iter()
+            .filter_map(|frag| self.layout.fragment(*frag))
+            .all(|fragment| {
+                let ink = zgui_geom::transformed_bounds(&matrix, fragment.subtree_ink);
+                ink.is_empty() || surface.contains_rect(ink)
+            })
     }
 
     /// The coordinate system an element's box established, and the matrix the placement puts it at.
