@@ -93,6 +93,10 @@ impl<A: AppHandler> AppHandler for DeclineEveryOther<A> {
 fn main() {
     const PROPERTY: &str = "a declined redraw commits nothing and delays nothing";
 
+    if !support::require_nested(PROPERTY) {
+        return;
+    }
+
     support::tracing();
     support::watchdog(PROPERTY);
 

@@ -27,7 +27,7 @@
 //! or a suspend rather than a slow frame, and stepping back onto the old phase from an arbitrary
 //! distance is a first interval of an arbitrary length. Such a window is anchored where it is.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// How many missed intervals a phase survives.
 ///
@@ -39,7 +39,7 @@ const MAX_CATCH_UP: u128 = 8;
 /// When the next animation frame is due, if any animation is running.
 ///
 /// ```
-/// use std::time::{Duration, Instant};
+/// use web_time::{Duration, Instant};
 /// use zgui_runtime::AnimationCadence;
 ///
 /// let interval = Duration::from_micros(4_167);
@@ -131,7 +131,7 @@ impl AnimationCadence {
 #[cfg(test)]
 mod tests {
     use super::{AnimationCadence, MAX_CATCH_UP};
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     /// One frame of a two-hundred-and-forty hertz output.
     const FAST: Duration = Duration::from_micros(4_167);

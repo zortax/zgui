@@ -34,6 +34,7 @@ use style::traversal_flags::TraversalFlags;
 use zgui_dom::Node;
 use zgui_profile::{Counter, counter};
 
+use crate::driver::memo;
 use crate::driver::traversal::RecalcStyle;
 
 /// Which custom properties an element's inherited map changed by, for the elements below it.
@@ -428,8 +429,27 @@ fn compute_style<'doc>(
         data.set_restyled();
     }
 
+    // A frame that only advances the clock writes the animated values into the held style.
+    if let RestyleKind::CascadeWithReplacements(replacements) = kind
+        && let Some(settling) = traversal.settling
+    {
+        let old_primary = data.styles.primary.clone();
+        if let Some(hint) = crate::driver::animations::direct::restyle(
+            context,
+            element,
+            data,
+            replacements,
+            settling,
+        ) {
+            return children_hint(old_primary, data, hint, candidates);
+        }
+    }
+
     let mut important_rules_changed = false;
-    let new_styles = match kind {
+    // Styles the engine's sharing cache gave: the element they came from went through the shared
+    // styles already.
+    let mut settled = false;
+    let mut new_styles = match kind {
         RestyleKind::MatchAndCascade => {
             debug_assert!(
                 !context.shared.traversal_flags.for_animation_only() || !data.has_styles(),
@@ -451,6 +471,7 @@ fn compute_style<'doc>(
             match target.share_style_if_possible(context) {
                 Some(shared_styles) => {
                     context.thread_local.statistics.styles_shared += 1;
+                    settled = true;
                     shared_styles
                 }
                 None => {
@@ -488,14 +509,39 @@ fn compute_style<'doc>(
         }
         RestyleKind::CascadeOnly => {
             let cascade_inputs = ElementCascadeInputs::new_from_element_data(data);
-            let new_styles = {
-                let mut resolver = StyleResolverForElement::new(
-                    element,
-                    context,
-                    RuleInclusion::All,
-                    PseudoElementResolution::IfApplicable,
-                );
-                resolver.cascade_styles_with_default_parents(cascade_inputs)
+            let mode = memo::mode();
+            let inputs = (mode != memo::Mode::Off)
+                .then(|| memo::Inputs::of(element, context.shared, data, &cascade_inputs))
+                .flatten();
+            let found = inputs
+                .as_ref()
+                .and_then(|inputs| traversal.memo.find(inputs));
+            match (&inputs, &found) {
+                (_, Some(_)) => counter::bump(Counter::CascadeMemoHits),
+                (Some(_), None) => counter::bump(Counter::CascadeMemoMisses),
+                (None, None) => counter::bump(Counter::CascadeMemoSkips),
+            }
+            let new_styles = match found {
+                Some(found) if mode == memo::Mode::On => found.into_resolved(),
+                found => {
+                    let new_styles = {
+                        let mut resolver = StyleResolverForElement::new(
+                            element,
+                            context,
+                            RuleInclusion::All,
+                            PseudoElementResolution::IfApplicable,
+                        );
+                        resolver.cascade_styles_with_default_parents(cascade_inputs)
+                    };
+                    match (found, inputs) {
+                        (Some(found), Some(inputs)) => memo::check(&found, &new_styles, &inputs),
+                        (None, Some(inputs)) => {
+                            traversal.memo.keep(inputs, &new_styles);
+                        }
+                        _ => {}
+                    }
+                    new_styles
+                }
             };
             if !new_styles.primary.reused_via_rule_node {
                 context.thread_local.sharing_cache.insert_if_possible(
@@ -509,6 +555,18 @@ fn compute_style<'doc>(
             new_styles
         }
     };
+
+    // An element styled for the first time whose result equals a style an earlier element was
+    // given takes that style's groups, so the two hold one allocation of each group in place of
+    // two.
+    if !settled && !data.has_styles() && !context.shared.traversal_flags.for_animation_only() {
+        let shared = traversal
+            .shared
+            .share(element, context.shared, &mut new_styles);
+        if shared != 0 {
+            counter::add(Counter::StylesShared, shared as u64);
+        }
+    }
 
     // Kept across the call that replaces it: the children's hint is decided by what they can
     // observe of the change, which is the difference between the style they inherited from and
@@ -539,6 +597,17 @@ fn compute_style<'doc>(
     {
         hint |= RestyleHint::RECASCADE_SELF;
     }
+    children_hint(old_primary, data, hint, candidates)
+}
+
+/// The hint the children take from an element restyled from `old_primary`, narrowed to what they
+/// can observe, and the custom properties its inherited map changed by.
+fn children_hint(
+    old_primary: Option<ServoArc<ComputedValues>>,
+    data: &ElementData,
+    hint: RestyleHint,
+    candidates: Option<&[String]>,
+) -> (RestyleHint, Option<Arc<ChangedNames>>) {
     match (old_primary, data.styles.get_primary()) {
         (Some(old), Some(new)) if !engine_hints() => {
             let narrowed = narrowed_children_hint(&old, new, hint);
@@ -604,7 +673,7 @@ fn narrowed_children_hint(
 }
 
 /// Whether every group a child inherits from is the same, by pointer or by value.
-fn inherited_groups_equal(old: &ComputedValues, new: &ComputedValues) -> bool {
+pub(super) fn inherited_groups_equal(old: &ComputedValues, new: &ComputedValues) -> bool {
     macro_rules! same {
         ($get:ident) => {
             core::ptr::eq(old.$get(), new.$get()) || old.$get() == new.$get()

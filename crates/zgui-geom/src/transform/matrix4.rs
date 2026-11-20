@@ -175,6 +175,28 @@ impl Matrix4 {
             && m[3][3] == 1.0
     }
 
+    /// How far the matrix moves a point of the z = 0 plane, when that is all it does to one.
+    ///
+    /// The third column is left out: it multiplies the depth of a point in the plane, which is zero.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    ///
+    /// assert_eq!(Matrix4::translation(3.0, -2.5, 0.0).plane_translation(), Some((3.0, -2.5)));
+    /// assert_eq!(Matrix4::scale(2.0, 1.0, 1.0).plane_translation(), None);
+    /// ```
+    pub fn plane_translation(&self) -> Option<(f32, f32)> {
+        let [x, y, _, w] = self.columns;
+        let moves_only = x[0] == 1.0
+            && x[1] == 0.0
+            && x[3] == 0.0
+            && y[0] == 0.0
+            && y[1] == 1.0
+            && y[3] == 0.0
+            && w[3] == 1.0;
+        moves_only.then_some((w[0], w[1]))
+    }
+
     /// The two-dimensional transform this embeds, or nothing when it moves out of the z = 0 plane.
     ///
     /// ```

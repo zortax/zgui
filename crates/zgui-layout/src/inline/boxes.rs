@@ -46,6 +46,17 @@ pub(crate) struct Boxes {
     pub(crate) shifts: Vec<f32>,
 }
 
+impl Boxes {
+    /// The capacity of the vectors these boxes hold, in bytes.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        use core::mem::size_of;
+        self.geometry.capacity() * size_of::<InlineBoxGeometry>()
+            + self.alignments.capacity() * size_of::<Alignment>()
+            + self.frames.capacity() * size_of::<Option<Frame>>()
+            + self.shifts.capacity() * size_of::<f32>()
+    }
+}
+
 /// One atomic inline's own resolved box, for writing back into the tree.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Frame {

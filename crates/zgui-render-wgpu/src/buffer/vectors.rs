@@ -1,6 +1,6 @@
 //! The instances every vector composite of a frame is drawn from.
 
-use crate::buffer::instances::StorageBuffer;
+use crate::buffer::instances::InstanceTable;
 use crate::buffer::upload::UploadBelt;
 use crate::gpu::device::Gpu;
 use crate::pipeline::vector::VectorInstance;
@@ -15,7 +15,7 @@ pub struct VectorInstances {
     /// This frame's instances, in the order they were planned.
     staged: Vec<VectorInstance>,
     /// Where they are uploaded to.
-    buffer: StorageBuffer,
+    table: InstanceTable,
 }
 
 impl VectorInstances {
@@ -23,7 +23,7 @@ impl VectorInstances {
     pub fn new(gpu: &Gpu) -> Self {
         Self {
             staged: Vec::new(),
-            buffer: StorageBuffer::new(gpu, "zgui.vector_instances"),
+            table: InstanceTable::new(gpu, "zgui.vector_instances"),
         }
     }
 
@@ -46,29 +46,29 @@ impl VectorInstances {
         belt: &mut UploadBelt,
         encoder: &mut wgpu::CommandEncoder,
     ) -> u64 {
-        self.buffer.upload(gpu, belt, encoder, &self.staged)
+        self.table.upload(gpu, belt, encoder, &self.staged)
     }
 
     /// The binding a bind group names.
     pub fn binding(&self) -> wgpu::BindingResource<'_> {
-        self.buffer.binding()
+        self.table.binding()
     }
 
     /// How many bytes are allocated on the device.
     pub fn bytes(&self) -> u64 {
-        self.buffer.capacity()
+        self.table.capacity()
     }
 
     /// The allocation epoch used by bind-group caches.
     pub fn generation(&self) -> u64 {
-        self.buffer.generation()
+        self.table.generation()
     }
 
     /// Shrinks an oversized instance allocation and host staging vector.
     pub fn shrink(&mut self, gpu: &Gpu) -> u64 {
         self.staged.clear();
         self.staged.shrink_to_fit();
-        self.buffer.shrink(gpu)
+        self.table.shrink(gpu)
     }
 
     /// How many instances this frame has staged.

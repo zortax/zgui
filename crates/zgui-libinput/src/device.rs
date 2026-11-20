@@ -65,6 +65,13 @@ impl Capability {
     /// Every capability, in the order libinput numbers them.
     // The order is the interface's: an entry's position is the number
     // `libinput_device_has_capability` is asked with.
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(
+            dead_code,
+            reason = "only the unix context asks a device for its capabilities"
+        )
+    )]
     pub(crate) const EVERY: [Self; 7] = [
         Self::Keyboard,
         Self::Pointer,

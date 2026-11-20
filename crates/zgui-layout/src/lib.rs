@@ -90,7 +90,7 @@ pub mod tree;
 
 pub use crate::axis::Axis;
 pub use crate::fragment::hit::{HitEntry, HitIndex, PointerEvents};
-pub use crate::fragment::{FragKey, Fragment, FragmentFlags, FragmentKind};
+pub use crate::fragment::{FragKey, Fragment, FragmentExtra, FragmentFlags, FragmentKind};
 pub use crate::key::{from_node_id, to_node_id};
 pub use crate::measure::{
     MeasureContent, MeasureRequest, Measured, NaturalSize, NoContent, WorkerMeasure,

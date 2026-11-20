@@ -72,8 +72,8 @@ thread_local! {
 
 /// What `node` marks, or `None` when it is not a component boundary this knows about.
 ///
-/// Most markers are not: every conditional, list and reactive hole in the program has one, and
-/// those are positions rather than boundaries. A tool walking the tree skips what this does not
+/// Most markers are not: every conditional, list and reactive hole whose content can change shape
+/// has one, and those are positions rather than boundaries. A tool walking the tree skips what this does not
 /// answer for rather than treating it as an unnamed component.
 #[must_use]
 pub fn at(node: NodeId) -> Option<MarkerRole> {

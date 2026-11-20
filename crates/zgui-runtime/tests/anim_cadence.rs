@@ -43,6 +43,13 @@ const PULSE_CSS: &str = "root { display: block; width: 400px; height: 300px }
                                  background-color: rgb(200, 200, 200);
                                  animation: pulse 2s linear infinite }";
 
+/// Dots blinking in two steps per keyframe segment, a quarter of the period apart.
+const BLINK_CSS: &str = "root { display: block; width: 400px; height: 300px }
+                         @keyframes blink { 50% { opacity: 0.35 } }
+                         .dot { display: block; width: 6px; height: 6px;
+                                background-color: rgb(200, 60, 60);
+                                animation: blink 1200ms steps(2) infinite }";
+
 /// A panel that fades once and then holds what it faded to, which is what `forwards` means.
 const FORWARDS_CSS: &str = "root { display: block; width: 400px; height: 300px }
                             @keyframes fade { from { opacity: 1 } to { opacity: 0.2 } }
@@ -333,6 +340,64 @@ fn a_window_hidden_while_animating_parks_and_starts_a_fresh_phase_when_it_is_sho
     assert!(
         frames + 1 >= refreshes as u64,
         "a window shown again drew {frames} frames against {refreshes} refreshes"
+    );
+    harness.assert_park_invariant();
+}
+
+/// The overridden opacity of the first element that carries `class`, quantised.
+fn opacity_of(
+    harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
+    class: &str,
+) -> Option<u32> {
+    let window = harness.app().windows().first()?;
+    let document = window.document().borrow();
+    (0..document.store().slot_count()).find_map(|index| {
+        let index = zgui_dom::NodeIndex::new(u32::try_from(index).ok()?);
+        document.store().try_core(index)?;
+        let carries = document
+            .store()
+            .classes_of(index)
+            .iter()
+            .any(|held| &**held == class);
+        if !carries {
+            return None;
+        }
+        let key = document.store().key_of(index);
+        let over = document.store().columns().anim.get(key)?.as_ref()?;
+        over.opacity.map(|value| (value * 1_000.0).round() as u32)
+    })
+}
+
+#[test]
+fn a_stepped_animation_wakes_at_its_steps_and_not_at_every_refresh() {
+    // `steps(2)` over the two segments of a 1.2 s blink changes the value every 300 ms. A tick at
+    // every refresh in between samples the same value again and draws nothing new, so the loop
+    // wakes at the boundaries alone: four times a period, with a little slack.
+    let millihertz = 60_000;
+    let mut harness = window_on(millihertz, BLINK_CSS, "dot");
+    let mut seen = std::collections::BTreeSet::new();
+    let mut frames = 0;
+    harness.reset_counts();
+    for _ in 0..150 {
+        harness.advance(Duration::from_millis(16));
+        frames += harness.pump();
+        if let Some(opacity) = opacity_of(&harness, "dot") {
+            seen.insert(opacity);
+        }
+    }
+    assert!(
+        frames <= 14,
+        "the blink drew {frames} frames over 2.4 s, where it changes 8 times"
+    );
+    assert!(
+        seen.len() >= 2,
+        "the blink holds one value for ever: {seen:?}"
+    );
+    assert!(
+        harness
+            .parked_deadline()
+            .is_some_and(|due| due > harness.now()),
+        "the blink parked with no moment to wake at"
     );
     harness.assert_park_invariant();
 }

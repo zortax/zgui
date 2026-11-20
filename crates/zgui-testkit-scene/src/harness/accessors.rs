@@ -4,7 +4,7 @@
 //! that [`mod@crate::harness`] stays the frame sequence and nothing else — the sequence is the part
 //! with rules in it, and it should not be read past twenty accessors to find.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, Rect, Size};

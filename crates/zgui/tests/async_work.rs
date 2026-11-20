@@ -2,7 +2,7 @@
 //!
 //! The unit tests in `zgui-reactive` call `flush` by hand, which proves the executor works but not
 //! that anything *asks* it to. That question only has an answer here: work finishing on a worker
-//! thread has to travel the whole wake edge — the composite waker, the frame gate, the platform's
+//! thread has to travel the whole wake edge — the task waker, the frame gate, the platform's
 //! wake reason, the window's redraw request — before a frame runs and the value reaches the
 //! screen. This drives that path over buffers.
 //!

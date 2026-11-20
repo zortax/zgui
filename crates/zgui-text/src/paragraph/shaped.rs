@@ -54,6 +54,10 @@ pub struct ShapedParagraph<E> {
     broken: Option<BreakingKey>,
     /// The line boxes the last few breaking passes produced, by the key they were taken under.
     recalled: Recalled,
+    /// The engine's estimate of its heap bytes, as the cache last recorded it.
+    engine_bytes: usize,
+    /// The brush slot the first run is drawn through, if the owner recorded it.
+    brush: Option<crate::Brush>,
     /// The shaper's own result.
     pub engine: E,
 }
@@ -83,6 +87,8 @@ impl<E> ShapedParagraph<E> {
             boxes: boxes.into_iter().collect(),
             broken: None,
             recalled: Recalled::default(),
+            engine_bytes: 0,
+            brush: None,
             engine,
         }
     }
@@ -90,6 +96,15 @@ impl<E> ShapedParagraph<E> {
     /// The key this result is held under.
     pub fn key(&self) -> ParagraphKey {
         self.key
+    }
+
+    /// The same result, held under `key`.
+    ///
+    /// For a copy of a paragraph held under a [variant](ParagraphKey::variant) of its own key.
+    #[must_use]
+    pub fn rekeyed(mut self, key: ParagraphKey) -> Self {
+        self.key = key;
+        self
     }
 
     /// The generated string every reported offset indexes into.
@@ -115,6 +130,32 @@ impl<E> ShapedParagraph<E> {
     /// The atomic inlines at the geometry the last break used.
     pub fn boxes(&self) -> &[InlineBoxGeometry] {
         &self.boxes
+    }
+
+    /// The engine's estimate of its heap bytes, as
+    /// [`ParagraphCache::restate_engine_bytes`](crate::ParagraphCache::restate_engine_bytes) last
+    /// recorded it.
+    pub fn engine_bytes(&self) -> usize {
+        self.engine_bytes
+    }
+
+    /// Records the engine's estimate of its heap bytes.
+    pub(crate) fn set_engine_bytes(&mut self, bytes: usize) {
+        self.engine_bytes = bytes;
+    }
+
+    /// The brush slot the first run is drawn through, as
+    /// [`set_brush`](ShapedParagraph::set_brush) recorded it.
+    ///
+    /// When the owner of the brush table releases this slot, no current context can name this
+    /// result's key, so the owner can drop the result.
+    pub fn brush(&self) -> Option<crate::Brush> {
+        self.brush
+    }
+
+    /// Records the brush slot the first run is drawn through.
+    pub fn set_brush(&mut self, brush: Option<crate::Brush>) {
+        self.brush = brush;
     }
 
     /// Which break the glyphs currently reflect, or `None` if none has been taken yet.

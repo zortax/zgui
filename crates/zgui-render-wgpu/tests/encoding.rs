@@ -172,7 +172,7 @@ fn compose_into(
     let mut pipelines = Pipelines::new(gpu);
     let mut buffers = FrameBuffers::new(gpu);
     buffers.prepare_tables(scene);
-    buffers.begin_frame(gpu);
+    buffers.begin_frame();
     let globals = buffers
         .globals
         .stage(&Globals::new(size, SubpixelOrder::default()));
@@ -213,6 +213,8 @@ fn compose_into(
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &frame, &[globals]);
         pass.set_bind_group(1, &instances, &[]);
+        // The draw order, as the renderer binds it: this scene's lane starts at zero.
+        pass.set_vertex_buffer(0, buffers.orders[0].slice_from(0));
         pass.draw(0..4, 0..scene.primitives.quads.len() as u32);
     }
     gpu.queue().submit([encoder.finish()]);

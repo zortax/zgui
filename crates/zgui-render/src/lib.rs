@@ -33,6 +33,7 @@ pub mod outcome;
 pub mod pool;
 pub mod renderer;
 pub mod shift;
+pub mod subpixel;
 pub mod target;
 pub mod texture;
 pub mod vector;
@@ -46,6 +47,7 @@ pub use crate::outcome::{FrameOutcome, FrameStats, GpuUnavailable, RejectedAdapt
 pub use crate::pool::TargetPoolReport;
 pub use crate::renderer::Renderer;
 pub use crate::shift::ScrollShift;
+pub use crate::subpixel::SubpixelOrder;
 pub use crate::target::RenderTarget;
 pub use crate::texture::{ExternalTexture, TextureHandle};
 pub use crate::vector::{

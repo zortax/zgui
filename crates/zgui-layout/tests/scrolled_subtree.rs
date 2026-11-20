@@ -1,10 +1,12 @@
 //! What a pass that only scrolled something arrives at, against a pass that composed every box.
 //!
-//! A scroll moves a subtree and changes nothing else about it, so the pass offsets the pieces
-//! instead of composing them again. The two are only interchangeable if they produce the same
-//! fragment tree, the same clip chains, the same hit index and the same damage — so that is what is
-//! asserted here, by running the same scroll twice over two identical documents and driving one of
-//! them down each path.
+//! The port here keeps its children in its own space: a transformed row holds a fixed box, which a
+//! content space would move (see `zgui_layout::fragment::scroll_nodes`). A scroll then moves every
+//! other row and changes nothing else about it, so the pass offsets the pieces instead of composing
+//! them again. The two are only interchangeable if they produce the same fragment tree, the same
+//! clip chains, the same hit index and the same damage — so that is what is asserted here, by
+//! running the same scroll twice over two identical documents and driving one of them down each
+//! path.
 
 mod support;
 
@@ -23,22 +25,25 @@ fn exclusive() -> MutexGuard<'static, ()> {
     LOCK.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// A scrollport with rows in it, each row a rounded card that clips its own contents.
+/// A scrollport with rows in it, each row a rounded card that clips its own contents, after a
+/// transformed row that holds a fixed box.
 ///
 /// The clip is the point: a chain interned from a rectangle that moves is a *different* chain, so a
 /// document without one would never exercise the half of the offsetting path that re-interns them.
+/// The fixed box keeps the port out of a content space.
 fn page() -> Fixture {
-    let rows: Vec<Element> = (0..12)
-        .map(|_| {
-            Element::new("row").children(vec![
-                Element::new("card").text("alpha bravo delta gamma kappa sigma"),
-            ])
-        })
-        .collect();
+    let mut rows: Vec<Element> = vec![Element::new("hold").children(vec![Element::new("pin")])];
+    rows.extend((0..12).map(|_| {
+        Element::new("row").children(vec![
+            Element::new("card").text("alpha bravo delta gamma kappa sigma"),
+        ])
+    }));
     Fixture::new(
         Element::new("root").children(vec![Element::new("port").children(rows)]),
         "root { display: block; width: 300px; height: 200px }
          port { display: block; height: 200px; overflow: scroll }
+         hold { display: block; height: 4px; position: relative; transform: translate(1px, 0px) }
+         pin  { display: block; position: fixed; top: 0px; left: 0px; width: 8px; height: 8px }
          row  { display: block; height: 60px; padding: 4px }
          card { display: block; overflow: hidden; border-radius: 6px; padding: 2px }",
     )
@@ -188,6 +193,17 @@ fn a_scroll_offsets_its_subtree_instead_of_comparing_every_piece_of_it() {
     let mut frame = lay_out(&mut store, &mut content, 300.0, 200.0);
     let element = port(&fixture, &store);
     let fragments_before = store.fragment_count();
+    // A first scroll before the measured one, so the measured one starts from a scrolled port.
+    let root = store.root().expect("a root box");
+    frame
+        .scroll
+        .place(element, Point::new(DevicePx(0.0), DevicePx(11.0)));
+    fragments(
+        &mut frame,
+        &mut store,
+        root,
+        &mut Scrolled { node: element },
+    );
     frame
         .scroll
         .place(element, Point::new(DevicePx(0.0), DevicePx(37.0)));
@@ -197,10 +213,24 @@ fn a_scroll_offsets_its_subtree_instead_of_comparing_every_piece_of_it() {
     let mut dirty = Scrolled { node: element };
     fragments(&mut frame, &mut store, root, &mut dirty);
     let diffed = counter::get(Counter::FragmentsDiffed);
+    let shifted = counter::get(Counter::BoxesShifted);
+    let port_box = store.node(root).children[0];
+    assert!(
+        store
+            .fragment(store.fragments_of_box(port_box)[0])
+            .is_some_and(|piece| !piece
+                .flags
+                .contains(zgui_layout::FragmentFlags::SCROLLS_CONTENT)),
+        "the port took a content space, so the scroll never reached the offsetting path"
+    );
 
     if !COUNTERS_ENABLED {
         return;
     }
+    assert!(
+        shifted >= 12,
+        "{shifted} boxes were carried; the scroll should have carried every row"
+    );
     assert!(
         fragments_before > 20,
         "the fixture produced {fragments_before} fragments, too few for the ratio to mean anything"

@@ -26,8 +26,11 @@ pub fn gradient_paint(
     bounds: Rect<DevicePx, Device>,
     scale: f32,
 ) -> Option<PaintRef> {
-    let (kind, length) = geometry(&spec.shape, bounds, scale);
-    let stops = resolved_stops(spec, length);
+    let (mut kind, length) = geometry(&spec.shape, bounds, scale);
+    let mut stops = resolved_stops(spec, length);
+    if spec.repeating {
+        period(&mut kind, &mut stops);
+    }
     match stops.len() {
         0 => None,
         1 => Some(scene.paints.add(Paint::Solid(stops[0].color))),
@@ -38,6 +41,44 @@ pub fn gradient_paint(
             hue: spec.interpolation.hue,
             repeating: spec.repeating,
         })),
+    }
+}
+
+/// Fits a repeating ramp to its period: the span from the first stop to the last. The rasteriser
+/// repeats the ramp over the whole parameter range, so the line is cut to the span and the stops
+/// are spread over it. A radial or conic ramp whose first stop is past zero keeps its geometry.
+fn period(kind: &mut GradientKind, stops: &mut smallvec::SmallVec<[zgui_color::GradientStop; 4]>) {
+    let (Some(first), Some(last)) = (stops.first(), stops.last()) else {
+        return;
+    };
+    let (first, last) = (first.offset, last.offset);
+    let span = last - first;
+    if span <= f32::EPSILON || (first == 0.0 && last == 1.0) {
+        return;
+    }
+    match kind {
+        GradientKind::Linear { start, end } => {
+            let (dx, dy) = (end.x.0 - start.x.0, end.y.0 - start.y.0);
+            let from = Point::new(
+                DevicePx(start.x.0 + dx * first),
+                DevicePx(start.y.0 + dy * first),
+            );
+            *end = Point::new(
+                DevicePx(start.x.0 + dx * last),
+                DevicePx(start.y.0 + dy * last),
+            );
+            *start = from;
+        }
+        GradientKind::Radial {
+            radius_x, radius_y, ..
+        } if first == 0.0 => {
+            *radius_x *= last;
+            *radius_y *= last;
+        }
+        _ => return,
+    }
+    for stop in stops.iter_mut() {
+        stop.offset = (stop.offset - first) / span;
     }
 }
 
@@ -213,7 +254,7 @@ mod tests {
     use zgui_css::values::length::{Length, LengthPercentage, percent};
     use zgui_geom::CssPx;
 
-    use super::{geometry, needs_densifying};
+    use super::{geometry, needs_densifying, period};
     use crate::lower::background::{
         Extent, GradientCenter, GradientShape, GradientSpec, RadialEnding,
     };
@@ -355,6 +396,30 @@ mod tests {
         };
         assert_eq!((center.x.0, center.y.0), (50.0, 100.0));
         assert_eq!(from_angle, 0.5);
+    }
+
+    #[test]
+    fn a_repeating_ramp_runs_over_its_stop_span() {
+        use smallvec::smallvec;
+        use zgui_color::{Color, GradientStop};
+
+        let mut kind = GradientKind::Linear {
+            start: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            end: Point::new(DevicePx(160.0), DevicePx(0.0)),
+        };
+        let black = Color::BLACK;
+        let mut stops: smallvec::SmallVec<[GradientStop; 4]> = smallvec![
+            GradientStop::new(0.0, black),
+            GradientStop::new(0.05, black),
+            GradientStop::new(0.1, black),
+        ];
+        period(&mut kind, &mut stops);
+        let GradientKind::Linear { start, end } = kind else {
+            panic!("the ramp stays linear");
+        };
+        assert_eq!((start.x.0, end.x.0), (0.0, 16.0));
+        let offsets: Vec<f32> = stops.iter().map(|it| it.offset).collect();
+        assert_eq!(offsets, [0.0, 0.5, 1.0]);
     }
 
     /// A 200 by 100 box at the origin.

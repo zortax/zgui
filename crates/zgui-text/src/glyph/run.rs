@@ -25,6 +25,15 @@ use crate::glyph::key::{GlyphKey, RasterStyle, SubpixelOffset};
 /// converges on: heavy enough to read as bold at text sizes, light enough not to fill a counter.
 pub const SYNTHETIC_BOLD_RATIO: f32 = 0.02;
 
+/// The largest size, in device pixels, a run is drawn at with one coverage for each colour channel.
+///
+/// Per-channel coverage sharpens thin stems. A stem at a larger size is several pixels wide, so
+/// the coverage adds no detail there and the tint along each long edge becomes visible. A larger
+/// run gets one coverage for each pixel.
+///
+/// Stated in device pixels, because the width of a stem in device pixels decides this.
+pub const SUBPIXEL_MAX_SIZE: f32 = 48.0;
+
 /// One glyph of a shaped line, positioned relative to the line box's top-left corner.
 ///
 /// The position is where the glyph's *origin* falls — the point on the baseline the outline is
@@ -80,7 +89,8 @@ impl ShapedRun<'_> {
     /// A colour face takes the colour path whatever else is true: its glyphs are pictures, and a
     /// coverage mask of a picture is a silhouette. Otherwise the caller's request decides, because
     /// whether per-channel coverage is meaningful is a property of the destination rather than of
-    /// the text.
+    /// the text. A run larger than [`SUBPIXEL_MAX_SIZE`] gets one coverage for each pixel on every
+    /// destination.
     ///
     /// ```
     /// use zgui_scene::PaintSlot;
@@ -102,11 +112,14 @@ impl ShapedRun<'_> {
     ///
     /// let emoji = ShapedRun { has_color: true, ..run };
     /// assert_eq!(emoji.raster_style(true), RasterStyle::Color);
+    ///
+    /// let heading = ShapedRun { size: 64.0, ..run };
+    /// assert_eq!(heading.raster_style(true), RasterStyle::Grayscale);
     /// ```
     pub fn raster_style(&self, subpixel: bool) -> RasterStyle {
         if self.has_color {
             RasterStyle::Color
-        } else if subpixel {
+        } else if subpixel && self.size <= SUBPIXEL_MAX_SIZE {
             RasterStyle::Subpixel
         } else {
             RasterStyle::Grayscale
@@ -225,6 +238,19 @@ mod tests {
             glyphs: &[],
             text_start: 0,
         }
+    }
+
+    #[test]
+    fn per_channel_coverage_stops_above_the_size_limit() {
+        let at = |size: f32| ShapedRun { size, ..run() }.raster_style(true);
+        assert_eq!(at(super::SUBPIXEL_MAX_SIZE), RasterStyle::Subpixel);
+        assert_eq!(at(super::SUBPIXEL_MAX_SIZE + 0.5), RasterStyle::Grayscale);
+        let emoji = ShapedRun {
+            size: 96.0,
+            has_color: true,
+            ..run()
+        };
+        assert_eq!(emoji.raster_style(true), RasterStyle::Color);
     }
 
     #[test]

@@ -81,6 +81,7 @@ impl InlinePaint {
                 clip,
                 transform,
                 scale,
+                owned: None,
             },
             text: InlineText {
                 left: content_box.origin.x.0 + left,

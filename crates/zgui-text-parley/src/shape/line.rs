@@ -17,7 +17,8 @@ use zgui_text::{
 };
 use zgui_text_style::variant::FontVariantLigatures;
 use zgui_text_style::{
-    FamilyName, FontFamilyList, FontSlant, FontVariant, LengthPercent, TextStyle, WrapMode,
+    FamilyName, FontFamilyList, FontFeature, FontSlant, FontVariant, FontVariation, LengthPercent,
+    TextStyle, WrapMode,
 };
 
 use crate::shape::brush::SlotBrush;
@@ -48,6 +49,27 @@ pub struct LineRequest<'a> {
     pub ligatures: bool,
 }
 
+/// The OpenType settings a line is shaped with on top of its [`LineRequest`].
+///
+/// The equivalent of `font-feature-settings` and `font-variation-settings`: a feature named here
+/// outranks the one [`LineRequest::ligatures`] implies for the same tag, and an axis named here
+/// outranks the one the weight implies.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LineSettings<'a> {
+    /// The OpenType features and their values, in order.
+    pub features: &'a [FontFeature],
+    /// The variable-axis coordinates, in order.
+    pub variations: &'a [FontVariation],
+}
+
+impl LineSettings<'_> {
+    /// No settings: the line is shaped from its request alone.
+    pub const NONE: LineSettings<'static> = LineSettings {
+        features: &[],
+        variations: &[],
+    };
+}
+
 /// What one request's line is measured by, in device pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ResolvedLineMetrics {
@@ -64,7 +86,7 @@ pub struct ResolvedLineMetrics {
 ///
 /// Shared by shaping and by measuring, so the face the metrics describe is the face the glyphs are
 /// drawn from.
-pub(crate) fn text_style(request: &LineRequest<'_>) -> TextStyle {
+pub(crate) fn text_style(request: &LineRequest<'_>, settings: &LineSettings<'_>) -> TextStyle {
     TextStyle {
         family: FontFamilyList::from_iter(
             request
@@ -91,6 +113,8 @@ pub(crate) fn text_style(request: &LineRequest<'_>) -> TextStyle {
             },
             ..FontVariant::default()
         },
+        features: settings.features.iter().copied().collect(),
+        variations: settings.variations.iter().copied().collect(),
         ..TextStyle::initial()
     }
 }
@@ -107,6 +131,7 @@ pub(crate) fn text_style(request: &LineRequest<'_>) -> TextStyle {
 pub(crate) fn shape(
     text: &str,
     request: &LineRequest<'_>,
+    settings: &LineSettings<'_>,
     fonts: &FontSystem,
     context: &mut parley::FontContext,
     scratch: &mut parley::LayoutContext<SlotBrush>,
@@ -116,7 +141,11 @@ pub(crate) fn shape(
     }
     // The brush is a placeholder: it never leaves this function, because an owned run takes its
     // slot from whoever draws it.
-    let lowered = LoweredStyle::of(&text_style(request), zgui_scene::PaintSlot(0), CssPx::ZERO);
+    let lowered = LoweredStyle::of(
+        &text_style(request, settings),
+        zgui_scene::PaintSlot(0),
+        CssPx::ZERO,
+    );
     // A scale of one, because the size is already in device pixels.
     let mut builder = scratch.ranged_builder(context, text, 1.0, true);
     lowered.push_default(&mut builder);

@@ -57,9 +57,9 @@ pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSour
     } else {
         tracing::info!(
             adapter = %gpu.describe(),
-            "this device runs no compute shaders over writable storage textures, so vector \
-             content is rasterised by the simpler path: no blend or compose set, and multisampled \
-             coverage rather than analytic"
+            "this device cannot run the path renderer's compute shaders, so vector content is \
+             rasterised by the simpler path: no blend or compose set, and multisampled coverage \
+             rather than analytic"
         );
     }
     Box::new(CoverageRaster::new(gpu, width, height))

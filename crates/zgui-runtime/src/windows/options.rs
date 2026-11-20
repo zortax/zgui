@@ -2,13 +2,16 @@
 
 use zgui_geom::{CssPx, Point, Size};
 use zgui_platform::{
-    ColorScheme, Decorations, FullscreenMode, SurfaceAttributes, TitleButtons, WindowIcon,
-    WindowLevel,
+    ColorScheme, ComposeAhead, Decorations, FullscreenMode, SurfaceAttributes, TitleButtons,
+    WindowIcon, WindowLevel,
 };
 use zgui_vocab::SharedString;
 
 use crate::commands::CloseResponse;
 use crate::window::WindowContent;
+use crate::windows::handle::{WindowHandle, WindowId};
+use crate::windows::layer::LayerOptions;
+use crate::windows::popup::PopupOptions;
 
 /// Everything a window can be asked for.
 ///
@@ -23,6 +26,10 @@ pub struct WindowOptions {
     pub(crate) runtime: WindowContent,
     /// What to ask before a close the user asked for is carried out.
     pub(crate) on_close_request: Option<Box<dyn FnMut() -> CloseResponse>>,
+    /// Whether the window stays hidden until the application shows it.
+    pub(crate) hidden: bool,
+    /// The window a pop-up is placed against.
+    pub(crate) popup_parent: Option<WindowId>,
 }
 
 impl WindowOptions {
@@ -32,12 +39,49 @@ impl WindowOptions {
             attributes: SurfaceAttributes::new(title),
             runtime: WindowContent::default(),
             on_close_request: None,
+            hidden: false,
+            popup_parent: None,
         }
+    }
+
+    /// A shell window, such as a bar, a dock or a pop-over, placed as `layer` says.
+    ///
+    /// Undecorated and not resizable, because the desktop draws no frame around a part of the
+    /// shell. A desktop that has no shell windows refuses to open it; ask
+    /// [`PlatformCapabilities::layer_surfaces`](zgui_platform::PlatformCapabilities::layer_surfaces)
+    /// first.
+    pub fn layer(layer: LayerOptions) -> Self {
+        let mut options = Self::new("");
+        layer.apply_to(&mut options.attributes);
+        options
+    }
+
+    /// A pop-up, such as a menu, placed against `parent` as `popup` says.
+    ///
+    /// The parent is an ordinary window, another pop-up or a shell window, and it must be open
+    /// when the pop-up opens. The pop-up closes with
+    /// [`CloseReason::Dismissed`](zgui_platform::CloseReason::Dismissed) when the desktop dismisses
+    /// it and when its parent closes. A desktop that has no pop-up surfaces refuses to open it;
+    /// ask
+    /// [`PlatformCapabilities::native_popup_surfaces`](zgui_platform::PlatformCapabilities::native_popup_surfaces)
+    /// first.
+    pub fn popup(parent: &WindowHandle, popup: PopupOptions) -> Self {
+        let mut options = Self::new("");
+        popup.apply_to(&mut options.attributes);
+        options.popup_parent = Some(parent.id());
+        options
     }
 
     /// Names the window. This is what a user reads, and it changes with the document.
     pub fn with_title(mut self, title: impl Into<SharedString>) -> Self {
         self.attributes.title = title.into();
+        self
+    }
+
+    /// Names the application this window belongs to, such as a Wayland app id. A window without
+    /// one takes the application's.
+    pub fn with_application_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.attributes.application_id = Some(id.into());
         self
     }
 
@@ -56,6 +100,16 @@ impl WindowOptions {
     /// The largest the user may make it, in CSS pixels.
     pub fn with_max_size(mut self, width: f32, height: f32) -> Self {
         self.attributes.max_size = Some(Size::new(CssPx(width), CssPx(height)));
+        self
+    }
+
+    /// Whether the window is shown once its first frame is drawn.
+    ///
+    /// A hidden window has its document built and drawn, and stays off the screen until
+    /// [`WindowHandle::set_visible`](crate::windows::WindowHandle::set_visible) shows it. A
+    /// pop-over is opened hidden and shown on demand, so showing it costs one frame.
+    pub fn with_visible(mut self, visible: bool) -> Self {
+        self.hidden = !visible;
         self
     }
 
@@ -130,6 +184,14 @@ impl WindowOptions {
         self
     }
 
+    /// Whether the window composes its next frame before the platform is ready to show it.
+    ///
+    /// [`ComposeAhead::Auto`] is the default. See [`ComposeAhead`] for the trade-off.
+    pub fn with_compose_ahead(mut self, compose_ahead: ComposeAhead) -> Self {
+        self.attributes.compose_ahead = compose_ahead;
+        self
+    }
+
     /// Adds a stylesheet of this window's own, cascaded after the application's.
     ///
     /// Each call adds one sheet. The sheets cascade in call order.
@@ -179,6 +241,35 @@ mod tests {
         assert!(options.attributes().resizable, "the default is resizable");
         assert_eq!(options.attributes().decorations, Decorations::Full);
         assert_eq!(options.attributes().position, None);
+        assert_eq!(options.attributes().application_id, None);
+        let named = WindowOptions::new("settings").with_application_id("app-settings");
+        assert_eq!(
+            named
+                .attributes()
+                .application_id
+                .as_ref()
+                .map(|id| id.as_str()),
+            Some("app-settings")
+        );
+    }
+
+    #[test]
+    fn a_shell_window_carries_its_placement_and_its_size() {
+        use crate::windows::LayerOptions;
+        use zgui_platform::{Layer, SurfaceRole};
+
+        let options =
+            WindowOptions::layer(LayerOptions::overlay().with_size(300.0, 120.0)).with_title("osd");
+        let SurfaceRole::Layer(placement) = &options.attributes().role else {
+            panic!("a shell window is a layer surface");
+        };
+        assert_eq!(placement.layer, Layer::Overlay);
+        assert_eq!(
+            options.attributes().size.map(|size| size.height),
+            Some(CssPx(120.0))
+        );
+        assert_eq!(options.attributes().decorations, Decorations::None);
+        assert_eq!(options.attributes().title.as_str(), "osd");
     }
 
     #[test]

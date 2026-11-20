@@ -132,3 +132,51 @@ pub(crate) fn at(rows: usize, height: f32, gesture: Gesture) -> Point {
         cost: pass.cost,
     }
 }
+
+/// What the steps of one gesture pass did with their layout passes.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Crossings {
+    /// One line per step that rebuilt boxes: a row left the port and another arrived.
+    pub(crate) lines: Vec<String>,
+    /// How many layout passes each crossing step ran, in step order.
+    pub(crate) passes: Vec<u64>,
+    /// How many layout passes each step that drew and rebuilt no boxes ran, in step order.
+    pub(crate) steady: Vec<u64>,
+}
+
+/// Drives `gesture` once over a settled list and reads each step's counters.
+///
+/// A crossing is a step that rebuilt boxes, because only a row arriving builds one. That test
+/// reads nothing about layout passes, so the passes it reports can be judged on their own.
+pub(crate) fn crossings(open: &mut Opened, height: f32, gesture: Gesture) -> Crossings {
+    let at = gesture::middle(height);
+    gesture::aim(&mut open.harness, at);
+    gesture.drive(&mut open.harness, at, 0);
+    open.harness.settle(256);
+    let mut out = Crossings::default();
+    let mut index = 0_usize;
+    let mut before = zgui_profile::counter::snapshot();
+    gesture.drive_stepped(&mut open.harness, at, 1, &mut |_, frames| {
+        let now = zgui_profile::counter::snapshot();
+        let moved = before.delta(&now);
+        before = now;
+        if moved.boxes_rebuilt > 0 {
+            out.passes.push(moved.layout_passes);
+            out.lines.push(format!(
+                "CROSS {} step={index} frames={frames} layout_passes={} observation_passes={} \
+                 layouts_held={} boxes_rebuilt={} nodes_relaid_out={} fragments_rebuilt={}",
+                gesture.name(),
+                moved.layout_passes,
+                moved.observation_passes,
+                moved.layouts_held,
+                moved.boxes_rebuilt,
+                moved.nodes_relaid_out,
+                moved.fragments_rebuilt,
+            ));
+        } else if frames > 0 {
+            out.steady.push(moved.layout_passes);
+        }
+        index += 1;
+    });
+    out
+}

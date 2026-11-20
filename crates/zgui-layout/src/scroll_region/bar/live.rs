@@ -28,9 +28,9 @@ pub fn travel_of(store: &LayoutStore, element: NodeKey, axis: Axis) -> Option<Tr
     let fragment = store.fragment(frag)?;
     let content = store.layout_of(box_)?.content_size;
     let port = Scrollport {
-        padding_box: fragment.padding_box,
-        inner: fragment.padding_box.inset(fragment.padding),
-        content_box: fragment.content_box,
+        padding_box: fragment.padding_box(),
+        inner: fragment.padding_box().inset(fragment.padding),
+        content_box: fragment.content_box(),
         content,
         offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
     };

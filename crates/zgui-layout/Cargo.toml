@@ -13,6 +13,7 @@ include.workspace = true
 
 # L4 — engines. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
+web-time.workspace = true
 zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
 # The damage set a frame accumulates and the invalidation lattice the fragment pass reads and
 # writes. Both are this workspace's own bit-twiddling primitives, and there is one of each.

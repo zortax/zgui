@@ -6,7 +6,7 @@ use zgui_bits::DamageSet;
 use zgui_geom::{Scale, Size};
 use zgui_render::{RenderTarget, Renderer};
 use zgui_render_wgpu::wgpu;
-use zgui_render_wgpu::{Acquisition, Builder, GroupPool, SrgbTier};
+use zgui_render_wgpu::{Acquisition, Builder, GroupPool, GroupPrecision, SrgbTier};
 use zgui_scene::{BackdropFilter, Filter, GroupBoundary, Quad, Scene};
 
 use support::{SIDE, device_lock, opaque, plain_renderer, present, rect};
@@ -191,7 +191,7 @@ fn only_a_frame_that_will_be_presented_tells_the_compositor_it_is_coming() {
     let notified = Arc::new(AtomicUsize::new(0));
     let counter = Arc::clone(&notified);
     let built = Builder::new()
-        .with_pre_present(Box::new(move || {
+        .with_pre_present(Box::new(move |_| {
             counter.fetch_add(1, Ordering::Relaxed);
         }))
         .offscreen(target(), wgpu::TextureFormat::Bgra8Unorm, false);
@@ -239,6 +239,77 @@ fn only_a_frame_that_will_be_presented_tells_the_compositor_it_is_coming() {
         2,
         "a suboptimal texture is still presented and must be announced"
     );
+}
+
+#[test]
+fn a_frame_the_platform_is_not_ready_for_is_held_and_presented_later() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use zgui_render::{FrameOutcome, SkipReason};
+
+    let _device = device_lock();
+    let notified = Arc::new(AtomicUsize::new(0));
+    let counter = Arc::clone(&notified);
+    let built = Builder::new()
+        .with_pre_present(Box::new(move |_| {
+            counter.fetch_add(1, Ordering::Relaxed);
+        }))
+        .offscreen(target(), wgpu::TextureFormat::Bgra8Unorm, false);
+    let Ok(mut renderer) = built else {
+        return;
+    };
+    let ready = Arc::new(AtomicBool::new(false));
+    let gate = Arc::clone(&ready);
+    renderer.set_present_gate(Box::new(move || gate.load(Ordering::Relaxed)));
+
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.finish(&DamageSet::full());
+
+    let outcome = renderer.draw(&scene, &DamageSet::full());
+    assert_eq!(outcome, FrameOutcome::Skipped(SkipReason::Held));
+    assert!(
+        outcome.retires_damage(),
+        "the held frame's work was submitted"
+    );
+    assert_eq!(
+        notified.load(Ordering::Relaxed),
+        0,
+        "a held frame was announced"
+    );
+
+    assert!(matches!(
+        renderer.present_held(),
+        FrameOutcome::Presented(_)
+    ));
+    assert_eq!(notified.load(Ordering::Relaxed), 1);
+    assert_eq!(
+        renderer.present_held(),
+        FrameOutcome::Skipped(SkipReason::Undamaged),
+        "one held frame was presented twice"
+    );
+
+    // A configure between the two makes the held frame obsolete.
+    assert_eq!(
+        renderer.draw(&scene, &DamageSet::full()),
+        FrameOutcome::Skipped(SkipReason::Held)
+    );
+    renderer.configure(RenderTarget::new(
+        Size::new(SIDE + 8, SIDE),
+        Scale::new(1.0),
+    ));
+    assert!(!matches!(
+        renderer.present_held(),
+        FrameOutcome::Presented(_)
+    ));
+    assert_eq!(notified.load(Ordering::Relaxed), 1);
+
+    // The composed target still owes the surface, so an undamaged frame presents it.
+    ready.store(true, Ordering::Relaxed);
+    assert!(matches!(
+        renderer.draw(&scene, &DamageSet::new()),
+        FrameOutcome::Presented(_)
+    ));
 }
 
 #[test]
@@ -331,10 +402,37 @@ fn a_small_renderer_reserves_small_memory_blocks() {
 }
 
 #[test]
+fn a_default_device_asks_for_no_timestamp_queries_and_times_nothing() {
+    if zgui_render_wgpu::gpu::timing::requested() {
+        eprintln!("skipped: GPU pass timing was asked for through the environment");
+        return;
+    }
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    assert!(
+        !renderer
+            .gpu()
+            .device()
+            .features()
+            .contains(wgpu::Features::TIMESTAMP_QUERY),
+        "timestamp queries are asked for only when timing is on"
+    );
+    assert!(!renderer.gpu_timing_enabled());
+    assert_eq!(renderer.gpu_timed_frames(), None);
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    scene.finish(&DamageSet::full());
+    present(&mut renderer, &scene);
+    assert!(renderer.take_gpu_timings().is_empty());
+}
+
+#[test]
 fn a_lost_device_is_rebuilt_and_the_frame_after_it_draws_the_same_pixels() {
     let Some(mut renderer) = plain_renderer() else {
         return;
     };
+    renderer.set_group_precision(GroupPrecision::High);
     let mut scene = Scene::new();
     scene.begin_frame(Size::new(SIDE, SIDE));
     let fill = scene
@@ -366,6 +464,11 @@ fn a_lost_device_is_rebuilt_and_the_frame_after_it_draws_the_same_pixels() {
         renderer.memory().atlases,
         0,
         "nothing a device held survives it"
+    );
+    assert_eq!(
+        renderer.group_precision(),
+        GroupPrecision::High,
+        "the group precision is a setting, and settings survive"
     );
 
     let after = present(&mut renderer, &scene);

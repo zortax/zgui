@@ -8,7 +8,7 @@ use winit::window::WindowId;
 use zgui_platform::{
     AppMenu, Clipboard, ClipboardFormat, Clock, ColorScheme, DecorationSource, FullscreenMode,
     MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError, ScrollSettings, Surface,
-    SurfaceAttributes, SurfaceId, Waker,
+    SurfaceAttributes, SurfaceId, SurfaceRole, Unsupported, Waker,
 };
 
 use crate::clipboard::DesktopClipboard;
@@ -201,6 +201,7 @@ impl PlatformCx for WinitCx<'_> {
         &self,
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<dyn Surface>, PlatformError> {
+        makes(&attributes.role)?;
         let window = self
             .event_loop
             .create_window(window_attributes(attributes, self.shared.scheme.get()))
@@ -341,6 +342,19 @@ fn title_buttons(attributes: &SurfaceAttributes) -> Option<zgui_platform::TitleB
         .flatten()
 }
 
+/// Refuses every role but an ordinary window.
+///
+/// The windowing library makes ordinary windows only. It has no shell layer, no lock surface and
+/// no pop-up placed against a parent, and an ordinary window in place of one is the failure the
+/// contract forbids: a bar that opens as a second application window, or a lock screen the user
+/// can move aside. [`PlatformCapabilities`] says the same beforehand.
+fn makes(role: &SurfaceRole) -> Result<(), PlatformError> {
+    match role {
+        SurfaceRole::Toplevel => Ok(()),
+        _ => Err(PlatformError::Unsupported(Unsupported)),
+    }
+}
+
 /// What this desktop can actually do.
 ///
 /// Built up from nothing rather than down from everything, so that a capability nobody filled in
@@ -376,5 +390,37 @@ fn capabilities(event_loop: &ActiveEventLoop, knows_scheme: bool) -> PlatformCap
     capabilities.system_color_scheme = knows_scheme;
     capabilities.app_menu = cfg!(target_os = "macos");
     capabilities.reopen = cfg!(target_os = "macos");
+    capabilities.window_controls = true;
     capabilities
+}
+
+#[cfg(test)]
+mod tests {
+    use zgui_geom::{Css, CssPx, Point, Rect, Size};
+    use zgui_platform::{
+        Layer, LayerPlacement, MonitorId, MonitorTarget, PlatformError, PopupPlacement, SurfaceId,
+        SurfaceRole, Unsupported,
+    };
+
+    use super::makes;
+
+    #[test]
+    fn only_an_ordinary_window_is_made() {
+        assert_eq!(makes(&SurfaceRole::Toplevel), Ok(()));
+        let rect: Rect<CssPx, Css> = Rect::new(
+            Point::new(CssPx(0.0), CssPx(0.0)),
+            Size::new(CssPx(1.0), CssPx(1.0)),
+        );
+        for role in [
+            SurfaceRole::Layer(LayerPlacement::new(Layer::Top)),
+            SurfaceRole::Lock(MonitorTarget::Id(MonitorId::new(1))),
+            SurfaceRole::Popup(PopupPlacement::below(SurfaceId::new(1), rect)),
+        ] {
+            assert_eq!(
+                makes(&role),
+                Err(PlatformError::Unsupported(Unsupported)),
+                "{role:?}"
+            );
+        }
+    }
 }

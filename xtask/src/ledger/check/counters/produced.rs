@@ -23,7 +23,7 @@ pub(crate) fn find(tree: &Tree, declaration: &Declaration) -> Producers {
             let Some(text) = shipped::code_of(file) else {
                 continue;
             };
-            let code = code_of(text);
+            let code = code_of(&text);
             for counter in &declaration.counters {
                 if increments(&code, counter) {
                     producers

@@ -100,14 +100,25 @@ impl ChunkSlot {
     }
 }
 
-/// One chunk a renderer with persistent storage is told about this frame.
+/// One change to the chunks a renderer with persistent storage holds.
+///
+/// The notes form one log in note order. A renderer applies them in that order: notes stand
+/// across frames that never reach it, so one batch can insert a revision and then retire it.
 #[derive(Clone, Debug)]
-pub struct ChunkUpload {
-    /// The chunk's identity: the revision its encoding was stamped with, unique for the cache's
-    /// life.
-    pub revision: u64,
-    /// The bytes, at the position the fragment was encoded at.
-    pub prims: std::sync::Arc<ChunkPrims>,
+pub enum ChunkNote {
+    /// A chunk came into existence.
+    Inserted {
+        /// The chunk's identity: the revision its encoding was stamped with, unique for the
+        /// cache's life.
+        revision: u64,
+        /// The bytes, at the position the fragment was encoded at.
+        prims: std::sync::Arc<ChunkPrims>,
+    },
+    /// A chunk ceased to exist.
+    Retired {
+        /// The revision of the chunk.
+        revision: u64,
+    },
 }
 
 /// The primitives one encoding pushed, one array per kind, with the order they were pushed in.
@@ -570,22 +581,19 @@ impl Scene {
 
     /// Notes a chunk a renderer with persistent storage should hold, until the notes are cleared.
     pub fn note_chunk_inserted(&mut self, revision: u64, prims: std::sync::Arc<ChunkPrims>) {
-        self.chunk_inserted.push(ChunkUpload { revision, prims });
+        self.chunk_notes
+            .push(ChunkNote::Inserted { revision, prims });
     }
 
     /// Notes a chunk that ceased to exist, until the notes are cleared.
     pub fn note_chunk_retired(&mut self, revision: u64) {
-        self.chunk_retired.push(revision);
+        self.chunk_notes.push(ChunkNote::Retired { revision });
     }
 
-    /// The chunks noted since the notes were last cleared, in note order.
-    pub fn chunk_inserted(&self) -> &[ChunkUpload] {
-        &self.chunk_inserted
-    }
-
-    /// The revisions dropped since the notes were last cleared, in note order.
-    pub fn chunk_retired(&self) -> &[u64] {
-        &self.chunk_retired
+    /// The chunk insertions and retirements noted since the notes were last cleared, in note
+    /// order.
+    pub fn chunk_notes(&self) -> &[ChunkNote] {
+        &self.chunk_notes
     }
 
     /// How far each chunk replayed away from where it was encoded this frame, by revision.
@@ -593,14 +601,13 @@ impl Scene {
         &self.chunk_offsets
     }
 
-    /// Empties both chunk-note lists.
+    /// Empties the chunk-note log.
     ///
     /// The runtime calls this once a draw has consumed them — after the outcome retired the
     /// frame's damage, so a skipped frame's notes stand for the next drawn one, and an eviction
     /// after the draw lands in the notes the following draw consumes.
     pub fn clear_chunk_notes(&mut self) {
-        self.chunk_inserted.clear();
-        self.chunk_retired.clear();
+        self.chunk_notes.clear();
     }
 
     /// Copies the operations in `range` of this frame's log into `chunk`, re-based so every

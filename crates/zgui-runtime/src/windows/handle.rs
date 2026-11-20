@@ -4,13 +4,14 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
-use zgui_geom::{Css, CssPx, Point, Size};
+use zgui_geom::{Css, CssPx, Point, Rect, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, Decorations, FullscreenMode, PlatformCapabilities, ResizeEdge,
-    Surface, WindowIcon, WindowLevel,
+    CloseReason, ColorScheme, CursorStyle, Decorations, FullscreenMode, LayerPatch,
+    PlatformCapabilities, ResizeEdge, Surface, WindowIcon, WindowLevel,
 };
 use zgui_reactive::prelude::*;
 use zgui_reactive::{ArcRwSignal, Signal};
+use zgui_vocab::Modifiers;
 
 use crate::commands::{WindowCommands, WindowToken};
 
@@ -66,13 +67,30 @@ pub(crate) struct WindowShared {
     pub(crate) scale: ArcRwSignal<f32>,
     /// Whether the window holds the keyboard.
     pub(crate) focused: ArcRwSignal<bool>,
+    /// What hears about the window gaining and losing the keyboard.
+    pub(crate) focus_listeners: Rc<RefCell<crate::windows::focus::FocusListeners>>,
     /// Whether the desktop says nothing of the window is visible.
     pub(crate) occluded: ArcRwSignal<bool>,
+    /// Whether a frame of the window has reached the screen.
+    pub(crate) presented: ArcRwSignal<bool>,
     /// Whether the window is maximised.
     pub(crate) maximized: ArcRwSignal<bool>,
     /// How the window fills the screen, if it does.
     pub(crate) fullscreen: ArcRwSignal<Option<FullscreenMode>>,
+    /// Why the window closed, once it has.
+    pub(crate) close_reason: ArcRwSignal<Option<CloseReason>>,
+    /// Which lock keys are on, as of the last change the window was told about.
+    pub(crate) lock_keys: ArcRwSignal<Modifiers>,
+    /// The last input region the application gave, if it gave one.
+    ///
+    /// A surface takes it when it attaches, so a region set while the window builds holds.
+    pub(crate) input_region: RefCell<Option<Region>>,
+    /// The last opaque region the application gave, if it gave one.
+    pub(crate) opaque_region: RefCell<Option<Region>>,
 }
+
+/// A region in CSS pixels, or `None` for the whole window.
+type Region = Option<Vec<Rect<CssPx, Css>>>;
 
 impl WindowHandle {
     /// A handle for a window that has been asked for and does not exist yet.
@@ -92,11 +110,18 @@ impl WindowHandle {
                 size: ArcRwSignal::new(Size::new(CssPx(0.0), CssPx(0.0))),
                 scale: ArcRwSignal::new(1.0),
                 // A window is opened focused until the desktop says otherwise, which is the same
-                // assumption the window itself starts from.
+                // assumption the window itself starts from. A shell window is the exception, and
+                // the runtime says so when it opens one.
                 focused: ArcRwSignal::new(true),
+                focus_listeners: Rc::default(),
                 occluded: ArcRwSignal::new(false),
+                presented: ArcRwSignal::new(false),
                 maximized: ArcRwSignal::new(false),
                 fullscreen: ArcRwSignal::new(None),
+                close_reason: ArcRwSignal::new(None),
+                lock_keys: ArcRwSignal::new(Modifiers::NONE),
+                input_region: RefCell::new(None),
+                opaque_region: RefCell::new(None),
             }),
         }
     }
@@ -116,6 +141,12 @@ impl WindowHandle {
         ));
         self.shared.maximized.set(surface.is_maximized());
         self.shared.fullscreen.set(surface.fullscreen());
+        if let Some(region) = self.shared.input_region.borrow().as_ref() {
+            let _ = surface.set_input_region(region.as_deref());
+        }
+        if let Some(region) = self.shared.opaque_region.borrow().as_ref() {
+            surface.set_opaque_region(region.as_deref());
+        }
     }
 
     /// Takes the surface away, leaving the window named but not open.
@@ -130,6 +161,11 @@ impl WindowHandle {
     pub(crate) fn note_closed(&self) {
         self.shared.closed.set(true);
         self.detach();
+    }
+
+    /// Records why the window closed.
+    pub(crate) fn set_close_reason(&self, reason: CloseReason) {
+        self.shared.close_reason.set(Some(reason));
     }
 
     /// Whether a platform-driven drag was begun since this was last asked, clearing the record.
@@ -158,7 +194,22 @@ impl WindowHandle {
 
     /// Records whether the window holds the keyboard.
     pub(crate) fn set_focused(&self, focused: bool) {
-        self.shared.focused.set(focused);
+        if self.shared.focused.get_untracked() != focused {
+            self.shared.focused.set(focused);
+        }
+    }
+
+    /// Tells the callbacks registered with [`WindowHandle::on_focus_change`] about an edge.
+    pub(crate) fn focus_changed(&self, focused: bool) {
+        crate::windows::focus::tell(&self.shared.focus_listeners, focused);
+    }
+
+    /// Records which lock keys are on.
+    pub(crate) fn set_lock_keys(&self, locks: Modifiers) {
+        let locks = locks.locks();
+        if self.shared.lock_keys.get_untracked() != locks {
+            self.shared.lock_keys.set(locks);
+        }
     }
 
     /// Records whether the desktop says nothing of the window is visible.
@@ -166,10 +217,17 @@ impl WindowHandle {
         self.shared.occluded.set(occluded);
     }
 
+    /// Records that a frame of the window reached the screen.
+    pub(crate) fn set_presented(&self) {
+        if !self.shared.presented.get_untracked() {
+            self.shared.presented.set(true);
+        }
+    }
+
     /// Asks the surface again whether it is maximised or full screen.
     ///
-    /// Neither is reported as an event by any desktop, and both always resize the window — so a
-    /// resize is where they are noticed.
+    /// Read on resize, and when the platform reports a state change. A desktop can change either
+    /// state and keep the size of the window.
     pub(crate) fn refresh_window_state(&self) {
         if let Some(surface) = self.surface() {
             let maximized = surface.is_maximized();
@@ -192,7 +250,8 @@ impl WindowHandle {
     ///
     /// For an application that would rather hide an affordance than offer one that does nothing —
     /// a "move window here" menu item on a desktop that does not let a window place itself. Every
-    /// operation is safe to call whatever this says.
+    /// operation is safe to call whatever this says. Before the platform's surfaces become
+    /// available, this answers [`PlatformCapabilities::default`].
     pub fn capabilities(&self) -> PlatformCapabilities {
         self.shared.capabilities.borrow().clone()
     }
@@ -213,8 +272,43 @@ impl WindowHandle {
     }
 
     /// Whether the window holds the keyboard.
+    ///
+    /// An ordinary window starts as focused, because the desktop gives a new window the keyboard.
+    /// A shell window starts as not focused: one that takes no keyboard is never given it, and
+    /// one that takes it on demand is given it when the desktop says so.
     pub fn focused(&self) -> Signal<bool> {
         self.shared.focused.clone().into()
+    }
+
+    /// Calls `callback` each time the window gains the keyboard or loses it, with `true` for a
+    /// gain.
+    ///
+    /// Each call is one edge: a gain and a loss inside one frame are two calls, where the
+    /// [`WindowHandle::focused`] signal can settle on the value it started from. A pop-over
+    /// closes itself from the loss. The callback runs inside the frame that handles the edge, as
+    /// a listener does, and a signal it reads is not subscribed to.
+    ///
+    /// The guard removes the callback when it is dropped. Keep it for as long as the edges
+    /// matter.
+    pub fn on_focus_change(&self, callback: impl FnMut(bool) + 'static) -> crate::FocusGuard {
+        crate::windows::focus::listen(&self.shared.focus_listeners, callback)
+    }
+
+    /// Which lock keys are on: [`Modifiers::CAPS_LOCK`] and [`Modifiers::NUM_LOCK`].
+    ///
+    /// The desktop tells the window while it holds the keyboard, and when it gains the keyboard.
+    /// The set holds no other modifier. It stays empty on a desktop that does not report the
+    /// locks.
+    pub fn lock_keys(&self) -> Signal<Modifiers> {
+        self.shared.lock_keys.clone().into()
+    }
+
+    /// Whether caps lock is on, as [`WindowHandle::lock_keys`] reports it.
+    ///
+    /// A password field reads it to warn that the letters typed are upper case.
+    pub fn caps_lock(&self) -> Signal<bool> {
+        let locks = self.shared.lock_keys.clone();
+        Signal::derive(move || locks.get().caps_lock())
     }
 
     /// Whether the desktop says nothing of the window is visible.
@@ -222,6 +316,15 @@ impl WindowHandle {
     /// What an application watches to stop animating something nobody can see.
     pub fn occluded(&self) -> Signal<bool> {
         self.shared.occluded.clone().into()
+    }
+
+    /// Whether a frame of the window has reached the screen.
+    ///
+    /// It turns true once and stays true. Where the platform reports presentation, the desktop says
+    /// when the first frame was shown. Elsewhere it turns true when the first frame is handed to the
+    /// desktop. A lock screen reads it to know that every output shows the lock.
+    pub fn presented(&self) -> Signal<bool> {
+        self.shared.presented.clone().into()
     }
 
     /// Whether the window is maximised.
@@ -232,6 +335,15 @@ impl WindowHandle {
     /// How the window fills the screen, if it does.
     pub fn fullscreen(&self) -> Signal<Option<FullscreenMode>> {
         self.shared.fullscreen.clone().into()
+    }
+
+    /// Why the window closed, or nothing while it has not.
+    ///
+    /// A shell window on an output that went away closes with
+    /// [`CloseReason::OutputGone`]. Read it from outside the window: the window's own scope ends
+    /// when it closes.
+    pub fn close_reason(&self) -> Signal<Option<CloseReason>> {
+        self.shared.close_reason.clone().into()
     }
 
     /// The surface, while there is one to act on.
@@ -358,6 +470,52 @@ impl WindowHandle {
         self.act(|surface| surface.set_visible(visible));
     }
 
+    /// Changes where a shell window sits and what it claims.
+    ///
+    /// The change reaches the screen with the next frame, together with the content drawn for
+    /// it, so a bar that grows and the room it reserves change at once. What `patch` leaves
+    /// absent stays as it is. Does nothing for a window that is not a shell window.
+    ///
+    /// A shell window that is hidden and shown again keeps its placement, changes included.
+    pub fn set_layer_placement(&self, patch: LayerPatch) {
+        self.act(|surface| {
+            let _ = surface.set_layer_placement(&patch);
+        });
+    }
+
+    /// Sets the part of the window that takes pointer and touch input, in CSS pixels.
+    ///
+    /// Input on the rest of the window reaches whatever is behind it. `None` makes the whole
+    /// window take input again, and an empty list makes none of it take input. The change reaches
+    /// the screen with the next frame. A region set before the window has a surface reaches the
+    /// surface when the window opens, and every later surface gets it on a resume. Does nothing
+    /// where the desktop cannot do it; see [`PlatformCapabilities::input_regions`].
+    ///
+    /// [`use_input_region`](crate::windows::use_input_region) keeps the region equal to the boxes
+    /// of some elements, which is what a pop-over or a stack of notifications wants.
+    pub fn set_input_region(&self, region: Option<Vec<Rect<CssPx, Css>>>) {
+        if self.shared.closed.get() {
+            return;
+        }
+        self.act(|surface| {
+            let _ = surface.set_input_region(region.as_deref());
+        });
+        *self.shared.input_region.borrow_mut() = Some(region);
+    }
+
+    /// Tells the desktop which part of the window is opaque, in CSS pixels.
+    ///
+    /// A hint that lets a compositor skip drawing what is behind the opaque part. `None` says
+    /// nothing is opaque. The change reaches the screen with the next frame. A region set before
+    /// the window has a surface reaches the surface when the window opens.
+    pub fn set_opaque_region(&self, region: Option<Vec<Rect<CssPx, Css>>>) {
+        if self.shared.closed.get() {
+            return;
+        }
+        self.act(|surface| surface.set_opaque_region(region.as_deref()));
+        *self.shared.opaque_region.borrow_mut() = Some(region);
+    }
+
     /// Sets the picture the desktop shows for this window.
     ///
     /// Does nothing where the desktop takes the icon from elsewhere — from the desktop entry on
@@ -382,6 +540,25 @@ impl WindowHandle {
     /// focus-stealing prevention exists to stop.
     pub fn focus(&self) {
         self.act(|surface| surface.focus());
+    }
+
+    /// The token of the latest press the user made, for a pop-up that takes a grab.
+    ///
+    /// Read it in the handler of the press that opens a menu, and pass it to
+    /// [`PopupOptions::with_grab`](crate::windows::PopupOptions::with_grab). `None` before the
+    /// first press, while the window is not open, and on a desktop that needs no token.
+    pub fn input_serial(&self) -> Option<zgui_platform::InputSerial> {
+        self.surface().and_then(|surface| surface.input_serial())
+    }
+
+    /// When the window's frames reach the screen, as far as the desktop says.
+    ///
+    /// A caller that plans work around the window's frames reads the next refresh from it with
+    /// [`PresentationTiming::refresh_after`](zgui_platform::PresentationTiming::refresh_after).
+    /// `None` while the window is not open and on a desktop that reports no timing.
+    pub fn presentation_timing(&self) -> Option<zgui_platform::PresentationTiming> {
+        self.surface()
+            .and_then(|surface| surface.presentation_timing())
     }
 
     /// Asks the desktop to draw attention to this window, or stops asking.

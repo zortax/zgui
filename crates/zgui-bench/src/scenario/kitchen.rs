@@ -58,10 +58,12 @@ pub(crate) fn run() -> Outcome {
     let letters = ["a", "b", "c", "d", "e", "f", "g", "h"];
     for step in 0..REPEATS {
         let letter = letters[step % letters.len()];
+        let gpu = crate::gpu_time::phase("kitchen.keystroke");
         let started = std::time::Instant::now();
         harness.deliver_to_first(crate::input::key(KeyEvent::character(letter)));
         harness.settle(64);
         keys.push(started.elapsed().as_secs_f64() * 1e6);
+        drop(gpu);
         harness.deliver_to_first(crate::input::key_up(KeyEvent::character(letter)));
         harness.settle(64);
         if step % 8 == 7 {
@@ -87,10 +89,12 @@ pub(crate) fn run() -> Outcome {
         let at = centres[step % centres.len()];
         harness.deliver_to_first(crate::input::pointer(PointerAction::Moved, at));
         harness.settle(64);
+        let gpu = crate::gpu_time::phase("kitchen.click");
         let started = std::time::Instant::now();
         harness.deliver_to_first(crate::input::pointer(PointerAction::Pressed, at));
         harness.settle(64);
         clicks.push(started.elapsed().as_secs_f64() * 1e6);
+        drop(gpu);
         harness.deliver_to_first(crate::input::pointer(PointerAction::Released, at));
         harness.settle(64);
     }
@@ -105,12 +109,14 @@ pub(crate) fn run() -> Outcome {
         harness.settle(64);
         let mut carried = 0;
         while crate::input::gliding(&harness) && carried < 60 {
+            let gpu = crate::gpu_time::phase("kitchen.glide_tick");
             let started = std::time::Instant::now();
             harness.advance(std::time::Duration::from_micros(16_667));
             let ran = harness.pump();
             if ran > 0 {
                 ticks.push(started.elapsed().as_secs_f64() * 1e6);
             }
+            drop(gpu);
             carried += 1;
         }
     }
@@ -122,6 +128,7 @@ pub(crate) fn run() -> Outcome {
             reason = "a step index bounded by the repeat count"
         )]
         let width = crate::gallery::WIDTH + (step % 24) as f32 * 8.0;
+        let gpu = crate::gpu_time::phase("kitchen.resize");
         let started = std::time::Instant::now();
         harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
             DevicePx(width),
@@ -129,6 +136,7 @@ pub(crate) fn run() -> Outcome {
         )));
         harness.settle(64);
         resizes.push(started.elapsed().as_secs_f64() * 1e3);
+        drop(gpu);
     }
 
     // Untouched, but not still: the gallery ships an indeterminate progress bar, so this is what a
@@ -136,12 +144,14 @@ pub(crate) fn run() -> Outcome {
     // the idle question — that scenario asks what a loop with nothing to do costs, and this asks
     // what the cheapest thing a loop can actually have to do costs.
     let mut untouched = Vec::with_capacity(UNTOUCHED_TURNS);
+    let gpu = crate::gpu_time::phase("kitchen.untouched_turn");
     for _ in 0..UNTOUCHED_TURNS {
         let started = std::time::Instant::now();
         harness.advance(std::time::Duration::from_micros(16_667));
         harness.pump();
         untouched.push(started.elapsed().as_secs_f64() * 1e6);
     }
+    drop(gpu);
 
     let all = before.delta(&zgui_profile::counter::snapshot());
     assert!(
@@ -180,10 +190,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "ms",
                 value: resize.p50,
                 band: Band::Time {
-                    baseline: 8.2,
+                    baseline: 1.84,
                     tolerance: STARTUP_TOLERANCE,
                 },
-                rationale: "the measured on-screen p50, which every box in the window pays into",
+                rationale: "measured at 1.77-1.95 ms across five runs at 2 695 boxes, which every \
+                            box in the window pays into",
                 budget: None,
                 spread: Some(resize),
             },
@@ -192,10 +203,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: click.p50,
                 band: Band::Time {
-                    baseline: 10.8,
+                    baseline: 29.6,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "the measured p50 at 1 851 boxes: one class on one element",
+                rationale: "measured at 29.2-29.7 us across five runs at 2 695 boxes: one class on \
+                            one element",
                 budget: None,
                 spread: Some(click),
             },
@@ -216,10 +228,11 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: quiet_turn.p50,
                 band: Band::Time {
-                    baseline: 22.0,
+                    baseline: 56.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "the measured p50 of one turn over an untouched but animating gallery",
+                rationale: "measured at 53-76 us across five runs: one turn over an untouched \
+                            gallery of 2 695 boxes whose progress bar animates",
                 budget: None,
                 spread: Some(quiet_turn),
             },
@@ -228,10 +241,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: glide.p50,
                 band: Band::Time {
-                    baseline: 610.0,
+                    baseline: 293.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "the measured p50 of one frame of the framework's own scroll animation",
+                rationale: "measured at 287-301 us across five runs: one frame of the framework's \
+                            own scroll animation, which moves the page's content space and draws \
+                            the band it uncovered",
                 budget: None,
                 spread: Some(glide),
             },

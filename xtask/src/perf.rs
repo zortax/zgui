@@ -1,6 +1,6 @@
 //! The performance ratchet.
 //!
-//! One step, and everything it does is inside the harness it runs: `zgui-bench` drives the five
+//! One step, and everything it does is inside the harness it runs: `zgui-bench` drives the seven
 //! end-to-end scenarios, compares every number it takes against the band recorded for it, stores
 //! the run under `docs/perf/runs/`, regenerates `docs/performance.md` and exits non-zero naming
 //! whatever left its band. Nothing is duplicated here, because a gate that re-implemented the

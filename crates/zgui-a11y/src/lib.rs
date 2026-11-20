@@ -91,3 +91,7 @@ pub use crate::dump::dump;
 pub use crate::id::{NodeId, to_a11y, to_document};
 pub use crate::integrity::{Dangling, Mention, dangling};
 pub use crate::world::World;
+
+/// The size of one accessibility node record, for a memory report.
+#[doc(hidden)]
+pub const NODE_SIZE: usize = core::mem::size_of::<accesskit::Node>();
