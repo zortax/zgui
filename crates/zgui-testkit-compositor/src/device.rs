@@ -5,7 +5,8 @@ use std::sync::{Arc, Mutex};
 use compositor_api::Renderer;
 use compositor_capture::CaptureRenderer;
 use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, VectorBackend,
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, SubpixelOrder,
+    VectorBackend,
 };
 use compositor_vello::VelloOptions;
 use compositor_wgpu::{Gpu, WgpuRenderer, wgpu};
@@ -137,6 +138,10 @@ impl Renderer for Device {
 
     fn memory(&self) -> MemoryReport {
         self.wgpu.memory()
+    }
+
+    fn set_subpixel_order(&mut self, order: SubpixelOrder) {
+        self.wgpu.set_subpixel_order(order);
     }
 
     fn as_any(&self) -> Option<&dyn core::any::Any> {
