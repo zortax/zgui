@@ -656,7 +656,7 @@ impl Pass<'_, '_> {
                 continue;
             };
             let mut ink = self.where_drawn(fragment, fragment.subtree_ink);
-            if let Some(drawn) = self.retained(*frag) {
+            if let Some(drawn) = self.retained(fragment) {
                 ink = ink.union(drawn);
             }
             if let Some(marks) = crate::damage::marks::extent(
@@ -675,16 +675,17 @@ impl Pass<'_, '_> {
         held
     }
 
-    /// Where the compositor still draws the chunk of `frag`, when one is attached and has one.
+    /// Where the compositor still draws the chunk of `fragment`, when one is attached and the
+    /// fragment has moved away from it.
     ///
     /// A fragment that moved out of the damage is visited while the damage reaches the place its
     /// chunk is drawn at, so the chunk follows it there.
-    fn retained(&self, frag: FragKey) -> Option<Rect<DevicePx, Device>> {
+    fn retained(&self, fragment: &Fragment) -> Option<Rect<DevicePx, Device>> {
         let sync = self.painter.sync.as_ref()?;
-        if !sync.knows(frag) {
+        if !sync.knows(fragment.key) {
             return None;
         }
-        self.painter.cache.drawn(frag)
+        self.painter.cache.moved_from(fragment)
     }
 
     /// What `key`'s element is currently animating, if anything.
@@ -1051,8 +1052,10 @@ impl Pass<'_, '_> {
         ) {
             cull = cull.union(marks);
         }
-        let reached =
-            self.reaches(cull) || self.retained(frag).is_some_and(|drawn| self.reaches(drawn));
+        let reached = self.reaches(cull)
+            || self
+                .retained(fragment)
+                .is_some_and(|drawn| self.reaches(drawn));
         if !reached {
             return;
         }

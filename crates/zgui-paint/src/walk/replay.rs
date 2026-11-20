@@ -601,11 +601,17 @@ impl PaintCache {
             .map(|record| record.painted.anim)
     }
 
-    /// Where `fragment`'s record was last drawn: the rectangle it was culled against when it was
-    /// encoded, moved as its replays moved it.
-    pub fn drawn(&self, fragment: FragKey) -> Option<Rect<DevicePx, Device>> {
-        let record = self.records.get(&fragment)?;
-        Some(record.drawn.translate(record.moved))
+    /// Where `fragment`'s record was last drawn, when the fragment has moved away from it since:
+    /// the rectangle it was culled against when it was encoded, moved as its replays moved it.
+    ///
+    /// `None` when the fragment has no record or stands where its record was last drawn.
+    pub fn moved_from(&self, fragment: &Fragment) -> Option<Rect<DevicePx, Device>> {
+        let record = self.records.get(&fragment.key)?;
+        let at = record.border_box.origin;
+        let now = fragment.border_box.origin;
+        let stands =
+            at.x.0 + record.moved.width.0 == now.x.0 && at.y.0 + record.moved.height.0 == now.y.0;
+        (!stands).then(|| record.drawn.translate(record.moved))
     }
 
     /// The number of the tiled source `fragment`'s record draws, if it draws one.

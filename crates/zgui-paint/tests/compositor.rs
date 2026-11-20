@@ -170,3 +170,32 @@ fn a_row_scrolled_out_of_its_port_does_not_stay_drawn_where_it_was() {
         }
     }
 }
+
+#[test]
+fn a_row_a_plain_port_scrolls_away_is_not_visited() {
+    // A plain port scrolls by moving its content space, so a row keeps its rectangle and its
+    // chunk moves with the space. The walk does not visit a row the damage misses.
+    let rows: Vec<Element> = ["first", "second", "third", "fourth", "fifth", "sixth"]
+        .into_iter()
+        .map(|name| Element::new(name).classes(&["row"]))
+        .collect();
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("port").children(rows)]),
+        "root { display: block; width: 200px; height: 200px }
+         port { display: block; width: 100px; height: 40px; overflow-y: scroll }
+         .row { display: block; height: 20px; background: rgb(0, 0, 255) }",
+        200.0,
+        200.0,
+    );
+    harness.paint_everything();
+    let first = harness.fragment_of("first");
+
+    harness.clear_damage();
+    harness.scroll_to("port", 0.0, 80.0);
+    let report = harness.paint();
+
+    assert!(
+        !report.emitted(first),
+        "the first row was visited after it scrolled away"
+    );
+}
