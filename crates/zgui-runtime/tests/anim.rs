@@ -75,6 +75,36 @@ const PULSE_CSS: &str = "root { display: block; width: 400px; height: 300px }
                                  background-color: rgb(200, 200, 200);
                                  animation: pulse 2s linear infinite }";
 
+/// Five hundred skeletons whose background colour pulses, as a loading list does.
+const SHIMMER_CSS: &str = ".root { display: flex; flex-direction: row; flex-wrap: wrap;
+                                  width: 400px; height: 300px }
+                           @keyframes shimmer { from { background-color: rgb(40, 40, 40) }
+                                                to { background-color: rgb(200, 200, 200) } }
+                           .bone { display: block; width: 4px; height: 4px;
+                                   background-color: rgb(40, 40, 40);
+                                   animation: shimmer 2s linear infinite }";
+
+/// A port that clips two wide boxes: one fades, the other changes its background colour.
+const CLIPPED_CSS: &str = ".root { display: block; width: 400px; height: 300px }
+                           @keyframes pulse { from { opacity: 1 } to { opacity: 0.4 } }
+                           @keyframes shimmer { from { background-color: rgb(40, 40, 40) }
+                                                to { background-color: rgb(200, 200, 200) } }
+                           .port { display: block; width: 100px; height: 60px; overflow: hidden }
+                           .fade { display: block; width: 300px; height: 20px;
+                                   background-color: rgb(200, 200, 200);
+                                   animation: pulse 2s linear infinite }
+                           .tint { display: block; width: 300px; height: 20px;
+                                   background-color: rgb(40, 40, 40);
+                                   animation: shimmer 2s linear infinite }";
+
+/// A paragraph with a box inside its text whose background colour pulses.
+const INLINE_CSS: &str = ".root { display: block; width: 400px; height: 300px }
+                          @keyframes shimmer { from { background-color: rgb(40, 40, 40) }
+                                               to { background-color: rgb(200, 200, 200) } }
+                          .para { display: block }
+                          .mark { background-color: rgb(40, 40, 40);
+                                  animation: shimmer 2s linear infinite }";
+
 /// A panel that fades once and is meant to stay faded, which is what `forwards` means.
 const FORWARDS_CSS: &str = "root { display: block; width: 400px; height: 300px }
                             @keyframes fade { from { opacity: 1 } to { opacity: 0.2 } }
@@ -213,7 +243,8 @@ fn brightest_fill(fills: &Fills) -> u32 {
         .unwrap_or_default()
 }
 
-/// An application under `css`, with every frame's solid fills recorded.
+/// An application under `css`, with every frame's solid fills recorded and text shaped by the
+/// test shaper.
 ///
 /// The recording renderer is what separates the two halves an animation fails in independently: the
 /// override column says what the animation computed, and this says what reached the display list.
@@ -241,9 +272,21 @@ where
                 Ok::<Box<dyn Renderer>, zgui_runtime::AppError>(Box::new(renderer))
             },
         ))
+        .with_text_engine(Box::new(|| {
+            Box::new(zgui_layout::Paragraphs::new(
+                zgui_testkit_scene::MonoShaper::new(),
+            ))
+        }))
+        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)
+}
+
+thread_local! {
+    /// The bounds of the damage of every frame drawn on this thread, oldest first.
+    static DAMAGE: RefCell<Vec<Option<zgui_geom::Rect<i32, zgui_geom::Device>>>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 /// A renderer that records the solid fills of every frame and draws nothing.
@@ -269,7 +312,8 @@ impl Renderer for Fill {
         self.target
     }
 
-    fn draw(&mut self, scene: &zgui_scene::Scene, _damage: &zgui_bits::DamageSet) -> FrameOutcome {
+    fn draw(&mut self, scene: &zgui_scene::Scene, damage: &zgui_bits::DamageSet) -> FrameOutcome {
+        DAMAGE.with_borrow_mut(|frames| frames.push(damage.bounds()));
         self.fills.borrow_mut().push(
             scene
                 .primitives
@@ -441,6 +485,138 @@ fn five_hundred_animations_advance_every_frame_without_restyling_any_of_them() {
         );
     }
     assert!(harness.parked_deadline().is_some());
+    harness.assert_park_invariant();
+}
+
+#[test]
+fn a_colour_animation_replays_every_chunk_after_its_first_frame() {
+    let _guard = measuring();
+    // The colour is in a slot the box owns, so a frame that moves it rewrites the slot and replays
+    // the chunk that names it. Re-encoding five hundred boxes per frame for a colour is the cost
+    // this removes; a replay that drew the colour it was recorded with is the failure it risks.
+    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
+    let mut harness = drawn_into(SHIMMER_CSS, &fills, |cx: &mut BuildCx<'_>| {
+        let mut grid = zgui_elements::column().class("root");
+        for _ in 0..500 {
+            grid = grid.child(zgui_elements::column().class("bone"));
+        }
+        Box::new(grid.into_view().build(cx))
+    });
+    harness.settle(8);
+    // The animation starts on the tick after the cascade that created it, and the first frame
+    // that draws its value encodes the boxes through their slots.
+    for _ in 0..2 {
+        harness.advance(FRAME);
+        harness.pump();
+    }
+
+    counter::reset();
+    let mut drawn = Vec::new();
+    for _ in 0..4 {
+        fills.borrow_mut().clear();
+        harness.advance(FRAME);
+        assert_eq!(harness.pump(), 1, "the deadline produced no frame");
+        drawn.push(brightest_fill(&fills));
+    }
+    let frames = counter::snapshot();
+    assert!(
+        drawn.windows(2).all(|pair| pair[1] > pair[0]),
+        "the drawn colour did not move every frame: {drawn:?}"
+    );
+    if COUNTERS_ENABLED {
+        assert_eq!(
+            frames.chunks_reencoded, 0,
+            "a frame that moved only colours encoded a box again"
+        );
+        assert!(
+            frames.chunks_translated >= 4 * 500,
+            "the boxes were not drawn every frame: {} replays",
+            frames.chunks_translated
+        );
+        assert_eq!(frames.tier_b_transitions, 4 * 500);
+    }
+    harness.assert_park_invariant();
+}
+
+#[test]
+fn an_animated_box_damages_only_what_its_clip_admits() {
+    let _guard = measuring();
+    // Both boxes are three times as wide as the port that clips them. A colour moved in the slots
+    // the box owns is damaged by the animation stage, and an opacity by the fragment pass. Either
+    // damage cut to anything wider than the port redraws pixels no box can draw into.
+    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
+    let mut harness = drawn_into(CLIPPED_CSS, &fills, |cx: &mut BuildCx<'_>| {
+        let port = zgui_elements::column()
+            .class("port")
+            .child(zgui_elements::column().class("fade"))
+            .child(zgui_elements::column().class("tint"));
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(port)
+                .into_view()
+                .build(cx),
+        )
+    });
+    harness.settle(8);
+    for _ in 0..2 {
+        harness.advance(FRAME);
+        harness.pump();
+    }
+
+    DAMAGE.with_borrow_mut(Vec::clear);
+    for _ in 0..4 {
+        harness.advance(FRAME);
+        assert_eq!(harness.pump(), 1, "the deadline produced no frame");
+    }
+    let damage = DAMAGE.with_borrow(Clone::clone);
+    assert_eq!(damage.len(), 4, "every frame drew: {damage:?}");
+    for bounds in &damage {
+        let bounds = bounds.expect("an animating frame damages something");
+        assert!(
+            bounds.origin.x + bounds.size.width <= 100,
+            "the damage reaches past the port: {bounds:?}"
+        );
+    }
+    harness.assert_park_invariant();
+}
+
+#[test]
+fn a_box_inside_text_shows_every_frame_of_its_colour_animation() {
+    let _guard = measuring();
+    // The lines the box is on draw its background, so it never takes slots of its own: the colour
+    // reaches the screen only through the repaint of those lines.
+    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
+    let mut harness = drawn_into(INLINE_CSS, &fills, |cx: &mut BuildCx<'_>| {
+        let para = zgui_elements::text()
+            .class("para")
+            .child(|| "aa ")
+            .child(zgui_elements::text().class("mark").child(|| "bbbb"));
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(para)
+                .into_view()
+                .build(cx),
+        )
+    });
+    harness.settle(8);
+    for _ in 0..2 {
+        harness.advance(FRAME);
+        harness.pump();
+    }
+
+    let mut drawn = Vec::new();
+    for _ in 0..4 {
+        fills.borrow_mut().clear();
+        harness.advance(FRAME);
+        assert_eq!(harness.pump(), 1, "the deadline produced no frame");
+        drawn.push(brightest_fill(&fills));
+    }
+    assert!(
+        drawn.windows(2).all(|pair| pair[1] > pair[0]),
+        "the drawn colour did not move every frame: {drawn:?}"
+    );
     harness.assert_park_invariant();
 }
 

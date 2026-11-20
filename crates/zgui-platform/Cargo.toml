@@ -17,6 +17,7 @@ include.workspace = true
 # contract. `raw-window-handle` is the one graphics-adjacent name, and it is confined to the
 # `GpuSurface` sub-trait so a backend with no GPU simply does not implement it.
 [dependencies]
+web-time.workspace = true
 accesskit.workspace = true
 raw-window-handle.workspace = true
 thiserror.workspace = true

@@ -97,19 +97,40 @@ impl Event {
         // alignment. Every field of `input_event` is an integer, so every bit pattern of those
         // bytes is a value of it.
         let raw: sys::input_event = unsafe { std::ptr::read_unaligned(record.as_ptr().cast()) };
+        let (seconds, microseconds) = Self::stamp(&raw);
         Self {
             // The kernel splits one instant into whole seconds and the microseconds under them.
             // Both are added rather than multiplied, and added saturating: this walk exists to
             // survive a stream it does not recognise, and arithmetic is the one thing in it that
             // a debug build could panic on. The two spellings agree for every value a kernel can
             // produce.
-            at: Duration::from_secs(u64::try_from(raw.time.tv_sec).unwrap_or(0)).saturating_add(
-                Duration::from_micros(u64::try_from(raw.time.tv_usec).unwrap_or(0)),
-            ),
+            at: Duration::from_secs(seconds).saturating_add(Duration::from_micros(microseconds)),
             kind: EventType::new(raw.type_),
             code: raw.code,
             value: raw.value,
         }
+    }
+
+    /// Returns the seconds and the microseconds one record is stamped with.
+    ///
+    /// The kernel's header spells these `input_event_sec` and `input_event_usec`, and it puts the
+    /// two behind a `struct timeval` on one target and behind a pair of `__kernel_ulong_t` on
+    /// another. bindgen writes the fields and drops the two macros, so the choice is made here.
+    /// `sys` states which target gets which, and why both carry the same value.
+    #[cfg(target_pointer_width = "64")]
+    fn stamp(raw: &sys::input_event) -> (u64, u64) {
+        (
+            u64::try_from(raw.time.tv_sec).unwrap_or(0),
+            u64::try_from(raw.time.tv_usec).unwrap_or(0),
+        )
+    }
+
+    #[cfg(not(target_pointer_width = "64"))]
+    fn stamp(raw: &sys::input_event) -> (u64, u64) {
+        (
+            u64::try_from(raw.__sec).unwrap_or(0),
+            u64::try_from(raw.__usec).unwrap_or(0),
+        )
     }
 }
 
@@ -245,8 +266,8 @@ impl Reader {
     ///
     /// let mut reader = Reader::new();
     ///
-    /// // Half of a twenty-four byte record completes nothing, and the bytes wait for the call
-    /// // that carries the rest of it.
+    /// // Twelve bytes are less than one record on every target, so they complete nothing and
+    /// // wait for the call that carries the rest.
     /// assert!(reader.feed(&[0; 12]).is_empty());
     /// ```
     pub fn feed(&mut self, bytes: &[u8]) -> Vec<Batch> {
@@ -279,7 +300,7 @@ impl Reader {
 mod tests {
     //! The batching, over bytes written here and over a pipe.
     //!
-    //! No device is needed for any of this. A record is twenty-four bytes and a read is a read, so
+    //! No device is needed for any of this. A record is a fixed size and a read is a read, so
     //! a pipe stands in for a device exactly — and the cases worth asserting are the ones a
     //! working device never produces: a read cut in the middle of a record, an update split across
     //! two reads, and a stream that ends before its report.
@@ -291,11 +312,23 @@ mod tests {
     use super::*;
 
     /// The bytes of one record, as the kernel lays it out.
+    ///
+    /// The seconds and the microseconds are one word each, and the word is as wide as this
+    /// target's: eight bytes where a record is twenty-four and four where it is sixteen. `sys`
+    /// states which target gets which.
     fn record(at: Duration, kind: EventType, code: u16, value: i32) -> Vec<u8> {
         let mut bytes = Vec::with_capacity(RECORD);
         let seconds = i64::try_from(at.as_secs()).expect("the test uses a small moment");
-        bytes.extend_from_slice(&seconds.to_ne_bytes());
-        bytes.extend_from_slice(&i64::from(at.subsec_micros()).to_ne_bytes());
+        let microseconds = i64::from(at.subsec_micros());
+        if cfg!(target_pointer_width = "64") {
+            bytes.extend_from_slice(&seconds.to_ne_bytes());
+            bytes.extend_from_slice(&microseconds.to_ne_bytes());
+        } else {
+            let seconds = i32::try_from(seconds).expect("the test uses a small moment");
+            let microseconds = i32::try_from(microseconds).expect("a microsecond count fits");
+            bytes.extend_from_slice(&seconds.to_ne_bytes());
+            bytes.extend_from_slice(&microseconds.to_ne_bytes());
+        }
         bytes.extend_from_slice(&kind.raw().to_ne_bytes());
         bytes.extend_from_slice(&code.to_ne_bytes());
         bytes.extend_from_slice(&value.to_ne_bytes());

@@ -47,6 +47,40 @@ the surface it is given is not the surface it drew into last time.
 If you are writing a renderer over a swap chain, this is the decision to make first, and it is not
 reversible later without changing everything above it.
 
+### Copying only what changed
+
+The kept target is copied into the texture that is presented. How much of it is copied depends on
+whether that texture keeps its contents between frames:
+
+- A texture of wgpu's swap chain keeps nothing. wgpu discards its contents at each acquisition, so
+  the whole frame is copied every time.
+- A texture a display supplies, and an image of a swap chain the renderer makes itself, keep their
+  contents. Such a texture is copied only where it *owes* pixels.
+
+Two damage sets are kept apart, because each answers a different question:
+
+- **Image debt**: what was written into the kept target since this texture was last copied into.
+  A set of rotated textures owes each texture what was drawn while another one was in use. This
+  decides what the copy covers.
+- **Present damage**: what changed since the previous present. This is what the compositor or the
+  display engine is told, so that it redraws only that part.
+
+Both record what the renderer *wrote*, never only the damage it was given. A scroll shift, a resize
+that carries the old picture over, and a backdrop that widens its rectangles all write outside that
+damage. A frame that is composed and not presented, because the platform held it or no texture was
+free, adds its rectangles to both sets for the next present.
+
+`zgui-render-wgpu` makes its own swap chain when `ZGUI_PRESENTER=native` is set: a Vulkan swap
+chain, or on Windows with DX12 a flip-sequential DXGI swap chain for an opaque window. Its images
+keep their contents, and `VK_KHR_incremental_present` or the dirty rectangles of
+`IDXGISwapChain1::Present1` tell the compositor which rectangles changed. `ZGUI_PRESENT_VERIFY=1` reads every presented image back and compares it with the kept
+target, which finds a damage bug at the frame where it occurs.
+
+To measure the effect, run `anim-cadence` from `zgui-bench` once with `ZGUI_PRESENTER=native` and
+once without it. Its report gives `copy_px_per_frame` and `damage_px_per_frame`, which do not depend
+on the hardware. The counters `present_copy_px` and `present_damage_px` give the same totals to any
+other tool.
+
 ## Rule two: damage is retired on submission, not on presentation
 
 `draw` returns a `FrameOutcome`, deliberately not a `Result`. Most of the ways a frame fails to
@@ -63,9 +97,12 @@ retain damage because no work was recorded.
 
 A renderer that has to be given the buffer it composes into — one drawing straight into what a
 display scans out of — asks for that buffer *before* it composes. A frame refused there recorded
-nothing, so it reports `Unacquired` and keeps its damage. `Timeout` is the same refusal met after
-composing, where the target does hold the frame's pixels. Report the one that matches where your
-renderer stopped.
+nothing, so it reports `Unacquired` and keeps its damage. A refusal met after composing has two
+words, and the target holds the frame's pixels for both. `Declined` is a display answering at once,
+because the buffer it would take is still on its way to the screen. `Timeout` is an acquisition that
+blocked for as long as the graphics API allows; the runtime reads a run of those as a surface nobody
+is consuming and probes at a growing distance, so a decline reported as one costs the window its
+frame rate. Report the one that matches where your renderer stopped and what it waited for.
 
 Three skip reasons also say *do not ask for another frame*: `Occluded`, `Undamaged`, and
 `DeviceUnavailable`. A platform event wakes an occluded window. A new frame cannot improve an
@@ -81,7 +118,11 @@ the list should contain and not merely how it is drawn:
 - `subpixel_text` — per-channel text antialiasing needs dual-source blending, which is optional on
   real drivers and absent from software rasterisers. Where it is absent, ordinary coverage is
   emitted throughout. A pipeline gated on the feature with no fallback is a renderer that draws no
-  text at all on those devices.
+  text at all on those devices. A window narrows this capability further: it emits per-channel
+  coverage only where its display has horizontal colour stripes in a known order, see
+  `App::with_text_antialiasing` and the `ZGUI_TEXT_AA` environment variable (`auto`, `gray`, `rgb`,
+  `bgr`). The window states the stripe order with `Renderer::set_subpixel_order` and damages the
+  whole surface when the order changes. A renderer that wraps another must forward the call.
 - `vector_compute` — whether the device can run a compute path rasteriser. Where it cannot, a
   simpler rasteriser is bound instead.
 - `mutable_texture_formats` — decides whether a surface offering only an encoded format is handled

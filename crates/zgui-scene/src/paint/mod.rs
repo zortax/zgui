@@ -10,6 +10,9 @@
 //! every already-shaped paragraph without re-shaping a single string. Interning those would make a
 //! paragraph whose colour came from a theme variable and one whose colour was written literally
 //! share a slot, and the theme change would silently re-colour the literal one.
+//!
+//! An entry of [`PaintTable`] can also be *owned*: named after a box and one of its paints, and
+//! rewritten in place while an animation moves its colour. See [`PaintEntry`].
 
 pub mod reference;
 pub mod source;
@@ -21,5 +24,5 @@ mod tests;
 
 pub use crate::paint::reference::{PaintKind, PaintRef};
 pub use crate::paint::source::{GradientKind, Paint};
-pub use crate::paint::table::PaintTable;
+pub use crate::paint::table::{PaintEntry, PaintOwner, PaintRewrite, PaintRole, PaintTable};
 pub use crate::paint::text::{TextPaint, TextPaintTable};

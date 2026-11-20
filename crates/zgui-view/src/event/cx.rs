@@ -86,7 +86,11 @@ pub struct EventCx<'a, E: EventView = AnyEvent> {
     pub phase: Phase,
     /// Which modifier keys were held.
     pub modifiers: Modifiers,
-    /// When the event happened.
+    /// When the event happened, on the application's clock.
+    ///
+    /// An event that an input event causes, such as a click or a focus change, carries the stamp
+    /// of that input event. An event without a platform stamp carries the frame's moment. Use
+    /// [`Timestamp::saturating_since`] to compare two stamps.
     pub timestamp: Timestamp,
     /// What the event carries.
     payload: &'a Payload,

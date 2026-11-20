@@ -45,6 +45,15 @@ pub trait View: Sized + 'static {
     /// Retained state for this view between rebuilds.
     type State: Anchor;
 
+    /// Whether a rebuild always keeps the nodes the build made, and the build makes at least one.
+    ///
+    /// A closure that returns such a view is kept up to date by a sink with no marker node, which
+    /// costs a fraction of an effect. Text says `true`. Say `true` only for a view whose state
+    /// creates no reactive node and whose first node never changes. Such a closure gets the
+    /// [`Sink`](zgui_reactive::Sink) semantics: in each flush round it runs after the task pool,
+    /// and `Owner::pause` does not stop it.
+    const REBUILDS_IN_PLACE: bool = false;
+
     /// Creates this view's nodes, detached, and returns the state that updates them.
     fn build(self, cx: &mut BuildCx<'_>) -> Self::State;
 

@@ -22,11 +22,13 @@
 use zgui_anim::{Placed, Placer};
 use zgui_bits::DamageSet;
 use zgui_dom::NodeKey;
-use zgui_dom::side::AnimPlacement;
+use zgui_dom::side::{AnimOverride, AnimPlacement};
 use zgui_layout::tree::store::LayoutStore;
+use zgui_paint::Painter;
 use zgui_scene::{PropertyOwner, Scene, SpatialId};
 
-/// Moves boxes by writing the display list's coordinate systems.
+/// Moves boxes by writing the display list's coordinate systems, and recolours them by writing
+/// the paint slots they own.
 pub(crate) struct Writing<'a> {
     /// The display list holding the coordinate systems and the frame that is on the screen.
     pub scene: &'a mut Scene,
@@ -34,12 +36,15 @@ pub(crate) struct Writing<'a> {
     pub layout: &'a LayoutStore,
     /// How many device pixels one CSS pixel is.
     pub scale: f32,
-    /// Where every box moved from and to, which is what the frame has to draw again.
+    /// Where every box moved from and to, and the ink of every box recoloured, which is what the
+    /// frame has to draw again.
     ///
     /// A write moves the pixels and says nothing about which of them changed, so this is the other
     /// half of it: without the union of the two rectangles the box is drawn in its new place over a
     /// surface that still holds it in the old one.
     pub damage: DamageSet,
+    /// The paint records, for which paint slots each box's painting names.
+    pub painter: &'a Painter,
 }
 
 impl Placer for Writing<'_> {
@@ -63,6 +68,14 @@ impl Placer for Writing<'_> {
     fn retired(&mut self, node: NodeKey) {
         self.withdraw(node);
     }
+
+    fn recolor(&mut self, node: NodeKey, values: &AnimOverride) -> bool {
+        self.write_colors(node, values)
+    }
+
+    fn uncolored(&mut self, node: NodeKey, was: &AnimOverride) {
+        self.damage_uncolored(node, was);
+    }
 }
 
 impl Writing<'_> {
@@ -80,7 +93,8 @@ impl Writing<'_> {
         };
         for frag in self.layout.fragments_of_box(*box_key) {
             if let Some(fragment) = self.layout.fragment(*frag) {
-                self.damage.absorb(whole(fragment.subtree_ink));
+                let ink = fragment.on_device_in(fragment.subtree_ink, &self.scene.spatial);
+                self.damage.absorb(whole(ink));
             }
         }
     }

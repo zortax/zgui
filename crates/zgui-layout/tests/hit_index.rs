@@ -90,6 +90,7 @@ fn a_transform_transition_updates_only_its_own_subtree_in_the_hit_index() {
     let mut tables = zgui_layout::fragment::build::Tables {
         clips: &mut frame.clips,
         spatial: &mut frame.spatial,
+        drawn: &zgui_scene::Placements::EMPTY,
         device: zgui_layout::DeviceStyle::default(),
         scroll: &frame.scroll,
         placements: &[],
@@ -153,7 +154,7 @@ fn a_transform_transition_updates_only_its_own_subtree_in_the_hit_index() {
             .expect("a live coordinate system");
         zgui_layout::fragment::transform::transformed_bounds(&matrix, entry.envelope)
     };
-    assert_eq!(placed(moved).origin.x.0 - placed(still).origin.x.0, 12.0);
+    assert_eq!(placed(&moved).origin.x.0 - placed(&still).origin.x.0, 12.0);
 }
 
 /// A dirty answer that marks one subtree and reports everything else clean.

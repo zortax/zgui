@@ -385,7 +385,7 @@ fn an_animated_transform_reports_the_union_of_where_it_was_and_where_it_is() {
         .store
         .fragment(harness.fragment_of("subject"))
         .expect("a fragment")
-        .ink;
+        .device_ink(&zgui_scene::Placements::of(&harness.scene.spatial));
 
     let subject = harness.element("subject");
     harness.edit_and_restyle(|batch| {
@@ -398,7 +398,7 @@ fn an_animated_transform_reports_the_union_of_where_it_was_and_where_it_is() {
         .store
         .fragment(harness.fragment_of("subject"))
         .expect("a fragment")
-        .ink;
+        .device_ink(&zgui_scene::Placements::of(&harness.scene.spatial));
     assert_ne!(
         before.origin, after.origin,
         "the fixture has to have moved it"

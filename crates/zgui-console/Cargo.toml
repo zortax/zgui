@@ -17,6 +17,7 @@ publish = false
 zgui = { path = "../zgui", version = "0.1.0" }
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
+zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-drm = { path = "../zgui-platform-drm", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
@@ -31,7 +32,6 @@ zgui-view = { path = "../zgui-view", version = "0.1.0" }
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
-zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 
 [lints]

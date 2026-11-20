@@ -35,8 +35,26 @@ impl Window {
         }
     }
 
-    /// Carries out what the surface gaining or losing the keyboard means.
+    /// Carries out what the surface gaining or losing the keyboard means, then tells the
+    /// application.
+    ///
+    /// The application hears last, so a callback that reads the field it was typing into reads
+    /// the value that settled.
     pub(crate) fn surface_focus_changed(&mut self, focused: bool, timestamp: Timestamp) {
+        self.surface_focus_settled(focused, timestamp);
+        self.handle.focus_changed(focused);
+    }
+
+    /// Records whether the surface starts out holding the keyboard.
+    ///
+    /// Called once, before the first event. A shell window starts without it: the desktop gives it
+    /// the keyboard with an edge of its own, if at all.
+    pub(crate) fn assume_surface_focus(&mut self, focused: bool) {
+        self.surface_focused = focused;
+    }
+
+    /// What the window itself does when the surface gains or loses the keyboard.
+    fn surface_focus_settled(&mut self, focused: bool, timestamp: Timestamp) {
         if focused {
             // Text input is asked for again for whatever still has focus. The window system
             // disabled it when it took the keyboard away, so a field returned to without this is a

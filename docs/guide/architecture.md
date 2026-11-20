@@ -88,7 +88,7 @@ mechanically.
 |---|---|---|
 | L0 foundation | `zgui-geom`, `zgui-color`, `zgui-arena`, `zgui-interned`, `zgui-bits`, `zgui-profile` | Coordinate spaces, colour, storage whose addresses hold still, interned names, invalidation bits, counters. No policy. |
 | L1 contracts | `zgui-vocab`, `zgui-css`, `zgui-scene`, `zgui-render`, `zgui-atlas`, `zgui-platform`, `zgui-reactive` | The traits and value types the rest of the tree agrees on. Nothing here implements anything replaceable. |
-| L2 backends | `zgui-render-wgpu`, `zgui-render-vector-vello`, `zgui-render-vector-coverage`, `zgui-platform-wayland`, `zgui-platform-winit`, `zgui-platform-headless` | Implementations of L1 contracts. Every one of them is replaceable, and every one of them has a sibling. |
+| L2 backends | `zgui-render-wgpu`, `zgui-render-vector-vello`, `zgui-render-vector-coverage`, `zgui-platform-wayland`, `zgui-platform-winit`, `zgui-platform-web`, `zgui-platform-headless` | Implementations of L1 contracts. Every one of them is replaceable, and every one of them has a sibling. |
 | L3 document | `zgui-dom` | One arena of nodes, safe to read from many threads while the cascade runs over it. |
 | L4 engines | `zgui-style`, `zgui-layout`, `zgui-text`, `zgui-text-style`, `zgui-text-parley`, `zgui-paint`, `zgui-svg` | The stages that turn a document into a display list. |
 | L5 systems | `zgui-input`, `zgui-scroll`, `zgui-a11y`, `zgui-anim`, `zgui-edit` | Behaviour over a laid-out document: hit testing and dispatch, scrolling, the accessibility projection, transitions and animations, text editing. |
@@ -173,4 +173,5 @@ assumed.
 - [Doing something that takes time](async.md) — tasks, worker threads, cancellation, and tokio.
 - [Drawing on a canvas](canvas.md) — retained scenes, the view transform, and data-space series.
 - [Writing a `Renderer`](renderer.md) — the contract, damage, and what a second renderer must not do.
+- [Running in a browser](web.md) — the WebAssembly build, its renderers, fonts and limits.
 - [Building a browser on zgui](browser.md) — the extension points, in the order a consumer meets them.

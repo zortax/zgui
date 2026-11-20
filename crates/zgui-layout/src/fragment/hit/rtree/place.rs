@@ -11,7 +11,8 @@ use crate::fragment::hit::rtree::{RTree, envelope};
 pub(crate) enum Placed {
     /// The rectangle still lay inside the leaf holding it, so nothing but the entry was touched.
     InPlace,
-    /// It had left that leaf but not the branch above it, so that leaf's rectangle was widened.
+    /// It had left that leaf, but stayed inside the branch above it or only grew where it was, so
+    /// that leaf's rectangle was widened and the envelopes above it were recomputed.
     Stretched,
     /// It had gone somewhere else entirely, so it was taken out and put back.
     Reinserted,
@@ -35,11 +36,19 @@ pub(crate) enum Placed {
 /// out of, and a rectangle still inside it has not left the region the descent already routes here.
 /// Widening the leaf to take it in therefore changes nothing above the leaf at all: its parent
 /// already contains the new rectangle, so the climb that follows stops one level up. It also bounds
-/// how loose a leaf can become, because it can never grow past the node it hangs from.
+/// how loose a leaf can become: only an entry that grew (below) takes it past the node it hangs
+/// from.
 ///
-/// An entry whose new rectangle has left that branch too has genuinely gone somewhere else, and for
-/// that one the search is the right answer: keeping it would stretch its leaf across the gap and
-/// make the node answer for a region nothing in it occupies.
+/// An entry that grew where it was keeps its leaf too, wherever its edges went. A resize widens
+/// every row of a page by the same amount in one frame, and the first row of each branch to widen
+/// leaves that branch. A search moves it into whichever leaf widened first, which groups the
+/// entries by the order of the writes, and every search counts towards a rebuild of the whole
+/// index. Its old rectangle is inside the new one, so the leaf grows by what the entry grew and
+/// keeps the neighbours it had.
+///
+/// An entry whose new rectangle has left that branch, and has not just grown, has genuinely gone
+/// somewhere else, and for that one the search is the right answer: keeping it would stretch its
+/// leaf across the gap and make the node answer for a region nothing in it occupies.
 pub(crate) fn at(
     tree: &mut RTree,
     key: FragKey,
@@ -59,7 +68,7 @@ pub(crate) fn at(
         tree.nodes[leaf].entries[slot].1 = bounds;
         return Placed::InPlace;
     }
-    if branch_holds(tree, leaf, bounds) {
+    if branch_holds(tree, leaf, bounds) || grew(tree.nodes[leaf].entries[slot].1, bounds) {
         tree.nodes[leaf].entries[slot].1 = bounds;
         envelope::refresh(tree, leaf);
         return Placed::Stretched;
@@ -79,4 +88,11 @@ fn branch_holds(tree: &RTree, leaf: usize, bounds: Rect<DevicePx, Device>) -> bo
         Some(parent) => tree.nodes[parent].envelope.contains_rect(bounds),
         None => true,
     }
+}
+
+/// Whether `bounds` holds all of `held`, a rectangle with an area: the entry grew where it was.
+///
+/// An empty rectangle has no place to grow from, so an entry that was empty is not said to grow.
+fn grew(held: Rect<DevicePx, Device>, bounds: Rect<DevicePx, Device>) -> bool {
+    !held.is_empty() && bounds.contains_rect(held)
 }

@@ -25,11 +25,19 @@
 //! what lets the code above be the same code on every platform.
 
 mod drag;
+mod focus;
 mod handle;
+mod layer;
 mod options;
+pub(crate) mod popup;
+mod region;
 
+pub use crate::windows::focus::FocusGuard;
 pub use crate::windows::handle::{WindowHandle, WindowId};
+pub use crate::windows::layer::LayerOptions;
 pub use crate::windows::options::WindowOptions;
+pub use crate::windows::popup::PopupOptions;
+pub use crate::windows::region::use_input_region;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -80,6 +88,8 @@ impl Windows {
             attributes,
             runtime,
             on_close_request,
+            hidden,
+            popup_parent,
         } = options;
         if let Some(callback) = on_close_request {
             close.borrow_mut().insert(callback);
@@ -96,7 +106,9 @@ impl Windows {
             token,
             WindowSpec::new(attributes, runtime, view)
                 .with_close_callbacks(close)
-                .with_handle(handle.clone()),
+                .with_handle(handle.clone())
+                .with_hidden(hidden)
+                .with_popup_parent(popup_parent),
         );
         handle
     }
@@ -123,8 +135,16 @@ impl Windows {
     }
 
     /// What this desktop can do.
+    ///
+    /// The platform states its capabilities when its surfaces become available. Before that,
+    /// during the application's setup, this answers [`PlatformCapabilities::default`].
     pub fn capabilities(&self) -> PlatformCapabilities {
         self.capabilities.borrow().clone()
+    }
+
+    /// Where a request goes onto.
+    pub(crate) fn commands(&self) -> &WindowCommands {
+        &self.commands
     }
 
     /// Where this records what the platform said it can do.

@@ -18,12 +18,11 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use zgui_geom::{Device, Size};
-use zgui_render::{ExternalTexture, RenderTarget, VectorBackend};
+use zgui_geom::{Device, Rect, Size};
+use zgui_render::{ExternalTexture, RenderTarget, SubpixelOrder, VectorBackend};
 use zgui_scene::ExternalTextureId;
 
 use crate::atlas_backend::sink::AtlasTextures;
-use crate::bind::globals::SubpixelOrder;
 use crate::frame::fault::FaultInjector;
 use crate::frame::pass::AttachedTexture;
 use crate::frame::vector::VectorSource;
@@ -33,13 +32,13 @@ pub type VectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSourc
 /// A vector constructor whose result can move from a preparation worker to the UI thread.
 pub type PreparedVectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn VectorSource + Send>;
 use crate::gpu::device::Gpu;
+use crate::gpu::timing::{GpuTimer, GpuTiming};
 use crate::pipeline::Pipelines;
-use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
 use crate::renderer::readback::Pixels;
 use crate::renderer::shared::{DeviceState, SharedGraphics};
 use crate::target::acquire::Acquisition;
-use crate::target::group_pool::GroupPool;
+use crate::target::group_pool::{GroupPool, GroupPrecision};
 use crate::target::scene_texture::SceneTexture;
 use crate::target::swapchain::Presentation;
 
@@ -50,7 +49,17 @@ use crate::target::swapchain::Presentation;
 /// point in the frame where it is meaningful. It runs only for an acquisition that will actually
 /// be presented: announcing a frame after an acquisition failed can leave a compositor waiting for
 /// a surface commit that never comes.
-pub type PrePresent = Box<dyn Fn() + Send + Sync>;
+///
+/// It is given the target the frame was drawn for, which can be older than the window's current
+/// extent.
+pub type PrePresent = Box<dyn Fn(RenderTarget) + Send + Sync>;
+
+/// Whether a composed frame may be handed to the surface now.
+///
+/// Asked after a frame's work is submitted and before anything is acquired. `false` keeps the
+/// frame in the composed target, and [`Renderer::present_held`](zgui_render::Renderer::present_held)
+/// presents it when the platform is ready.
+pub type PresentGate = Box<dyn Fn() -> bool + Send + Sync>;
 
 /// How a renderer was built, which is what it needs to rebuild itself.
 ///
@@ -135,6 +144,36 @@ pub struct WgpuRenderer {
     /// received the composed target. The retry may therefore have no new damage and still owe the
     /// final copy and presentation.
     present_composed_next: bool,
+    /// The rows of the composed target the last frame wrote, merged and in order.
+    ///
+    /// The renderer's own answer, and not the damage set it was handed: a frame that had to widen
+    /// its damage wrote more rows than the caller asked for, and a caller reading back only the
+    /// rows it asked for would then miss what the widening drew.
+    composed_rows: Vec<core::ops::Range<u32>>,
+    /// The rectangles of the composed target the last frame wrote.
+    ///
+    /// Kept beside `composed_rows` because the two are read by different things and want different
+    /// shapes. A copy the processor makes steps whole rows, so rows are what it can use; a copy the
+    /// graphics device makes is a scissor, which is any rectangle at all — and on a frame that
+    /// changed forty-eight scattered places the difference between the two is a third of the
+    /// pixels.
+    composed_rects: Vec<Rect<i32, Device>>,
+    /// What frames wrote into the composed target since the last frame that was presented.
+    ///
+    /// A frame that is composed and then held or not acquired still changed the picture, so its
+    /// rectangles go to the next present together with that frame's own.
+    unpresented: zgui_bits::DamageSet<{ crate::target::debt::STALE }>,
+    /// What the last presented frame changed, compared with the frame presented before it.
+    presented_damage: Vec<Rect<i32, Device>>,
+    /// Whether every image of a swap chain this crate made is checked against the composed
+    /// target. See [`VERIFY_ENV`](crate::target::native::VERIFY_ENV).
+    verify: bool,
+    /// The buffer a readback of the composed target copies through.
+    ///
+    /// One buffer for the life of the renderer rather than one a frame. A console reads its whole
+    /// frame back every time it draws one, and on a slow device the allocation alone costs
+    /// milliseconds.
+    staging: crate::renderer::readback::Staging,
     /// The surface being drawn for.
     target: RenderTarget,
     /// Which way round the display's subpixels run.
@@ -147,6 +186,10 @@ pub struct WgpuRenderer {
     next_handle: u64,
     /// What to run between submission and presentation.
     pre_present: Option<PrePresent>,
+    /// What decides whether a composed frame is presented at once, if anything does.
+    present_gate: Option<PresentGate>,
+    /// Whether the composed target holds a frame the gate held back.
+    held: bool,
     /// How long the last frame waited to be handed a surface to present into.
     acquire_block: std::time::Duration,
     /// How many times *this* surface's acquisition has failed validation in a row.
@@ -162,6 +205,8 @@ pub struct WgpuRenderer {
     backends: wgpu::Backends,
     /// Whether a frame with more vector passes than the scratch can hold stops the program.
     vector_shortfall_is_fatal: bool,
+    /// The pass timing, when timing was asked for and the device has timestamp queries.
+    timer: Option<GpuTimer>,
 }
 
 impl std::fmt::Debug for WgpuRenderer {
@@ -198,7 +243,9 @@ impl WgpuRenderer {
             pipelines.borrow().layouts().sampled.clone(),
         );
         let buffers = FrameBuffers::new(&gpu);
-        let groups = GroupPool::scaled(target.size);
+        let timer = GpuTimer::new(&gpu);
+        let mut groups = GroupPool::scaled(target.size);
+        groups.set_precision(GroupPrecision::from_environment().unwrap_or_default());
         let sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zgui.sampler.filtering"),
             // Clamping is what a magnifying read wants at the edge of a target; everything a
@@ -214,20 +261,11 @@ impl WgpuRenderer {
             ..Default::default()
         });
         // Building the pipelines now rather than at the first frame is what keeps a driver's first
-        // compilation out of a frame the user is waiting for. A second window on the same device
-        // finds them already built unless its format differs, in which case only the entries that
-        // format needs are compiled.
-        {
-            let mut built = pipelines.borrow_mut();
-            for kind in PipelineKind::ALL {
-                let format = match kind {
-                    PipelineKind::Blit | PipelineKind::BlitUndoSrgb => formats.present_attachment(),
-                    _ => formats.scene,
-                };
-                let _ = built.get(&gpu, kind, format);
-            }
-            built.persist();
-        }
+        // compilation out of a frame the user is waiting for. A device opened for a window has
+        // built them before its surface was configured, and a second window on the same device
+        // finds them built unless its format differs, in which case only the entries that format
+        // needs are compiled.
+        device.prepare(formats);
         Self {
             gpu,
             presentation,
@@ -251,12 +289,20 @@ impl WgpuRenderer {
             marks_scratch: crate::target::marks::MarksScratch::default(),
             pending_shift: None,
             present_composed_next: false,
+            composed_rows: Vec::new(),
+            composed_rects: Vec::new(),
+            unpresented: zgui_bits::DamageSet::full(),
+            presented_damage: Vec::new(),
+            verify: crate::target::native::verify(),
+            staging: crate::renderer::readback::Staging::new(),
             target,
             subpixel_order: SubpixelOrder::default(),
             externals: BTreeMap::new(),
             pending_externals: BTreeMap::new(),
             next_handle: 1,
             pre_present,
+            present_gate: None,
+            held: false,
             acquire_block: std::time::Duration::ZERO,
             consecutive_validation_failures: 0,
             origin,
@@ -265,7 +311,17 @@ impl WgpuRenderer {
             // that runs out of capacity has reached a ceiling rather than a condition anyone chose,
             // and it costs real content either way.
             vector_shortfall_is_fatal: cfg!(debug_assertions),
+            timer,
         }
+    }
+
+    /// Lets `gate` decide whether each composed frame is presented at once.
+    ///
+    /// A frame the gate refuses is kept in the composed target and reported as
+    /// [`SkipReason::Held`](zgui_render::SkipReason::Held). The platform behind the gate then asks
+    /// for [`Renderer::present_held`](zgui_render::Renderer::present_held).
+    pub fn set_present_gate(&mut self, gate: PresentGate) {
+        self.present_gate = Some(gate);
     }
 
     /// Decides whether a vector rasteriser running out of capacity stops the program.
@@ -312,6 +368,7 @@ impl WgpuRenderer {
         // twice across the changeover.
         let target = self.target;
         let subpixel_order = self.subpixel_order;
+        let precision = self.groups.precision();
         let vector_factory = self.vector_factory;
         let vector_backend = self.vector_backend;
         let rebuilt = match self.shared.clone() {
@@ -349,8 +406,11 @@ impl WgpuRenderer {
         // dropped rather than carried over, and whoever attached it attaches one again — carrying
         // it would mean compositing from a scratch texture that no longer exists.
         let had_raster = self.vectors.is_some();
+        let present_gate = self.present_gate.take();
         *self = rebuilt;
+        self.present_gate = present_gate;
         self.subpixel_order = subpixel_order;
+        self.groups.set_precision(precision);
         self.vector_factory = vector_factory;
         self.vector_backend = vector_backend;
         if had_raster {
@@ -361,6 +421,41 @@ impl WgpuRenderer {
         // Nothing the old device held survives, least of all the target frames were composed into.
         self.full_damage_next = true;
         Ok(())
+    }
+
+    /// Whether this renderer times its passes on the GPU.
+    ///
+    /// See [`gpu::timing`](crate::gpu::timing) for when it does.
+    pub fn gpu_timing_enabled(&self) -> bool {
+        self.timer.is_some()
+    }
+
+    /// The most recent GPU timing result.
+    ///
+    /// A result arrives one or two frames after the frame it describes. `None` when timing is off
+    /// or no result has arrived yet.
+    pub fn gpu_timing(&self) -> Option<GpuTiming> {
+        self.timer.as_ref().and_then(GpuTimer::latest)
+    }
+
+    /// Reads completed GPU timing results without waiting, and hands over each one held, oldest
+    /// first.
+    ///
+    /// Empty when timing is off. After [`Gpu::wait`], it holds every frame drawn before the wait
+    /// that got a query set. It keeps only the latest 1024 results since the last call.
+    pub fn take_gpu_timings(&mut self) -> Vec<GpuTiming> {
+        match &mut self.timer {
+            Some(timer) => timer.take(&self.gpu),
+            None => Vec::new(),
+        }
+    }
+
+    /// How many frames began recording since the renderer was built, when timing is on.
+    ///
+    /// The frame a [`GpuTiming`] names is this count as it was before that frame began, so a
+    /// caller that reads the count around a draw can find the result of that draw later.
+    pub fn gpu_timed_frames(&self) -> Option<u64> {
+        self.timer.as_ref().map(GpuTimer::frames)
     }
 
     /// The device everything is drawn on.
@@ -507,6 +602,31 @@ impl WgpuRenderer {
         &self.groups
     }
 
+    /// Starts every isolated target `margin` device pixels above and to the left of the surface
+    /// origin, as the test mode [`GroupPool::POISON_ORIGIN`] does.
+    #[doc(hidden)]
+    pub fn set_target_margin(&mut self, margin: i32) {
+        self.groups.set_poison_margin(margin);
+    }
+
+    /// How precisely a plain group holds its content.
+    pub fn group_precision(&self) -> GroupPrecision {
+        self.groups.precision()
+    }
+
+    /// Sets how precisely a plain group holds its content, see [`GroupPrecision`].
+    ///
+    /// A renderer starts with the precision that [`GroupPrecision::VARIABLE`] names, or with
+    /// [`GroupPrecision::Compact`]. This value replaces it. The value stays across a new group
+    /// budget, a resize and a device recovery. A change redraws the whole surface in the next
+    /// frame.
+    pub fn set_group_precision(&mut self, precision: GroupPrecision) {
+        if precision != self.groups.precision() {
+            self.groups.set_precision(precision);
+            self.full_damage_next = true;
+        }
+    }
+
     /// How many bytes of isolated targets may be resident before the pool reduces resolution.
     ///
     /// Setting it discards every target the pool holds, because a budget that is now too small has
@@ -514,7 +634,9 @@ impl WgpuRenderer {
     /// set here stays when the surface is resized; the default follows the surface
     /// ([`GroupPool::scaled`]).
     pub fn set_group_budget(&mut self, bytes: u64) {
+        let precision = self.groups.precision();
         self.groups = GroupPool::new(self.composed.used().size, bytes);
+        self.groups.set_precision(precision);
     }
 
     /// Chooses which supplied texture the next frame is copied into.
@@ -535,6 +657,22 @@ impl WgpuRenderer {
         }
     }
 
+    /// Records that whatever supplied the presented textures reads each one out and throws it away.
+    ///
+    /// Answers whether anything took it: only a supplied set has textures to say this about. See
+    /// [`Supplied::is_consumed`](crate::target::swapchain::Supplied::is_consumed) — a set that is
+    /// consumed carries one frame's rectangles and never a debt.
+    #[must_use = "a set that was not told is a set that keeps sending a debt nobody reads"]
+    pub fn presented_textures_are_consumed(&mut self, consumed: bool) -> bool {
+        match &mut self.presentation {
+            Presentation::Supplied(supplied) => {
+                supplied.is_consumed(consumed);
+                true
+            }
+            Presentation::Surface(_) | Presentation::Offscreen(_) => false,
+        }
+    }
+
     /// Reads back the persistent target frames are composed into.
     pub fn read_composed(&self) -> Pixels {
         readback::read(
@@ -543,6 +681,90 @@ impl WgpuRenderer {
             self.composed.format(),
             self.target.size,
         )
+    }
+
+    /// The rows of the composed target the last frame wrote, merged and in order.
+    ///
+    /// A backend copying the target out reads these rather than the damage set it handed in: a
+    /// frame that had to redraw everything — a rebuilt device, a resized surface — wrote rows the
+    /// caller never asked for, and one that copied only the rows it asked for would leave the rest
+    /// holding a frame from before the rebuild.
+    pub fn composed_rows(&self) -> &[core::ops::Range<u32>] {
+        &self.composed_rows
+    }
+
+    /// The rectangles of the composed target the last frame wrote.
+    ///
+    /// What a copy made by the graphics device covers. See [`WgpuRenderer::composed_rows`] for the
+    /// form a copy made by the processor needs, and why they are not the same list.
+    pub fn composed_rects(&self) -> &[Rect<i32, Device>] {
+        &self.composed_rects
+    }
+
+    /// The rectangles the last presented frame changed, compared with the frame presented before
+    /// it.
+    ///
+    /// What a display or a compositor is told changed, so that it reads or recomposites only
+    /// those. It differs from [`WgpuRenderer::composed_rects`] when frames were composed and not
+    /// presented in between: their rectangles are part of this list. Read it after a frame that
+    /// presented and before the next draw.
+    pub fn presented_damage(&self) -> &[Rect<i32, Device>] {
+        &self.presented_damage
+    }
+
+    /// Reads the rows `bands` names of what was presented into `into`, keeping the rest of it.
+    ///
+    /// For a backend that copies every frame out of the renderer and has just been told which rows
+    /// changed. `into` keeps every row no band names, so it stays a whole frame — which is the
+    /// point: reading a hundred rows instead of a thousand is worth having only because the other
+    /// nine hundred are already right.
+    ///
+    /// Where `into` is not already a frame of this extent — the first frame, or one after a
+    /// resize — the whole of it is read whatever `bands` says, because there is nothing there for
+    /// the unnamed rows to keep.
+    ///
+    /// Answers `false`, having read nothing, where what was presented is a window's surface: the
+    /// compositor owns it the moment it is presented.
+    pub fn read_presented_bands(
+        &mut self,
+        into: &mut Pixels,
+        bands: &[core::ops::Range<u32>],
+    ) -> bool {
+        let (texture, format, size) = match &self.presentation {
+            Presentation::Offscreen(offscreen) => (
+                offscreen.texture(),
+                offscreen.formats().surface,
+                self.target.size,
+            ),
+            // At the textures' own extent rather than the target's, for the reason
+            // [`WgpuRenderer::read_presented`] gives.
+            Presentation::Supplied(supplied) => (
+                supplied.texture(),
+                supplied.formats().surface,
+                supplied.size(),
+            ),
+            Presentation::Surface(_) => return false,
+        };
+        let bgra = matches!(
+            format,
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        );
+        let whole = crate::frame::damage::every_row(size.height.max(0) as u32);
+        let bands = if into.holds(size, bgra) {
+            bands
+        } else {
+            &whole
+        };
+        readback::read_bands(
+            &self.gpu,
+            texture,
+            format,
+            size,
+            bands,
+            &mut self.staging,
+            into,
+        );
+        true
     }
 
     /// Reads back what was presented, when what was presented is a texture rather than a window.
@@ -577,16 +799,25 @@ impl WgpuRenderer {
         }
     }
 
+    /// Lets the swap chain be larger than the frames presented from it.
+    ///
+    /// Only for a window that shows the top-left part of each image at the extent of the frame:
+    /// see `Surface::crops_buffers` in `zgui-platform`. The swap chain is then kept at a size
+    /// class and is rebuilt only when a resize leaves the class. A rebuild waits for the device to
+    /// go idle, so this removes that wait from most frames of a drag.
+    pub fn set_crops_buffers(&mut self, crops: bool) {
+        self.presentation.set_crop(crops);
+    }
+
     /// Rebuilds everything sized against the surface.
     fn resize(&mut self, size: Size<i32, Device>) {
         self.presentation.resize(&self.gpu, size);
         self.groups.resize(size);
         if self.composed.resize(&self.gpu, size) {
+            // The new target receives the old picture at the start of the next frame, so the
+            // damage the caller gives for the newly exposed bands stays enough.
             self.composed_binding =
                 bind_composed(&self.gpu, &self.pipelines.borrow(), &self.composed);
-            // A reallocated target holds nothing at all, so no rectangle outside this frame's
-            // damage set still shows what the frame before it drew.
-            self.full_damage_next = true;
         }
     }
 }

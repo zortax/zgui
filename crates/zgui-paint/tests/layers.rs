@@ -13,7 +13,7 @@ use zgui_profile::Counter;
 use zgui_scene::kurbo::{self, Affine, Shape as _};
 use zgui_testkit_scene::counters::Recording;
 
-use support::{Element, Harness};
+use support::{Element, Harness, poison, unpoisoned};
 
 /// A 32 by 32 document of one triangle under a red to blue ramp, which no analytic route takes.
 const RAMP: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ff0000"/><stop offset="1" stop-color="#0000ff"/></linearGradient></defs><path d="M0 0 L32 0 L0 32 Z" fill="url(#a)"/></svg>"##;
@@ -124,7 +124,7 @@ fn a_gradient_document_draws_one_color_sprite_and_no_vector_item() {
         panic!("{} colour sprites", primitives.color_sprites.len());
     };
     assert_eq!(
-        sprite.bounds,
+        unpoisoned(sprite.bounds),
         [0.0, 10.0, 64.0, 64.0],
         "the sprite covers the box"
     );
@@ -235,7 +235,7 @@ fn a_layer_sprite_carries_the_chain_clip_and_the_element_opacity() {
     assert_ne!(clip, zgui_scene::ClipId::ROOT);
     assert_eq!(sprite.opacity, 0.5, "the folded opacity rides the sprite");
     assert_eq!(
-        sprite.bounds,
+        unpoisoned(sprite.bounds),
         [0.0, 0.0, 64.0, 64.0],
         "nothing is cut from the raster"
     );
@@ -354,9 +354,11 @@ fn a_fractional_move_encodes_a_layer_again() {
     assert_eq!(owed, [1, 1, 0]);
     assert_eq!(rasterised, 1, "one exact raster at the new phase");
     // The sprite lands on whole device pixels, and the raster carries the half pixel inside it.
-    let top = window.sprite()[1] * 1.5;
+    let top = (window.sprite()[1] - poison()) * 1.5;
+    // At the poison offset an f32 holds the sprite's edge only to about one ulp of the offset.
+    let slack = 1.0e-4 + poison() * f32::EPSILON * 1.5;
     assert!(
-        (top - top.round()).abs() < 1.0e-4 && (top - 16.5).abs() <= 1.0,
+        (top - top.round()).abs() < slack && (top - 16.5).abs() <= 1.0,
         "{top}"
     );
 }
@@ -527,8 +529,8 @@ fn placed_cells(window: &Window, top: f32) -> Vec<(i32, i32)> {
         .filter(|sprite| sprite.bounds != [0.0; 4])
         .map(|sprite| {
             // The frame is the sprite's own rectangle grown by one pixel.
-            let x = sprite.frame[0] + 1.0;
-            let y = sprite.frame[1] + 1.0 - top;
+            let x = sprite.frame[0] + 1.0 - poison();
+            let y = sprite.frame[1] + 1.0 - poison() - top;
             ((x / 512.0).round() as i32, (y / 512.0).round() as i32)
         })
         .collect();

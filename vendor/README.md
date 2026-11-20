@@ -38,6 +38,32 @@ shared clone's changes; a query that finds the state built against another gener
 `crates/zgui-text-parley/tests/fonts.rs`
 (`a_face_unregistered_after_shaping_is_not_drawn_with_again`) pins the invalidation.
 
+### System font cache (`backend/fontconfig.rs`, `backend/fontconfig_cache.rs`, `system_cache.rs`)
+
+On Linux, a system collection spent about 27 ms of a cold start in fontconfig: it loaded the
+configuration and sorted all installed faces once for each of the eight generic families. Each
+family a document named then cost one more sort of all faces (about 1.5 ms each). The backend now
+keeps the results in a file:
+
+- the file holds the family names, the generic family lists, and each family and fallback that a
+  process resolved (a record is appended when a process resolves a new one);
+- a process that finds the file valid builds the collection from it and loads fontconfig only for
+  a question the file cannot answer;
+- the file is valid while every font directory and configuration file that fontconfig reported (and
+  the directories that hold the configuration files) has the same identity, size and modification
+  time, and while the fontconfig version and the environment variables that fontconfig reads are
+  the same; a font install or removal changes its directory, so the next process writes a new file;
+- a stamp that changed after the scan started, or less than two seconds before it, can hold a
+  change the scan did not see, so no file is written then;
+- the file is written again only when a stamp changes, so processes that run at the same time can
+  append the same record twice;
+- `ZGUI_FONT_CACHE=off` disables the file, `ZGUI_FONT_CACHE=<absolute dir>` moves it, and the
+  default is `$XDG_CACHE_HOME/zgui` or `$HOME/.cache/zgui`.
+
+`fontique::system_cache_counts` reports hits, misses, writes and configuration loads.
+`crates/zgui-text-parley/tests/font_cache.rs` compares names, generic lists, families and fallbacks
+with the cache off, on a miss and on a hit, and pins the invalidation on install and removal.
+
 ### Script samples (`script.rs`)
 
 The sample table builds each `Script` with `Script::from_bytes`. Upstream calls

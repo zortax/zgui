@@ -23,6 +23,14 @@ use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
 use zgui_view::{BuildCx, ClassName, IntoView, View};
 
+#[test]
+fn the_counters_are_compiled_into_this_build() {
+    // The runtime's normal dependency leaves the counters off, so a release test build has them
+    // only through the dev-dependency. Without them every pair below passes while it measures
+    // nothing.
+    const { assert!(zgui_profile::COUNTERS_ENABLED) };
+}
+
 /// A scrollport with rows in it, one of which can be lit.
 const CSS: &str = "root { display: block; width: 400px; height: 300px; overflow: scroll }
                    .row { display: block; width: 400px; height: 20px; background-color: #202020 }

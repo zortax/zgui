@@ -10,10 +10,16 @@
 
 #![allow(dead_code)]
 
+#[path = "drag_source.rs"]
+pub(crate) mod drag_source;
+#[path = "fatal.rs"]
+pub(crate) mod fatal;
 #[path = "paste.rs"]
 pub(crate) mod paste;
 #[path = "seat.rs"]
 pub(crate) mod seat;
+#[path = "virtual_keyboard.rs"]
+pub(crate) mod virtual_keyboard;
 #[path = "virtual_pointer.rs"]
 pub(crate) mod virtual_pointer;
 
@@ -26,7 +32,8 @@ use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, WakeReason,
 };
 use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{Builder, PresentPacing};
+use zgui_render_wgpu::renderer::PrePresent;
+use zgui_render_wgpu::{PresentPacing, SharedGraphics};
 use zgui_runtime::{App, AppError};
 use zgui_view::{BuildCx, IntoView, View};
 
@@ -53,6 +60,9 @@ const ANIMATED_CSS: &str = "@keyframes pulse { from { opacity: 1 } to { opacity:
 
 /// How many frames the application has been given, wherever it is running.
 pub(crate) static FRAMES: AtomicU64 = AtomicU64::new(0);
+
+/// How many buffers the windows of this program committed.
+pub(crate) static PRESENTS: AtomicU64 = AtomicU64::new(0);
 
 /// Whether the machine turned out to have no graphics device the window could be drawn through.
 pub(crate) static NO_DEVICE: AtomicBool = AtomicBool::new(false);
@@ -177,6 +187,50 @@ pub(crate) fn loop_for<A: AppHandler>(
     }
 }
 
+/// The variable that lets a program run against a compositor.
+///
+/// Its value is the name of the nested display, and it must equal `WAYLAND_DISPLAY`.
+/// `cargo xtask wayland` starts a nested headless sway and sets both.
+pub(crate) const NESTED: &str = "ZGUI_NESTED_COMPOSITOR";
+
+/// Whether this program may open surfaces on the compositor that `WAYLAND_DISPLAY` names.
+///
+/// These programs lock the session, press keys, move the pointer and take the focus. So each one
+/// runs only on a nested compositor that the run names in [`NESTED`]. Any other display is the
+/// desktop of the person at the machine, and the program skips.
+pub(crate) fn require_nested(property: &str) -> bool {
+    let display = std::env::var_os("WAYLAND_DISPLAY").filter(|display| !display.is_empty());
+    let nested = std::env::var_os(NESTED).filter(|nested| !nested.is_empty());
+    match (display, nested) {
+        (Some(display), Some(nested)) if display == nested => true,
+        (None, _) => {
+            skipped(
+                property,
+                "no compositor to run on: WAYLAND_DISPLAY is not set",
+            );
+            false
+        }
+        (Some(_), None) => {
+            skipped(
+                property,
+                &format!("{NESTED} does not name the display; run `cargo xtask wayland`"),
+            );
+            false
+        }
+        (Some(display), Some(nested)) => {
+            skipped(
+                property,
+                &format!(
+                    "WAYLAND_DISPLAY is {}, and {NESTED} names {}",
+                    display.to_string_lossy(),
+                    nested.to_string_lossy()
+                ),
+            );
+            false
+        }
+    }
+}
+
 /// Announces that this machine has nothing to say about the property.
 pub(crate) fn skipped(property: &str, reason: &str) {
     eprintln!("SKIPPED: {property}: {reason}");
@@ -240,12 +294,22 @@ impl<A: AppHandler> AppHandler for StopAfter<A> {
     }
 }
 
+/// The renderer factory every window of this program draws through.
+///
+/// One device behind all of them, as in the application. So a property about several windows
+/// exercises the path that a shell with a bar, pop-ups and lock windows runs on.
+pub(crate) fn renderers() -> zgui_runtime::RendererFactory {
+    let graphics = SharedGraphics::new();
+    Box::new(move |surface, target| renderer(&graphics, surface, target))
+}
+
 /// Builds whatever this surface can actually be drawn through.
 ///
-/// The pacing is asked for rather than assumed, exactly as the application does it: a backend that
-/// paces frames itself gets presentation that never blocks, and is told when a buffer is about to
-/// be committed so that it can ask the compositor for the next frame.
-pub(crate) fn renderer(
+/// The pacing is asked for, exactly as the application does it: a backend that paces frames
+/// itself gets presentation that never blocks, and is told when a buffer is about to be committed
+/// so that it can ask the compositor for the next frame.
+fn renderer(
+    graphics: &SharedGraphics,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
 ) -> Result<Box<dyn Renderer>, AppError> {
@@ -259,16 +323,19 @@ pub(crate) fn renderer(
         _ => PresentPacing::Display,
     };
     let notified = Arc::clone(surface);
-    let builder = Builder::new()
-        .with_present_pacing(pacing)
-        .with_pre_present(Box::new(move || notified.pre_present_notify()));
-    builder.for_surface(target, handles).map_or_else(
-        |unavailable| {
-            NO_DEVICE.store(true, Ordering::Relaxed);
-            Err(AppError::from(unavailable))
-        },
-        |renderer| Ok(Box::new(renderer) as Box<dyn Renderer>),
-    )
+    let pre_present: PrePresent = Box::new(move |target| {
+        PRESENTS.fetch_add(1, Ordering::Relaxed);
+        notified.pre_present_frame(target.size, f64::from(target.scale.get()));
+    });
+    graphics
+        .renderer_for_surface(target, handles, pacing, Some(pre_present))
+        .map_or_else(
+            |unavailable| {
+                NO_DEVICE.store(true, Ordering::Relaxed);
+                Err(AppError::from(unavailable))
+            },
+            |renderer| Ok(Box::new(renderer) as Box<dyn Renderer>),
+        )
 }
 
 /// The identifier every window these properties open is grouped under.
@@ -295,7 +362,7 @@ fn styled(title: &'static str, css: &'static str) -> Result<zgui_runtime::Runtim
         .with_application_id(APP_ID)
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(renderer))
+        .with_renderer(renderers())
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(
                 zgui_elements::column()

@@ -15,11 +15,16 @@
 //! that both depend on is what stops the four disagreeing.
 
 use zgui_css::ComputedStyle;
-use zgui_css::values::custom;
+use zgui_css::values::custom::Property;
 use zgui_scene::CornerShape;
+
+use crate::fragment::custom_properties::CustomProperties;
 
 /// The property a box names its corner shape through.
 pub const CORNER_SHAPE: &str = "zgui-corner-shape";
+
+/// [`CORNER_SHAPE`], interned.
+pub(crate) static CORNER_SHAPE_PROPERTY: Property = Property::new(CORNER_SHAPE);
 
 /// The shape `style` cuts its corners to.
 ///
@@ -27,7 +32,15 @@ pub const CORNER_SHAPE: &str = "zgui-corner-shape";
 /// nothing, and for one whose value is not a shape. An unreadable value keeps the appearance the
 /// box would have had, which is the same thing an unknown property does anywhere in CSS.
 pub fn shape(style: &ComputedStyle) -> CornerShape {
-    let Some(written) = custom::text(style, CORNER_SHAPE) else {
+    shape_with(style, CustomProperties::ALL)
+}
+
+/// [`shape`], for a style that declares `declared`.
+pub fn shape_with(style: &ComputedStyle, declared: CustomProperties) -> CornerShape {
+    if !declared.corner_shape() {
+        return CornerShape::ROUND;
+    }
+    let Some(written) = CORNER_SHAPE_PROPERTY.text(style) else {
         return CornerShape::ROUND;
     };
     parse(written).unwrap_or(CornerShape::ROUND)

@@ -2,8 +2,10 @@
 
 mod activation;
 mod data;
+mod failure;
 mod ime;
 mod input;
+mod layer;
 pub mod live;
 mod protocol;
 mod shell;
@@ -88,6 +90,10 @@ pub struct WaylandState {
     pub(crate) presentation: Presentation,
     /// The globals the toolkit has no wrapper for.
     pub(crate) extras: Extras,
+    /// The focus grabs, where the compositor offers them.
+    pub(crate) grabs: crate::grab::Grabs,
+    /// The session lock, where the compositor offers one.
+    pub(crate) locks: crate::lock::Locks,
     /// The desktop's clipboards.
     pub(crate) clipboard: WaylandClipboard,
     /// What is being dragged over a window, while something is.
@@ -113,6 +119,13 @@ pub struct WaylandState {
     pub(crate) live: Live,
     /// What happened during a dispatch and has not been delivered yet.
     pub(crate) out: Vec<(SurfaceId, SurfaceEvent)>,
+    /// The shell layers the compositor closed during a dispatch, whose reason is not decided yet.
+    pub(crate) closing: Vec<SurfaceId>,
+    /// Whether a change to the outputs wakes the application.
+    ///
+    /// Off for the first round trip: the application reads the outputs when it starts, so the
+    /// outputs it starts with are not a change.
+    pub(crate) announce_outputs: bool,
 }
 
 impl WaylandState {
@@ -143,6 +156,8 @@ impl WaylandState {
             .map_err(|error| PlatformError::Backend(format!("xdg_wm_base: {error}")))?;
         let layers = LayerShell::bind(globals, &qh).ok();
         let extras = Extras::bind(globals, &qh);
+        let grabs = crate::grab::Grabs::bind(globals, &qh);
+        let locks = crate::lock::Locks::bind(globals, &qh);
         let presentation = Presentation::bind(globals, &qh);
         let text_input: Option<ZwpTextInputManagerV3> = globals.bind(&qh, 1..=1, GlobalData).ok();
         let activation = ActivationState::bind(globals, &qh).ok();
@@ -154,6 +169,8 @@ impl WaylandState {
             clipboard: data.is_some(),
             primary_selection: primary.is_some(),
             text_input: text_input.is_some(),
+            focus_grab: grabs.offered(),
+            session_lock: locks.offered(),
             // The toolkit asks for a server-drawn frame per window and the compositor answers per
             // window, so this is what it can do rather than what it did; a window that is told
             // otherwise reports it for itself.
@@ -176,6 +193,8 @@ impl WaylandState {
             events,
             presentation,
             extras,
+            grabs,
+            locks,
             clipboard: WaylandClipboard::default(),
             drag: Drag::default(),
             ime: Ime::default(),
@@ -187,6 +206,8 @@ impl WaylandState {
             monotonic: Monotonic::anchor(),
             live: Live::new(capabilities::of(offered), Arc::clone(&waker)),
             out: Vec::new(),
+            closing: Vec::new(),
+            announce_outputs: false,
             qh: qh.clone(),
         };
         state.clipboard.selections().attach(
@@ -194,9 +215,8 @@ impl WaylandState {
             qh,
             Arc::clone(&waker) as Arc<dyn zgui_platform::Waker>,
         );
-        // The preference lives on the session bus rather than in the protocol, and is watched from
-        // here on so that a person switching their desktop to dark is answered by a redraw rather
-        // than by nothing until the next launch.
+        // The preference lives on the session bus, outside the protocol. It is watched from here
+        // on, so a person who switches the desktop to dark sees a redraw at once.
         let watching = crate::theme::watch(
             Arc::clone(&waker) as Arc<dyn zgui_platform::Waker>,
             Arc::clone(&state.live.scheme),
@@ -231,6 +251,11 @@ impl WaylandState {
             offer.serial,
             Some(crate::clipboard::mime::URI_LIST.to_owned()),
         );
+        // The source actions arrive before the offer becomes a drag offer, so the toolkit never
+        // passes them to `source_actions`. Without an action set here, the compositor cancels the
+        // drop.
+        let taken = crate::driver::data::copy_only(offer.source_actions);
+        offer.set_actions(taken, taken);
         let Ok(reader) = offer.receive(crate::clipboard::mime::URI_LIST.to_owned()) else {
             return;
         };
@@ -266,22 +291,6 @@ impl WaylandState {
         }
     }
 
-    /// Why the loop stopped, in the compositor's words where it left any.
-    ///
-    /// A loop that fails reports an input-output error and nothing else, because by the time the
-    /// socket breaks the reason has already been sent down it. The connection keeps that reason,
-    /// and it is the difference between "something went wrong" and the interface, the request and
-    /// the rule that was broken — which is the whole of what is needed to fix a protocol defect.
-    pub(crate) fn explain(&self, error: &calloop::Error) -> PlatformError {
-        match self.conn.protocol_error() {
-            Some(protocol) => PlatformError::Backend(format!(
-                "the compositor refused a request on {}#{} (error {}): {}",
-                protocol.object_interface, protocol.object_id, protocol.code, protocol.message
-            )),
-            None => PlatformError::Backend(format!("the wayland loop: {error}")),
-        }
-    }
-
     /// Records something that happened to a surface, for delivery after this dispatch.
     pub(crate) fn report(&mut self, id: SurfaceId, event: SurfaceEvent) {
         self.out.push((id, event));
@@ -304,13 +313,13 @@ impl WaylandState {
             return;
         };
         let at = self.monotonic.instant(seconds, nanoseconds);
-        let event = {
+        let (edge, first) = {
             let mut shared = surface.shared();
             shared.presented(at, refresh);
             shared.visibility.answered();
-            shared.visibility_edge()
+            (shared.visibility_edge(), shared.presentation_edge(true))
         };
-        if let Some(event) = event {
+        for event in [edge, first].into_iter().flatten() {
             self.report(id, event);
         }
     }
@@ -348,7 +357,6 @@ impl WaylandState {
             let logical = shared.logical;
             shared.resized(logical, scale)
         };
-        crate::surface::scale::declare(&surface);
         if let Some(event) = event {
             self.report(id, event);
         }

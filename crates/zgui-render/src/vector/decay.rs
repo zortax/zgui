@@ -6,7 +6,7 @@
 //! but shrinking waits, because a scroll or a resize is a run of frames whose demand swings and
 //! reallocating a texture in the middle of one costs more than the memory is worth.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// What one scratch texture is asked to be.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -143,7 +143,7 @@ impl Decay {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     use super::{Decay, Extent};
 

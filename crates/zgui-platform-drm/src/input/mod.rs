@@ -40,3 +40,31 @@ pub mod pointer;
 pub mod seat;
 pub(crate) mod through;
 pub mod wheel;
+
+#[cfg(test)]
+pub(crate) mod fixture {
+    //! What the modules beside this one build a record out of.
+    //!
+    //! Three of them write `input_event` bytes for a reader to walk, and the time at the front of
+    //! one is the single part of that record whose width follows the target. It is written here
+    //! once so that the three agree.
+
+    /// The bytes of the time one record is stamped with, at this target's width.
+    ///
+    /// The seconds and the microseconds are one word each: eight bytes where a record is
+    /// twenty-four and four where it is sixteen. `zgui_evdev`'s generated interface states which
+    /// target gets which, and why both carry the same value.
+    pub(crate) fn stamp(seconds: i64, microseconds: i64) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(16);
+        if cfg!(target_pointer_width = "64") {
+            bytes.extend_from_slice(&seconds.to_ne_bytes());
+            bytes.extend_from_slice(&microseconds.to_ne_bytes());
+        } else {
+            let seconds = i32::try_from(seconds).expect("a test uses a small moment");
+            let microseconds = i32::try_from(microseconds).expect("a microsecond count fits");
+            bytes.extend_from_slice(&seconds.to_ne_bytes());
+            bytes.extend_from_slice(&microseconds.to_ne_bytes());
+        }
+        bytes
+    }
+}

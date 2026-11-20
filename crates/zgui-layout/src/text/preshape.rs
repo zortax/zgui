@@ -89,6 +89,14 @@ pub fn collect<C: MeasureContent>(tree: &mut LayoutTree<'_, C>) -> PreShapeJobs 
             scale,
         };
         let paragraph_key = generated.key(&content);
+        // A context that holds a copy of its paragraph shapes that copy; see `kept`.
+        let held = tree
+            .store()
+            .inline_resolution(key)
+            .map(|resolution| resolution.key);
+        if held.is_some_and(|held| tree.store().variant_base(held) == Some(paragraph_key)) {
+            continue;
+        }
         jobs.push((paragraph_key, Arc::clone(&generated)));
     }
     PreShapeJobs { scale, jobs }

@@ -35,6 +35,33 @@ pub trait FrameDirty {
         false
     }
 
+    /// Whether `node` is an element with an element among its children.
+    ///
+    /// The accessibility node of such an element carries the transform its children are measured
+    /// from, so a move of the element moves every child, whatever the element declares.
+    ///
+    /// Answering `false` is always safe for a pass that has no document to ask.
+    fn carries_children(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        let _ = node;
+        false
+    }
+
+    /// Whether a running animation drives `node`'s opacity.
+    ///
+    /// Answering `false` is always safe for a pass that has no document to ask.
+    fn animates_opacity(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        let _ = node;
+        false
+    }
+
+    /// Whether a running animation drives `node`'s background colour.
+    ///
+    /// A pass that has no document has no animations and answers `false`.
+    fn animates_background(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        let _ = node;
+        false
+    }
+
     /// Records that `node`'s boxes moved or changed size and nothing else about it changed.
     ///
     /// Stated apart from [`FrameDirty::mark`] because it is a strictly smaller claim, and the
@@ -227,6 +254,45 @@ impl FrameDirty for DocumentMarks<'_> {
                 .get(node)
                 .and_then(|slot| slot.as_deref())
                 .is_some_and(|semantics| !semantics.is_trivial())
+        })
+    }
+
+    fn carries_children(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        let Some(index) = node.and_then(|node| self.store.index_of(node)) else {
+            return false;
+        };
+        if self.store.core(index).kind() != zgui_dom::NodeKind::Element {
+            return false;
+        }
+        let mut next = self.store.core(index).first_child();
+        while let Some(child) = next {
+            if self.store.core(child).kind() == zgui_dom::NodeKind::Element {
+                return true;
+            }
+            next = self.store.core(child).next_sibling();
+        }
+        false
+    }
+
+    fn animates_opacity(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        node.is_some_and(|node| {
+            self.store
+                .columns()
+                .anim
+                .get(node)
+                .and_then(|slot| slot.as_deref())
+                .is_some_and(|over| over.opacity.is_some())
+        })
+    }
+
+    fn animates_background(&self, node: Option<zgui_dom::NodeKey>) -> bool {
+        node.is_some_and(|node| {
+            self.store
+                .columns()
+                .anim
+                .get(node)
+                .and_then(|slot| slot.as_deref())
+                .is_some_and(|over| over.background_color.is_some())
         })
     }
 

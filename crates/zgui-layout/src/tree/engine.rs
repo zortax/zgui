@@ -12,6 +12,7 @@ use cephal::tree::{
     LayoutTree as EngineTree, NodeCache, NodeId, NodeKind, QueryMeta, RunMode,
 };
 use cephal::{Layout, Style};
+use zgui_profile::alloc_tag::{self, Tag};
 use zgui_profile::{Counter, counter};
 
 use crate::key::{from_node_id, to_node_id};
@@ -142,7 +143,9 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         inputs: LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        crate::inline::leaf_shell::compute(self, node, inputs, block_ctx)
+        alloc_tag::scope(Tag::LayoutEngine, || {
+            crate::inline::leaf_shell::compute(self, node, inputs, block_ctx)
+        })
     }
 
     fn set_unrounded_layout(&mut self, node: NodeId, layout: &Layout) {
@@ -211,7 +214,9 @@ impl<C: MeasureContent> EngineTree for LayoutTree<'_, C> {
         inputs: LayoutInput,
         block_ctx: Option<&mut BlockContext<'_>>,
     ) -> LayoutOutput {
-        cephal::compute::compute_child_layout(self, node, inputs, block_ctx)
+        alloc_tag::scope(Tag::LayoutEngine, || {
+            cephal::compute::compute_child_layout(self, node, inputs, block_ctx)
+        })
     }
 
     #[inline]

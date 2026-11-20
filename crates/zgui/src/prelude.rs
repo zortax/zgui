@@ -29,8 +29,9 @@ pub use crate::error::Error;
 /// another. Every operation on a window that has closed does nothing, as does every operation this
 /// desktop cannot carry out — so none of this needs a branch per platform.
 pub use zgui_runtime::windows::{
-    CloseGuard, WindowHandle, WindowId, WindowOptions, Windows, on_close_request, try_use_window,
-    try_use_windows, use_window, use_windows,
+    CloseGuard, FocusGuard, LayerOptions, PopupOptions, WindowHandle, WindowId, WindowOptions,
+    Windows, on_close_request, try_use_window, try_use_windows, use_input_region, use_window,
+    use_windows,
 };
 
 /// The desktop's clipboards: what to copy onto, and what to read back.
@@ -41,14 +42,28 @@ pub use zgui_runtime::windows::{
 pub use zgui_platform::ClipboardKind;
 pub use zgui_runtime::clipboard::{Clipboards, try_use_clipboard, use_clipboard};
 
+/// The outputs the desktop has, as a signal, and how a shell window names the one it opens on.
+pub use zgui_platform::{MonitorId, MonitorInfo, MonitorTarget};
+pub use zgui_runtime::monitors::{try_use_monitors, use_monitors};
+
+/// The keyboard and the pointer, limited to a set of windows until the user presses outside them.
+pub use zgui_runtime::grab::{ClearedGuard, FocusGrab};
+
+/// The session locked behind lock windows the application draws, one per output.
+pub use zgui_runtime::lock::{LockError, LockHandle, SessionLock};
+
 /// What a window can be asked to be, what it answers, and when an application stops.
 ///
 /// The desktop's own light-or-dark preference is deliberately absent: `ColorScheme` is already the
 /// name of the theme a view asks for, and a window's is a different question with the same answer
 /// type. It is [`zgui::platform::ColorScheme`](zgui_platform::ColorScheme) for the rare caller that
 /// overrides one window's.
+///
+/// A pop-up's anchor point is [`zgui::platform::Anchor`](zgui_platform::Anchor), because the view
+/// layer has an `Anchor` of its own.
 pub use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
+    CloseReason, ComposeAhead, Constrain, CursorStyle, Decorations, ExclusiveZone, FullscreenMode,
+    InputSerial, KeyboardInteractivity, ResizeEdge, TitleButtons, WindowIcon, WindowLevel,
 };
 pub use zgui_runtime::{CloseResponse, ExitPolicy};
 

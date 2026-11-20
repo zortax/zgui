@@ -23,6 +23,12 @@ use crate::sys;
 /// The character every DRM request number is grouped under.
 const GROUP: u8 = b'd';
 
+/// The character a dma-buf request number is grouped under.
+///
+/// A dma-buf is not a DRM object and its requests are the kernel's own, on the descriptor rather
+/// than on a device. They are issued here because this is where the machinery is.
+pub(crate) const DMA_BUF_GROUP: u8 = b'b';
+
 /// One request: what to ask the kernel, the payload the number was computed for, and the name to
 /// report when the kernel refuses.
 ///
@@ -54,10 +60,15 @@ impl<T> Request<T> {
 }
 
 /// Names a request that reads and writes its payload.
+///
+/// The group defaults to DRM's, because all but one of the requests below are DRM's.
 macro_rules! read_write {
     ($name:ident, $number:expr, $payload:ty) => {
+        read_write!($name, GROUP, $number, $payload);
+    };
+    ($name:ident, $group:expr, $number:expr, $payload:ty) => {
         pub(crate) const $name: Request<$payload> = Request {
-            opcode: opcode::read_write::<$payload>(GROUP, $number),
+            opcode: opcode::read_write::<$payload>($group, $number),
             name: stringify!($name),
             payload: PhantomData,
         };
@@ -118,6 +129,15 @@ read_write!(MODE_CURSOR2, 0xbb, sys::drm_mode_cursor2);
 read_write!(MODE_ATOMIC, 0xbc, sys::drm_mode_atomic);
 read_write!(MODE_CREATEPROPBLOB, 0xbd, sys::drm_mode_create_blob);
 read_write!(MODE_DESTROYPROPBLOB, 0xbe, sys::drm_mode_destroy_blob);
+
+// The one request that is not DRM's. Its payload is hand-written rather than generated — `sync`
+// says why — so the size the request number is computed from is asserted there as well as here.
+read_write!(
+    DMA_BUF_EXPORT_SYNC_FILE,
+    DMA_BUF_GROUP,
+    0x02,
+    crate::sync::ExportSyncFile
+);
 
 /// One ioctl, with its payload borrowed for the duration of the call.
 struct Call<'a, T> {
@@ -192,6 +212,11 @@ mod tests {
         // to when the C preprocessor is run over the kernel's own headers. A struct generated at
         // the wrong size changes the number, and this is where that shows up as a failure instead
         // of as `EINVAL` from a device.
+        //
+        // The size sits in the number, so the three structs that change size with the alignment of
+        // a `__u64` carry two numbers each, one per ABI. `sys` states which structs those are.
+        let wide = align_of::<u64>() == 8;
+
         assert_eq!(GEM_CLOSE.opcode(), 0x4008_6409);
         assert_eq!(GET_CAP.opcode(), 0xc010_640c);
         assert_eq!(SET_CLIENT_CAP.opcode(), 0x4010_640d);
@@ -210,14 +235,26 @@ mod tests {
         assert_eq!(MODE_CREATE_DUMB.opcode(), 0xc020_64b2);
         assert_eq!(MODE_MAP_DUMB.opcode(), 0xc010_64b3);
         assert_eq!(MODE_DESTROY_DUMB.opcode(), 0xc004_64b4);
-        assert_eq!(MODE_GETPLANERESOURCES.opcode(), 0xc010_64b5);
+        assert_eq!(
+            MODE_GETPLANERESOURCES.opcode(),
+            if wide { 0xc010_64b5 } else { 0xc00c_64b5 }
+        );
         assert_eq!(MODE_GETPLANE.opcode(), 0xc020_64b6);
-        assert_eq!(MODE_ADDFB2.opcode(), 0xc068_64b8);
-        assert_eq!(MODE_OBJ_GETPROPERTIES.opcode(), 0xc020_64b9);
+        assert_eq!(
+            MODE_ADDFB2.opcode(),
+            if wide { 0xc068_64b8 } else { 0xc064_64b8 }
+        );
+        assert_eq!(
+            MODE_OBJ_GETPROPERTIES.opcode(),
+            if wide { 0xc020_64b9 } else { 0xc01c_64b9 }
+        );
         assert_eq!(MODE_CURSOR2.opcode(), 0xc024_64bb);
         assert_eq!(MODE_ATOMIC.opcode(), 0xc038_64bc);
         assert_eq!(MODE_CREATEPROPBLOB.opcode(), 0xc010_64bd);
         assert_eq!(MODE_DESTROYPROPBLOB.opcode(), 0xc004_64be);
+        // `_IOWR('b', 2, struct dma_buf_export_sync_file)` from `linux/dma-buf.h`, which is the
+        // one number here whose struct this crate wrote rather than generated.
+        assert_eq!(DMA_BUF_EXPORT_SYNC_FILE.opcode(), 0xc008_6202);
     }
 
     /// Compiles only if `request` may be issued with a payload of type `T`.

@@ -78,9 +78,19 @@ impl Fonts {
     /// Enumerating them is started here and finished the first time anything asks a question about
     /// a face, so an application that names these faces before it has a window pays for them
     /// alongside opening its graphics device rather than in front of it.
+    ///
+    /// A browser gives a page no list of installed faces. There this is
+    /// [`Fonts::shipped_only`], and the faces come from the page: see `App::mount`.
     pub fn system() -> Self {
-        Self {
-            system: Arc::new(Pending::system()),
+        #[cfg(target_arch = "wasm32")]
+        {
+            Self::shipped_only()
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            Self {
+                system: Arc::new(Pending::system()),
+            }
         }
     }
 
