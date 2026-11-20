@@ -117,6 +117,8 @@ pub struct OffscreenSurface {
     opaque_region_log: Mutex<Vec<Region>>,
     /// Whether the surface has been shown.
     visible: AtomicBool,
+    /// Whether showing the surface preserves the frame presented while hidden.
+    contents_survive_show: AtomicBool,
     /// Whether the surface was last asked to be maximised.
     ///
     /// A headless desktop grants each request at once and sends no event.
@@ -154,6 +156,7 @@ impl OffscreenSurface {
             input_region_log: Mutex::new(Vec::new()),
             opaque_region_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
+            contents_survive_show: AtomicBool::new(true),
             maximized: AtomicBool::new(false),
             fullscreen: Mutex::new(None),
             title: Mutex::new(String::new()),
@@ -350,6 +353,12 @@ impl OffscreenSurface {
         self.visible.load(Ordering::Relaxed)
     }
 
+    /// Sets whether showing the surface preserves its hidden frame. Defaults to true.
+    pub fn set_contents_survive_show(&self, survives: bool) {
+        self.contents_survive_show
+            .store(survives, Ordering::Relaxed);
+    }
+
     /// The title the surface was last given.
     pub fn title(&self) -> String {
         self.title
@@ -425,6 +434,10 @@ impl Surface for OffscreenSurface {
 
     fn set_visible(&self, visible: bool) {
         self.visible.store(visible, Ordering::Relaxed);
+    }
+
+    fn contents_survive_show(&self) -> bool {
+        self.contents_survive_show.load(Ordering::Relaxed)
     }
 
     fn set_decorations(&self, _decorations: Decorations) {}
