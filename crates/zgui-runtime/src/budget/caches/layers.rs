@@ -1,7 +1,6 @@
-//! The CPU vector layers: whole drawings rasterised into the image pool of the atlas.
+//! The CPU vector layers: whole drawings rasterised into images.
 
-use zgui_paint::{ContentCache, Painter};
-use zgui_scene::Scene;
+use zgui_paint::ContentCache;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};
@@ -21,20 +20,15 @@ pub fn layer_limit(width: u32, height: u32) -> u64 {
 
 /// The window's CPU vector layers, as the budget sees them.
 ///
-/// Separate from the glyph atlas they share a pool with, because a layer is large and its level
-/// follows the surface: a few zoomed drawings can hold more texels than every glyph on the page.
-/// The atlas reports its figures without them, so the registry counts them once.
+/// Separate from the glyph atlas, because a layer is large and its level follows the surface: a few
+/// zoomed drawings can hold more texels than every glyph on the page. The atlas reports its figures
+/// without them, so the registry counts them once.
 ///
-/// A paint record holds the layers it draws for as long as its fragment lives, so the layers of
-/// drawings scrolled far away are held too. Eviction first removes the layers nothing holds, and
-/// then drops the coldest records that hold layers, which releases those layers as well. A dropped
-/// record is a clean miss: the next frame that reaches its fragment encodes it again.
+/// Eviction removes the layers the frame did not draw, coldest first. The compositor keeps the
+/// image of a removed layer while a chunk draws it, and the next frame that encodes its fragment
+/// rasterises it again.
 pub struct VectorLayersBudget<'a> {
-    /// The records that hold layers.
-    painter: &'a mut Painter,
-    /// The tables the records hold entries of.
-    scene: &'a mut Scene,
-    /// The layers and the atlas they are in.
+    /// The layers.
     content: &'a mut ContentCache,
     /// How many layer bytes may be held.
     limit: u64,
@@ -44,16 +38,8 @@ pub struct VectorLayersBudget<'a> {
 
 impl<'a> VectorLayersBudget<'a> {
     /// The adapter over one window's layers.
-    pub fn new(
-        painter: &'a mut Painter,
-        scene: &'a mut Scene,
-        content: &'a mut ContentCache,
-        limit: u64,
-        tracked: &'a mut Tracked,
-    ) -> Self {
+    pub fn new(content: &'a mut ContentCache, limit: u64, tracked: &'a mut Tracked) -> Self {
         Self {
-            painter,
-            scene,
             content,
             limit,
             tracked,
@@ -73,7 +59,7 @@ impl Budgeted for VectorLayersBudget<'_> {
     fn report(&self) -> CacheReport {
         CacheReport {
             resident: self.content.layer_bytes(),
-            // The layers this frame drew. A layer a record holds can go with the record.
+            // The layers this frame drew.
             pinned: self.content.layer_pinned_bytes(),
             last_used: self.tracked.last_used(),
             // A CPU raster of a drawing already in memory, and an upload.
@@ -84,29 +70,15 @@ impl Budgeted for VectorLayersBudget<'_> {
     }
 
     fn observe(&mut self, epoch: SceneEpoch) {
-        let held = self.content.layer_held_bytes() > 0;
-        self.tracked.note(epoch, self.content.layer_hits(), held);
+        let drawn = self.content.layer_pinned_bytes() > 0;
+        self.tracked.note(epoch, self.content.layer_hits(), drawn);
     }
 
     fn evict(&mut self, units: u64, _epoch: SceneEpoch) -> u64 {
-        let mut freed = self.content.evict_layers(units);
-        if freed >= units {
-            return freed;
-        }
-        let tiles = self.content.layer_tiles();
-        let dropped = self.painter.evict_cold_holding(
-            units - freed,
-            &|key| tiles.get(&key).copied(),
-            self.scene,
-            &self.content.tile_owner(),
-        );
-        if dropped > 0 {
-            freed += self.content.evict_layers(units - freed);
-        }
-        freed
+        self.content.evict_layers(units)
     }
 
-    /// Removes every layer nothing holds.
+    /// Removes every layer the frame did not draw.
     fn forget(&mut self) {
         self.content.evict_layers(u64::MAX);
     }

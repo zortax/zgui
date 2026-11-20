@@ -28,9 +28,9 @@ use crate::lower::PaintStyle;
 
 /// Where a replaced box's content comes from.
 ///
-/// A fragment names the content it draws and nothing about it; what that name resolves to — an
-/// atlas tile for a decoded image, a texture handle for a video frame — belongs to whoever decoded
-/// it. Keeping it a seam is what lets the paint stage be exercised with no decoder.
+/// A fragment names the content it draws and nothing about it. What that name resolves to,
+/// decoded texels or a texture handle for a video frame, belongs to whoever decoded it. Keeping
+/// it a seam is what lets the paint stage be exercised with no decoder.
 pub trait ReplacedSource {
     /// Where the content named by `id` lives, or nothing if it has not been decoded yet.
     fn source(&self, id: zgui_dom::host::ReplacedId) -> Option<Source>;
@@ -43,6 +43,10 @@ pub trait ReplacedSource {
     fn revision(&self, _id: zgui_dom::host::ReplacedId) -> u64 {
         0
     }
+
+    /// Reports that the content of `id` was handed back without texels and the compositor holds
+    /// no image of it, so it drew nothing.
+    fn missing(&self, _id: zgui_dom::host::ReplacedId) {}
 }
 
 /// A replaced-content source with nothing in it.
@@ -113,7 +117,7 @@ pub struct Emission<'a> {
 }
 
 /// What one fragment emitted, including the path selected for vector content.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FragmentEmission {
     /// How many items were recorded and primitives pushed into the scene.
     pub(crate) pushed: usize,
@@ -270,7 +274,7 @@ fn content_tracked(
         ),
         FragmentKind::Replaced { content } => match emission.replaced.source(content) {
             Some(source) => crate::emit::replaced::emit(
-                rec.scene(),
+                rec,
                 source,
                 ReplacedPlacement {
                     content_box: fragment.content_box(),
@@ -285,7 +289,11 @@ fn content_tracked(
                     position: style.object_position.clone(),
                     scale: emission.scale,
                 },
-            ),
+            )
+            .unwrap_or_else(|| {
+                emission.replaced.missing(content);
+                0
+            }),
             None => 0,
         },
         // The outlines are drawn inside the box's own decorations and under the same clip and
@@ -306,7 +314,7 @@ fn content_tracked(
             };
             // The layer reads the unfaded paint, and the sprite carries the folded opacity.
             let emitted = vector::draw_drawing_tracked(
-                rec.scene(),
+                rec,
                 VectorId(fragment.key.index()),
                 &drawing,
                 style.shape,

@@ -237,7 +237,7 @@ fn the_svg_paint_properties_are_reported_as_absent_and_change_nothing() {
 }
 
 #[test]
-fn the_outlines_a_view_set_reach_a_renderer_as_the_list_it_wrote_in_the_colour_it_inherited() {
+fn the_outlines_a_view_set_reach_the_compositor_as_the_list_it_wrote_in_the_colour_it_inherited() {
     let mut drawing = Drawing::open(".chart { color: rgb(0, 128, 255) }");
     let paths = drawing.paths();
     assert_eq!(paths.len(), 2, "two marks, not one path with two subpaths");
@@ -245,61 +245,70 @@ fn the_outlines_a_view_set_reach_a_renderer_as_the_list_it_wrote_in_the_colour_i
     let mut scene = Scene::new();
     scene.begin_frame(zgui_geom::Size::new(64, 64));
     let paint = drawing.paint();
-    let ink = zgui_geom::Rect::new(
-        zgui_geom::Point::new(zgui_geom::DevicePx(0.0), zgui_geom::DevicePx(0.0)),
-        zgui_geom::Size::new(zgui_geom::DevicePx(16.0), zgui_geom::DevicePx(16.0)),
-    );
-    let mut pushed = 0;
-    for (index, path) in paths.into_iter().enumerate() {
-        pushed += zgui_paint::emit::vector::emit(
-            &mut scene,
-            zgui_scene::VectorId(index as u32),
-            Arc::new(path),
-            ink,
-            paint,
-            zgui_paint::emit::vector::VectorPlacement {
-                clip: zgui_space::ClipId::ROOT,
-                transform: zgui_space::SpatialId::VIEWPORT,
-                scale: 1.0,
-            },
-        );
-    }
-    assert_eq!(pushed, 2, "one filled item per outline");
-    assert_eq!(scene.primitives.vectors.len(), 2);
+    let shapes: Vec<zgui_svg::Shape> = paths
+        .into_iter()
+        .map(|path| zgui_svg::Shape {
+            path: Arc::new(path),
+            fill: Some(zgui_svg::Fill {
+                paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
+                rule: zgui_scene::peniko::Fill::NonZero,
+            }),
+            stroke: None,
+            clips: Vec::new(),
+        })
+        .collect();
 
-    // Through a renderer, not read back out of the scene the test just filled: what a rasteriser is
-    // handed is the display list, and the colour in it is the one the cascade resolved.
-    scene.finish(&zgui_bits::DamageSet::full());
-    let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-    zgui_render::Renderer::draw(&mut renderer, &scene, &zgui_bits::DamageSet::full());
-    let transcript = renderer
-        .transcript()
-        .expect("a frame was drawn")
-        .to_string();
-    let shapes: Vec<&str> = transcript
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("vector order="))
+    // Through a compositor, not read back out of the scene the test just filled: what a renderer
+    // is handed is the frame, and the colour in it is the one the cascade resolved.
+    let key = compositor_types::ChunkKey::new(1, 0);
+    let mut session =
+        zgui_testkit_compositor::Session::new([64, 64]).unwrap_or_else(|why| panic!("{why}"));
+    let mut transaction = session.transaction();
+    let mut pushed = 0;
+    zgui_paint::record_chunk(
+        &mut transaction,
+        key,
+        &mut scene,
+        (zgui_space::SpatialId::VIEWPORT, zgui_space::ClipId::ROOT),
+        |rec| {
+            pushed = zgui_paint::emit::vector::draw(
+                rec,
+                zgui_scene::VectorId(0),
+                &shapes,
+                paint,
+                zgui_paint::emit::vector::VectorPlacement {
+                    clip: zgui_space::ClipId::ROOT,
+                    transform: zgui_space::SpatialId::VIEWPORT,
+                    scale: 1.0,
+                },
+            );
+        },
+    );
+    assert_eq!(pushed, 2, "one filled item per outline");
+    session.show(&mut transaction, &[key]);
+    session.commit(transaction);
+    let drawn = session.redraw();
+    let shapes: Vec<&str> = drawn
+        .instances()
+        .iter()
+        .filter(|instance| matches!(instance.kind(), "path" | "mono"))
+        .map(|instance| instance.text())
         .collect();
     assert_eq!(
         shapes.len(),
         2,
-        "the renderer was handed two shapes:\n{transcript}"
+        "the renderer was handed two shapes:\n{drawn}"
     );
     for shape in &shapes {
         assert!(
-            shape.contains("fill=solid srgb(0, 0.502, 1, 1)"),
-            "the shapes reached the renderer in the colour the drawing inherited:\n{transcript}"
+            shape.contains("premul[0, 0.502, 1, 1]"),
+            "the shapes reached the renderer in the colour the drawing inherited:\n{drawn}"
         );
     }
     assert_ne!(
-        shapes[0]
-            .split_once(" d=")
-            .expect("a shape carries its outline"),
-        shapes[1]
-            .split_once(" d=")
-            .expect("a shape carries its outline"),
-        "two marks became one outline drawn twice"
+        shapes[0].split_once(" paint=").map(|(bounds, _)| bounds),
+        shapes[1].split_once(" paint=").map(|(bounds, _)| bounds),
+        "two marks became one outline drawn twice:\n{drawn}"
     );
 
     drawing.restyle();

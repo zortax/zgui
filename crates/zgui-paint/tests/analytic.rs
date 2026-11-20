@@ -1,7 +1,7 @@
-//! Recognised shapes reaching the display list as quads through the emit walk.
+//! Recognised shapes reaching the compositor as quads through the emit walk.
 //!
-//! Every fixture is a canvas painted through the real shared atlas, so the analytic route, the mask
-//! route and the general route all compete for each shape as they do in a window.
+//! Every fixture is a canvas painted through the real content cache, so the analytic route, the
+//! marks routes and the general route all compete for each shape as they do in a window.
 
 mod support;
 
@@ -9,12 +9,11 @@ use zgui_atlas::AtlasLimits;
 use zgui_canvas::{Brush, SceneHandle, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{PaintReport, VectorCache, VectorRoute};
-use zgui_profile::Counter;
 use zgui_scene::kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
-use zgui_scene::{ClipId, ClipLink, ClipNode, Paint, PaintKind, Scene};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit_compositor::{Drawing, Instance};
 
-use support::{Element, Harness, poison, unpoisoned};
+use support::drawn::numbers;
+use support::{Element, Harness, unpoisoned};
 
 /// A root with one canvas in it, at the origin, with no box paint of its own.
 const CSS: &str = "root { display: block; width: 400px; height: 200px }
@@ -44,18 +43,15 @@ fn paint(harness: &mut Harness) -> PaintReport {
 /// Whether the one element painted took the analytic route and no other.
 fn analytic_only(report: &PaintReport) -> bool {
     let routes = report.vector_routes[0].routes;
-    routes.contains(VectorRoute::Analytic)
-        && !routes.contains(VectorRoute::AtlasMask)
-        && !routes.contains(VectorRoute::GeneralRaster)
+    routes.contains(VectorRoute::Analytic) && !routes.contains(VectorRoute::GeneralRaster)
 }
 
-/// The paint a reference resolves to.
-fn paint_of(scene: &Scene, reference: zgui_scene::PaintRef) -> Paint {
-    scene
-        .paints
-        .get(reference.id().expect("a paint"))
-        .cloned()
-        .expect("an interned paint")
+/// The quads the whole output draws, which hold no other vector content.
+fn quads(drawing: &Drawing) -> Vec<&Instance> {
+    for kind in ["path", "mono", "marks"] {
+        assert_eq!(drawing.of_kind(kind).count(), 0, "a {kind} in {drawing}");
+    }
+    drawing.quads()
 }
 
 /// A circle as a path.
@@ -76,22 +72,19 @@ fn a_filled_circle_with_an_opaque_stroke_is_one_quad() {
     );
     let report = paint(&mut harness);
     assert!(analytic_only(&report));
-    let scene = harness.scene();
-    assert!(scene.primitives.vectors.is_empty());
-    assert!(scene.primitives.mono_sprites.is_empty());
-    let [quad] = scene.primitives.quads.as_slice() else {
-        panic!("{} quads", scene.primitives.quads.len());
+    let drawing = harness.redraw();
+    let [quad] = quads(&drawing)[..] else {
+        panic!("{drawing}");
     };
     assert_eq!(
-        unpoisoned(quad.bounds),
+        unpoisoned(quad.bounds()),
         [13.0, 13.0, 22.0, 22.0],
         "the stroke's outer edge"
     );
-    assert_eq!(quad.radii, [11.0; 8]);
-    assert_eq!(quad.border, [2.0; 4]);
-    assert_eq!(quad.fill.kind, PaintKind::Solid as u32);
-    assert_eq!(quad.stroke.kind, PaintKind::Solid as u32);
-    assert_ne!(quad.fill, quad.stroke);
+    assert_eq!(numbers(quad, "radii"), Some(vec![11.0; 8]));
+    assert_eq!(numbers(quad, "border"), Some(vec![2.0; 4]));
+    assert_eq!(quad.color("fill"), Some([1.0, 0.0, 0.0, 1.0]));
+    assert_eq!(quad.color("stroke"), Some([0.0, 0.0, 1.0, 1.0]));
 }
 
 #[test]
@@ -107,23 +100,27 @@ fn a_filled_circle_with_a_translucent_stroke_is_two_quads_fill_first() {
     );
     let report = paint(&mut harness);
     assert!(analytic_only(&report));
-    let [fill, stroke] = harness.scene().primitives.quads.as_slice() else {
-        panic!("{} quads", harness.scene().primitives.quads.len());
+    let drawing = harness.redraw();
+    let [fill, stroke] = quads(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert_eq!(unpoisoned(fill.bounds), [14.0, 14.0, 20.0, 20.0]);
-    assert_eq!(fill.border, [0.0; 4]);
-    assert!(fill.stroke.is_none());
-    assert_eq!(unpoisoned(stroke.bounds), [13.0, 13.0, 22.0, 22.0]);
-    assert_eq!(stroke.border, [2.0; 4]);
-    assert!(
-        stroke.fill.is_none(),
+    assert_eq!(unpoisoned(fill.bounds()), [14.0, 14.0, 20.0, 20.0]);
+    assert_eq!(fill.field("border"), None);
+    assert_eq!(
+        unpoisoned(stroke.bounds()),
+        [13.0, 13.0, 22.0, 22.0],
+        "drawn second"
+    );
+    assert_eq!(numbers(stroke, "border"), Some(vec![2.0; 4]));
+    assert_eq!(
+        stroke.field("fill"),
+        Some("none"),
         "the fill under a translucent ring stays the fill's own"
     );
-    assert!(stroke.order > fill.order, "the stroke draws over the fill");
 }
 
 #[test]
-fn separated_markers_share_one_order_through_one_run() {
+fn separated_markers_are_one_quad_each() {
     // Forty circles 12 pixels apart in two rows: 5 pixels between neighbours.
     let mut path = BezPath::new();
     for at in 0..40 {
@@ -141,17 +138,7 @@ fn separated_markers_share_one_order_through_one_run() {
     );
     let report = paint(&mut harness);
     assert!(analytic_only(&report));
-    let scene = harness.scene();
-    assert!(scene.primitives.vectors.is_empty());
-    assert!(scene.primitives.mono_sprites.is_empty());
-    let quads = &scene.primitives.quads;
-    assert_eq!(quads.len(), 40);
-    assert!(
-        quads.iter().all(|quad| quad.order == quads[0].order),
-        "disjoint members of one run share its order: {:?}",
-        quads.iter().map(|quad| quad.order).collect::<Vec<_>>()
-    );
-    assert_eq!(scene.order_overlaps().map(|found| found.len()), Ok(0));
+    assert_eq!(quads(&harness.redraw()).len(), 40);
 }
 
 #[test]
@@ -173,7 +160,7 @@ fn abutting_fractional_rects_take_another_route() {
             .contains(VectorRoute::Analytic)
     );
     assert!(
-        harness.scene().primitives.quads.is_empty(),
+        harness.redraw().quads().is_empty(),
         "two quads would each paint the shared edge pixel, and darken it"
     );
 }
@@ -196,7 +183,7 @@ fn overlapping_translucent_circles_take_another_route() {
             .routes
             .contains(VectorRoute::Analytic)
     );
-    assert!(harness.scene().primitives.quads.is_empty());
+    assert!(harness.redraw().quads().is_empty());
 }
 
 #[test]
@@ -216,27 +203,23 @@ fn a_gradient_filled_rect_is_one_quad_with_its_gradient() {
     );
     let report = paint(&mut harness);
     assert!(analytic_only(&report));
-    let scene = harness.scene();
-    let [quad] = scene.primitives.quads.as_slice() else {
-        panic!("{} quads", scene.primitives.quads.len());
+    let drawing = harness.redraw();
+    let [quad] = quads(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert_eq!(unpoisoned(quad.bounds), [4.0, 4.0, 40.0, 20.0]);
-    assert_eq!(quad.paint_origin, [0.0, 0.0]);
-    match paint_of(scene, quad.fill) {
-        Paint::Gradient {
-            kind: zgui_scene::GradientKind::Linear { start, end },
-            stops,
-            ..
-        } => {
-            assert_eq!(
-                (start.x.0 - poison(), end.x.0 - poison()),
-                (4.0, 44.0),
-                "the ramp in the shape's space"
-            );
-            assert_eq!(stops.len(), 2);
-        }
-        other => panic!("expected a linear gradient, found {other:?}"),
-    }
+    assert_eq!(unpoisoned(quad.bounds()), [4.0, 4.0, 40.0, 20.0]);
+    assert_eq!(quad.field("paint_origin"), None);
+    assert_eq!(quad.paint("fill").as_deref(), Some("linear"), "{drawing}");
+    let ramp = support::poison();
+    assert_eq!(
+        quad.field("from"),
+        Some(format!("({}, 0)", 4.0 + ramp).as_str()),
+        "the ramp in the shape's space: {drawing}"
+    );
+    assert_eq!(
+        quad.field("to"),
+        Some(format!("({}, 0)", 44.0 + ramp).as_str())
+    );
 }
 
 #[test]
@@ -251,35 +234,31 @@ fn an_inherited_fill_paints_the_quad_in_the_elements_colour() {
     );
     let report = paint(&mut harness);
     assert!(analytic_only(&report));
-    let scene = harness.scene();
-    let [quad] = scene.primitives.quads.as_slice() else {
-        panic!("{} quads", scene.primitives.quads.len());
+    let drawing = harness.redraw();
+    let [quad] = quads(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    match paint_of(scene, quad.fill) {
-        Paint::Solid(color) => assert_eq!(
-            color.to_premultiplied_srgb(),
-            opaque(0, 128, 255).to_premultiplied_srgb()
-        ),
-        other => panic!("expected a solid fill, found {other:?}"),
-    }
+    assert_eq!(quad.color("fill"), Some([0.0, 0.502, 1.0, 1.0]));
 }
 
 #[test]
-fn a_rect_clipped_to_a_whole_pixel_rect_is_one_quad_under_a_minted_clip() {
+fn a_rect_clipped_to_a_whole_pixel_rect_is_one_quad_under_a_square_clip() {
     let (mut harness, _handle) = canvas(
         clipped_rect(kurbo::Rect::new(10.0, 10.0, 40.0, 40.0).to_path(0.1)),
         CSS,
     );
     let report = paint(&mut harness);
     assert!(analytic_only(&report));
-    let scene = harness.scene();
-    let [quad] = scene.primitives.quads.as_slice() else {
-        panic!("{} quads", scene.primitives.quads.len());
+    let drawing = harness.redraw();
+    let [quad] = quads(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    let Some(ClipNode::Link { link, .. }) = scene.clips.get(ClipId(quad.clip)) else {
-        panic!("the quad draws through no link of its own");
-    };
-    assert!(!link.is_rounded(), "expected a square link, found {link:?}");
+    let at = support::poison();
+    assert_eq!(
+        quad.field("clip"),
+        Some(format!("[rect({}, {}, 30, 30)]", 10.0 + at, 10.0 + at).as_str()),
+        "the quad draws through one square link: {drawing}"
+    );
 }
 
 /// A clip tested at pixel centres has a hard edge, so only an edge on a whole pixel is exact.
@@ -312,19 +291,14 @@ fn a_clip_that_holds_the_whole_shape_is_left_out() {
     );
     let report = paint(&mut harness);
     assert!(analytic_only(&report));
-    let scene = harness.scene();
-    let [quad] = scene.primitives.quads.as_slice() else {
-        panic!("{} quads", scene.primitives.quads.len());
+    let drawing = harness.redraw();
+    let [quad] = quads(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert!(
-        !matches!(
-            scene.clips.get(ClipId(quad.clip)),
-            Some(ClipNode::Link {
-                link: ClipLink::RoundedRect { .. },
-                ..
-            })
-        ),
-        "no link is minted for a clip that changes no pixel"
+    assert_eq!(
+        quad.field("clip"),
+        None,
+        "no link is added for a clip that changes no pixel"
     );
 }
 
@@ -365,10 +339,7 @@ fn a_square_clip_inside_rounded_ports_stays_analytic() {
         analytic_only(&paint(&mut harness)),
         "a square clip needs no rounded test"
     );
-    let scene = harness.scene();
-    assert!(scene.primitives.quads.iter().all(|quad| {
-        scene.clips.rounded_links(ClipId(quad.clip)) <= zgui_scene::ClipTable::MAX_INLINE_ROUNDED
-    }));
+    assert_eq!(quads(&harness.redraw()).len(), 1);
 }
 
 #[test]
@@ -389,7 +360,7 @@ fn a_rect_clipped_to_a_triangle_takes_another_route() {
             .routes
             .contains(VectorRoute::Analytic)
     );
-    assert!(harness.scene().primitives.quads.is_empty());
+    assert!(harness.redraw().quads().is_empty());
 }
 
 #[test]
@@ -414,7 +385,7 @@ fn a_rotated_canvas_circle_takes_another_route() {
                 .contains(VectorRoute::Analytic),
             "`transform: {transform}` drew quads the shader cannot antialias"
         );
-        assert!(harness.scene().primitives.quads.is_empty());
+        assert!(harness.redraw().quads().is_empty());
     }
     // A quarter turn and a scale-up keep the route.
     for transform in ["rotate(90deg)", "scale(2)"] {
@@ -438,15 +409,8 @@ fn a_rotated_canvas_circle_takes_another_route() {
 }
 
 /// Paints `shapes` in a canvas below a spacer, grows the spacer, and paints again. Answers the
-/// second frame's report, the counters it moved, and how far the first quad moved.
-fn moved(
-    shapes: Vec<zgui_canvas::Shape>,
-    turned: bool,
-) -> (
-    PaintReport,
-    zgui_testkit_scene::counters::Measurement,
-    Option<f32>,
-) {
+/// second frame's report, the chunk offsets it wrote, and how far the first quad moved.
+fn moved(shapes: Vec<zgui_canvas::Shape>, turned: bool) -> (PaintReport, usize, Option<f32>) {
     let css = "root { display: block; width: 400px; height: 200px }
                spacer { display: block; height: 10px }
                spacer.tall { height: 30px }
@@ -464,42 +428,31 @@ fn moved(
     let mut harness = Harness::new(tree, css);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let mut recording = Recording::begin();
-    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
+    let raster = zgui_testkit_scene::MonoRaster::new();
+    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
     assert_eq!(
         first.vector_routes.len(),
         1,
         "the first frame encodes the canvas"
     );
-    let before = harness
-        .scene()
-        .primitives
-        .quads
-        .first()
-        .map(|quad| quad.bounds[1]);
+    let top = |drawing: Drawing| drawing.quads().first().map(|quad| quad.bounds()[1]);
+    let before = top(harness.redraw());
 
     let spacer = harness.element("spacer");
     harness.edit_and_restyle(|edit| edit.add_class(spacer, zgui_interned::ClassName::new("tall")));
     // The style reaches the box in place, so the canvas keeps its fragment and only moves.
     zgui_layout::boxtree::patch::restyle(&mut harness.store, &harness.document, [spacer]);
     harness.compose_from_marks(400.0, 200.0);
-    let mut report = None;
-    let measured = recording.measure(|| {
-        report = Some(harness.paint_cached_vectors_ready(&vectors, &mut content, true));
-    });
-    let after = harness
-        .scene()
-        .primitives
-        .quads
-        .first()
-        .map(|quad| quad.bounds[1]);
+    let report = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+    let offsets = harness.compositor.sync.offsets;
+    let after = top(harness.redraw());
     let shift = before.zip(after).map(|(before, after)| after - before);
-    (report.expect("a frame was painted"), measured, shift)
+    (report, offsets, shift)
 }
 
 #[test]
 fn a_canvas_of_analytic_shapes_replays_when_it_moves() {
-    let (report, measured, shift) = moved(
+    let (report, offsets, shift) = moved(
         vec![
             ShapeBuilder::new(circle(24.0, 24.0, 10.0))
                 .fill(Brush::Solid(opaque(255, 0, 0)))
@@ -512,19 +465,18 @@ fn a_canvas_of_analytic_shapes_replays_when_it_moves() {
         "the canvas was encoded again: {:?}",
         report.vector_routes
     );
-    assert!(measured.get(Counter::ChunksTranslated) > 0);
-    assert_eq!(measured.get(Counter::VectorReplaysMoved), 0);
+    assert!(offsets > 0, "the canvas's chunk moved");
     assert_eq!(shift, Some(20.0), "the replayed quad moved with its box");
 
-    // A vector item holds its path in path space, so its record moves its placement. Turned, so
-    // the drawing is no CPU layer.
+    // A path holds its geometry in path space, so its chunk moves with the box. Turned, so the
+    // drawing is no CPU layer.
     let gradient = Brush::Linear {
         start: kurbo::Point::new(0.0, 0.0),
         end: kurbo::Point::new(40.0, 0.0),
         stops: vec![(0.0, opaque(255, 0, 0)), (1.0, opaque(0, 0, 255))],
         repeating: false,
     };
-    let (report, measured, _) = moved(
+    let (report, offsets, _) = moved(
         vec![
             ShapeBuilder::new(BezPath::from_svg("M4 4 L40 4 L4 40 Z").expect("a path"))
                 .fill(gradient)
@@ -537,5 +489,5 @@ fn a_canvas_of_analytic_shapes_replays_when_it_moves() {
         "the drawing was encoded again: {:?}",
         report.vector_routes
     );
-    assert!(measured.get(Counter::VectorReplaysMoved) > 0);
+    assert!(offsets > 0, "the drawing's chunk moved");
 }

@@ -286,7 +286,7 @@ pub struct Painter {
     sync: Option<CompositorSync>,
     /// The items of the fragment being encoded.
     items: Items,
-    /// The items of the outline being emitted.
+    /// The items of the outline or the backdrop being emitted.
     outline: Items,
 }
 
@@ -421,12 +421,20 @@ impl Painter {
             spaces,
         };
         self.scratch.clear();
-        // After the walk and its replays, which are what push the tiles of large drawings: the
-        // frame's whole need is known only here.
+        // After the walk, which notes where the tiles of large drawings are shown: the frame's
+        // whole need is known only here.
         if let Some(layers) = input.vector_masks.layers() {
+            let mut resolver = self.sync.as_mut().and_then(CompositorSync::resolver);
+            let mut write = |raster: &crate::content::vectors::LayerPixels| {
+                if let (Some(resolver), Some(texels)) = (&mut resolver, &raster.texels) {
+                    let pixels = raster.pixels();
+                    let write = crate::sync::whole(pixels.desc, texels);
+                    resolver.write_image(raster.key, write, pixels.revision);
+                }
+            };
             report
                 .layers_owed
-                .extend(layers.settle(scene, input.damage));
+                .extend(layers.settle(scene.viewport(), input.damage, &mut write));
         }
         self.cache.end_frame();
         self.styles.sweep();
@@ -991,7 +999,44 @@ impl Pass<'_, '_> {
         );
         self.report.primitives += order::outline(&mut rec, &emission);
         if let Some(sync) = &mut painter.sync {
-            sync.record_outline(store, fragment, &painter.outline, self.scene);
+            sync.record_extra(
+                store,
+                fragment,
+                crate::sync::Part::Outline,
+                &painter.outline,
+                self.scene,
+            );
+        }
+    }
+
+    /// Notes where the tile images of a replayed fragment are shown, moved by `offset` from where
+    /// they were recorded, so the end of the walk rasterises the ones the frame needs.
+    fn show_replayed_tiles(
+        &self,
+        fragment: &Fragment,
+        offset: zgui_geom::Size<DevicePx, Device>,
+        transform: zgui_scene::SpatialId,
+        clip: zgui_scene::ClipId,
+    ) {
+        let (Some(tiles), Some(layers)) = (
+            self.painter.cache.tiles(fragment.key),
+            self.input.vector_masks.layers(),
+        ) else {
+            return;
+        };
+        let placement = crate::emit::vector::VectorPlacement {
+            clip,
+            transform,
+            scale: self.input.scale,
+        };
+        for &(key, local) in tiles.iter() {
+            crate::emit::vector::show_tile(
+                layers,
+                self.scene,
+                placement,
+                key,
+                local.translate(offset),
+            );
         }
     }
 
@@ -1122,6 +1167,7 @@ impl Pass<'_, '_> {
                     pushed += (range.end - range.start) as usize;
                 }
                 self.report.primitives += pushed;
+                self.show_replayed_tiles(fragment, offset, transform, clip);
                 self.painter.cache.replayed(fragment);
                 if let Some(sync) = &mut self.painter.sync {
                     sync.replayed(fragment, offset);
@@ -1199,6 +1245,7 @@ impl Pass<'_, '_> {
                             provisional: emitted.layer.provisional,
                             promote: emitted.layer.promote,
                             tiled: emitted.layer.tiled,
+                            tiles: emitted.layer.tiles.clone(),
                             window: emitted.layer.window,
                         },
                     },
@@ -1210,6 +1257,46 @@ impl Pass<'_, '_> {
             self.report.emitted.push(frag);
         }
     }
+}
+
+/// What recording a box's backdrop writes into and reads.
+struct Backdropped<'a> {
+    scene: &'a mut Scene,
+    items: &'a mut Items,
+    sync: Option<&'a mut CompositorSync>,
+    store: &'a LayoutStore,
+    shaders: &'a dyn crate::content::shader::ShaderSource,
+    scale: f32,
+}
+
+/// Records the backdrop of the box whose first fragment is `fragment` into its own chunk, and
+/// returns how many items it has.
+fn backdrop(
+    into: Backdropped<'_>,
+    fragment: &Fragment,
+    style: &crate::lower::PaintStyle,
+    computed: &zgui_css::ComputedStyle,
+) -> usize {
+    let Backdropped {
+        scene,
+        items,
+        mut sync,
+        store,
+        shaders,
+        scale,
+    } = into;
+    let mut rec = Recorder::new(
+        scene,
+        items,
+        sync.as_deref_mut().and_then(CompositorSync::resolver),
+        crate::lower::transform::of(fragment),
+        fragment.clip,
+    );
+    let recorded = group::backdrop(&mut rec, style, computed, fragment, shaders, scale);
+    if let Some(sync) = sync {
+        sync.record_extra(store, fragment, crate::sync::Part::Backdrop, items, scene);
+    }
+    recorded
 }
 
 /// The parts of nested inline boxes a line paints, in tree order.
@@ -1318,6 +1405,10 @@ impl stacking::Visitor for Pass<'_, '_> {
         // Refused before either stack is pushed, and before a band is opened, so the leave that
         // never comes has nothing to withdraw.
         if isolation.alpha() == 0.0 {
+            // The backdrop chunk sits outside the box's group, which the zero alpha fades.
+            if let Some(sync) = &mut self.painter.sync {
+                sync.drop_extra(key, crate::sync::Part::Backdrop);
+            }
             self.report.skipped_subtrees += 1;
             counter::add(Counter::PrimitivesCulled, 1);
             return false;
@@ -1326,14 +1417,18 @@ impl stacking::Visitor for Pass<'_, '_> {
         // box turned out to have: a push made conditionally and a pop made on a different condition
         // is how the alpha in force comes to belong to somebody else's subtree.
         if let Some(fragment) = own {
-            self.report.primitives += group::backdrop(
-                self.scene,
+            self.report.primitives += backdrop(
+                Backdropped {
+                    scene: self.scene,
+                    items: &mut self.painter.outline,
+                    sync: self.painter.sync.as_mut(),
+                    store,
+                    shaders: self.input.shaders,
+                    scale: self.input.scale,
+                },
+                fragment,
                 &style,
                 &node.style,
-                fragment,
-                fragment.clip,
-                self.input.shaders,
-                self.input.scale,
             );
             if isolation.needs_target() {
                 counter::bump(Counter::GroupTargets);
@@ -1380,7 +1475,7 @@ impl stacking::Visitor for Pass<'_, '_> {
             Some((frag, style_ref, owned)) => self.outline(store, key, frag, style_ref, owned),
             None => {
                 if let Some(sync) = &mut self.painter.sync {
-                    sync.drop_outline(key);
+                    sync.drop_extra(key, crate::sync::Part::Outline);
                 }
             }
         }

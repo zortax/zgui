@@ -4,76 +4,25 @@
 //! systems and paints into them as the emitters name them, so a fragment's items are complete
 //! once its emitters return.
 
+mod image;
 mod items;
+mod recording;
 
+pub use self::image::{ImageKey, ImagePixels};
 pub(crate) use self::items::{Items, Ref};
+pub use self::recording::Recording;
+
+use std::sync::Arc;
 
 use compositor_types::{
-    ClipRef, ClipShape, Glyph, GlyphRun, Line, LocalClip, LocalParent, PaintRef, Quad, Shadow,
-    SpaceRef,
+    Backdrop, ClipRef, ClipShape, Filter, Glyph, GlyphRun, Line, LocalClip, LocalParent,
+    MarkPayload, Marks, PaintRef, PathItem, Quad, Shadow, SpaceRef,
 };
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Rect, Vec2};
 use zgui_scene::{ClipId, ClipLink, Scene, SpatialId};
 
 use crate::sync::Resolver;
-
-/// One chunk's items recorded without a compositor, for reading back.
-///
-/// Nothing refers to a node or a slot. Items name the chunk's default space and clip, colours are
-/// carried in their references, and every other paint is none.
-#[derive(Debug, Default)]
-pub struct Recording {
-    items: Items,
-}
-
-impl Recording {
-    /// Creates an empty recording.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns a recorder that empties the recording and records into it, with `space` and `clip`
-    /// as the chunk's defaults.
-    pub fn recorder<'a>(
-        &'a mut self,
-        scene: &'a mut Scene,
-        space: SpatialId,
-        clip: ClipId,
-    ) -> Recorder<'a> {
-        Recorder::new(scene, &mut self.items, None, space, clip)
-    }
-
-    /// Returns the quads, in record order.
-    pub fn quads(&self) -> &[Quad] {
-        &self.items.quads
-    }
-
-    /// Returns the shadows, in record order.
-    pub fn shadows(&self) -> &[Shadow] {
-        &self.items.shadows
-    }
-
-    /// Returns the decoration lines, in record order.
-    pub fn lines(&self) -> &[Line] {
-        &self.items.lines
-    }
-
-    /// Returns the glyph runs, in record order.
-    pub fn glyph_runs(&self) -> &[GlyphRun] {
-        &self.items.glyph_runs
-    }
-
-    /// Returns the glyphs of `run`.
-    pub fn glyphs(&self, run: &GlyphRun) -> &[Glyph] {
-        &self.items.glyphs[run.glyphs.indices()]
-    }
-
-    /// Returns the variation coordinates of `run`.
-    pub fn coords(&self, run: &GlyphRun) -> &[i16] {
-        &self.items.coords[run.coords.indices()]
-    }
-}
 
 /// Where emitters record one chunk's items, and the scene whose tables they read.
 ///
@@ -171,6 +120,22 @@ impl<'a> Recorder<'a> {
     /// The link is measured in the chunk's default coordinate system. A link in another system,
     /// or a mask, is mirrored as part of a clip chain instead, which does not move with the chunk.
     pub fn local_clip(&mut self, parent: ClipId, link: ClipLink) -> ClipRef {
+        let reference = self.clip(parent);
+        match self.local_clip_in(reference, link) {
+            Some(clip) => clip,
+            None => {
+                let chain = self.scene.clips.push(parent, link);
+                self.clip(chain)
+            }
+        }
+    }
+
+    /// Adds a clip of `link` inside the clip `parent` refers to, which moves with the chunk, and
+    /// returns the reference items drawn through it hold.
+    ///
+    /// Returns `None` for a link that is no rounded rectangle measured in the chunk's default
+    /// coordinate system.
+    pub fn local_clip_in(&mut self, parent: ClipRef, link: ClipLink) -> Option<ClipRef> {
         let ClipLink::RoundedRect {
             rect,
             radii,
@@ -178,14 +143,12 @@ impl<'a> Recorder<'a> {
             space,
         } = link
         else {
-            let chain = self.scene.clips.push(parent, link);
-            return self.clip(chain);
+            return None;
         };
         if space != self.items.space {
-            let chain = self.scene.clips.push(parent, link);
-            return self.clip(chain);
+            return None;
         }
-        let parent = match self.clip(parent) {
+        let parent = match parent {
             ClipRef::INHERIT => LocalParent::Chunk,
             ClipRef::NONE => LocalParent::None,
             reference => match reference.local_index() {
@@ -202,7 +165,7 @@ impl<'a> Recorder<'a> {
                 shapes: [shape.get(); 4],
             },
         });
-        ClipRef::local(index)
+        Some(ClipRef::local(index))
     }
 
     /// Returns the reference that paints `color`.
@@ -249,32 +212,68 @@ impl<'a> Recorder<'a> {
 
     /// Appends a quad.
     pub fn quad(&mut self, quad: Quad) {
-        self.items.push_quad(quad, self.scene.captured());
+        self.items.push_quad(quad);
     }
 
     /// Appends a shadow.
     pub fn shadow(&mut self, shadow: Shadow) {
-        self.items.push_shadow(shadow, self.scene.captured());
+        self.items.push_shadow(shadow);
     }
 
     /// Appends a decoration line.
     pub fn line(&mut self, line: Line) {
-        self.items.push_line(line, self.scene.captured());
+        self.items.push_line(line);
     }
 
     /// Appends a glyph run of `glyphs` at the normalised variation coordinates `coords`, empty
     /// for the default instance of its font.
     ///
-    /// The run's glyph and coordinate ranges are replaced.
-    pub fn glyph_run(&mut self, mut run: GlyphRun, glyphs: &[Glyph], coords: &[i16]) {
-        run.glyphs = append(&mut self.items.glyphs, glyphs);
-        run.coords = append(&mut self.items.coords, coords);
-        self.items.push_glyph_run(run, self.scene.captured());
+    /// The run's glyph and coordinate ranges are replaced. `instanced` marks a run shaped at a
+    /// variation instance, which is drawn at the default instance.
+    pub fn glyph_run(&mut self, mut run: GlyphRun, glyphs: &[Glyph], instanced: bool) {
+        let start = self.items.glyphs.len() as u32;
+        self.items.glyphs.extend_from_slice(glyphs);
+        run.glyphs = compositor_types::ArenaRange {
+            start,
+            len: glyphs.len() as u32,
+        };
+        run.coords = compositor_types::ArenaRange::default();
+        self.items.instanced += usize::from(instanced);
+        self.items.push_glyph_run(run);
     }
 
-    /// Returns the chunk's items.
-    pub(crate) fn items_mut(&mut self) -> &mut Items {
-        self.items
+    /// Appends a marks item drawing from `payload`, whose index in the chunk's payload list
+    /// replaces the item's.
+    pub fn marks(&mut self, mut marks: Marks, payload: Arc<MarkPayload>) {
+        marks.payload = self.items.payload(payload);
+        self.items.push_marks(marks);
+    }
+
+    /// Appends a path, unless a number in its geometry, its maps or its stroke is not finite.
+    ///
+    /// Returns whether it was appended.
+    pub fn path(&mut self, path: PathItem) -> bool {
+        if !finite_path(&path) {
+            return false;
+        }
+        self.items.push_path(path);
+        true
+    }
+
+    /// Appends a backdrop filtered by `chain`, whose index in the chunk's filter-chain list
+    /// replaces the item's.
+    pub fn backdrop(&mut self, mut backdrop: Backdrop, chain: Arc<[Filter]>) {
+        backdrop.filters = self.items.filters(chain);
+        self.items.push_backdrop(backdrop);
+    }
+
+    /// Returns a recorder into the same chunk for a shorter borrow.
+    pub fn reborrow(&mut self) -> Recorder<'_> {
+        Recorder {
+            scene: self.scene,
+            items: self.items,
+            resolver: self.resolver.as_mut().map(Resolver::reborrow),
+        }
     }
 
     /// Returns the clip node a node reference was taken from.
@@ -311,10 +310,35 @@ fn append<T: Copy>(arena: &mut Vec<T>, values: &[T]) -> compositor_types::ArenaR
 }
 
 /// Adds `reference` to the ids `items` refer to, unless it is there.
-fn refer(items: &mut Items, reference: Ref) {
+pub(crate) fn refer(items: &mut Items, reference: Ref) {
     if !items.refs.contains(&reference) {
         items.refs.push(reference);
     }
+}
+
+/// Reports whether every number of `item` is finite.
+fn finite_path(item: &PathItem) -> bool {
+    let finite = |values: &[f64]| values.iter().all(|value| value.is_finite());
+    let stroke = item.stroke.as_ref().is_none_or(|stroke| {
+        let style = &stroke.style;
+        finite(&[style.width, style.miter_limit, style.dash_offset]) && finite(&style.dash_pattern)
+    });
+    let geometry = |path: &zgui_scene::kurbo::BezPath| {
+        use zgui_scene::kurbo::PathEl;
+
+        let point = |point: &zgui_scene::kurbo::Point| point.x.is_finite() && point.y.is_finite();
+        path.elements().iter().all(|element| match element {
+            PathEl::MoveTo(a) | PathEl::LineTo(a) => point(a),
+            PathEl::QuadTo(a, b) => point(a) && point(b),
+            PathEl::CurveTo(a, b, c) => point(a) && point(b) && point(c),
+            PathEl::ClosePath => true,
+        })
+    };
+    finite(&item.placement.as_coeffs())
+        && finite(&item.brush.as_coeffs())
+        && stroke
+        && geometry(&item.path)
+        && item.clips.iter().all(|clip| geometry(&clip.path))
 }
 
 /// Returns a borderless quad over `bounds` filled with `fill`, in the chunk's default space and

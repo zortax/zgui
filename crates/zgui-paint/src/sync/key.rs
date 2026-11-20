@@ -10,6 +10,8 @@ pub(crate) enum Part {
     Body = 0,
     /// The outline, drawn after the box's descendants.
     Outline = 1,
+    /// The backdrop filter, drawn before the box's own painting, outside its group.
+    Backdrop = 2,
 }
 
 /// Returns the key of `part` of `fragment`.

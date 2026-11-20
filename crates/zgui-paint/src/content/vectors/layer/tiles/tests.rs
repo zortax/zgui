@@ -1,29 +1,27 @@
 use std::sync::Arc;
 
-use zgui_atlas::{Atlas, AtlasLimits};
 use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::{Affine2, Device, DevicePx, Point, Rect, Size};
 use zgui_profile::Counter;
 use zgui_scene::kurbo::{self, Affine, Shape as _};
-use zgui_scene::{ColorSprite, Scene, VectorId, peniko};
+use zgui_scene::{VectorId, peniko};
 
 use super::super::{LayerAnswer, LayerRequest, VectorLayerCache};
-use super::{TILE, Tiles};
+use super::{TILE, TiledSource, Tiles, handle_of};
 use crate::content::vectors::Drawing;
+use crate::emit::record::ImageKey;
 use crate::emit::vector::ShapePaint;
 
-/// A cache and an atlas, one frame at a time.
+/// A cache, one frame at a time.
 struct Fixture {
     cache: VectorLayerCache,
-    atlas: Atlas,
 }
 
 impl Fixture {
     fn new() -> Self {
         let mut fixture = Self {
             cache: VectorLayerCache::default(),
-            atlas: Atlas::new(AtlasLimits::default()),
         };
         fixture.cache.set_raster_ready(true);
         fixture.frame();
@@ -32,9 +30,27 @@ impl Fixture {
 
     /// Ends the frame and starts the next.
     fn frame(&mut self) {
-        self.cache.end_frame(&mut self.atlas);
-        self.atlas.begin_frame();
+        self.cache.end_frame();
         self.cache.begin_frame();
+    }
+
+    /// Whether the raster of the tile image `key` is rasterised.
+    fn rasterised(&self, key: ImageKey) -> bool {
+        handle_of(key)
+            .and_then(|handle| self.cache.tiles.rasters.get(&handle))
+            .is_some_and(|raster| raster.texels.is_some())
+    }
+
+    /// The source `tiles` were answered from.
+    fn source(&self, tiles: &Tiles) -> std::sync::Arc<TiledSource> {
+        let entry = self
+            .cache
+            .tiles
+            .sources
+            .values()
+            .find(|entry| entry.source.id == tiles.id())
+            .expect("the source is kept");
+        std::sync::Arc::clone(&entry.source)
     }
 
     /// The answer for `drawing` under a scale of `scale` moved by `shift` device pixels.
@@ -45,48 +61,37 @@ impl Fixture {
         scale: f32,
         shift: [f32; 2],
     ) -> LayerAnswer {
-        let mut named = Vec::new();
-        self.cache.layer(
-            &mut self.atlas,
-            LayerRequest {
-                owner: VectorId(1),
-                revision,
-                drawing,
-                paint: ShapePaint {
-                    fill: Color::BLACK,
-                    stroke: None,
-                    stroke_width: 1.0,
-                },
-                spatial: Some(Affine2::new(scale, 0.0, 0.0, scale, shift[0], shift[1])),
+        self.cache.layer(LayerRequest {
+            owner: VectorId(1),
+            revision,
+            drawing,
+            paint: ShapePaint {
+                fill: Color::BLACK,
+                stroke: None,
+                stroke_width: 1.0,
             },
-            &mut named,
-            &mut |_| Vec::new(),
-        )
+            spatial: Some(Affine2::new(scale, 0.0, 0.0, scale, shift[0], shift[1])),
+        })
     }
 
-    /// Pushes every tile of `tiles` at `scale` into a frame of `viewport`, settles it against
-    /// `damage`, and returns the scene and what is owed.
+    /// Shows every tile of `tiles` at `scale` in a frame of `viewport`, settles it against
+    /// `damage`, and returns the images written and what is owed.
     fn settle(
         &mut self,
         tiles: &Tiles,
         scale: f64,
         viewport: Size<i32, Device>,
         damage: &DamageSet,
-    ) -> (Scene, Vec<Rect<i32, Device>>) {
-        let mut scene = Scene::new();
-        scene.begin_frame(viewport);
-        for (name, path_rect) in tiles.sprites() {
-            let device = Affine::scale(scale).transform_rect_bbox(path_rect);
-            scene.push_color_sprite(ColorSprite::new(rect(device), name));
+    ) -> (Vec<ImageKey>, Vec<Rect<i32, Device>>) {
+        for tile in tiles.tiles() {
+            let device = Affine::scale(scale).transform_rect_bbox(tile.path_rect);
+            self.cache.shown(tile.pixels.key, Some(rect(device)));
         }
+        let mut written = Vec::new();
         let owed = self
             .cache
-            .settle(&mut self.atlas, &mut scene, damage, &mut |_| Vec::new());
-        assert!(
-            !scene.has_unresolved_resources(),
-            "every tile sprite is placed or blank"
-        );
-        (scene, owed)
+            .settle(viewport, damage, &mut |raster| written.push(raster.key));
+        (written, owed)
     }
 }
 
@@ -179,7 +184,7 @@ fn a_drawing_past_the_size_cap_is_tiled() {
     let tiled = tiles(fixture.ask(1, &drawing, 30.0, [0.0, 0.0]));
     let per_side = 3002_u32.div_ceil(TILE) as usize + 1;
     assert!(tiled.len() >= 36 && tiled.len() <= per_side * per_side);
-    let covered: f64 = tiled.sprites().map(|(_, path_rect)| path_rect.area()).sum();
+    let covered: f64 = tiled.tiles().iter().map(|tile| tile.path_rect.area()).sum();
     assert!(
         (covered - 100.0 * 100.0).abs() < 1.0,
         "the tiles cover the ink once: {covered}"
@@ -200,8 +205,6 @@ fn a_translation_keeps_every_tile() {
     fixture.frame();
     let moved = tiles(fixture.ask(1, &drawing, 30.0, [137.25, -40.5]));
     assert_eq!(first, moved, "one source");
-    let names = |tiles: &Tiles| tiles.sprites().collect::<Vec<_>>();
-    assert_eq!(names(&first), names(&moved));
 }
 
 #[test]
@@ -215,7 +218,7 @@ fn settle_rasterises_only_the_needed_tiles() {
     let mut damage = DamageSet::new();
     damage.absorb(Rect::new(Point::new(10, 10), Size::new(100, 100)));
     let before = get(Counter::VectorLayerTilesRasterised);
-    let (scene, owed) = fixture.settle(&tiled, 30.0, viewport, &damage);
+    let (written, owed) = fixture.settle(&tiled, 30.0, viewport, &damage);
     let rasterised = get(Counter::VectorLayerTilesRasterised) - before;
     assert!(owed.is_empty());
     assert!(rasterised >= 1, "the damaged tile");
@@ -223,13 +226,7 @@ fn settle_rasterises_only_the_needed_tiles() {
         rasterised <= 4,
         "the damaged tile and its neighbours ahead, no more: {rasterised}"
     );
-    let placed = scene
-        .primitives
-        .color_sprites
-        .iter()
-        .filter(|sprite| sprite.bounds != [0.0; 4])
-        .count();
-    assert_eq!(placed as u64, rasterised, "the rest draw nothing");
+    assert_eq!(written.len() as u64, rasterised, "the rest stay unwritten");
 
     // The same frame again rasterises nothing.
     fixture.frame();
@@ -251,7 +248,7 @@ fn a_deferred_tile_is_owed_and_rasterised_by_its_third_frame() {
     let mut first_owed = Vec::new();
     for frame in 0..3 {
         let before = get(Counter::VectorLayerTilesDeferred);
-        let (scene, owed) = fixture.settle(&tiled, 25.0, viewport, &damage);
+        let (_, owed) = fixture.settle(&tiled, 25.0, viewport, &damage);
         if frame == 0 {
             first_owed = owed.clone();
         }
@@ -264,19 +261,17 @@ fn a_deferred_tile_is_owed_and_rasterised_by_its_third_frame() {
                 owed.is_empty(),
                 "the third frame rasterises every needed tile"
             );
-            // A blank keeps its frame, which says where it would have drawn.
-            let visible = |sprite: &&ColorSprite| {
-                sprite.frame[0] + 1.0 < viewport.width as f32
-                    && sprite.frame[1] + 1.0 < viewport.height as f32
+            let visible = |rect: kurbo::Rect| {
+                rect.x0 + 1.0 < f64::from(viewport.width)
+                    && rect.y0 + 1.0 < f64::from(viewport.height)
             };
             assert!(
-                scene
-                    .primitives
-                    .color_sprites
+                tiled
+                    .tiles()
                     .iter()
-                    .filter(visible)
-                    .all(|sprite| sprite.bounds != [0.0; 4]),
-                "nothing visible is blank on the third frame"
+                    .filter(|tile| visible(Affine::scale(25.0).transform_rect_bbox(tile.path_rect)))
+                    .all(|tile| fixture.rasterised(tile.pixels.key)),
+                "nothing visible is unrasterised on the third frame"
             );
         }
         fixture.frame();
@@ -311,9 +306,10 @@ fn an_edit_of_one_shape_rasterises_only_its_tiles() {
     let second = tiles(fixture.ask(2, &drawing, 30.0, [0.0, 0.0]));
     assert_ne!(first.id(), second.id());
     let changed = first
-        .sprites()
-        .zip(second.sprites())
-        .filter(|(a, b)| a.0 != b.0)
+        .tiles()
+        .iter()
+        .zip(second.tiles())
+        .filter(|(a, b)| a.pixels.key != b.pixels.key)
         .count();
     assert_eq!(
         get(Counter::VectorLayerTilesReused) - reused,
@@ -349,19 +345,13 @@ fn evicted_tiles_rasterise_again() {
     assert!(held > 0);
     // The budget's step runs between frames, when nothing is pinned.
     fixture.frame();
-    let freed = fixture.cache.evict(&mut fixture.atlas, u64::MAX);
+    let freed = fixture.cache.evict(u64::MAX);
     assert_eq!(freed, held);
     assert_eq!(fixture.cache.bytes(), 0);
     let before = get(Counter::VectorLayerTilesRasterised);
-    let (scene, _) = fixture.settle(&tiled, 30.0, viewport, &damage);
+    let (written, _) = fixture.settle(&tiled, 30.0, viewport, &damage);
     assert!(get(Counter::VectorLayerTilesRasterised) > before);
-    assert!(
-        scene
-            .primitives
-            .color_sprites
-            .iter()
-            .any(|sprite| sprite.bounds != [0.0; 4])
-    );
+    assert!(!written.is_empty());
 }
 
 #[test]
@@ -391,16 +381,16 @@ fn an_edit_that_moves_the_bounds_keeps_every_raster_the_size_of_its_slot() {
     // rows only the top shape meets.
     let grown = solid(kurbo::Rect::new(0.0, 60.0, 101.0, 100.0), colour);
     let drawing = Drawing::fitted_shared(Arc::from(vec![top, grown]), Affine::IDENTITY);
-    let second = tiles(fixture.ask(2, &drawing, 30.0, [0.0, 0.0]));
+    let answer = tiles(fixture.ask(2, &drawing, 30.0, [0.0, 0.0]));
+    let second = fixture.source(&answer);
     let rasters = &fixture.cache.tiles.rasters;
-    for slot in &second.0.slots {
+    for slot in &second.slots {
         let raster = &rasters[&slot.handle];
         let made = &raster.source.slots[raster.slot as usize];
         assert_eq!(made.texels, slot.texels, "the raster of {:?}", slot.texels);
     }
     assert!(
         second
-            .0
             .slots
             .iter()
             .any(|slot| slot.texels[2] == 3030 && slot.texels[1] == 0),
@@ -408,22 +398,26 @@ fn an_edit_that_moves_the_bounds_keeps_every_raster_the_size_of_its_slot() {
     );
 }
 
-/// The blank frames in a row of each visible sprite of `scene`, by where it is, after this frame.
+/// The unrasterised frames in a row of each visible tile of `tiles` at `scale`, by where it is,
+/// after this frame.
 fn count_blanks(
     blanks: &mut rustc_hash::FxHashMap<[i32; 2], u32>,
-    scene: &Scene,
+    fixture: &Fixture,
+    tiles: &Tiles,
+    scale: f64,
     viewport: Size<i32, Device>,
 ) {
-    for sprite in &scene.primitives.color_sprites {
-        let at = [sprite.frame[0] as i32, sprite.frame[1] as i32];
+    for tile in tiles.tiles() {
+        let device = Affine::scale(scale).transform_rect_bbox(tile.path_rect);
+        let at = [device.x0 as i32, device.y0 as i32];
         if at[0] >= viewport.width || at[1] >= viewport.height {
             continue;
         }
         let run = blanks.entry(at).or_default();
-        *run = if sprite.bounds == [0.0; 4] {
-            *run + 1
-        } else {
+        *run = if fixture.rasterised(tile.pixels.key) {
             0
+        } else {
+            *run + 1
         };
     }
 }
@@ -452,9 +446,9 @@ fn a_drawing_that_changes_every_frame_draws_each_visible_tile_by_its_third_frame
             }
             let tiled = tiles(answer);
             let before = get(Counter::VectorLayerTilesDeferred);
-            let (scene, _) = fixture.settle(&tiled, 25.0, viewport, &DamageSet::full());
+            fixture.settle(&tiled, 25.0, viewport, &DamageSet::full());
             deferred += get(Counter::VectorLayerTilesDeferred) - before;
-            count_blanks(&mut blanks, &scene, viewport);
+            count_blanks(&mut blanks, &fixture, &tiled, 25.0, viewport);
             assert!(
                 blanks.values().all(|run| *run <= 2),
                 "ready {ready}, frame {frame}: a visible tile is blank on three frames: {blanks:?}"
@@ -583,7 +577,7 @@ fn calibrate_the_tile_cost_model() {
     let drawing = Drawing::fitted_shared(Arc::from(document.shapes()), Affine::IDENTITY);
     let mut fixture = Fixture::new();
     let tiled = tiles(fixture.ask(1, &drawing, 1.0, [0.0, 0.0]));
-    let source = &tiled.0;
+    let source = &fixture.source(&tiled);
     let mut rows = Vec::new();
     for slot in &source.slots {
         let [x0, y0, x1, y1] = slot.texels;

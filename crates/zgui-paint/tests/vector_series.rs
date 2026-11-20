@@ -1,7 +1,7 @@
-//! Canvas series and canvas views on a real device.
+//! Canvas series and canvas views, recorded and drawn by the compositor on a device.
 //!
-//! A pan of a view re-encodes the canvas chunk and keeps its payloads, so it uploads none and
-//! draws the pixels a fresh encoding draws. Markers and lines keep their size under a zoom or a
+//! A pan of a view records the canvas chunk again and keeps its payloads, so it uploads none and
+//! draws the pixels a fresh recording draws. Markers and lines keep their size under a zoom or a
 //! turn, data far from the origin lands on its pixel, and marks through a fit draw as the placed
 //! shapes do.
 
@@ -9,33 +9,19 @@ mod support;
 
 use std::sync::Arc;
 
-use zgui_bits::DamageSet;
 use zgui_canvas::{Brush, CanvasScene, Marker, Series};
 use zgui_color::Color;
-use zgui_geom::Size;
-use zgui_paint::content::{CachedMarks, Drawing, MarksOnly};
-use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, draw_drawing, draw_with_masks};
+use zgui_paint::content::{CachedMarks, Drawing};
 use zgui_profile::Counter;
-use zgui_render_wgpu::Pixels;
 use zgui_scene::kurbo::{self, Affine, BezPath, Circle, Shape as _};
-use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId, VectorId, peniko};
+use zgui_scene::peniko;
 use zgui_svg::{Fill, Ink, Paint, Shape, Stroke};
+use zgui_testkit_compositor::Pixels;
 
-use support::{SIDE, Which, harness, opaque, present, quad, rect};
-
-/// White fill, the inherited colour of every shape here.
-const PAINT: ShapePaint = ShapePaint {
-    fill: Color::WHITE,
-    stroke: None,
-    stroke_width: 1.0,
+use support::conformance::{
+    Route, SIDE, drawn, framed, payloads, picture, recording, same_payloads,
 };
-
-/// Drawn at the origin of the surface, with no transform and no clip.
-const PLACEMENT: VectorPlacement = VectorPlacement {
-    clip: ClipId::ROOT,
-    transform: SpatialId::VIEWPORT,
-    scale: 1.0,
-};
+use support::gpu::Gpu;
 
 /// A white brush.
 fn white() -> Brush {
@@ -53,78 +39,37 @@ fn canvas(series: Vec<Series>, shapes: Vec<Shape>, view: Affine) -> CanvasScene 
     scene
 }
 
-/// One frame: a black background and `drawing`, encoded as chunk `revision` and retiring
-/// `retired`.
-fn encode(
-    scene: &mut Scene,
-    drawing: &Drawing,
-    masks: &CachedMarks,
-    revision: u64,
-    retired: Option<u64>,
-) {
-    scene.begin_frame(Size::new(SIDE, SIDE));
-    quad(
-        scene,
-        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
-        opaque(0, 0, 0),
-    );
-    scene.begin_chunk_capture(ChunkPrims::default());
-    draw_drawing(scene, VectorId(1), drawing, PAINT, masks, PLACEMENT);
-    let chunk = Arc::new(scene.take_chunk_capture());
-    scene.note_chunk_inserted(revision, chunk);
-    if let Some(old) = retired {
-        scene.note_chunk_retired(old);
-    }
-    scene.bind_capture(revision);
-    scene.finish(&DamageSet::full());
-}
-
-/// Draws a frame `encode` built and returns its payload bytes and pixels.
-fn draw(renderer: &mut zgui_render_wgpu::WgpuRenderer, scene: &mut Scene) -> (u64, Pixels) {
-    zgui_profile::counter::reset();
-    let pixels = present(renderer, scene);
-    scene.clear_chunk_notes();
-    (
-        zgui_profile::counter::get(Counter::MarksPayloadBytes),
-        pixels,
-    )
-}
-
-/// The pixels of `drawing` encoded once, on a renderer of its own.
+/// The pixels of `drawing` recorded once, on a device of its own.
 fn fresh(drawing: &Drawing) -> Option<Pixels> {
-    let mut harness = harness(Which::Vello)?;
-    let mut scene = Scene::new();
-    encode(&mut scene, drawing, &CachedMarks::new(), 1, None);
-    Some(draw(&mut harness.renderer, &mut scene).1)
+    let mut gpu = Gpu::open(SIDE as u32)?;
+    Some(Arc::unwrap_or_clone(
+        drawn(&mut gpu, drawing, &CachedMarks::new()).pixels,
+    ))
 }
 
-/// Draws `canvas` at `views[0]`, then pans it to each later view with one cache and one renderer,
-/// and returns the payload bytes and pixels of the last frame.
+/// Draws `canvas` at `views[0]`, then pans it to each later view with one cache and one device.
+///
+/// Returns whether the last frame recorded the payloads of the frame before, its pixels and its
+/// drawing.
 fn panned(
     canvas: &mut CanvasScene,
     fit: Affine,
     views: &[Affine],
-) -> Option<(u64, Pixels, Drawing)> {
-    let mut harness = harness(Which::Vello)?;
+) -> Option<(bool, Pixels, Drawing)> {
+    let mut gpu = Gpu::open(SIDE as u32)?;
     let masks = CachedMarks::new();
-    let mut scene = Scene::new();
+    let mut before = Vec::new();
     let mut last = None;
-    for (at, &view) in views.iter().enumerate() {
+    for &view in views {
         canvas.set_transform(view);
         let drawing = Drawing::canvas(canvas, fit);
-        let revision = at as u64 + 1;
-        encode(
-            &mut scene,
-            &drawing,
-            &masks,
-            revision,
-            (revision > 1).then(|| revision - 1),
-        );
-        let (bytes, pixels) = draw(&mut harness.renderer, &mut scene);
+        let recorded = payloads(&drawing, &masks);
+        let pixels = drawn(&mut gpu, &drawing, &masks).pixels;
         masks.end_frame();
-        last = Some((bytes, pixels, drawing));
+        last = Some((same_payloads(&before, &recorded), pixels, drawing));
+        before = recorded;
     }
-    last
+    last.map(|(same, pixels, drawing)| (same, Arc::unwrap_or_clone(pixels), drawing))
 }
 
 /// Points scattered over `0..1`, many of them overlapping at radius 3 on 100 pixels.
@@ -140,7 +85,7 @@ fn scatter(count: usize) -> Arc<[[f32; 2]]> {
 }
 
 #[test]
-fn a_panned_series_draws_as_a_fresh_encoding_and_uploads_no_payload() {
+fn a_panned_series_draws_as_a_fresh_recording_and_records_its_payloads_once() {
     let series = Series::Points {
         data: scatter(400),
         to_canvas: Affine::new([100.0, 0.0, 0.0, -100.0, 14.0, 114.0]),
@@ -150,14 +95,12 @@ fn a_panned_series_draws_as_a_fresh_encoding_and_uploads_no_payload() {
     };
     let mut scene = canvas(vec![series], Vec::new(), Affine::IDENTITY);
     let pan = Affine::translate((13.25, -7.5));
-    let Some((bytes, pixels, drawing)) =
+    let Some((same, pixels, drawing)) =
         panned(&mut scene, Affine::IDENTITY, &[Affine::IDENTITY, pan])
     else {
         return;
     };
-    if zgui_profile::COUNTERS_ENABLED {
-        assert_eq!(bytes, 0, "the pan uploads no payload");
-    }
+    assert!(same, "the pan records the payloads it recorded before");
     let Some(expected) = fresh(&drawing) else {
         return;
     };
@@ -331,28 +274,20 @@ fn polyline_shape(points: &[kurbo::Point], style: kurbo::Stroke) -> Option<Pixel
         }),
         clips: Vec::new(),
     };
-    let mut harness = harness(Which::Vello)?;
-    let mut scene = support::scene();
-    quad(
-        &mut scene,
-        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
-        opaque(0, 0, 0),
-    );
-    draw_with_masks(
-        &mut scene,
-        VectorId(1),
+    let mut gpu = Gpu::open(SIDE as u32)?;
+    let drawn = picture(
+        &mut gpu,
         &[shape],
-        PAINT,
-        &MarksOnly,
-        PLACEMENT,
+        Some(Route::Marks),
+        zgui_geom::Affine2::IDENTITY,
     );
     assert_eq!(
-        scene.primitives.marks.len(),
+        drawn.drawing.of_kind("marks").count(),
         1,
-        "the shape takes the marks route"
+        "the shape takes the marks route: {}",
+        drawn.drawing
     );
-    scene.finish(&DamageSet::full());
-    Some(present(&mut harness.renderer, &scene))
+    Some(Arc::unwrap_or_clone(drawn.pixels))
 }
 
 /// The summed coverage of the pixels whose centres lie within `radius` of `centre`.
@@ -466,19 +401,17 @@ fn overlapping() -> Shape {
 }
 
 #[test]
-fn a_panned_shape_scene_uploads_no_payload() {
+fn a_panned_shape_scene_records_its_payloads_once() {
     let mut scene = canvas(Vec::new(), vec![overlapping()], Affine::IDENTITY);
     let pan = Affine::translate((-9.0, 5.25));
-    let Some((bytes, pixels, drawing)) = panned(
+    let Some((same, pixels, drawing)) = panned(
         &mut scene,
         Affine::IDENTITY,
         &[Affine::IDENTITY, Affine::translate((-4.0, 2.0)), pan],
     ) else {
         return;
     };
-    if zgui_profile::COUNTERS_ENABLED {
-        assert_eq!(bytes, 0, "the pan uploads no payload");
-    }
+    assert!(same, "the pan records the payloads it recorded before");
     let Some(expected) = fresh(&drawing) else {
         return;
     };
@@ -530,30 +463,22 @@ fn marks_through_a_fit_draw_as_the_placed_shapes() {
         .iter()
         .map(|shape| zgui_svg::document::place::shape(shape, fit))
         .collect();
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
-    let mut scene = support::scene();
-    quad(
-        &mut scene,
-        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
-        opaque(0, 0, 0),
-    );
-    draw_with_masks(
-        &mut scene,
-        VectorId(1),
+    let placed = picture(
+        &mut gpu,
         &placed,
-        PAINT,
-        &MarksOnly,
-        PLACEMENT,
+        Some(Route::Marks),
+        zgui_geom::Affine2::IDENTITY,
     );
     assert_eq!(
-        scene.primitives.marks.len(),
+        placed.drawing.of_kind("marks").count(),
         3,
-        "every shape takes the marks route"
+        "every shape takes the marks route: {}",
+        placed.drawing
     );
-    scene.finish(&DamageSet::full());
-    let expected = present(&mut harness.renderer, &scene);
+    let expected = &placed.pixels;
     assert!(
         through.max_difference(&expected) <= 1,
         "marks through the fit differ by {}",
@@ -581,24 +506,15 @@ fn walk(count: usize) -> Arc<[[f32; 2]]> {
 }
 
 /// Draws `canvas` at its own view, then at `far` while its builds run, then at `far` once they
-/// end, with one cache and one renderer, and returns the last frame and its drawing.
+/// end, with one cache and one device, and returns the last frame and its drawing.
 fn settled(canvas: &mut CanvasScene, far: Affine) -> Option<(Pixels, Drawing)> {
-    let mut harness = harness(Which::Vello)?;
+    let mut gpu = Gpu::open(SIDE as u32)?;
     let masks = CachedMarks::new();
-    let mut scene = Scene::new();
-    let mut revision = 0;
     let mut frame = |canvas: &CanvasScene, masks: &CachedMarks| {
-        revision += 1;
         let drawing = Drawing::canvas(canvas, Affine::IDENTITY);
-        encode(
-            &mut scene,
-            &drawing,
-            masks,
-            revision,
-            (revision > 1).then(|| revision - 1),
-        );
+        zgui_profile::counter::reset();
+        let pixels = drawn(&mut gpu, &drawing, masks).pixels;
         let standing = zgui_profile::counter::get(Counter::SeriesDrawsProvisional);
-        let pixels = draw(&mut harness.renderer, &mut scene).1;
         masks.end_frame();
         (pixels, standing, drawing)
     };
@@ -616,11 +532,11 @@ fn settled(canvas: &mut CanvasScene, far: Affine) -> Option<(Pixels, Drawing)> {
     if zgui_profile::COUNTERS_ENABLED {
         assert_eq!(standing, 0, "the built payloads stand");
     }
-    Some((pixels, drawing))
+    Some((Arc::unwrap_or_clone(pixels), drawing))
 }
 
 #[test]
-fn a_far_zoom_settles_to_a_fresh_encoding() {
+fn a_far_zoom_settles_to_a_fresh_recording() {
     // Past the size a frame builds: 2 000 000 line points and 100 000 discs over x in 0..1.
     let line = Series::Line {
         data: walk(2_000_000),
@@ -669,7 +585,7 @@ const PLOT: Affine = Affine::new([120.0, 0.0, 0.0, -100.0, 4.0, 114.0]);
 
 /// A black surface `side` square holding `data` stroked `width` wide through `plot` as one shape
 /// on the general route.
-fn general_line(data: &[[f32; 2]], plot: Affine, width: f64, side: i32) -> Scene {
+fn general_line(data: &[[f32; 2]], plot: Affine, width: f64) -> Shape {
     let mut path = BezPath::new();
     for (index, &[x, y]) in data.iter().enumerate() {
         let point = plot * kurbo::Point::new(f64::from(x), f64::from(y));
@@ -679,7 +595,7 @@ fn general_line(data: &[[f32; 2]], plot: Affine, width: f64, side: i32) -> Scene
             path.line_to(point);
         }
     }
-    let shape = Shape {
+    Shape {
         path: Arc::new(path),
         fill: None,
         stroke: Some(Stroke {
@@ -687,23 +603,7 @@ fn general_line(data: &[[f32; 2]], plot: Affine, width: f64, side: i32) -> Scene
             style: kurbo::Stroke::new(width),
         }),
         clips: Vec::new(),
-    };
-    let mut scene = support::scene_at(side);
-    quad(
-        &mut scene,
-        rect(0.0, 0.0, side as f32, side as f32),
-        opaque(0, 0, 0),
-    );
-    draw_with_masks(
-        &mut scene,
-        VectorId(1),
-        &[shape],
-        PAINT,
-        &zgui_paint::content::NoVectorMasks,
-        PLACEMENT,
-    );
-    scene.finish(&DamageSet::full());
-    scene
+    }
 }
 
 /// How many samples the true coverage takes along each side of a pixel.
@@ -867,17 +767,7 @@ fn lines(data: &Arc<[[f32; 2]]>) -> Option<(Vec<u8>, Vec<u8>, Vec<u8>)> {
     let mut reduced = CanvasScene::default();
     reduced.push_series_lod(line(), zgui_canvas::Lod::Columns);
     let reduced = Drawing::canvas(&reduced, Affine::IDENTITY);
-    let mut scene = Scene::new();
-    scene.begin_frame(Size::new(SIDE, SIDE));
-    draw_drawing(
-        &mut scene,
-        VectorId(1),
-        &reduced,
-        PAINT,
-        &CachedMarks::new(),
-        PLACEMENT,
-    );
-    let vertices = scene.primitives.marks[0].vertices;
+    let vertices = recording(&reduced, &CachedMarks::new()).marks()[0].vertices;
     // 120 device columns a unit is a bucket of 256 columns.
     assert!(
         vertices <= 4 * 257 + 2,
@@ -949,30 +839,23 @@ fn wide_lines(data: &Arc<[[f32; 2]]>, width: f64) -> Option<(Vec<u8>, Vec<u8>)> 
         brush: white(),
     });
     let drawing = Drawing::canvas(&canvas, Affine::IDENTITY);
-    let mut scene = support::scene_at(WIDE);
-    quad(
-        &mut scene,
-        rect(0.0, 0.0, WIDE as f32, WIDE as f32),
-        opaque(0, 0, 0),
-    );
-    draw_drawing(
-        &mut scene,
-        VectorId(1),
-        &drawing,
-        PAINT,
-        &CachedMarks::new(),
-        PLACEMENT,
-    );
-    assert!(scene.primitives.vectors.is_empty(), "the line is a mark");
+    let mut gpu = Gpu::open(WIDE as u32)?;
+    let marks = drawn(&mut gpu, &drawing, &CachedMarks::new());
+    let lines: Vec<_> = marks.drawing.of_kind("marks").collect();
     assert!(
-        scene.primitives.marks[0].is_union(),
-        "the line overlaps itself"
+        marks.drawing.of_kind("path").count() == 0 && !lines.is_empty(),
+        "the line is a mark: {}",
+        marks.drawing
     );
-    scene.finish(&DamageSet::full());
-    let general = general_line(data, WIDE_PLOT, width, WIDE);
-    let mut harness = support::harness_at(WIDE, Which::Vello)?;
-    let marks = present(&mut harness.renderer, &scene);
-    let general = present(&mut harness.renderer, &general);
+    assert!(lines[0].has("union"), "the line overlaps itself");
+    let general = [general_line(data, WIDE_PLOT, width)];
+    let general = picture(
+        &mut gpu,
+        &framed(&general),
+        None,
+        zgui_geom::Affine2::IDENTITY,
+    );
+    let (marks, general) = (marks.pixels, general.pixels);
     Some((levels(&marks), levels(&general)))
 }
 
@@ -1002,15 +885,14 @@ fn a_dense_line_draws_as_the_true_line() {
     }
 }
 
-/// The pixels of `drawing` encoded once through `masks`, on a renderer of its own, and how many
-/// series chunks the encoding left out.
+/// The pixels of `drawing` recorded once through `masks`, on a device of its own, and how many
+/// series chunks the recording left out.
 fn drawn_through(drawing: &Drawing, masks: &CachedMarks) -> Option<(Pixels, u64)> {
-    let mut harness = harness(Which::Vello)?;
-    let mut scene = Scene::new();
+    let mut gpu = Gpu::open(SIDE as u32)?;
     zgui_profile::counter::reset();
-    encode(&mut scene, drawing, masks, 1, None);
+    let pixels = drawn(&mut gpu, drawing, masks).pixels;
     let culled = zgui_profile::counter::get(Counter::SeriesChunksCulled);
-    Some((draw(&mut harness.renderer, &mut scene).1, culled))
+    Some((Arc::unwrap_or_clone(pixels), culled))
 }
 
 #[test]
@@ -1055,5 +937,6 @@ fn a_deep_zoom_draws_the_chunks_it_shows_as_the_whole_series_draws() {
         assert_eq!(kept, 0, "the reference draws every chunk");
     }
     assert!(coverage(&pixels) > 300.0, "the series draw");
-    assert_eq!(pixels.max_difference(&expected), 0);
+    // One level of rounding at a few pixels: the compositor bins a union of more marks otherwise.
+    assert!(pixels.max_difference(&expected) <= 1);
 }

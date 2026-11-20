@@ -56,9 +56,7 @@ impl Budgeted for GlyphAtlasBudget<'_> {
                 .saturating_sub(self.content.layer_bytes()),
             // The tiles a live record holds. A replayed range draws from these and looks none of
             // them up, so this — not the frame's lookups — is what says they are still on screen.
-            pinned: atlas
-                .referenced_bytes
-                .saturating_sub(self.content.layer_held_bytes()),
+            pinned: atlas.referenced_bytes,
             last_used: self.tracked.last_used(),
             // A rasteriser over a face already loaded, plus an upload.
             rebuild_cost: rebuild::RECOMPUTED,

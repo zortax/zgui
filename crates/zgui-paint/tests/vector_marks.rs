@@ -1,4 +1,4 @@
-//! Marks against the general route and the true coverage, on a real device.
+//! Marks against the general route and the true coverage, drawn by the compositor on a device.
 //!
 //! One list of shapes is drawn through the marks route and through the general route, by the path
 //! renderer. See [`support::conformance`] for the rule. Two more tests check what only a union
@@ -15,8 +15,8 @@ use zgui_scene::kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
 use zgui_scene::peniko;
 use zgui_svg::{Fill, Ink, Paint, Shape, Stroke};
 
-use support::conformance::{self, Route, scene_of};
-use support::{Which, harness, opaque, present};
+use support::conformance::{self, Route, SIDE, opaque, picture};
+use support::gpu::Gpu;
 
 /// A solid paint.
 fn solid(color: Color) -> Paint {
@@ -185,16 +185,17 @@ fn marks_under_a_non_uniform_scale_match_the_true_coverage() {
 
 #[test]
 fn a_translucent_overlap_paints_alpha_once() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     let shapes = [filled(
         circles(&[(50.0, 64.0, 24.0), (78.0, 64.0, 24.0)]),
         white(0.5),
     )];
-    let scene = scene_of(&shapes, Some(Route::Marks), Affine2::IDENTITY);
-    assert!(scene.primitives.marks[0].is_union());
-    let pixels = present(&mut harness.renderer, &scene);
+    let drawn = picture(&mut gpu, &shapes, Some(Route::Marks), Affine2::IDENTITY);
+    let marks: Vec<_> = drawn.drawing.of_kind("marks").collect();
+    assert!(marks[0].has("union"), "{}", drawn.drawing);
+    let pixels = &drawn.pixels;
     let single = pixels.rgba(40, 64)[0];
     let overlap = pixels.rgba(64, 64)[0];
     println!("translucent overlap: one disc {single}, both discs {overlap}");
@@ -210,7 +211,7 @@ fn a_translucent_overlap_paints_alpha_once() {
 
 #[test]
 fn abutting_boxes_leave_no_seam() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     let mut path = kurbo::Rect::new(0.0, 20.0, 10.5, 100.0).to_path(0.1);
@@ -222,9 +223,10 @@ fn abutting_boxes_leave_no_seam() {
             .copied(),
     );
     let shapes = [filled(path, opaque(255, 255, 255))];
-    let scene = scene_of(&shapes, Some(Route::Marks), Affine2::IDENTITY);
-    assert!(scene.primitives.marks[0].is_union());
-    let pixels = present(&mut harness.renderer, &scene);
+    let drawn = picture(&mut gpu, &shapes, Some(Route::Marks), Affine2::IDENTITY);
+    let marks: Vec<_> = drawn.drawing.of_kind("marks").collect();
+    assert!(marks[0].has("union"), "{}", drawn.drawing);
+    let pixels = &drawn.pixels;
     for y in [30, 60, 90] {
         let interior = pixels.rgba(5, y)[0];
         let seam = pixels.rgba(10, y)[0];
@@ -273,10 +275,10 @@ fn hairline_rings(width: f64) -> Vec<Shape> {
 }
 
 /// The coverage a picture of white on black holds, in pixels.
-fn coverage(pixels: &zgui_render_wgpu::Pixels) -> f64 {
+fn coverage(pixels: &zgui_testkit_compositor::Pixels) -> f64 {
     let mut sum = 0u64;
-    for y in 0..support::SIDE {
-        for x in 0..support::SIDE {
+    for y in 0..SIDE {
+        for x in 0..SIDE {
             sum += u64::from(pixels.rgba(x, y)[0]);
         }
     }
@@ -285,7 +287,7 @@ fn coverage(pixels: &zgui_render_wgpu::Pixels) -> f64 {
 
 #[test]
 fn hairlines_cover_their_width() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     for width in [0.25, 0.5] {
@@ -293,18 +295,18 @@ fn hairlines_cover_their_width() {
             ("polylines", hairline_polylines(width)),
             ("rings", hairline_rings(width)),
         ] {
-            let quick = scene_of(&shapes, Some(Route::Marks), Affine2::IDENTITY);
+            let quick = picture(&mut gpu, &shapes, Some(Route::Marks), Affine2::IDENTITY);
             assert!(
-                quick.primitives.vectors.is_empty() && !quick.primitives.marks.is_empty(),
-                "{name} {width}: a shape left the marks route"
+                quick.drawing.of_kind("path").count() == 0
+                    && quick.drawing.of_kind("mono").count() == 0
+                    && quick.drawing.of_kind("marks").count() > 0,
+                "{name} {width}: a shape left the marks route: {}",
+                quick.drawing
             );
-            let exact = scene_of(
-                &conformance::precise(&shapes, Affine2::IDENTITY),
-                None,
-                Affine2::IDENTITY,
-            );
-            let by_marks = coverage(&present(&mut harness.renderer, &quick));
-            let by_lines = coverage(&present(&mut harness.renderer, &exact));
+            let exact = conformance::framed(&conformance::precise(&shapes, Affine2::IDENTITY));
+            let exact = picture(&mut gpu, &exact, None, Affine2::IDENTITY);
+            let by_marks = coverage(&quick.pixels);
+            let by_lines = coverage(&exact.pixels);
             println!(
                 "{name} {width}: marks cover {by_marks:.1} pixels, the true coverage {by_lines:.1}"
             );

@@ -1,17 +1,22 @@
-//! Drawings reaching the display list through the emit walk.
+//! Drawings reaching the compositor through the emit walk.
 //!
 //! Every assertion here goes through [`Painter::emit`](zgui_paint::Painter::emit) over a real box
-//! tree, a real layout pass and real fragments, and reads the result out of a renderer rather than
-//! out of the scene the test filled. That is the whole point: a drawing that only reaches the
-//! display list when a test calls the emitter itself is a drawing an application cannot draw, and
-//! an assertion made by calling the emitter is an assertion that cannot tell the difference.
+//! tree, a real layout pass and real fragments, and reads the result out of a compositor frame
+//! rather than out of the scene the test filled. That is the whole point: a drawing that only
+//! reaches the compositor when a test calls the emitter itself is a drawing an application cannot
+//! draw, and an assertion made by calling the emitter is an assertion that cannot tell the
+//! difference.
+//!
+//! The compositor draws a small path with solid paints as mono masks and any other as a path, so
+//! a shape is either kind of instance.
 
 mod support;
 
 use zgui_atlas::AtlasLimits;
-use zgui_bits::DamageSet;
 use zgui_paint::VectorCache;
+use zgui_paint::emit::record::Recording;
 use zgui_scene::Scene;
+use zgui_testkit_compositor::{Drawing, Instance};
 use zgui_vocab::{PropKey, PropValue, prop::drawing};
 
 use support::{Element, Harness};
@@ -30,58 +35,102 @@ fn tree() -> Element {
     ])
 }
 
-#[test]
-fn an_eligible_drawing_uses_one_tinted_mask_and_no_vector_item() {
-    let mut harness = Harness::new(tree(), CSS);
-    let vectors = VectorCache::new();
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let report = harness.paint_cached_vectors(&vectors, &mut content);
+/// Paints one frame through a content cache, so the shapes take the routes a window gives them.
+fn paint_cached(harness: &mut Harness) -> zgui_paint::PaintReport {
+    harness.paint_cached_vectors(
+        &VectorCache::new(),
+        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
+        &zgui_testkit_scene::MonoRaster::new(),
+    )
+}
 
-    assert!(harness.scene().primitives.vectors.is_empty());
-    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
-    assert_eq!(content.report().tiles, 1);
+/// The mono masks and paths of `drawing`, in draw order.
+fn shapes(drawing: &Drawing) -> Vec<&Instance> {
+    drawing
+        .instances()
+        .iter()
+        .filter(|instance| matches!(instance.kind(), "mono" | "path"))
+        .collect()
+}
+
+/// The colour a mono mask or a path fills with.
+fn color(shape: &Instance) -> Option<[f32; 4]> {
+    shape.color("paint").or_else(|| shape.color("fill"))
+}
+
+/// Whether two colours are within one eight-bit step of each other.
+fn near(found: Option<[f32; 4]>, wanted: [f32; 4]) -> bool {
+    found.is_some_and(|found| {
+        found
+            .iter()
+            .zip(wanted)
+            .all(|(found, wanted)| (found - wanted).abs() <= 1.0 / 255.0)
+    })
+}
+
+/// Records the drawing of the element `mark` in a chunk of its own, on the general route, with
+/// the paint its style gives it.
+fn recorded(harness: &Harness, cache: &VectorCache) -> Recording {
+    let fragment = harness
+        .store()
+        .fragment(harness.fragment_of("mark"))
+        .expect("the drawing produced a fragment");
+    let node = harness.document().store().key_of(harness.element("mark"));
+    let drawing = zgui_paint::VectorSource::drawing(
+        &cache.frame(harness.document()),
+        node,
+        zgui_paint::content::vectors::Placement {
+            content_box: fragment.content_box(),
+            scale: 1.0,
+        },
+    )
+    .expect("the element draws");
+    let style = &harness.store().node(fragment.box_).style;
+    let mut scene = Scene::new();
+    scene.begin_frame(zgui_geom::Size::new(200, 100));
+    let mut recording = Recording::new();
+    let mut rec = recording.recorder(
+        &mut scene,
+        zgui_scene::SpatialId::VIEWPORT,
+        zgui_scene::ClipId::ROOT,
+    );
+    zgui_paint::emit::vector::draw_drawing(
+        &mut rec,
+        zgui_scene::VectorId(1),
+        &drawing,
+        zgui_paint::emit::vector::shape_paint(style, 1.0),
+        &zgui_paint::content::NoVectorMasks,
+        zgui_paint::emit::vector::VectorPlacement {
+            clip: zgui_scene::ClipId::ROOT,
+            transform: zgui_scene::SpatialId::VIEWPORT,
+            scale: 1.0,
+        },
+    );
+    recording
+}
+
+#[test]
+fn an_eligible_drawing_is_one_path_the_compositor_draws_as_one_mask() {
+    let mut harness = Harness::new(tree(), CSS);
+    let report = paint_cached(&mut harness);
+
     assert_eq!(report.vector_routes.len(), 1);
     assert!(
         report.vector_routes[0]
             .routes
-            .contains(zgui_paint::VectorRoute::AtlasMask)
-    );
-    assert!(
-        !report.vector_routes[0]
-            .routes
             .contains(zgui_paint::VectorRoute::GeneralRaster)
     );
+    let drawing = harness.redraw();
+    let shapes = shapes(&drawing);
+    let [mask] = shapes[..] else {
+        panic!("{drawing}");
+    };
+    assert_eq!(mask.kind(), "mono", "{drawing}");
+    assert!(near(color(mask), [0.0, 0.502, 1.0, 1.0]), "{drawing}");
 }
 
 #[test]
-fn recolouring_reuses_a_mask_but_different_geometry_allocates_another() {
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-
-    let mut blue = Harness::new(tree(), CSS);
-    blue.paint_cached_vectors(&VectorCache::new(), &mut content);
-    let blue_color = blue.scene().primitives.mono_sprites[0].color;
-    assert_eq!(content.report().tiles, 1);
-
-    let red_css = "root { display: block; width: 200px; height: 100px }
-                   mark { display: block; width: 48px; height: 48px; color: red }";
-    let mut red = Harness::new(tree(), red_css);
-    red.paint_cached_vectors(&VectorCache::new(), &mut content);
-    assert_ne!(red.scene().primitives.mono_sprites[0].color, blue_color);
-    assert_eq!(content.report().tiles, 1, "tint is not a mask key");
-
-    let small_css = "root { display: block; width: 200px; height: 100px }
-                     mark { display: block; width: 16px; height: 16px; color: red }";
-    let mut small = Harness::new(tree(), small_css);
-    small.paint_cached_vectors(&VectorCache::new(), &mut content);
-    assert_eq!(
-        content.report().tiles,
-        2,
-        "different geometry gets new coverage"
-    );
-}
-
-#[test]
-fn an_eligible_canvas_fill_uses_the_same_mask_route() {
+fn an_eligible_canvas_fill_is_one_mask_as_well() {
     let handle = zgui_canvas::SceneHandle::new();
     handle.edit(|scene| {
         let path = zgui_scene::kurbo::BezPath::from_svg(TRIANGLE).unwrap();
@@ -93,21 +142,20 @@ fn an_eligible_canvas_fill_uses_the_same_mask_route() {
     });
     let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
     let mut harness = Harness::new(tree, CSS);
-    let vectors = VectorCache::new();
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let report = harness.paint_cached_vectors(&vectors, &mut content);
+    let report = paint_cached(&mut harness);
 
-    assert!(harness.scene().primitives.vectors.is_empty());
-    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
     assert!(
         report.vector_routes[0]
             .routes
-            .contains(zgui_paint::VectorRoute::AtlasMask)
+            .contains(zgui_paint::VectorRoute::GeneralRaster)
     );
+    let drawing = harness.redraw();
+    assert_eq!(drawing.of_kind("mono").count(), 1, "{drawing}");
+    assert_eq!(drawing.of_kind("path").count(), 0, "{drawing}");
 }
 
 #[test]
-fn a_small_solid_canvas_stroke_uses_a_mask_instead_of_the_vector_rasteriser() {
+fn a_small_solid_canvas_stroke_is_one_mask() {
     let handle = zgui_canvas::SceneHandle::new();
     handle.edit(|scene| {
         // A curve, because a straight one is a quad on the analytic route or a mark.
@@ -122,13 +170,11 @@ fn a_small_solid_canvas_stroke_uses_a_mask_instead_of_the_vector_rasteriser() {
     });
     let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
     let mut harness = Harness::new(tree, CSS);
-    let vectors = VectorCache::new();
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    harness.paint_cached_vectors(&vectors, &mut content);
+    paint_cached(&mut harness);
 
-    assert!(harness.scene().primitives.vectors.is_empty());
-    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
-    assert_eq!(content.report().tiles, 1);
+    let drawing = harness.redraw();
+    assert_eq!(drawing.of_kind("mono").count(), 1, "{drawing}");
+    assert_eq!(drawing.of_kind("path").count(), 0, "{drawing}");
 }
 
 #[test]
@@ -138,68 +184,49 @@ fn a_transparent_fill_does_not_disqualify_a_small_solid_css_stroke() {
                       --zgui-fill: transparent; --zgui-stroke: currentColor;
                       --zgui-stroke-width: 2px }";
     let mut harness = Harness::new(tree(), css);
-    let vectors = VectorCache::new();
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    harness.paint_cached_vectors(&vectors, &mut content);
+    paint_cached(&mut harness);
 
-    assert!(harness.scene().primitives.vectors.is_empty());
-    assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
+    let drawing = harness.redraw();
+    assert_eq!(drawing.of_kind("mono").count(), 1, "{drawing}");
+    assert_eq!(drawing.of_kind("path").count(), 0, "{drawing}");
 }
 
-/// A shape carrying both a fill and a stroke is two sprites, which is what it was all along.
-///
-/// The general rasteriser makes two items of it too — the stroke composited over the fill — so two
-/// tinted masks in the same order draw the same picture from the atlas. Each is measured against
-/// its own ink, because a stroke puts ink outside the interior it follows.
+/// A shape carrying both a fill and a stroke is one path, which the compositor draws as two
+/// masks, the stroke over the fill. Each mask is measured against its own ink, because a stroke
+/// puts ink outside the interior it follows.
 #[test]
-fn a_shape_with_a_fill_and_a_stroke_is_two_sprites_and_no_vector_item() {
+fn a_shape_with_a_fill_and_a_stroke_is_one_path_and_two_masks() {
     let css = "root { display: block; width: 200px; height: 100px }
                mark { display: block; width: 48px; height: 48px;
                       --zgui-fill: rgb(0, 128, 255); --zgui-stroke: rgb(255, 0, 0);
                       --zgui-stroke-width: 2px }";
     let mut harness = Harness::new(tree(), css);
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let report = harness.paint_cached_vectors(&VectorCache::new(), &mut content);
+    let report = paint_cached(&mut harness);
 
     assert!(
         report.vector_routes[0]
             .routes
-            .contains(zgui_paint::VectorRoute::AtlasMask)
-    );
-    assert!(
-        !report.vector_routes[0]
-            .routes
             .contains(zgui_paint::VectorRoute::GeneralRaster)
     );
-    assert!(harness.scene().primitives.vectors.is_empty());
-
-    let sprites = &harness.scene().primitives.mono_sprites;
-    assert_eq!(sprites.len(), 2);
-    assert_eq!(content.report().tiles, 2, "the two parts are two rasters");
-    let (fill, stroke) = (sprites[0], sprites[1]);
-    assert!(
-        stroke.order > fill.order,
-        "the stroke did not composite over the fill"
+    assert_eq!(
+        harness.compositor.commit.chunks_recorded, 2,
+        "the root and the drawing"
     );
+    let drawing = harness.redraw();
+    let shapes = shapes(&drawing);
+    let [fill, stroke] = shapes[..] else {
+        panic!("{drawing}");
+    };
+    assert!(near(color(fill), [0.0, 0.502, 1.0, 1.0]), "{drawing}");
     assert!(
-        stroke.ink().left() < fill.ink().left() && stroke.ink().right() > fill.ink().right(),
-        "the stroke was measured against the interior it follows rather than its own ink"
+        near(color(stroke), [1.0, 0.0, 0.0, 1.0]),
+        "the stroke draws over the fill: {drawing}"
     );
-}
-
-/// Every line the renderer was handed for a vector item.
-fn shapes(scene: &Scene) -> Vec<String> {
-    let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-    zgui_render::Renderer::draw(&mut renderer, scene, &DamageSet::full());
-    renderer
-        .transcript()
-        .expect("a frame was drawn")
-        .to_string()
-        .lines()
-        .map(str::trim)
-        .filter(|line| line.starts_with("vector order="))
-        .map(str::to_owned)
-        .collect()
+    let (fill, stroke) = (fill.bounds(), stroke.bounds());
+    assert!(
+        stroke[0] < fill[0] && stroke[0] + stroke[2] > fill[0] + fill[2],
+        "the stroke was measured against its own ink: {drawing}"
+    );
 }
 
 /// The whole defect, stated as one test: an element carrying outlines has to reach a rasteriser.
@@ -223,12 +250,12 @@ fn an_element_carrying_outlines_reaches_a_rasteriser_through_the_emit_walk() {
             .routes
             .contains(zgui_paint::VectorRoute::GeneralRaster)
     );
-    let shapes = shapes(harness.scene());
-    assert_eq!(shapes.len(), 1, "one outline is one shape: {shapes:?}");
+    let drawing = harness.redraw();
+    let shapes = shapes(&drawing);
+    assert_eq!(shapes.len(), 1, "one outline is one shape: {drawing}");
     assert!(
-        shapes[0].contains("fill=solid srgb(0, 0.502, 1, 1)"),
-        "the fill is the element's own computed colour: {}",
-        shapes[0]
+        near(color(shapes[0]), [0.0, 0.502, 1.0, 1.0]),
+        "the fill is the element's own computed colour: {drawing}"
     );
 }
 
@@ -268,21 +295,20 @@ fn a_canvas_scene_reaches_a_rasteriser_with_its_own_paints() {
     let report = harness.paint_vectors(&cache);
 
     assert!(report.primitives > 0, "the canvas emitted nothing");
-    let shapes = shapes(harness.scene());
+    let drawing = harness.redraw();
+    let shapes = shapes(&drawing);
     assert_eq!(
         shapes.len(),
         2,
-        "one filled shape and one stroked shape: {shapes:?}"
+        "one filled shape and one stroked shape: {drawing}"
     );
     assert!(
-        shapes[0].contains("fill=solid srgb(1, 0, 0, 1)"),
-        "the first shape keeps its own red, not the element's colour: {}",
-        shapes[0]
+        near(color(shapes[0]), [1.0, 0.0, 0.0, 1.0]),
+        "the first shape keeps its own red, not the element's colour: {drawing}"
     );
     assert!(
-        shapes[1].contains("srgb(0, 0.502, 1, 1)"),
-        "the inherited brush resolves to the element's computed colour: {}",
-        shapes[1]
+        near(color(shapes[1]), [0.0, 0.502, 1.0, 1.0]),
+        "the inherited brush resolves to the element's computed colour: {drawing}"
     );
 }
 
@@ -295,20 +321,30 @@ fn a_drawing_is_fitted_to_the_box_its_style_gave_it() {
     let mut harness = Harness::new(tree(), small);
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
-    let item = &harness.scene().primitives.vectors[0];
-    let bounds = item.placed_bounds();
+    let bounds = recorded_bounds(&harness, &cache);
     assert_eq!(
         (bounds.width(), bounds.height()),
         (16.0, 16.0),
         "a twenty-four unit outline in a sixteen pixel box is drawn sixteen pixels across"
     );
+    assert_eq!(shapes(&harness.redraw()).len(), 1);
 
     let mut harness = Harness::new(tree(), CSS);
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
-    let item = &harness.scene().primitives.vectors[0];
-    let bounds = item.placed_bounds();
+    let bounds = recorded_bounds(&harness, &cache);
     assert_eq!((bounds.width(), bounds.height()), (48.0, 48.0));
+}
+
+/// The bounds of the one path the drawing of `mark` records, placed in the fragment's space.
+fn recorded_bounds(harness: &Harness, cache: &VectorCache) -> zgui_scene::kurbo::Rect {
+    use zgui_scene::kurbo::Shape as _;
+
+    let recording = recorded(harness, cache);
+    let [item] = recording.paths() else {
+        panic!("{} paths", recording.paths().len());
+    };
+    (item.placement * item.path.as_ref().clone()).bounding_box()
 }
 
 /// The geometry is placed where the box is, not at the origin the outline was written at.
@@ -325,10 +361,13 @@ fn a_drawing_is_placed_at_its_own_boxs_content_box() {
         .fragment(harness.fragment_of("mark"))
         .expect("the drawing produced a fragment")
         .content_box();
-    let item = &harness.scene().primitives.vectors[0];
-    let bounds = item.placed_bounds();
-    assert_eq!(bounds.x0 as f32, content_box.origin.x.0);
-    assert_eq!(bounds.y0 as f32, content_box.origin.y.0);
+    let drawing = harness.redraw();
+    let [mask] = shapes(&drawing)[..] else {
+        panic!("{drawing}");
+    };
+    let bounds = mask.bounds();
+    assert_eq!(bounds[0], content_box.origin.x.0, "{drawing}");
+    assert_eq!(bounds[1], content_box.origin.y.0, "{drawing}");
 }
 
 /// The general route draws the drawing's own source path, with the fit as the item's placement.
@@ -352,7 +391,8 @@ fn a_general_shape_draws_its_source_path_under_the_fit() {
         },
     )
     .expect("the element draws");
-    let item = &harness.scene().primitives.vectors[0];
+    let recording = recorded(&harness, &cache);
+    let item = &recording.paths()[0];
     assert!(
         std::sync::Arc::ptr_eq(&item.path, &drawing.shapes[0].path),
         "the item draws the source path, not a placed copy"
@@ -371,15 +411,15 @@ fn an_inherited_stroke_keeps_its_device_width_under_a_fit() {
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
 
-    let item = harness
-        .scene()
-        .primitives
-        .vectors
+    let recording = recorded(&harness, &cache);
+    let item = recording
+        .paths()
         .iter()
         .find(|item| item.stroke.is_some())
         .expect("a stroked item");
-    assert_eq!(item.placed_scale(), 2.0, "a 24 unit drawing in a 48 px box");
-    let width = item.stroke.as_ref().expect("a stroke").style.width * item.placed_scale();
+    let scale = item.placement.determinant().abs().sqrt();
+    assert_eq!(scale, 2.0, "a 24 unit drawing in a 48 px box");
+    let width = item.stroke.as_ref().expect("a stroke").style.width * scale;
     assert!(
         (width - 3.0).abs() < 1.0e-9,
         "the stroke is {width} px wide on the device"
@@ -397,21 +437,27 @@ fn the_fill_and_stroke_custom_properties_reach_the_display_list() {
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
 
-    let shapes = shapes(harness.scene());
+    let drawing = harness.redraw();
+    let shapes = shapes(&drawing);
     assert_eq!(
         shapes.len(),
         2,
-        "one filled item and one stroked: {shapes:?}"
+        "one filled mask and one stroked: {drawing}"
     );
     assert!(
-        shapes[0].contains("fill=solid srgb(0.7843, 0, 0, 1)"),
-        "the fill came from the inherited custom property: {}",
-        shapes[0]
+        near(color(shapes[0]), [0.7843, 0.0, 0.0, 1.0]),
+        "the fill came from the inherited custom property: {drawing}"
     );
     assert!(
-        shapes[1].contains("stroke=solid srgb(0, 0.7843, 0, 1)") && shapes[1].contains("width=3"),
-        "the stroke came from the inherited custom properties: {}",
-        shapes[1]
+        near(color(shapes[1]), [0.0, 0.7843, 0.0, 1.0]),
+        "the stroke came from the inherited custom properties: {drawing}"
+    );
+    let recording = recorded(&harness, &cache);
+    let stroke = recording.paths()[0].stroke.as_ref().expect("a stroke");
+    assert_eq!(
+        stroke.style.width * 2.0,
+        3.0,
+        "three pixels under a fit of two"
     );
 }
 
@@ -426,27 +472,34 @@ fn a_drawing_is_clipped_like_any_other_primitive() {
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
 
-    let scene = harness.scene();
-    let item = &scene.primitives.vectors[0];
-    assert_ne!(
-        item.clip,
-        zgui_scene::ClipId::ROOT,
-        "a drawing inside a clipping box is drawn through that box's chain"
-    );
+    let drawing = harness.redraw();
+    let [mask] = shapes(&drawing)[..] else {
+        panic!("{drawing}");
+    };
+    let at = support::poison();
     assert_eq!(
-        item.clip,
-        harness
-            .store()
-            .fragment(harness.fragment_of("mark"))
-            .expect("a fragment")
-            .clip,
-        "and it is the chain the fragment itself is under, not one of its own"
+        mask.field("clip"),
+        Some(format!("[rect({at}, {at}, 200, 100)]").as_str()),
+        "a drawing inside a clipping box is drawn through that box's chain: {drawing}"
+    );
+    let instances = drawing.instances();
+    let ground = instances
+        .iter()
+        .position(|instance| instance.kind() == "quad")
+        .expect("the root's background");
+    let shape = instances
+        .iter()
+        .position(|instance| instance.kind() == "mono")
+        .expect("the drawing");
+    assert!(
+        shape > ground,
+        "the drawing draws over the root's background: {drawing}"
     );
 }
 
 /// Two outlines are two shapes with two identities, so a rasteriser can cache each on its own.
 #[test]
-fn each_outline_is_its_own_shape_with_its_own_identity() {
+fn each_outline_is_its_own_shape() {
     let tree = Element::new("root").children(vec![Element::new("mark").drawing(
         "M0 0 L24 0 L24 24 Z\nM0 0 L0 24 L24 24 Z",
         Some("0 0 24 24"),
@@ -455,10 +508,14 @@ fn each_outline_is_its_own_shape_with_its_own_identity() {
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
 
-    let items = &harness.scene().primitives.vectors;
+    let recording = recorded(&harness, &cache);
+    let items = recording.paths();
     assert_eq!(items.len(), 2);
-    assert_ne!(items[0].id, items[1].id);
-    assert_ne!(items[0].path, items[1].path, "two marks, drawn twice");
+    assert!(
+        !std::sync::Arc::ptr_eq(&items[0].path, &items[1].path),
+        "two marks, drawn twice"
+    );
+    assert_eq!(shapes(&harness.redraw()).len(), 2);
 }
 
 /// An element that carries no outlines produces no vector primitive, and does not become one by
@@ -469,7 +526,7 @@ fn an_element_with_no_outlines_draws_nothing() {
     let mut harness = Harness::new(tree, CSS);
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
-    assert!(harness.scene().primitives.vectors.is_empty());
+    assert!(shapes(&harness.redraw()).is_empty());
 }
 
 /// A control that carries several marks and reveals one is the shape this answers for.
@@ -485,10 +542,10 @@ fn a_drawing_faded_to_nothing_is_not_in_the_display_list_at_all() {
     let mut harness = Harness::new(tree(), hidden);
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
+    let drawing = harness.redraw();
     assert!(
-        harness.scene().primitives.vectors.is_empty(),
-        "a drawing every colour of which is fully transparent was still pushed: {:?}",
-        shapes(harness.scene())
+        shapes(&drawing).is_empty(),
+        "a drawing every colour of which is fully transparent was still recorded: {drawing}"
     );
 }
 
@@ -517,8 +574,7 @@ fn nothing_below_a_vanished_box_is_walked() {
         "the walk descended past a box nothing under it can be seen through"
     );
     assert!(report.skipped_subtrees >= 1);
-    assert!(harness.scene().primitives.vectors.is_empty());
-    assert!(harness.scene().primitives.mono_sprites.is_empty());
+    assert!(shapes(&harness.redraw()).is_empty());
 }
 
 /// And the same drawing at an alpha a person can see is still drawn, so the case above is a
@@ -531,12 +587,12 @@ fn a_drawing_faded_part_way_is_still_drawn() {
     let mut harness = Harness::new(tree(), faint);
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
-    let shapes = shapes(harness.scene());
-    assert_eq!(shapes.len(), 1, "the drawing is still there: {shapes:?}");
+    let drawing = harness.redraw();
+    let shapes = shapes(&drawing);
+    assert_eq!(shapes.len(), 1, "the drawing is still there: {drawing}");
     assert!(
-        shapes[0].contains("fill=solid srgb(0, 0.502, 1, 0.25)"),
-        "the group's alpha is folded into the shape's own paint: {}",
-        shapes[0]
+        near(color(shapes[0]), [0.0, 0.1255, 0.25, 0.25]),
+        "the group's alpha is folded into the shape's own paint: {drawing}"
     );
 }
 
@@ -548,7 +604,7 @@ fn changing_only_the_outlines_redraws_the_element() {
     let mut harness = Harness::new(tree(), CSS);
     let cache = VectorCache::new();
     harness.paint_vectors(&cache);
-    let before = harness.scene().primitives.vectors[0].placed_path().to_svg();
+    let before = shapes(&harness.redraw())[0].text().to_owned();
 
     let index = harness.element("mark");
     harness.edit_and_restyle(|edit| {
@@ -561,7 +617,7 @@ fn changing_only_the_outlines_redraws_the_element() {
     harness.compose(200.0, 100.0);
     harness.paint_vectors(&cache);
 
-    let after = harness.scene().primitives.vectors[0].placed_path().to_svg();
+    let after = shapes(&harness.redraw())[0].text().to_owned();
     assert_ne!(
         before, after,
         "the outlines changed and the frame replayed the ones that were there"
@@ -659,7 +715,7 @@ fn a_drawing_with_no_view_box_is_drawn_in_css_pixels_from_its_content_box() {
         .fragment(harness.fragment_of("mark"))
         .expect("a fragment")
         .content_box();
-    let bounds = harness.scene().primitives.vectors[0].placed_bounds();
+    let bounds = recorded_bounds(&harness, &cache);
     assert_eq!(
         (bounds.width(), bounds.height()),
         (10.0, 10.0),
@@ -671,10 +727,8 @@ fn a_drawing_with_no_view_box_is_drawn_in_css_pixels_from_its_content_box() {
 /// A drawing nothing changed about is still drawn on the frame after, and on every frame after
 /// that.
 ///
-/// The frames after the first replay the drawing's chunk, and the replay re-pushes its vector
-/// item into the pass planning the scene rebuilds every frame. A replay that skipped it would
-/// re-emit nothing while the damage that reached the fragment had already cleared its pixels:
-/// the icon disappears, and because the following frames no longer damage the hole it stays gone
+/// The frames after the first replay the drawing's chunk. A replay that dropped it while the
+/// damage that reached the fragment had already cleared its pixels would leave a hole that stays
 /// until something repaints the whole surface. This is the regression this test exists to catch.
 #[test]
 fn an_unchanged_drawing_is_drawn_again_on_every_frame_that_reaches_it() {
@@ -683,389 +737,23 @@ fn an_unchanged_drawing_is_drawn_again_on_every_frame_that_reaches_it() {
 
     for frame in 1..=4 {
         harness.paint_vectors(&cache);
+        let drawing = harness.redraw();
         assert_eq!(
-            harness.scene().primitives.vectors.len(),
+            shapes(&drawing).len(),
             1,
-            "frame {frame} reached the drawing and drew nothing for it"
-        );
-        assert_eq!(
-            shapes(harness.scene()).len(),
-            1,
-            "frame {frame} handed the rasteriser no outline"
+            "frame {frame} reached the drawing and drew nothing for it: {drawing}"
         );
     }
 }
 
-/// A root large enough to hold a drawing at the mask limit and one past it.
-const LARGE_ROOT: &str = "root { display: block; width: 400px; height: 400px }";
-
-/// The fixture tree with the mark sized to `edge` device pixels square.
-fn sized_tree(edge: u32) -> (Element, String) {
-    let css = format!(
-        "{LARGE_ROOT}
-         mark {{ display: block; width: {edge}px; height: {edge}px; color: rgb(0, 128, 255) }}"
-    );
-    (tree(), css)
-}
-
-/// The route a drawing of `edge` square takes.
-fn route_at(edge: u32) -> (zgui_paint::VectorRoutes, usize, usize) {
-    let (tree, css) = sized_tree(edge);
-    routes_of(tree, css.as_str())
-}
-
-/// The route one fixture's drawing takes, with the sprites and vector items it produced.
-fn routes_of(tree: Element, css: &str) -> (zgui_paint::VectorRoutes, usize, usize) {
-    let mut harness = Harness::new(tree, css);
-    let report = harness.paint_cached_vectors(
-        &VectorCache::new(),
-        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-    );
-    (
-        report.vector_routes[0].routes,
-        harness.scene().primitives.mono_sprites.len(),
-        harness.scene().primitives.vectors.len(),
-    )
-}
-
-/// The route the fixture drawing takes under `transform`.
-fn route_under(transform: &str) -> (zgui_paint::VectorRoutes, usize, usize) {
-    let css = format!(
-        "{LARGE_ROOT}
-         mark {{ display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
-                 transform: {transform} }}"
-    );
-    routes_of(tree(), css.as_str())
-}
-
-/// Whether one route is the atlas mask and nothing else.
-fn is_mask(result: (zgui_paint::VectorRoutes, usize, usize)) -> bool {
-    let (routes, sprites, vectors) = result;
-    routes.contains(zgui_paint::VectorRoute::AtlasMask)
-        && !routes.contains(zgui_paint::VectorRoute::GeneralRaster)
-        && sprites == 1
-        && vectors == 0
-}
-
+/// A drawing scaled to nothing records nothing.
 #[test]
-fn a_drawing_at_the_mask_limit_still_uses_the_atlas_mask() {
-    let (routes, sprites, vectors) = route_at(256);
-    assert!(routes.contains(zgui_paint::VectorRoute::AtlasMask));
-    assert!(!routes.contains(zgui_paint::VectorRoute::GeneralRaster));
-    assert_eq!(sprites, 1);
-    assert!(vectors == 0);
-}
-
-#[test]
-fn a_drawing_over_the_mask_limit_takes_the_general_raster() {
-    let (routes, sprites, vectors) = route_at(257);
-    assert!(routes.contains(zgui_paint::VectorRoute::GeneralRaster));
-    assert!(!routes.contains(zgui_paint::VectorRoute::AtlasMask));
-    assert_eq!(sprites, 0);
-    assert_eq!(vectors, 1);
-}
-
-/// The turns and scales an interface is actually built from stay on the atlas.
-///
-/// A grip rotated a quarter turn, a chevron turned over, a panel that grows into place: each of
-/// these used to be the shape that built a path rasteriser, at a third of a second and a hundred
-/// and seventy megabytes, for a picture the atlas draws. The monochrome pages are sampled without
-/// filtering, so what makes these exact is that every one of them puts the shape's own axes back on
-/// the device's.
-#[test]
-fn a_drawing_under_a_turn_or_a_scale_stays_on_the_atlas() {
-    for transform in [
-        "rotate(90deg)",
-        "rotate(-90deg)",
-        "rotate(180deg)",
-        "scale(0.9)",
-        "scale(2)",
-        "scale(-1, 1)",
-        "scaleY(-1)",
-        "translate(3px, 5px) rotate(90deg)",
-        "rotate(90deg) rotate(90deg) rotate(180deg)",
-    ] {
-        assert!(
-            is_mask(route_under(transform)),
-            "`transform: {transform}` was sent to the general rasteriser"
-        );
-    }
-}
-
-/// The sprite one mask arrives as, and the texels behind it.
-fn sprite_under(
-    transform: &str,
-) -> (
-    zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
-    [i32; 2],
-) {
-    let css = format!(
-        "{LARGE_ROOT}
-         mark {{ display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
-                 transform: {transform} }}"
-    );
-    let mut harness = Harness::new(tree(), css.as_str());
-    harness.paint_cached_vectors(
-        &VectorCache::new(),
-        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-    );
-    let sprite = harness.scene().primitives.mono_sprites[0];
-    (sprite.ink(), [sprite.tile.bounds[2], sprite.tile.bounds[3]])
-}
-
-/// What the density is for, stated as the two cases it distinguishes.
-///
-/// The sprite is always the shape's own rectangle, because it rides the same transform every other
-/// primitive of the box rides. What moves is the coverage behind it: a turn needs none, so the tile
-/// a shape has at rest is the tile it has at every angle; a scale needs twice the texels, and gets
-/// them from the rasteriser rather than from a sampler stretching the tile it had.
-#[test]
-fn a_turn_reuses_a_shapes_texels_and_a_scale_asks_for_more() {
-    let (rest, at_rest) = sprite_under("none");
-    let (turned, when_turned) = sprite_under("rotate(90deg)");
-    assert_eq!(turned, rest, "a turn moved the sprite out of its own box");
-    assert_eq!(when_turned, at_rest, "a turn rasterised the outline again");
-
-    let (scaled, when_scaled) = sprite_under("scale(2)");
-    assert_eq!(scaled, rest, "a scale moved the sprite out of its own box");
-    assert_eq!(
-        when_scaled,
-        [at_rest[0] * 2, at_rest[1] * 2],
-        "a doubled shape was drawn from the texels it had at rest"
-    );
-}
-
-/// And a map that does not put those axes back stays where it was.
-///
-/// The bound on the residue is relative, so a quarter turn composed through three transforms is
-/// still read as one. It has to refuse a real rotation just as reliably.
-#[test]
-fn a_drawing_under_a_rotation_or_a_shear_takes_the_general_raster() {
-    for transform in ["rotate(30deg)", "rotate(1deg)", "skewX(20deg)"] {
-        let (routes, sprites, vectors) = route_under(transform);
-        assert!(
-            routes.contains(zgui_paint::VectorRoute::GeneralRaster),
-            "`transform: {transform}` was drawn from an unfiltered mask"
-        );
-        assert_eq!(sprites, 0);
-        assert_eq!(vectors, 1);
-    }
-}
-
-/// A stroke has one width whatever direction the outline runs in, and one mask cannot say that
-/// under a map that scales the two axes differently.
-#[test]
-fn a_stroke_under_a_non_uniform_scale_takes_the_general_raster() {
-    let stroked = "root { display: block; width: 400px; height: 400px }
-                   mark { display: block; width: 48px; height: 48px; color: transparent;
-                          --zgui-stroke: rgb(0, 128, 255); --zgui-stroke-width: 2px;
-                          transform: scale(2, 1) }";
-    let (routes, sprites, vectors) = routes_of(tree(), stroked);
-    assert!(routes.contains(zgui_paint::VectorRoute::GeneralRaster));
-    assert_eq!(sprites, 0);
-    // The fill and the stroke, which is what the general path pushes for a shape carrying both,
-    // whatever either of them is coloured.
-    assert_eq!(vectors, 2);
-
-    let uniform = stroked.replace("scale(2, 1)", "scale(2)");
-    assert!(is_mask(routes_of(tree(), uniform.as_str())));
-}
-
-/// A drawing scaled to nothing is drawn by nobody.
-#[test]
-fn a_drawing_scaled_to_nothing_reaches_neither_rasteriser() {
-    let css = format!(
-        "{LARGE_ROOT}
-         mark {{ display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
-                 transform: scale(0) }}"
-    );
-    let mut harness = Harness::new(tree(), css.as_str());
-    harness.paint_cached_vectors(
-        &VectorCache::new(),
-        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-    );
-    assert!(harness.scene().primitives.vectors.is_empty());
-    assert!(harness.scene().primitives.mono_sprites.is_empty());
-}
-
-/// A bar with no view box, `width` by `height` CSS pixels, filled.
-///
-/// Its right edge leans by one pixel, so it has the bounds of a rectangle and stays off the
-/// analytic route.
-fn bar_tree(width: u32, height: u32) -> (Element, String) {
-    let path: &'static str = Box::leak(
-        format!("M0 0 L{width} 0 L{} {height} L0 {height} Z", width - 1).into_boxed_str(),
-    );
-    let css = format!(
-        "root {{ display: block; width: 1400px; height: 1400px }}
-         mark {{ display: block; width: {width}px; height: {height}px; color: rgb(0, 128, 255) }}"
-    );
-    (
-        Element::new("root").children(vec![Element::new("mark").drawing(path, None)]),
-        css,
-    )
-}
-
-/// The budget is stated in texels and in each edge, so a rule takes the atlas and a square does not.
-///
-/// An axis, a divider and a gridline are all far longer than any icon and hold less coverage than
-/// one. Under a cap on the longest edge every one of them built a path rasteriser.
-#[test]
-fn a_wide_thin_drawing_takes_the_atlas_and_a_large_square_does_not() {
-    let (tree, css) = bar_tree(1024, 2);
-    assert!(is_mask(routes_of(tree, css.as_str())), "a 1024×2 rule");
-
-    for (width, height, why) in [
-        (1025, 2, "one texel wider than a page"),
-        (2, 1024, "a shelf nothing shorter will be placed in"),
-        (300, 300, "ninety thousand texels"),
-    ] {
-        let (tree, css) = bar_tree(width, height);
-        let (routes, _, vectors) = routes_of(tree, css.as_str());
-        assert!(
-            routes.contains(zgui_paint::VectorRoute::GeneralRaster),
-            "{width}×{height} was put in the atlas, and it is {why}"
-        );
-        assert_eq!(vectors, 1);
-    }
-}
-
-/// Replaces the canvas scene with a triangle moved by a fraction of a pixel per frame, tells the
-/// element, and lays it out again: one frame of a canvas whose drawing changes every frame.
-fn redraw(harness: &mut Harness, handle: &zgui_canvas::SceneHandle, frame: u32) {
-    let shift = f64::from(frame) * 0.1;
-    handle.edit(|scene| {
-        let mut path = zgui_scene::kurbo::BezPath::new();
-        path.move_to((1.0 + shift, 1.0));
-        path.line_to((22.0, 2.0 + shift));
-        path.line_to((3.0, 22.0));
-        path.close_path();
-        scene.clear();
-        scene.push(
-            zgui_canvas::ShapeBuilder::new(path)
-                .fill(zgui_canvas::Brush::Solid(zgui_color::Color::BLACK))
-                .build(),
-        );
-    });
-    let index = harness.element("mark");
-    let value = drawing::canvas_value(handle.token().0, handle.revision());
-    harness.edit_and_restyle(|edit| {
-        edit.set_property(
-            index,
-            PropKey::new(drawing::CANVAS),
-            Some(PropValue::Integer(value)),
-        );
-    });
-    harness.compose(200.0, 100.0);
-}
-
-/// Paints a canvas redrawn on each of `frames` frames, and reports whether each frame drew it as a
-/// mask.
-fn redrawn_canvas_masks(ready: bool, frames: u32) -> Vec<bool> {
-    let handle = zgui_canvas::SceneHandle::new();
-    let tree = Element::new("root").children(vec![Element::new("mark").canvas(&handle)]);
-    let mut harness = Harness::new(tree, CSS);
-    let vectors = VectorCache::new();
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    (0..frames)
-        .map(|frame| {
-            redraw(&mut harness, &handle, frame);
-            harness.paint_cached_vectors_ready(&vectors, &mut content, ready);
-            let primitives = &harness.scene().primitives;
-            assert_eq!(
-                primitives.mono_sprites.len() + primitives.vectors.len(),
-                1,
-                "frame {frame} drew the canvas once"
-            );
-            primitives.vectors.is_empty()
-        })
-        .collect()
-}
-
-/// A canvas redrawn every frame changes its mask every frame. Once the general rasteriser is built,
-/// it takes the shape and the atlas stops churning.
-#[test]
-fn a_canvas_redrawn_every_frame_leaves_the_mask_route_once_vector_raster_is_ready() {
-    assert_eq!(
-        redrawn_canvas_masks(true, 6),
-        [true, true, true, false, false, false]
-    );
-}
-
-/// While the general rasteriser is cold, a decline would build it, so a small shape keeps the mask.
-#[test]
-fn a_small_canvas_redrawn_every_frame_stays_on_the_mask_route_while_cold() {
-    assert!(redrawn_canvas_masks(false, 8).into_iter().all(|mask| mask));
-}
-
-/// An icon whose geometry does not change keeps its mask, however often it is emitted again.
-#[test]
-fn an_icon_grid_repainted_without_change_stays_on_the_mask_route() {
-    let tree = Element::new("root").children(
-        (0..6)
-            .map(|_| Element::new("mark").drawing(TRIANGLE, Some("0 0 24 24")))
-            .collect(),
-    );
-    let mut harness = Harness::new(tree, CSS);
-    let marks = harness.elements("mark");
-    // A drawing's mask owner is its fragment, so the same fragments keep the same histories.
-    let fragments = |harness: &Harness| -> Vec<_> {
-        marks
-            .iter()
-            .map(|&mark| {
-                let node = harness.document().store().key_of(mark);
-                let boxed = harness.store().boxes_of(node)[0];
-                harness.store().fragments_of_box(boxed)[0]
-            })
-            .collect()
-    };
-    let owners = fragments(&harness);
-    let vectors = VectorCache::new();
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    for frame in 0..8 {
-        // The same outlines, spelled two ways: each frame writes a new drawing, so every icon
-        // encodes again and its placed path is a new allocation, while the geometry stays put.
-        let paths = if frame % 2 == 0 {
-            TRIANGLE
-        } else {
-            "M0,0 L24,0 L24,24 Z"
-        };
-        harness.edit_and_restyle(|edit| {
-            for &mark in &marks {
-                edit.set_property(
-                    mark,
-                    PropKey::new(drawing::PATHS),
-                    Some(PropValue::from(paths)),
-                );
-            }
-        });
-        harness.compose(200.0, 100.0);
-        let report = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
-        assert_eq!(
-            report.vector_routes.len(),
-            6,
-            "frame {frame} encoded every icon"
-        );
-        assert!(
-            report.vector_routes.iter().all(|route| !route
-                .routes
-                .contains(zgui_paint::VectorRoute::GeneralRaster)),
-            "frame {frame} sent an icon to the general route"
-        );
-        assert_eq!(
-            harness.scene().primitives.mono_sprites.len(),
-            6,
-            "frame {frame}"
-        );
-        assert!(
-            harness.scene().primitives.vectors.is_empty(),
-            "frame {frame}"
-        );
-        assert_eq!(
-            fragments(&harness),
-            owners,
-            "frame {frame} kept the fragments"
-        );
-    }
-    assert_eq!(content.report().tiles, 1, "six icons, one geometry");
+fn a_drawing_scaled_to_nothing_records_nothing() {
+    let css = "root { display: block; width: 400px; height: 400px }
+               mark { display: block; width: 48px; height: 48px; color: rgb(0, 128, 255);
+                      transform: scale(0) }";
+    let mut harness = Harness::new(tree(), css);
+    let report = paint_cached(&mut harness);
+    assert!(report.vector_routes[0].routes.is_empty());
+    assert!(shapes(&harness.redraw()).is_empty());
 }

@@ -1,16 +1,20 @@
 //! Clip chains mirrored as clip nodes.
 
-use compositor_types::{ClipId, ClipNode, ClipShape, Transaction};
+use compositor_types::{ClipId, ClipNode, ClipShape, MaskMode, Transaction};
 use rustc_hash::FxHashMap;
 use zgui_scene::{ChangeCoverage, ClipLink, ClipTable, SpatialTree, TableVersion};
 
+use crate::emit::record::ImageKey;
 use crate::sync::mirror::holds::Holds;
+use crate::sync::mirror::images::Images;
 use crate::sync::mirror::spaces::Spaces;
 
 /// The clip node of each mirrored clip chain, by zgui clip id.
 ///
 /// A mirrored chain is held in the zgui table while its node exists, so its id names the same
-/// chain. A link the compositor cannot express, such as a mask, is left out of the chain.
+/// chain. A mask link becomes a mask over the image of its tile's texture, which
+/// [`ImageKey::of_texture`] names. A mask whose texture the compositor holds no image of is left
+/// out of the chain.
 #[derive(Debug, Default)]
 pub(crate) struct Clips {
     entries: Vec<Option<Entry>>,
@@ -30,6 +34,7 @@ struct Entry {
 pub(crate) struct Sources<'a> {
     pub(crate) table: &'a mut ClipTable,
     pub(crate) spaces: &'a mut Spaces,
+    pub(crate) images: &'a Images,
     pub(crate) tree: &'a SpatialTree,
 }
 
@@ -168,14 +173,39 @@ impl Clips {
             return None;
         };
         let parent = self.mirror(tx, holds, sources, parent);
-        let ClipLink::RoundedRect {
-            rect,
-            radii,
-            shape,
-            space,
-        } = link
-        else {
-            return Some(Err(parent));
+        let (rect, radii, shape, space) = match link {
+            ClipLink::RoundedRect {
+                rect,
+                radii,
+                shape,
+                space,
+            } => (rect, radii, shape, space),
+            ClipLink::Mask {
+                tile, transform, ..
+            } => {
+                let Some(image) = sources.images.id(ImageKey::of_texture(tile.texture)) else {
+                    return Some(Err(parent));
+                };
+                let space = sources
+                    .spaces
+                    .mirror(tx, holds, sources.tree, transform.index());
+                let size = tile.bounds.size;
+                return Some(Ok(ClipNode {
+                    parent,
+                    space,
+                    shape: ClipShape::Mask {
+                        image,
+                        rect: [0.0, 0.0, size.width as f32, size.height as f32],
+                        source: [
+                            tile.bounds.origin.x as f32,
+                            tile.bounds.origin.y as f32,
+                            size.width as f32,
+                            size.height as f32,
+                        ],
+                        mode: MaskMode::ALPHA,
+                    },
+                }));
+            }
         };
         let space = sources
             .spaces
@@ -206,18 +236,24 @@ impl Clips {
     }
 }
 
-/// Makes the clip node `id` hold the parent and the space `node` names.
+/// Makes the clip node `id` hold the parent, the space and the mask image `node` names.
 fn hold_links(holds: &mut Holds, id: ClipId, node: &ClipNode) {
     if let Some(parent) = node.parent {
         holds.hold(id, parent);
     }
     holds.hold(id, node.space);
+    if let ClipShape::Mask { image, .. } = node.shape {
+        holds.hold(id, image);
+    }
 }
 
-/// Ends the holds of the clip node `id` on the parent and the space `node` names.
+/// Ends the holds of the clip node `id` on the parent, the space and the mask image `node` names.
 fn unhold_links(holds: &mut Holds, id: ClipId, node: &ClipNode) {
     if let Some(parent) = node.parent {
         holds.unhold(id, parent);
     }
     holds.unhold(id, node.space);
+    if let ClipShape::Mask { image, .. } = node.shape {
+        holds.unhold(id, image);
+    }
 }

@@ -1,8 +1,9 @@
 //! zgui's property tables mirrored into compositor nodes and slots.
 //!
-//! Coordinate systems become transform and scroll nodes, clip chains become clip nodes and paints
-//! become paint slots. Each is mirrored the first time a recorded chunk refers to it, and the
-//! tables' change journals then turn into node and slot writes before each frame's walk.
+//! Coordinate systems become transform and scroll nodes, clip chains become clip nodes, paints
+//! become paint slots and images become compositor images. Each is mirrored the first time a
+//! recorded chunk refers to it, and the tables' change journals then turn into node and slot
+//! writes before each frame's walk.
 //!
 //! A mirrored node or slot exists while a recorded chunk or another mirrored node refers to it.
 //! [`Mirror::settle`] removes the rest.
@@ -10,6 +11,7 @@
 pub(crate) mod clips;
 pub(crate) mod color;
 pub(crate) mod holds;
+pub(crate) mod images;
 pub(crate) mod paints;
 pub(crate) mod spaces;
 
@@ -24,6 +26,7 @@ pub(crate) struct Mirror {
     pub(crate) spaces: spaces::Spaces,
     pub(crate) clips: clips::Clips,
     pub(crate) paints: paints::Paints,
+    pub(crate) images: images::Images,
     pub(crate) holds: holds::Holds,
     removed: Vec<AnyId>,
 }
@@ -45,6 +48,7 @@ impl Mirror {
             Sources {
                 table: &mut scene.clips,
                 spaces: &mut self.spaces,
+                images: &self.images,
                 tree: &scene.spatial,
             },
         );
@@ -74,6 +78,7 @@ impl Mirror {
         let sources = Sources {
             table: &mut scene.clips,
             spaces: &mut self.spaces,
+            images: &self.images,
             tree: &scene.spatial,
         };
         self.clips.ensure(tx, &mut self.holds, sources, id)
@@ -89,6 +94,7 @@ impl Mirror {
         let mut sources = Sources {
             table: &mut scene.clips,
             spaces: &mut self.spaces,
+            images: &self.images,
             tree: &scene.spatial,
         };
         self.clips.mirror(tx, &mut self.holds, &mut sources, id)
@@ -105,6 +111,20 @@ impl Mirror {
     ) -> Option<(compositor_types::PaintId, compositor_types::PaintKind)> {
         self.paints
             .ensure(tx, &mut self.holds, &mut scene.paints, id)
+    }
+
+    /// Returns the image of `key` for the chunk being recorded, creating or updating it from
+    /// `pixels`.
+    ///
+    /// Returns the image and its description, or `None` when nothing is mirrored for `key` and
+    /// `pixels` is `None`.
+    pub(crate) fn image(
+        &mut self,
+        tx: &mut Transaction,
+        key: crate::emit::record::ImageKey,
+        pixels: Option<crate::emit::record::ImagePixels<'_>>,
+    ) -> Option<(compositor_types::ImageId, compositor_types::ImageDesc)> {
+        self.images.ensure(tx, &mut self.holds, key, pixels)
     }
 
     /// Makes the chunk `key` hold what was mirrored for it since the last recording.
@@ -127,6 +147,7 @@ impl Mirror {
                 AnyId::Scroll(id) => self.spaces.removed_scroll(id),
                 AnyId::Clip(id) => self.clips.removed(id, &mut scene.clips),
                 AnyId::Paint(id) => self.paints.removed(id, &mut scene.paints),
+                AnyId::Image(id) => self.images.removed(id),
                 _ => {}
             }
         }

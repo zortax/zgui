@@ -45,11 +45,11 @@ zgui-color = { path = "../zgui-color", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 zgui-space = { path = "../zgui-space", version = "0.1.0" }
-# The display list a renderer is actually handed, so `<vector>`'s acceptance ends at a renderer
-# rather than at a scene a test built and then read back to itself.
-zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+# The frame a renderer is actually handed, so `<vector>`'s acceptance ends at a compositor rather
+# than at a scene a test built and then read back to itself.
+compositor-types.workspace = true
+zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [lints]
 workspace = true

@@ -42,7 +42,7 @@ pub(crate) mod split;
 
 pub(crate) use series::shown;
 
-use std::sync::{Arc, OnceLock};
+use std::sync::OnceLock;
 
 use zgui_color::Color;
 use zgui_css::ComputedStyle;
@@ -50,10 +50,11 @@ use zgui_css::values::color::{current, to_color};
 use zgui_css::values::custom;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_profile::{Counter, counter};
-use zgui_scene::{ClipId, Paint, PaintRef, Scene, SpatialId, VectorId, VectorItem};
+use zgui_scene::{ClipId, ClipLink, Paint, PaintRef, Scene, SpatialId, VectorId};
 
 use crate::content::vectors::VectorMaskSource;
 use crate::emit::paint::{gradient_paint, needs_densifying};
+use crate::emit::record::Recorder;
 use crate::lower::background::GradientSpec;
 
 /// How a shape is painted.
@@ -88,20 +89,18 @@ pub fn vector_lod(style: &ComputedStyle) -> bool {
     custom::text(style, LOD).is_some_and(|value| value.trim() == "columns")
 }
 
-/// The raster path selected for one vector shape.
+/// The item kind selected for one vector shape.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VectorRoute {
-    /// A CPU-rasterised monochrome mask stored in the ordinary atlas.
-    AtlasMask,
-    /// A general vector item, executed by the renderer's configured vector rasteriser.
+    /// A path item.
     GeneralRaster,
     /// Rounded, bordered quads, one per recognised circle, ellipse, rectangle or stroke segment.
     Analytic,
-    /// One mark per part, drawing every recognised prim of the part from a shared payload.
+    /// One marks item per part, drawing every recognised prim of the part from a shared payload.
     Marks,
-    /// The whole drawing rasterised on the CPU into one colour tile, drawn as one sprite.
+    /// The whole drawing rasterised on the CPU into images.
     CpuLayer,
-    /// One mark per part, drawing every subpath from atlas cells of its repeated outline.
+    /// One marks item per part, placing every subpath as a copy of its repeated outline.
     PathGlyphs,
 }
 
@@ -110,7 +109,6 @@ pub enum VectorRoute {
 pub struct VectorRoutes(u8);
 
 impl VectorRoutes {
-    const ATLAS_MASK: u8 = 1;
     const GENERAL_RASTER: u8 = 2;
     const ANALYTIC: u8 = 4;
     const MARKS: u8 = 8;
@@ -138,7 +136,6 @@ impl VectorRoutes {
     /// The bit that stands for `route`.
     const fn bit(route: VectorRoute) -> u8 {
         match route {
-            VectorRoute::AtlasMask => Self::ATLAS_MASK,
             VectorRoute::GeneralRaster => Self::GENERAL_RASTER,
             VectorRoute::Analytic => Self::ANALYTIC,
             VectorRoute::Marks => Self::MARKS,
@@ -216,18 +213,18 @@ impl<'a> ShapeSource<'a> {
 /// What emitting one shape did.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ShapeEmission {
-    /// How many primitives survived insertion into the scene.
+    /// How many items were recorded.
     pub(crate) pushed: usize,
-    /// Which raster path the shape selected, if it drew anything.
+    /// Which route the shape selected, if it drew anything.
     pub(crate) route: Option<VectorRoute>,
 }
 
 /// What emitting all shapes belonging to one element did.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DrawingEmission {
-    /// How many primitives survived insertion into the scene.
+    /// How many items were recorded.
     pub(crate) pushed: usize,
-    /// Every raster path selected by the drawing's shapes.
+    /// Every route selected by the drawing's shapes.
     pub(crate) routes: VectorRoutes,
     /// What the layer route did.
     pub(crate) layer: LayerOutcome,
@@ -242,16 +239,16 @@ pub struct LayerInput {
     pub revision: u64,
     /// What an inherited paint resolves to, before any folded opacity.
     pub paint: ShapePaint,
-    /// The folded opacity, which the sprite carries.
+    /// The folded opacity, which the layer's images carry.
     pub alpha: f32,
 }
 
 /// What the layer route did for one drawing.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct LayerOutcome {
-    /// Whether a layer sprite was pushed.
+    /// Whether a layer image was recorded.
     pub(crate) sprite: bool,
-    /// Whether that sprite stretches a raster of another scale or phase.
+    /// Whether that image stretches a raster of another scale or phase.
     pub(crate) provisional: bool,
     /// Whether the drawing drew nothing, to be drawn on a later frame.
     pub(crate) deferred: bool,
@@ -260,8 +257,11 @@ pub(crate) struct LayerOutcome {
     pub(crate) promote: bool,
     /// The device pixels a provisional or deferred drawing is owed a frame for.
     pub(crate) owed: Option<Rect<i32, Device>>,
-    /// The number of the tiled source whose tiles the drawing pushed.
+    /// The number of the tiled source whose tiles the drawing recorded.
     pub(crate) tiled: Option<u64>,
+    /// The tile images the drawing recorded, with their rectangles in the fragment's space.
+    pub(crate) tiles:
+        Option<std::sync::Arc<[(crate::emit::record::ImageKey, Rect<DevicePx, Device>)]>>,
     /// The region of local space whose prims a series cut to it draws.
     pub(crate) window: Option<zgui_scene::kurbo::Rect>,
 }
@@ -294,44 +294,6 @@ pub struct VectorPlacement {
     pub scale: f32,
 }
 
-/// Emits one path, filled and optionally stroked, and returns how many items were pushed.
-///
-/// `ink` is what the path covers once its stroke is accounted for. It is the caller's because the
-/// caller built the path and knows its bounds; nothing here measures a Bézier.
-pub fn emit(
-    scene: &mut Scene,
-    id: VectorId,
-    path: Arc<zgui_scene::kurbo::BezPath>,
-    ink: Rect<DevicePx, Device>,
-    paint: ShapePaint,
-    placement: VectorPlacement,
-) -> usize {
-    // Under the transform, because that is the rectangle the rasteriser writes: an item is drawn
-    // into a scratch covering exactly its own ink and composited back through it, so an ink
-    // measured in the shape's own space cuts a turned drawing off at the edge of the box it would
-    // have occupied upright. The untransformed rectangle is kept beside it, because that is the
-    // space the draw order is decided in.
-    let local = ink;
-    let ink = under(scene, placement.transform, ink);
-    let mut pushed = 0;
-    let fill = scene.paints.add(Paint::Solid(paint.fill));
-    let mut item = VectorItem::filled(id, path.clone(), fill).clipped(placement.clip);
-    item.ink = ink;
-    item.local_ink = local;
-    item.transform = Some(placement.transform);
-    pushed += usize::from(scene.push_vector(item).is_some());
-    if let Some(color) = paint.stroke {
-        let stroke = scene.paints.add(Paint::Solid(color));
-        let mut item =
-            VectorItem::stroked(id, path, stroke, paint.stroke_width).clipped(placement.clip);
-        item.ink = ink;
-        item.local_ink = local;
-        item.transform = Some(placement.transform);
-        pushed += usize::from(scene.push_vector(item).is_some());
-    }
-    pushed
-}
-
 /// A rectangle in a shape's own space, as the rectangle it covers on the surface.
 ///
 /// A transform that leaves the z = 0 plane is flattened rather than refused, which is what the
@@ -352,25 +314,19 @@ pub(crate) fn under(
     }
 }
 
-/// Emits every shape of one drawing, and returns how many primitives were pushed.
+/// Records every shape of one drawing, and returns how many items were recorded.
 ///
-/// The outlines are already in the fragment's local space, so nothing here measures or moves a
-/// curve. Each takes its own
-/// identity, derived from the fragment's and its position in the list, so a rasteriser's cached
-/// encoding of one outline survives a sibling changing.
-///
-/// The ink of each item is measured from the outline itself, which is what makes a drawing that
-/// overflows its box still put its own pixels in the damage: a rectangle taken from the box would
-/// under-report exactly the overflow the box does not cover.
+/// The outlines are already in the fragment's local space. Each takes its own identity, derived
+/// from `base` and its position in the list, which its route history is kept by.
 pub fn draw(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     base: VectorId,
     shapes: &[zgui_svg::Shape],
     paint: ShapePaint,
     placement: VectorPlacement,
 ) -> usize {
     draw_with_masks(
-        scene,
+        rec,
         base,
         shapes,
         paint,
@@ -379,21 +335,21 @@ pub fn draw(
     )
 }
 
-/// Emits a drawing while allowing eligible solid shapes to use a monochrome mask source.
+/// Records a drawing with the route histories and caches of `masks`.
 pub fn draw_with_masks(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     base: VectorId,
     shapes: &[zgui_svg::Shape],
     paint: ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> usize {
-    draw_with_masks_tracked(scene, base, shapes, paint, masks, placement).pushed
+    draw_with_masks_tracked(rec, base, shapes, paint, masks, placement).pushed
 }
 
-/// Emits a drawing and records all raster paths selected by its shapes.
+/// Records a drawing and notes every route its shapes selected.
 pub(crate) fn draw_with_masks_tracked(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     base: VectorId,
     shapes: &[zgui_svg::Shape],
     paint: ShapePaint,
@@ -403,7 +359,7 @@ pub(crate) fn draw_with_masks_tracked(
     let mut emitted = DrawingEmission::default();
     for (index, shape) in shapes.iter().enumerate() {
         let shape = document::emit_tracked(
-            scene,
+            rec,
             outline_id(base, index),
             &ShapeSource::placed_shape(shape),
             &paint,
@@ -418,23 +374,23 @@ pub(crate) fn draw_with_masks_tracked(
     emitted
 }
 
-/// Emits every shape and series of a drawing from its source, and returns how many primitives
-/// were pushed.
+/// Records every shape and series of a drawing from its source, and returns how many items were
+/// recorded.
 pub fn draw_drawing(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     base: VectorId,
     drawing: &crate::content::Drawing,
     paint: ShapePaint,
     masks: &dyn VectorMaskSource,
     placement: VectorPlacement,
 ) -> usize {
-    draw_drawing_tracked(scene, base, drawing, paint, masks, placement, None, false).pushed
+    draw_drawing_tracked(rec, base, drawing, paint, masks, placement, None, false).pushed
 }
 
 /// The same as [`draw_drawing`], letting a candidate drawing take the layer route of `masks`.
 #[doc(hidden)]
 pub fn draw_drawing_layered(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     base: VectorId,
     drawing: &crate::content::Drawing,
     paint: ShapePaint,
@@ -443,7 +399,7 @@ pub fn draw_drawing_layered(
     layer: LayerInput,
 ) -> usize {
     draw_drawing_tracked(
-        scene,
+        rec,
         base,
         drawing,
         paint,
@@ -455,19 +411,22 @@ pub fn draw_drawing_layered(
     .pushed
 }
 
-/// The sprite one CPU layer is drawn as: the tile at `local`, through the placement's clip and
-/// transform, at `alpha`.
+/// Records one CPU layer raster as an image over `local`, through the placement's clip and
+/// transform, at `alpha`, and returns how many items were recorded.
 ///
-/// The frame is wider than the sprite by one unit on every side, so the frame's soft edge falls
-/// outside the quad. The quad's own edge lands on whole device pixels and the raster carries its
-/// own coverage.
+/// The image is cut to a frame one unit wider than `local` on every side, so the frame's soft
+/// edge falls outside the image. The raster carries its own coverage.
 #[doc(hidden)]
-pub fn layer_sprite(
+pub fn layer_image(
+    rec: &mut Recorder<'_>,
     local: Rect<DevicePx, Device>,
-    tile: impl Into<zgui_scene::Resource>,
+    raster: &crate::content::vectors::LayerPixels,
     placement: VectorPlacement,
     alpha: f32,
-) -> zgui_scene::ColorSprite {
+) -> usize {
+    let Some((image, _)) = rec.image_slot(raster.key, Some(raster.pixels())) else {
+        return 0;
+    };
     let frame = Rect::new(
         zgui_geom::Point::new(
             DevicePx(local.origin.x.0 - 1.0),
@@ -478,12 +437,64 @@ pub fn layer_sprite(
             DevicePx(local.size.height.0 + 2.0),
         ),
     );
-    let mut sprite = zgui_scene::ColorSprite::new(local, tile)
-        .framed(frame)
-        .clipped(placement.clip);
-    sprite.transform = placement.transform.index();
-    sprite.opacity = alpha;
-    sprite
+    let item = compositor_types::Image {
+        bounds: crate::emit::record::local_rect(local),
+        frame: crate::emit::record::local_rect(frame),
+        source: [0.0, 0.0, raster.width as f32, raster.height as f32],
+        radii: [0.0; 8],
+        shapes: compositor_types::ROUND,
+        paint: compositor_types::PaintRef::NONE,
+        image,
+        opacity: alpha,
+        clip: rec.clip(placement.clip),
+        space: rec.space(placement.transform),
+        flags: compositor_types::ImageFlags::default(),
+        extend: [compositor_types::Extend::NONE; 2],
+        filter: compositor_types::ImageFilter::LINEAR,
+    };
+    rec.image(item);
+    1
+}
+
+/// Notes that the tile image `key` is shown over `local` in the fragment's space, as far as the
+/// placement's clip admits it on the surface.
+pub(crate) fn show_tile(
+    layers: &dyn crate::content::vectors::VectorLayerSource,
+    scene: &Scene,
+    placement: VectorPlacement,
+    key: crate::emit::record::ImageKey,
+    local: Rect<DevicePx, Device>,
+) {
+    let device = under(scene, placement.transform, local);
+    let admitted = scene
+        .clips
+        .bounds_placed(placement.clip, &|space| scene.spatial.resolve(space));
+    layers.shown(key, device.intersection(admitted));
+}
+
+/// Returns the clip chain of `placement` narrowed by `links`, as the reference items drawn
+/// through it hold.
+///
+/// The links are chunk-local clips, so they move with the chunk. A link in another coordinate
+/// system than the chunk's is a clip chain the scene mints.
+pub(crate) fn clip_through(
+    rec: &mut Recorder<'_>,
+    placement: VectorPlacement,
+    links: impl IntoIterator<Item = ClipLink>,
+) -> compositor_types::ClipRef {
+    let mut chain = placement.clip;
+    let mut clip = rec.clip(chain);
+    for link in links {
+        if let Some(local) = rec.local_clip_in(clip, link) {
+            clip = local;
+            continue;
+        }
+        let scene = rec.scene();
+        chain = scene.clips.push(chain, link);
+        scene.note_minted_clip(chain);
+        clip = rec.clip(chain);
+    }
+    clip
 }
 
 /// Whether a drawing may take the layer route: it has no series, and some shape with a gradient
@@ -491,9 +502,9 @@ pub fn layer_sprite(
 ///
 /// A shape the analytic or the marks route takes is exact at every scale and costs no raster, so a
 /// drawing whose every such shape goes there stays on its shapes. The question is asked without
-/// pushing anything, and the recognitions it makes are kept for the shapes' own emission.
+/// recording anything, and the recognitions it makes are kept for the shapes' own emission.
 fn candidate(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     base: VectorId,
     drawing: &crate::content::Drawing,
     paint: &ShapePaint,
@@ -504,7 +515,8 @@ fn candidate(
         return false;
     }
     let gradient = |paint: &zgui_svg::Paint| matches!(paint, zgui_svg::Paint::Gradient(_));
-    let affine = scene
+    let affine = rec
+        .scene_ref()
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -525,22 +537,20 @@ fn candidate(
         let id = outline_id(base, index);
         let source = ShapeSource::of(drawing, index);
         let analytic =
-            analytic::emit_analytic(scene, id, &source, paint, masks, placement, affine, true);
+            analytic::emit_analytic(rec, id, &source, paint, masks, placement, affine, true);
         analytic.is_none()
-            && marks::emit_marks(scene, id, &source, paint, masks, placement, affine, true)
-                .is_none()
+            && marks::emit_marks(rec, id, &source, paint, masks, placement, affine, true).is_none()
     })
 }
 
-/// Emits every shape and series of a drawing from its source, and records all raster paths
-/// selected.
+/// Records every shape and series of a drawing from its source, and notes every route selected.
 ///
 /// No route places a shape, except recognition under a fit that scales its axes differently. A
 /// series is drawn before the shape its position names, and after the last shape when it names
 /// none.
 ///
-/// With `layer`, a candidate drawing asks the layer route first. A layer is one colour sprite
-/// carrying the box's clip and transform and the folded opacity, and replaces every shape.
+/// With `layer`, a candidate drawing asks the layer route first. A layer is one image, or one per
+/// tile, carrying the box's clip and transform and the folded opacity, and replaces every shape.
 ///
 /// With `lod`, every line series is reduced per device column, as [`LOD`] says.
 #[expect(
@@ -548,7 +558,7 @@ fn candidate(
     reason = "the drawing, where it goes and the two routes it may ask for"
 )]
 pub(crate) fn draw_drawing_tracked(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     base: VectorId,
     drawing: &crate::content::Drawing,
     paint: ShapePaint,
@@ -560,9 +570,10 @@ pub(crate) fn draw_drawing_tracked(
     let mut emitted = DrawingEmission::default();
     let layers = layer
         .zip(masks.layers())
-        .filter(|_| candidate(scene, base, drawing, &paint, masks, placement));
+        .filter(|_| candidate(rec, base, drawing, &paint, masks, placement));
     if let Some((input, layers)) = layers {
-        let spatial = scene
+        let spatial = rec
+            .scene_ref()
             .spatial
             .resolve(placement.transform)
             .as_ref()
@@ -593,30 +604,32 @@ pub(crate) fn draw_drawing_tracked(
         };
         match answer {
             crate::content::vectors::LayerAnswer::Sprite {
-                tile,
+                raster,
                 local,
                 provisional,
-                ..
             } => {
-                let sprite = layer_sprite(local, tile, placement, input.alpha);
-                emitted.pushed += usize::from(scene.push_color_sprite(sprite).is_some());
+                emitted.pushed += layer_image(rec, local, &raster, placement, input.alpha);
                 emitted.routes.insert(VectorRoute::CpuLayer);
                 emitted.layer.sprite = true;
                 counter::bump(Counter::VectorRouteLayer);
                 if provisional {
                     counter::bump(Counter::VectorLayersProvisional);
                     emitted.layer.provisional = true;
-                    emitted.layer.owed = owed(scene, local);
+                    emitted.layer.owed = owed(rec.scene_ref(), local);
                 }
                 return emitted;
             }
             crate::content::vectors::LayerAnswer::Tiles { tiles, provisional } => {
-                // Each tile names its raster: the end of the walk places the ones the frame needs.
-                for (name, path_rect) in tiles.sprites() {
-                    let local = rect_of(drawing.fit.transform_rect_bbox(path_rect));
-                    let sprite = layer_sprite(local, name, placement, input.alpha);
-                    emitted.pushed += usize::from(scene.push_color_sprite(sprite).is_some());
+                // Each tile is an image of its raster. The end of the walk rasterises the ones the
+                // frame needs and writes them.
+                let mut shown = Vec::with_capacity(tiles.len());
+                for tile in tiles.tiles() {
+                    let local = rect_of(drawing.fit.transform_rect_bbox(tile.path_rect));
+                    emitted.pushed += layer_image(rec, local, &tile.pixels, placement, input.alpha);
+                    show_tile(layers, rec.scene_ref(), placement, tile.pixels.key, local);
+                    shown.push((tile.pixels.key, local));
                 }
+                emitted.layer.tiles = Some(shown.into());
                 emitted.routes.insert(VectorRoute::CpuLayer);
                 emitted.layer.tiled = Some(tiles.id());
                 counter::bump(Counter::VectorRouteLayer);
@@ -624,10 +637,11 @@ pub(crate) fn draw_drawing_tracked(
                     counter::bump(Counter::VectorLayersProvisional);
                     emitted.layer.provisional = true;
                     let ink = tiles
-                        .sprites()
-                        .map(|(_, path_rect)| drawing.fit.transform_rect_bbox(path_rect))
+                        .tiles()
+                        .iter()
+                        .map(|tile| drawing.fit.transform_rect_bbox(tile.path_rect))
                         .reduce(|a, b| a.union(b));
-                    emitted.layer.owed = ink.and_then(|ink| owed(scene, rect_of(ink)));
+                    emitted.layer.owed = ink.and_then(|ink| owed(rec.scene_ref(), rect_of(ink)));
                 }
                 return emitted;
             }
@@ -635,7 +649,7 @@ pub(crate) fn draw_drawing_tracked(
                 counter::bump(Counter::VectorLayersDeferred);
                 emitted.routes.insert(VectorRoute::CpuLayer);
                 emitted.layer.deferred = true;
-                emitted.layer.owed = owed(scene, local);
+                emitted.layer.owed = owed(rec.scene_ref(), local);
                 return emitted;
             }
             crate::content::vectors::LayerAnswer::Items(why) => {
@@ -680,7 +694,7 @@ pub(crate) fn draw_drawing_tracked(
             series_note(
                 &mut emitted,
                 series::emit_series(
-                    scene,
+                    rec,
                     id,
                     &at.series,
                     drawing.fit,
@@ -694,7 +708,7 @@ pub(crate) fn draw_drawing_tracked(
         note(
             &mut emitted,
             document::emit_tracked(
-                scene,
+                rec,
                 outline_id(base, index),
                 &ShapeSource::of(drawing, index),
                 &paint,
@@ -707,7 +721,7 @@ pub(crate) fn draw_drawing_tracked(
         series_note(
             &mut emitted,
             series::emit_series(
-                scene,
+                rec,
                 id,
                 &at.series,
                 drawing.fit,
@@ -874,106 +888,5 @@ mod tests {
                 .all(|pair| pair[0].offset <= pair[1].offset),
             "densifying must not reorder the ramp"
         );
-    }
-
-    /// A mask source over a real mask cache that records each stroke width it is asked for.
-    struct Recording {
-        cache: core::cell::RefCell<crate::content::vectors::VectorMaskCache>,
-        atlas: core::cell::RefCell<zgui_atlas::Atlas>,
-        asked: core::cell::RefCell<Vec<(f64, zgui_atlas::AtlasKey)>>,
-    }
-
-    impl crate::content::vectors::VectorMaskSource for Recording {
-        fn vector_mask(
-            &self,
-            request: crate::content::vectors::VectorMaskRequest<'_>,
-        ) -> Option<crate::content::vectors::VectorMask> {
-            let mask = self
-                .cache
-                .borrow_mut()
-                .tile_for(&mut self.atlas.borrow_mut(), request)?;
-            if let crate::content::vectors::VectorMaskStyle::Stroke(style) = request.style {
-                self.asked.borrow_mut().push((style.width, mask.key));
-            }
-            Some(mask)
-        }
-
-        fn analytic(&self, _owner: zgui_scene::VectorId) -> bool {
-            false
-        }
-
-        fn marks(&self, _owner: zgui_scene::VectorId) -> bool {
-            false
-        }
-    }
-
-    /// The mask route scales a shape's own stroke by the fit, so the shape through the fit is the
-    /// same mask as the shape placed by that fit.
-    #[test]
-    fn a_shapes_own_stroke_is_scaled_by_the_fit_on_the_mask_route() {
-        use std::sync::Arc;
-
-        use zgui_scene::kurbo::{self, Affine, BezPath};
-        use zgui_scene::{ClipId, SpatialId, VectorId};
-
-        use super::document::emit_tracked;
-        use super::{ShapeSource, VectorPlacement, VectorRoute};
-
-        let mut path = BezPath::new();
-        path.move_to((2.0, 2.0));
-        path.line_to((20.0, 4.0));
-        path.line_to((6.0, 18.0));
-        let shape = zgui_svg::Shape {
-            path: Arc::new(path),
-            fill: None,
-            stroke: Some(zgui_svg::Stroke {
-                paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
-                style: kurbo::Stroke::new(2.0),
-            }),
-            clips: Vec::new(),
-        };
-        let fit = Affine::translate((3.0, 2.0)) * Affine::scale(2.0);
-        let placed = zgui_svg::document::place::shape(&shape, fit);
-
-        let masks = Recording {
-            cache: Default::default(),
-            atlas: core::cell::RefCell::new(zgui_atlas::Atlas::new(
-                zgui_atlas::AtlasLimits::default(),
-            )),
-            asked: Default::default(),
-        };
-        masks.atlas.borrow_mut().begin_frame();
-        masks.cache.borrow_mut().begin_frame();
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(100, 100));
-        let paint = shape_paint(&StyleDraft::initial().build(), 1.0);
-        let placement = VectorPlacement {
-            clip: ClipId::ROOT,
-            transform: SpatialId::VIEWPORT,
-            scale: 1.0,
-        };
-        let through = ShapeSource {
-            shape: &shape,
-            fit,
-            cell: None,
-        };
-        for (owner, source) in [
-            (VectorId(1), through),
-            (VectorId(2), ShapeSource::placed_shape(&placed)),
-        ] {
-            let emitted = emit_tracked(&mut scene, owner, &source, &paint, &masks, placement);
-            assert_eq!(emitted.route, Some(VectorRoute::AtlasMask));
-        }
-
-        let asked = masks.asked.borrow();
-        assert_eq!(
-            asked.iter().map(|(width, _)| *width).collect::<Vec<_>>(),
-            [4.0, 4.0],
-            "a 2 unit stroke under a fit of 2 is 4 pixels wide"
-        );
-        assert_eq!(asked[0].1, asked[1].1, "one raster, one atlas entry");
-        let sprites = &scene.primitives.mono_sprites;
-        assert_eq!(sprites.len(), 2);
-        assert_eq!(sprites[0].ink(), sprites[1].ink());
     }
 }

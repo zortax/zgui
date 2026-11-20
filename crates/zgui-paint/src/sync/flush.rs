@@ -1,5 +1,7 @@
 //! A fragment's items recorded as one compositor chunk.
 
+use std::sync::Arc;
+
 use compositor_types::{ChunkFlags, ChunkKey, ChunkProps, ItemKind, Transaction};
 use zgui_scene::Scene;
 
@@ -44,10 +46,13 @@ pub(crate) fn record(
             Ref::Paint(kind, id) => {
                 chunk.paint_ref(kind, id);
             }
+            Ref::Image(id) => {
+                chunk.image_slot(id);
+            }
         }
     }
 
-    // A recording starts with empty arenas, so the ranges and local clip indices the items hold
+    // A recording starts with empty arenas and lists, so the ranges and indices the items hold
     // stay what they were when the items were built.
     let glyphs = chunk.glyphs(&items.glyphs);
     debug_assert_eq!(glyphs.start, 0);
@@ -55,6 +60,12 @@ pub(crate) fn record(
     debug_assert_eq!(coords.start, 0);
     for clip in &items.local_clips {
         chunk.local_clip(clip.clone());
+    }
+    for payload in &items.payloads {
+        chunk.payload(Arc::clone(payload));
+    }
+    for chain in &items.filters {
+        chunk.filters(Arc::clone(chain));
     }
 
     for op in &items.ops {
@@ -64,6 +75,10 @@ pub(crate) fn record(
             ItemKind::SHADOW => chunk.shadow(items.shadows[index]),
             ItemKind::LINE => chunk.line(items.lines[index]),
             ItemKind::GLYPH_RUN => chunk.glyph_run(items.glyph_runs[index]),
+            ItemKind::IMAGE => chunk.image(items.images[index]),
+            ItemKind::MARKS => chunk.marks(items.marks[index]),
+            ItemKind::PATH => chunk.path(items.paths[index].clone()),
+            ItemKind::BACKDROP => chunk.backdrop(items.backdrops[index]),
             kind => unreachable!("the recorder holds no item of kind {kind:?}"),
         };
     }

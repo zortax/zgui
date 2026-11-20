@@ -49,6 +49,7 @@ use zgui_profile::{Counter, counter};
 
 use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId, TableHolds};
 
+use crate::emit::record::ImageKey;
 use crate::lower::cache::PaintStyleRef;
 use crate::walk::replay::hold::ResourceOwner;
 
@@ -235,9 +236,11 @@ pub struct Record {
     pub rasterised_frames: u8,
     /// The number of the tiled source whose tiles the chunk draws.
     ///
-    /// The tiles name their rasters and are placed every frame, so the record holds none of them.
-    /// It replays only while the source stands.
+    /// The record replays only while the source stands.
     pub tiled: Option<u64>,
+    /// The tile images the chunk draws, with their rectangles in the fragment's space as the
+    /// encoding placed them.
+    pub tiles: Option<Arc<[(ImageKey, Rect<DevicePx, Device>)]>>,
     /// The region of the fragment's space whose prims a series cut to it draws, as the encoding
     /// measured it.
     ///
@@ -248,7 +251,7 @@ pub struct Record {
 }
 
 /// What the layer route did for one encoding.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct LayerRecord {
     /// The phase the walk read for the fragment, when the encoding pushed a layer sprite.
     pub phase: Option<[u8; 2]>,
@@ -256,8 +259,10 @@ pub struct LayerRecord {
     pub provisional: bool,
     /// Whether the drawing fell back to its shapes for the budget or a demotion.
     pub promote: bool,
-    /// The number of the tiled source whose tiles the encoding pushed.
+    /// The number of the tiled source whose tiles the encoding recorded.
     pub tiled: Option<u64>,
+    /// The tile images the encoding recorded, with their rectangles in the fragment's space.
+    pub tiles: Option<Arc<[(ImageKey, Rect<DevicePx, Device>)]>>,
     /// The region of the fragment's space whose prims a series cut to it draws.
     pub window: Option<zgui_scene::kurbo::Rect>,
 }
@@ -619,6 +624,14 @@ impl PaintCache {
         self.records.get(&fragment).and_then(|record| record.tiled)
     }
 
+    /// The tile images the chunk of `fragment` draws, with their rectangles in the fragment's
+    /// space as the encoding placed them.
+    pub fn tiles(&self, fragment: FragKey) -> Option<&Arc<[(ImageKey, Rect<DevicePx, Device>)]>> {
+        self.records
+            .get(&fragment)
+            .and_then(|record| record.tiles.as_ref())
+    }
+
     /// The scene primitives recorded for `fragment`, their revision and how many compositor items
     /// the fragment recorded, for a caller that has already decided to replay it.
     pub fn chunk(&self, fragment: FragKey) -> Option<(u64, &Arc<ChunkPrims>, usize)> {
@@ -730,6 +743,7 @@ impl PaintCache {
                 promote: layer.promote,
                 rasterised_frames: 0,
                 tiled: layer.tiled,
+                tiles: layer.tiles,
                 window: layer.window,
             },
         );

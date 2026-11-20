@@ -39,8 +39,6 @@ impl CacheRegistry for Window {
             size.height.0.max(0.0) as u32,
         );
         visit(&mut VectorLayersBudget::new(
-            &mut self.painter,
-            &mut self.scene,
             &mut self.content,
             layer_bytes,
             self.budgets.tracked(CacheId::VectorLayers),

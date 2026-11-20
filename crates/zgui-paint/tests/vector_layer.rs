@@ -1,4 +1,4 @@
-//! A drawing rasterised whole on the CPU against the same drawing through the path renderer.
+//! A drawing rasterised whole on the CPU against the same drawing recorded as paths.
 //!
 //! The CPU layer stands in for the general route on a static page, so it has to draw the same
 //! picture: the same ramps, the same clips, the same strokes, at a whole box, at a box a fraction of
@@ -7,22 +7,23 @@
 
 mod support;
 
+use std::collections::HashMap;
+
 use zgui_atlas::AtlasLimits;
-use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_dom::{Document, NodeKind};
 use zgui_geom::{Affine2, DevicePx, Point, Rect, Size};
 use zgui_interned::ElementName;
-use zgui_paint::content::vectors::{LayerAnswer, LayerRequest};
-use zgui_paint::content::{NoVectorMasks, VectorPlacement as Placement};
-use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, draw_drawing, layer_sprite};
+use zgui_paint::content::vectors::{LayerAnswer, LayerPixels, LayerRequest};
+use zgui_paint::content::{VectorMaskSource as _, VectorPlacement as Placement};
+use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, layer_image};
 use zgui_paint::{ContentCache, VectorCache, VectorSource};
-use zgui_render::Renderer as _;
-use zgui_render_wgpu::Pixels;
 use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId, VectorId};
+use zgui_testkit_compositor::Pixels;
 use zgui_vocab::{PropKey, PropValue, prop::drawing};
 
-use support::{SIDE, Which, harness, opaque, present, quad, rect};
+use support::conformance::{self, SIDE, framed, scene_at};
+use support::gpu::{Gpu, Picture};
 
 /// The ground both pictures are drawn on.
 const GROUND: [u8; 3] = [40, 44, 52];
@@ -57,14 +58,9 @@ const CASES: [Case; 3] = [
     },
 ];
 
-/// The scene a case is drawn in: the ground, and the transform the drawing is placed under.
+/// The scene a case is drawn in, and the transform the drawing is placed under.
 fn ground(case: Case) -> (Scene, SpatialId) {
-    let mut scene = support::scene();
-    quad(
-        &mut scene,
-        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
-        opaque(GROUND[0], GROUND[1], GROUND[2]),
-    );
+    let mut scene = scene_at(SIDE as u32);
     let transform = if case.scale == 1.0 {
         SpatialId::VIEWPORT
     } else {
@@ -76,6 +72,30 @@ fn ground(case: Case) -> (Scene, SpatialId) {
             .space_of(viewport, owner, OwnSpace::of(Some(matrix), None, false))
     };
     (scene, transform)
+}
+
+/// Records the ground over the whole target.
+fn paint_ground(rec: &mut zgui_paint::emit::Recorder<'_>) {
+    let ground = rec.color(Color::srgb_u8(GROUND[0], GROUND[1], GROUND[2], 255));
+    let mut quad = zgui_paint::emit::record::filled(
+        Rect::new(
+            Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(SIDE as f32), DevicePx(SIDE as f32)),
+        ),
+        [0.0; 8],
+        ground,
+    );
+    quad.space = rec.space(SpatialId::VIEWPORT);
+    rec.quad(quad);
+}
+
+/// The placement of a drawing under `transform`.
+fn placed(transform: SpatialId) -> VectorPlacement {
+    VectorPlacement {
+        clip: ClipId::ROOT,
+        transform,
+        scale: 1.0,
+    }
 }
 
 /// The drawing an element carrying `source` draws into the case's box.
@@ -122,54 +142,38 @@ fn paint() -> ShapePaint {
     }
 }
 
-/// The drawing through the general route.
-fn general(source: &str, case: Case) -> Scene {
+/// The drawing through the general route, kept on frame paths.
+fn general(gpu: &mut Gpu, source: &str, case: Case) -> Picture {
     let (mut scene, transform) = ground(case);
     let (drawing, _) = drawing_of(source, case);
-    draw_drawing(
-        &mut scene,
-        VectorId(1),
-        &drawing,
-        paint(),
-        &NoVectorMasks,
-        VectorPlacement {
-            clip: ClipId::ROOT,
-            transform,
-            scale: 1.0,
-        },
-    );
+    let shapes = framed(&drawing.placed_all());
+    let picture = gpu.picture(&mut scene, transform, |rec| {
+        paint_ground(rec);
+        zgui_paint::emit::vector::draw(rec, VectorId(1), &shapes, paint(), placed(transform));
+    });
     assert!(
-        !scene.primitives.vectors.is_empty(),
-        "the general route drew nothing"
+        picture.drawing.of_kind("path").count() > 0,
+        "the general route drew nothing: {}",
+        picture.drawing
     );
-    scene.finish(&DamageSet::full());
-    scene
+    picture
 }
 
 /// The drawing flattened to lines within a two-hundredth of a pixel, strokes replaced by their
 /// outlines, through the general route: the true coverage.
-fn exact(source: &str, case: Case) -> Scene {
+fn exact(gpu: &mut Gpu, source: &str, case: Case) -> Picture {
     let (mut scene, transform) = ground(case);
     let (drawing, _) = drawing_of(source, case);
     let placement = Affine2::new(case.scale, 0.0, 0.0, case.scale, 0.0, 0.0);
-    let shapes = support::conformance::precise(&drawing.placed_all(), placement);
-    zgui_paint::emit::vector::draw(
-        &mut scene,
-        VectorId(1),
-        &shapes,
-        paint(),
-        VectorPlacement {
-            clip: ClipId::ROOT,
-            transform,
-            scale: 1.0,
-        },
-    );
-    scene.finish(&DamageSet::full());
-    scene
+    let shapes = framed(&conformance::precise(&drawing.placed_all(), placement));
+    gpu.picture(&mut scene, transform, |rec| {
+        paint_ground(rec);
+        zgui_paint::emit::vector::draw(rec, VectorId(1), &shapes, paint(), placed(transform));
+    })
 }
 
-/// The drawing as one CPU layer, with its tile in `content`.
-fn layered(source: &str, case: Case, content: &mut ContentCache) -> Scene {
+/// The drawing as one CPU layer, rasterised by `content`.
+fn layered(gpu: &mut Gpu, source: &str, case: Case, content: &mut ContentCache) -> Picture {
     let (mut scene, transform) = ground(case);
     let (drawing, revision) = drawing_of(source, case);
     let spatial = scene
@@ -186,27 +190,17 @@ fn layered(source: &str, case: Case, content: &mut ContentCache) -> Scene {
         spatial,
     });
     let LayerAnswer::Sprite {
-        tile,
+        raster,
         local,
         provisional: false,
-        ..
     } = answer
     else {
         panic!("expected an exact layer, got {answer:?}");
     };
-    let sprite = layer_sprite(
-        local,
-        tile,
-        VectorPlacement {
-            clip: ClipId::ROOT,
-            transform,
-            scale: 1.0,
-        },
-        1.0,
-    );
-    scene.push_color_sprite(sprite);
-    scene.finish(&DamageSet::full());
-    scene
+    gpu.picture(&mut scene, transform, |rec| {
+        paint_ground(rec);
+        layer_image(rec, local, &raster, placed(transform), 1.0);
+    })
 }
 
 /// How two pictures differ wherever either paints: the mean and the largest difference of the
@@ -274,36 +268,32 @@ const STATIC: [&str; 4] = [
 
 #[test]
 fn a_layer_matches_the_general_route_on_the_conformance_set() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     let mut failures = Vec::new();
     for (name, source) in conformance_set() {
         for case in CASES {
             let mut content = ContentCache::new(AtlasLimits::default());
-            let layer = layered(&source, case, &mut content);
-            content
-                .flush(harness.renderer.texture_sink())
-                .expect("the layer's texels reach the device");
-            let by_layer = present(&mut harness.renderer, &layer);
-            let by_paths = present(&mut harness.renderer, &general(&source, case));
+            let by_layer = layered(&mut gpu, &source, case, &mut content).pixels;
+            let by_paths = general(&mut gpu, &source, case).pixels;
             let (mean, worst, at, count) = difference(&by_layer, &by_paths);
             println!(
                 "{name} {case:?}: mean {mean:.3}, worst {worst} at {at:?} over {count} pixels"
             );
             assert!(count > 100, "{name}: the drawing covers almost nothing");
-            let close = mean <= support::conformance::MEAN && worst <= support::conformance::WORST;
+            let close = mean <= conformance::MEAN && worst <= conformance::WORST;
             // Where a curve makes the two differ by more, both are measured against the true
             // coverage, and the layer has to be the closer of the two.
             let closer = close || {
-                let by_lines = present(&mut harness.renderer, &exact(&source, case));
+                let by_lines = exact(&mut gpu, &source, case).pixels;
                 let layer_error = difference(&by_layer, &by_lines);
                 let paths_error = difference(&by_paths, &by_lines);
                 println!(
                     "    against the true coverage: layer {:.3} worst {}, general {:.3} worst {}",
                     layer_error.0, layer_error.1, paths_error.0, paths_error.1
                 );
-                layer_error.0 <= paths_error.0 && layer_error.1 <= support::conformance::WORST
+                layer_error.0 <= paths_error.0 && layer_error.1 <= conformance::WORST
             };
             if !closer {
                 failures.push(format!(
@@ -321,7 +311,7 @@ const HUGE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 3000
 
 #[test]
 fn tiles_of_a_huge_drawing_match_the_general_route() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     // The surface shows document units 1000 to 1128, on the whole grid and off it.
@@ -344,39 +334,66 @@ fn tiles_of_a_huge_drawing_match_the_general_route() {
         let LayerAnswer::Tiles { tiles, .. } = answer else {
             panic!("expected tiles, got {answer:?}");
         };
-        let placement = VectorPlacement {
-            clip: ClipId::ROOT,
-            transform,
-            scale: 1.0,
-        };
-        for (name, path_rect) in tiles.sprites() {
-            let local = drawing.fit.transform_rect_bbox(path_rect);
-            let local = Rect::new(
-                Point::new(DevicePx(local.x0 as f32), DevicePx(local.y0 as f32)),
-                Size::new(
-                    DevicePx(local.width() as f32),
-                    DevicePx(local.height() as f32),
-                ),
+        let placed_tiles: Vec<_> = tiles
+            .tiles()
+            .iter()
+            .map(|tile| {
+                let local = drawing.fit.transform_rect_bbox(tile.path_rect);
+                let local = Rect::new(
+                    Point::new(DevicePx(local.x0 as f32), DevicePx(local.y0 as f32)),
+                    Size::new(
+                        DevicePx(local.width() as f32),
+                        DevicePx(local.height() as f32),
+                    ),
+                );
+                (tile.pixels.clone(), local)
+            })
+            .collect();
+        let mut rasters = HashMap::new();
+        {
+            let store = zgui_layout::tree::store::LayoutStore::new(zgui_arena::DocumentId::FIRST);
+            let frame = content.frame(&store, &NoShaped, &zgui_text::NoRaster);
+            let layers = frame.layers().expect("a content frame keeps layers");
+            for (pixels, local) in &placed_tiles {
+                layers.shown(pixels.key, Some(*local));
+            }
+            let owed = layers.settle(
+                Size::new(SIDE, SIDE),
+                &zgui_bits::DamageSet::full(),
+                &mut |raster: &LayerPixels| {
+                    rasters.insert(raster.key, raster.clone());
+                },
             );
-            scene.push_color_sprite(layer_sprite(local, name, placement, 1.0));
+            assert!(owed.is_empty(), "four tiles fit one frame's budget");
         }
-        let owed = content.settle_layers(&mut scene, &DamageSet::full());
-        assert!(owed.is_empty(), "four tiles fit one frame's budget");
-        assert!(!scene.has_unresolved_resources());
-        scene.finish(&DamageSet::full());
-        content
-            .flush(harness.renderer.texture_sink())
-            .expect("the tiles' texels reach the device");
-        let by_tiles = present(&mut harness.renderer, &scene);
-        let by_paths = present(&mut harness.renderer, &general(HUGE, case));
+        let by_tiles = gpu
+            .picture(&mut scene, transform, |rec| {
+                paint_ground(rec);
+                for (pixels, local) in &placed_tiles {
+                    let raster = rasters.get(&pixels.key).unwrap_or(pixels);
+                    layer_image(rec, *local, raster, placed(transform), 1.0);
+                }
+            })
+            .pixels;
+        let by_paths = general(&mut gpu, HUGE, case).pixels;
         let (mean, worst, at, count) = difference(&by_tiles, &by_paths);
         println!("{left}, {top}: mean {mean:.3}, worst {worst} at {at:?} over {count} pixels");
         assert!(count > 10_000, "the drawing covers the surface");
-        assert!(mean <= support::conformance::MEAN, "mean {mean:.3}");
-        // Off the pixel grid the sprites are filtered, and still within the conformance worst.
-        assert!(
-            worst <= support::conformance::WORST,
-            "worst {worst} at {at:?}"
-        );
+        assert!(mean <= conformance::MEAN, "mean {mean:.3}");
+        // Off the pixel grid the images are filtered, and still within the conformance worst.
+        assert!(worst <= conformance::WORST, "worst {worst} at {at:?}");
+    }
+}
+
+/// A source of positioned glyphs with nothing in it.
+struct NoShaped;
+
+impl zgui_text::ShapedGlyphs for NoShaped {
+    fn visit_line(
+        &self,
+        _paragraph: zgui_text::ParagraphKey,
+        _line: u16,
+        _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
+    ) {
     }
 }

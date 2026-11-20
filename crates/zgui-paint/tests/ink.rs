@@ -29,8 +29,13 @@ fn reported(harness: &Harness, name: &str) -> Rect<DevicePx, Device> {
 fn assert_all_inside(harness: &mut Harness, bounds: Rect<DevicePx, Device>, drawn: usize) {
     let drawing = harness.redraw();
     let mut counted = 0;
-    for instance in drawing.instances() {
-        let [x, y, width, height] = instance.bounds();
+    for instance in drawing
+        .instances()
+        .iter()
+        .chain(drawing.objects("backdrop"))
+    {
+        // A backdrop reads beyond what it paints, and what it reads has to be inside too.
+        let [x, y, width, height] = instance.rect("source").unwrap_or_else(|| instance.bounds());
         let ink = Rect::new(
             Point::new(DevicePx(x), DevicePx(y)),
             Size::new(DevicePx(width), DevicePx(height)),
@@ -41,10 +46,6 @@ fn assert_all_inside(harness: &mut Harness, bounds: Rect<DevicePx, Device>, draw
     let primitives = &harness.scene.primitives;
     for external in &primitives.externals {
         assert_contains(bounds, external.ink(), "external quad");
-        counted += 1;
-    }
-    for backdrop in &primitives.backdrops {
-        assert_contains(bounds, backdrop.source, "backdrop source");
         counted += 1;
     }
     assert!(

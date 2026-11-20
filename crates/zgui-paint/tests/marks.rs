@@ -1,8 +1,7 @@
-//! Recognised shapes reaching the display list as marks through the emit walk.
+//! Recognised shapes reaching the compositor as marks through the emit walk.
 //!
-//! Every fixture is a canvas painted through the real shared atlas, so the analytic route, the
-//! marks route, the mask route and the general route all compete for each shape as they do in a
-//! window.
+//! Every fixture is a canvas painted through the real content cache, so the analytic route, the
+//! marks routes and the general route all compete for each shape as they do in a window.
 
 mod support;
 
@@ -10,11 +9,10 @@ use zgui_atlas::AtlasLimits;
 use zgui_canvas::{Brush, SceneHandle, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{PaintReport, VectorCache, VectorRoute};
-use zgui_profile::Counter;
 use zgui_scene::kurbo::{self, BezPath, Circle, Shape as _};
-use zgui_scene::{MarkItem, Paint, Scene};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit_compositor::{Drawing, Instance};
 
+use support::drawn::{number, numbers};
 use support::{Element, Harness, poison};
 
 /// A root with one canvas in it, at the origin, with no box paint of its own.
@@ -47,19 +45,24 @@ fn marks_only(report: &PaintReport) -> bool {
     let routes = report.vector_routes[0].routes;
     routes.contains(VectorRoute::Marks)
         && !routes.contains(VectorRoute::Analytic)
-        && !routes.contains(VectorRoute::AtlasMask)
         && !routes.contains(VectorRoute::GeneralRaster)
 }
 
-/// The one mark of a scene, and the other primitives it holds none of.
-fn the_mark(scene: &Scene) -> MarkItem {
-    assert!(scene.primitives.vectors.is_empty(), "no vector item");
-    assert!(scene.primitives.mono_sprites.is_empty(), "no sprite");
-    assert!(scene.primitives.quads.is_empty(), "no quad");
-    let [mark] = scene.primitives.marks.as_slice() else {
-        panic!("{} marks", scene.primitives.marks.len());
+/// The one marks item of a drawing, which holds no other vector content.
+fn the_mark(drawing: &Drawing) -> &Instance {
+    for kind in ["path", "mono", "quad"] {
+        assert_eq!(drawing.of_kind(kind).count(), 0, "a {kind} in {drawing}");
+    }
+    let marks: Vec<_> = drawing.of_kind("marks").collect();
+    let [mark] = marks[..] else {
+        panic!("{drawing}");
     };
-    *mark
+    mark
+}
+
+/// The counts of discs, boxes and vertices a marks item draws.
+fn counts(mark: &Instance) -> [f32; 3] {
+    ["discs", "boxes", "vertices"].map(|name| number(mark, name).expect("a count"))
 }
 
 /// A circle as a path.
@@ -96,10 +99,10 @@ fn overlapping_circles_are_one_union_mark() {
     );
     let report = paint(&mut harness);
     assert!(marks_only(&report));
-    let mark = the_mark(harness.scene());
-    assert!(mark.is_union());
-    assert_eq!((mark.discs, mark.boxes, mark.vertices), (300, 0, 0));
-    assert_eq!(harness.scene().primitives.mark_payloads[0].discs.len(), 300);
+    let drawing = harness.redraw();
+    let mark = the_mark(&drawing);
+    assert!(mark.has("union"));
+    assert_eq!(counts(mark), [300.0, 0.0, 0.0]);
 }
 
 #[test]
@@ -123,9 +126,10 @@ fn separated_markers_past_the_quad_limit_are_one_direct_mark() {
     );
     let report = paint(&mut harness);
     assert!(marks_only(&report));
-    let mark = the_mark(harness.scene());
-    assert!(!mark.is_union(), "apart prims are painted one by one");
-    assert_eq!(mark.discs, 400);
+    let drawing = harness.redraw();
+    let mark = the_mark(&drawing);
+    assert!(!mark.has("union"), "apart prims are painted one by one");
+    assert_eq!(counts(mark)[0], 400.0);
 }
 
 #[test]
@@ -141,16 +145,16 @@ fn a_slanted_round_joined_polyline_is_one_union_mark() {
     );
     let report = paint(&mut harness);
     assert!(marks_only(&report));
-    let mark = the_mark(harness.scene());
-    assert!(mark.is_union(), "the two segments overlap at their join");
+    let drawing = harness.redraw();
+    let mark = the_mark(&drawing);
+    assert!(mark.has("union"), "the two segments overlap at their join");
     assert_eq!(
-        mark.vertices, 5,
+        counts(mark)[2],
+        5.0,
         "one run: a separator, three vertices, a separator"
     );
-    assert_eq!(mark.half_width, 1.5);
-    let payload = &harness.scene().primitives.mark_payloads[0];
-    assert!(payload.vertices[0][0].is_nan() && payload.vertices[4][0].is_nan());
-    assert_eq!(payload.vertices[2], [20.0, 30.0]);
+    assert_eq!(number(mark, "half_width"), Some(1.5));
+    assert_eq!(mark.field("caps"), Some("round/round"));
 }
 
 #[test]
@@ -160,9 +164,10 @@ fn a_transformed_canvas_circle_takes_the_marks_route() {
             "{CSS}
              mark {{ transform: {transform} }}"
         );
+        // At the box's centre, which every transform about it leaves on the output.
         let (mut harness, _handle) = canvas(
             vec![
-                ShapeBuilder::new(circle(24.0, 24.0, 10.0))
+                ShapeBuilder::new(circle(120.0, 60.0, 10.0))
                     .fill(Brush::Solid(opaque(255, 0, 0)))
                     .build(),
             ],
@@ -170,9 +175,10 @@ fn a_transformed_canvas_circle_takes_the_marks_route() {
         );
         let report = paint(&mut harness);
         assert!(marks_only(&report), "`transform: {transform}`");
-        let mark = the_mark(harness.scene());
-        assert!(!mark.is_union(), "one prim is never a union");
-        assert_eq!(mark.discs, 1);
+        let drawing = harness.redraw();
+        let mark = the_mark(&drawing);
+        assert!(!mark.has("union"), "one prim is never a union");
+        assert_eq!(counts(mark)[0], 1.0);
     }
 }
 
@@ -189,7 +195,7 @@ fn a_polygon_takes_another_route() {
     );
     let report = paint(&mut harness);
     assert!(!report.vector_routes[0].routes.contains(VectorRoute::Marks));
-    assert!(harness.scene().primitives.marks.is_empty());
+    assert_eq!(harness.redraw().of_kind("marks").count(), 0);
 }
 
 #[test]
@@ -211,12 +217,14 @@ fn a_gradient_scatter_paints_through_its_mark() {
     );
     let report = paint(&mut harness);
     assert!(marks_only(&report));
-    let scene = harness.scene();
-    let mark = the_mark(scene);
-    match scene.paints.get(mark.paint.id().expect("a paint")) {
-        Some(Paint::Gradient { stops, .. }) => assert_eq!(stops.len(), 2),
-        other => panic!("expected the ramp, found {other:?}"),
-    }
+    let drawing = harness.redraw();
+    let mark = the_mark(&drawing);
+    assert_eq!(mark.paint("paint").as_deref(), Some("linear"), "{drawing}");
+    assert_eq!(
+        mark.field("stops").map(|stops| stops.matches('@').count()),
+        Some(2),
+        "{drawing}"
+    );
 }
 
 /// A copy of the plot's waves example at `width` by `height`: a grid, the damped sine as joined
@@ -290,12 +298,10 @@ fn the_waves_plot_takes_no_general_route() {
     let (mut harness, _handle) = canvas(waves(640.0, 360.0), css);
     let report = paint(&mut harness);
     let routes = report.vector_routes[0].routes;
-    assert!(
-        !routes.contains(VectorRoute::GeneralRaster) && !routes.contains(VectorRoute::AtlasMask),
-        "{routes:?}"
-    );
+    assert!(!routes.contains(VectorRoute::GeneralRaster), "{routes:?}");
     assert!(routes.contains(VectorRoute::Marks), "the wave is a mark");
-    assert!(harness.scene().primitives.vectors.is_empty());
+    let drawing = harness.redraw();
+    assert_eq!(drawing.of_kind("path").count(), 0, "{drawing}");
 }
 
 #[test]
@@ -319,46 +325,33 @@ fn a_marks_canvas_replays_when_it_moves() {
     let mut harness = Harness::new(tree, css);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let mut recording = Recording::begin();
-    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
+    let raster = zgui_testkit_scene::MonoRaster::new();
+    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
     assert!(first.vector_routes[0].routes.contains(VectorRoute::Marks));
-    let before = harness.scene().primitives.marks[0];
-    let payload = std::sync::Arc::clone(&harness.scene().primitives.mark_payloads[0]);
+    let place = |drawing: &Drawing| {
+        let mark = the_mark(drawing);
+        let origin = numbers(mark, "origin").expect("an origin");
+        (
+            mark.bounds()[1],
+            [origin[0] - poison(), origin[1] - poison()],
+        )
+    };
+    let before = place(&harness.redraw());
 
     let spacer = harness.element("spacer");
     harness.edit_and_restyle(|edit| edit.add_class(spacer, zgui_interned::ClassName::new("tall")));
     zgui_layout::boxtree::patch::restyle(&mut harness.store, &harness.document, [spacer]);
     harness.compose_from_marks(400.0, 200.0);
-    let mut report = None;
-    let measured = recording.measure(|| {
-        report = Some(harness.paint_cached_vectors_ready(&vectors, &mut content, true));
-    });
-    let report = report.expect("a frame was painted");
+    let report = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
     assert!(
         report.vector_routes.is_empty(),
         "the canvas was encoded again: {:?}",
         report.vector_routes
     );
-    assert!(measured.get(Counter::ChunksTranslated) > 0);
-    let after = harness.scene().primitives.marks[0];
-    assert_eq!(
-        after.bounds[1] - before.bounds[1],
-        20.0,
-        "the mark moved with its box"
-    );
-    let unpoisoned = |[x, y]: [f32; 2]| [x - poison(), y - poison()];
-    assert_eq!(
-        unpoisoned(before.origin),
-        [0.0, 10.0],
-        "the fit places the payload"
-    );
-    assert_eq!(
-        unpoisoned(after.origin),
-        [0.0, 30.0],
-        "and its payload stayed where it was"
-    );
-    assert!(
-        std::sync::Arc::ptr_eq(&harness.scene().primitives.mark_payloads[0], &payload),
-        "the replay shares the encoded payload"
-    );
+    let sync = harness.compositor.sync;
+    assert_eq!(sync.offsets, 1, "{sync:?}");
+    let after = place(&harness.redraw());
+    assert_eq!(after.0 - before.0, 20.0, "the mark moved with its box");
+    assert_eq!(before.1, [0.0, 10.0], "the fit places the payload");
+    assert_eq!(after.1, [0.0, 30.0], "and the chunk offset moves it");
 }

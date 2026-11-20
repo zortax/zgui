@@ -3,7 +3,7 @@
 //! Each box with children, each box that establishes a stacking context and each box drawn with a
 //! group effect gets an order node. A node lists the chunks of its box's fragments, then each child
 //! in painting order: a child with a node of its own as that node, any other child as the chunks
-//! of its fragments.
+//! of its fragments. A child's backdrop chunk comes right before it, outside its node.
 //!
 //! A box's list is rebuilt in these cases:
 //!
@@ -34,6 +34,8 @@ pub(crate) struct Order {
     root: Option<OrderId>,
     top: Option<BoxKey>,
     root_entries: Vec<OrderEntry>,
+    /// Whether the root's list changed without its box changing, as a backdrop chunk does.
+    root_dirty: bool,
     nodes: FxHashMap<BoxKey, Node>,
     placed: FxHashMap<BoxKey, Place>,
     effects: FxHashMap<BoxKey, GroupEffect>,
@@ -90,6 +92,8 @@ pub(crate) struct Context<'a> {
     pub(crate) scene: &'a mut Scene,
     /// Whether a box has an outline chunk.
     pub(crate) outlined: &'a dyn Fn(BoxKey) -> bool,
+    /// Whether a box has a backdrop chunk.
+    pub(crate) backdropped: &'a dyn Fn(BoxKey) -> bool,
 }
 
 impl Order {
@@ -105,6 +109,22 @@ impl Order {
     /// Notes that the fragments of the box `key` came or went.
     pub(crate) fn fragments_changed(&mut self, key: BoxKey) {
         self.dirty.insert(key);
+    }
+
+    /// Notes that the box `key` gained or lost its chunk of `part`.
+    ///
+    /// The box's own list holds its outline. The list that holds the box holds its backdrop.
+    pub(crate) fn part_changed(&mut self, key: BoxKey, part: Part) {
+        self.dirty.insert(key);
+        if part != Part::Backdrop {
+            return;
+        }
+        match self.placed.get(&key) {
+            Some(place) => {
+                self.dirty.insert(place.owner);
+            }
+            None => self.root_dirty |= self.top == Some(key),
+        }
     }
 
     /// Notes the group effect the box `key` is drawn with, `None` for none.
@@ -158,17 +178,21 @@ impl Order {
             .store
             .root()
             .filter(|top| context.store.get(*top).is_some());
-        if top == self.top && top.is_none_or(|top| self.nodes.contains_key(&top)) {
+        let dirty = core::mem::take(&mut self.root_dirty);
+        if top == self.top && top.is_none_or(|top| self.nodes.contains_key(&top)) && !dirty {
             return 0;
         }
-        if let Some(old) = self.top.take() {
+        if let Some(old) = self.top.take()
+            && Some(old) != top
+        {
             self.scratch.orphans.push(old);
         }
         self.top = top;
-        let entries: Vec<OrderEntry> = top
-            .map(|top| OrderEntry::Node(self.ensure_node(context, top)))
-            .into_iter()
-            .collect();
+        let mut entries = Vec::new();
+        if let Some(top) = top {
+            push_backdrop(context.backdropped, top, &mut entries);
+            entries.push(OrderEntry::Node(self.ensure_node(context, top)));
+        }
         let spliced = splice(context.tx, root, &self.root_entries, &entries);
         self.root_entries = entries;
         spliced
@@ -236,6 +260,7 @@ impl Order {
         for &child in &children {
             let node = self.needs_node(store, child);
             self.placed.insert(child, Place { owner: key, node });
+            push_backdrop(context.backdropped, child, &mut entries);
             if node {
                 entries.push(OrderEntry::Node(self.ensure_node(context, child)));
             } else {
@@ -349,6 +374,13 @@ fn push_chunks(store: &LayoutStore, key: BoxKey, entries: &mut Vec<OrderEntry>) 
 fn push_outline(outlined: &dyn Fn(BoxKey) -> bool, key: BoxKey, entries: &mut Vec<OrderEntry>) {
     if outlined(key) {
         entries.push(OrderEntry::Chunk(key::at(key.as_u64(), 0, Part::Outline)));
+    }
+}
+
+/// Appends the backdrop chunk of the box `key`, when `backdropped` says it has one.
+fn push_backdrop(backdropped: &dyn Fn(BoxKey) -> bool, key: BoxKey, entries: &mut Vec<OrderEntry>) {
+    if backdropped(key) {
+        entries.push(OrderEntry::Chunk(key::at(key.as_u64(), 0, Part::Backdrop)));
     }
 }
 

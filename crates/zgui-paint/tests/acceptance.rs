@@ -639,33 +639,40 @@ fn a_backdrop_is_cut_to_the_rounded_border_box_in_the_space_of_its_box() {
                 transform: translateX(10px); backdrop-filter: blur(8px) }",
     );
     harness.paint_everything();
-    let scene = harness.scene();
-    let backdrop = scene
-        .primitives
-        .backdrops
-        .first()
-        .expect("the card frosts what is beneath it");
+    let drawing = harness.redraw();
+    let backdrops: Vec<_> = drawing.objects("backdrop").collect();
+    let [backdrop] = backdrops[..] else {
+        panic!("the card frosts what is beneath it: {drawing}");
+    };
     let card = harness
         .store()
         .fragment(harness.fragment_of("card"))
         .expect("the card has a fragment");
-    let Some(zgui_scene::ClipNode::Link { link, parent, .. }) = scene.clips.get(backdrop.clip)
-    else {
-        panic!("the backdrop has a clip of its own");
-    };
+    let border = card.border_box;
+    assert_eq!(backdrop.field("filters"), Some("[blur(4)]"), "{drawing}");
     assert_eq!(
-        *parent, card.clip,
-        "inside the chain the card is clipped by"
+        backdrop.rect("item"),
+        Some([
+            border.origin.x.0,
+            border.origin.y.0,
+            border.size.width.0,
+            border.size.height.0
+        ]),
+        "{drawing}"
     );
-    assert!(link.is_rounded(), "with the card's round corners");
-    let zgui_scene::ClipLink::RoundedRect { rect, space, .. } = link else {
-        panic!("a rounded rectangle");
-    };
-    assert_eq!(*rect, card.border_box);
+    let clip = backdrop.field("clip").expect("a clip of its own");
+    assert!(
+        clip.contains("radii=[12, 12, 12, 12, 12, 12, 12, 12]"),
+        "with the card's round corners: {drawing}"
+    );
+    assert!(
+        clip.contains("in=translate[10, 0]"),
+        "in the card's own coordinate system: {drawing}"
+    );
     assert_eq!(
-        Some(*space),
-        card.transform,
-        "in the card's own coordinate system"
+        backdrop.field("space"),
+        Some("translate[10, 0]"),
+        "{drawing}"
     );
 }
 
@@ -677,9 +684,14 @@ fn a_square_backdrop_keeps_the_clip_of_its_box() {
          card { display: block; height: 80px; backdrop-filter: blur(8px) }",
     );
     harness.paint_everything();
-    let card = harness
-        .store()
-        .fragment(harness.fragment_of("card"))
-        .expect("the card has a fragment");
-    assert_eq!(harness.scene().primitives.backdrops[0].clip, card.clip);
+    let drawing = harness.redraw();
+    let backdrops: Vec<_> = drawing.objects("backdrop").collect();
+    let [backdrop] = backdrops[..] else {
+        panic!("{drawing}");
+    };
+    assert_eq!(
+        backdrop.field("clip"),
+        None,
+        "the card is clipped by nothing, and its square backdrop adds no link: {drawing}"
+    );
 }

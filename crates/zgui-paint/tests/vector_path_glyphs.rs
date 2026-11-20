@@ -1,4 +1,4 @@
-//! Repeated outlines drawn as path glyphs against the same outlines through the path renderer.
+//! Repeated outlines recorded as path glyphs against the same outlines recorded as paths.
 //!
 //! On the quarter-pixel grid a cell holds the exact coverage, so the glyphs have to agree with the
 //! general route as the other recognising routes do. Off the grid a copy is drawn from the
@@ -8,39 +8,20 @@ mod support;
 
 use std::sync::Arc;
 
-use zgui_atlas::AtlasLimits;
-use zgui_bits::DamageSet;
 use zgui_canvas::{Brush, CanvasScene, Marker, Series};
 use zgui_color::Color;
-use zgui_geom::{Affine2, Size};
-use zgui_paint::ContentCache;
+use zgui_geom::Affine2;
 use zgui_paint::content::Drawing;
-use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, draw_drawing};
-use zgui_profile::Counter;
-use zgui_render_wgpu::Pixels;
 use zgui_scene::kurbo::{self, Affine, BezPath};
-use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId, VectorId, peniko};
+use zgui_scene::peniko;
 use zgui_svg::{Fill, Ink, Paint, Shape, Stroke};
+use zgui_testkit_compositor::Pixels;
 
 use support::conformance::{
-    Route, compare, judge, precise, scene_of, scene_of_glyphs, with_glyphs,
+    GlyphsOnly, Route, SIDE, compare, drawn, framed, judge, payloads, picture, precise,
+    same_payloads,
 };
-use support::{SIDE, Which, harness, opaque, present, quad, rect};
-
-/// White fill, the inherited colour of every shape here.
-const PAINT: ShapePaint = ShapePaint {
-    fill: Color::WHITE,
-    stroke: None,
-    stroke_width: 1.0,
-};
-
-/// Drawn at the origin of the surface, with no transform and no clip.
-const PLACEMENT: VectorPlacement = VectorPlacement {
-    clip: ClipId::ROOT,
-    transform: SpatialId::VIEWPORT,
-    scale: 1.0,
-};
-
+use support::gpu::Gpu;
 /// Adds a triangle with its top vertex at `(x, y)`, `half` wide on each side and `height` tall.
 fn triangle(path: &mut BezPath, (x, y): (f64, f64), half: f64, height: f64) {
     path.move_to((x, y));
@@ -162,31 +143,6 @@ fn canvas(series: Series, view: Affine) -> Drawing {
     Drawing::canvas(&scene, Affine::IDENTITY)
 }
 
-/// The scene of `drawing` on black, drawn with `masks`, encoded as chunk `revision`.
-fn encode(
-    drawing: &Drawing,
-    masks: &dyn zgui_paint::content::VectorMaskSource,
-    revision: u64,
-    retired: Option<u64>,
-    scene: &mut Scene,
-) {
-    scene.begin_frame(Size::new(SIDE, SIDE));
-    quad(
-        scene,
-        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
-        opaque(0, 0, 0),
-    );
-    scene.begin_chunk_capture(ChunkPrims::default());
-    draw_drawing(scene, VectorId(1), drawing, PAINT, masks, PLACEMENT);
-    let chunk = Arc::new(scene.take_chunk_capture());
-    scene.note_chunk_inserted(revision, chunk);
-    if let Some(old) = retired {
-        scene.note_chunk_retired(old);
-    }
-    scene.bind_capture(revision);
-    scene.finish(&DamageSet::full());
-}
-
 /// Points of a quarter grid, as data the identity maps to the canvas.
 fn grid_data(columns: usize, rows: usize, step: f64) -> Arc<[[f32; 2]]> {
     quarter_grid(columns, rows, step, (8.0, 6.0))
@@ -197,32 +153,18 @@ fn grid_data(columns: usize, rows: usize, step: f64) -> Arc<[[f32; 2]]> {
 
 #[test]
 fn a_path_marker_series_matches_its_shapes() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     let anchors = quarter_grid(20, 20, 5.5, (8.0, 6.0));
     let data: Arc<[[f32; 2]]> = anchors.iter().map(|&(x, y)| [x as f32, y as f32]).collect();
     let drawing = canvas(markers(data, Affine::IDENTITY, 1.0), Affine::IDENTITY);
-    let mut content = ContentCache::new(AtlasLimits::default());
-    let mut quick = Scene::new();
-    with_glyphs(&mut content, &mut harness.renderer, |glyphs| {
-        encode(&drawing, glyphs, 1, None, &mut quick);
-    });
+    let quick = drawn(&mut gpu, &drawing, &GlyphsOnly::default());
     let shapes = [triangles(&anchors, 4.5, 9.0, 1.0)];
-    let general = scene_of(&shapes, None, Affine2::IDENTITY);
-    let exact = scene_of(
-        &precise(&shapes, Affine2::IDENTITY),
-        None,
-        Affine2::IDENTITY,
-    );
-    judge(
-        "series",
-        &mut harness.renderer,
-        &quick,
-        &general,
-        &exact,
-        Route::Glyphs,
-    );
+    let general = picture(&mut gpu, &framed(&shapes), None, Affine2::IDENTITY);
+    let exact = framed(&precise(&shapes, Affine2::IDENTITY));
+    let exact = picture(&mut gpu, &exact, None, Affine2::IDENTITY);
+    judge("series", &quick, &general, &exact, Route::Glyphs);
 }
 
 /// The centroid of the coverage in the `size` square at `(left, top)`, white on black.
@@ -243,7 +185,7 @@ fn centroid(pixels: &Pixels, (left, top): (i32, i32), size: i32) -> [f64; 2] {
 
 #[test]
 fn a_glyph_lands_within_an_eighth_of_a_pixel() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     let mut state = 0x9E37_79B9_7F4A_7C15_u64;
@@ -264,26 +206,19 @@ fn a_glyph_lands_within_an_eighth_of_a_pixel() {
         })
         .collect();
     let shapes = [triangles(&anchors, 4.5, 9.0, 1.0)];
-    let mut content = ContentCache::new(AtlasLimits::default());
-    let quick = scene_of_glyphs(
-        &shapes,
-        Affine2::IDENTITY,
-        &mut content,
-        &mut harness.renderer,
+    let glyphs = picture(&mut gpu, &shapes, Some(Route::Glyphs), Affine2::IDENTITY);
+    assert!(
+        glyphs.drawing.of_kind("marks").count() > 0 && glyphs.drawing.of_kind("path").count() == 0,
+        "{}",
+        glyphs.drawing
     );
-    assert!(quick.primitives.vectors.is_empty() && !quick.primitives.marks.is_empty());
-    let exact = scene_of(
-        &precise(&shapes, Affine2::IDENTITY),
-        None,
-        Affine2::IDENTITY,
-    );
-    let glyphs = present(&mut harness.renderer, &quick);
-    let truth = present(&mut harness.renderer, &exact);
+    let exact = framed(&precise(&shapes, Affine2::IDENTITY));
+    let truth = picture(&mut gpu, &exact, None, Affine2::IDENTITY);
     let mut worst = 0.0f64;
     for &(x, y) in &anchors {
         let window = ((x - 7.0).floor() as i32, (y - 2.0).floor() as i32);
-        let [gx, gy] = centroid(&glyphs, window, 14);
-        let [tx, ty] = centroid(&truth, window, 14);
+        let [gx, gy] = centroid(&glyphs.pixels, window, 14);
+        let [tx, ty] = centroid(&truth.pixels, window, 14);
         worst = worst.max((gx - tx).abs()).max((gy - ty).abs());
     }
     println!("the farthest glyph lands {worst:.4} pixels from its true centroid");
@@ -295,26 +230,20 @@ fn a_glyph_lands_within_an_eighth_of_a_pixel() {
 
 #[test]
 fn a_translucent_overlap_of_glyphs_paints_alpha_once() {
-    let Some(mut harness) = harness(Which::Vello) else {
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
     // Two triangles, the second a pixel and a half right of the first, and six more apart.
     let mut anchors = vec![(40.0, 30.0), (41.5, 30.0)];
     anchors.extend((0..6).map(|index| (10.0 + 20.0 * f64::from(index), 90.0)));
     let shapes = [triangles(&anchors, 9.0, 18.0, 0.5)];
-    let mut content = ContentCache::new(AtlasLimits::default());
-    let quick = scene_of_glyphs(
-        &shapes,
-        Affine2::IDENTITY,
-        &mut content,
-        &mut harness.renderer,
-    );
-    let [mark] = quick.primitives.marks.as_slice() else {
-        panic!("one glyph mark");
+    let quick = picture(&mut gpu, &shapes, Some(Route::Glyphs), Affine2::IDENTITY);
+    let marks: Vec<_> = quick.drawing.of_kind("marks").collect();
+    let [mark] = marks[..] else {
+        panic!("one glyph mark: {}", quick.drawing);
     };
-    assert!(mark.is_union(), "the two overlap");
-    let pixels = present(&mut harness.renderer, &quick);
-    let both = pixels.rgba(41, 44)[0];
+    assert!(mark.has("union"), "the two overlap: {}", quick.drawing);
+    let both = quick.pixels.rgba(41, 44)[0];
     assert!(
         both.abs_diff(128) <= 1,
         "the overlap paints alpha once: {both}"
@@ -322,60 +251,27 @@ fn a_translucent_overlap_of_glyphs_paints_alpha_once() {
 }
 
 #[test]
-fn a_panned_path_marker_series_uploads_no_payload() {
+fn a_panned_path_marker_series_records_its_payload_once() {
     let data = grid_data(16, 16, 7.0);
     let series = || markers(Arc::clone(&data), Affine::IDENTITY, 0.5);
     let pan = Affine::translate((13.25, -7.5));
-    let panned = {
-        let Some(mut harness) = harness(Which::Vello) else {
-            return;
-        };
-        let mut content = ContentCache::new(AtlasLimits::default());
-        let mut scene = Scene::new();
-        let mut last = None;
-        for (at, view) in [Affine::IDENTITY, pan].into_iter().enumerate() {
-            let drawing = canvas(series(), view);
-            let revision = at as u64 + 1;
-            with_glyphs(&mut content, &mut harness.renderer, |glyphs| {
-                encode(
-                    &drawing,
-                    glyphs,
-                    revision,
-                    (revision > 1).then(|| revision - 1),
-                    &mut scene,
-                );
-            });
-            zgui_profile::counter::reset();
-            let pixels = present(&mut harness.renderer, &scene);
-            scene.clear_chunk_notes();
-            last = Some((
-                zgui_profile::counter::get(Counter::MarksPayloadBytes),
-                pixels,
-            ));
-        }
-        last.expect("two frames")
-    };
-    let (bytes, pixels) = panned;
-    if zgui_profile::COUNTERS_ENABLED {
-        assert_eq!(bytes, 0, "the pan uploads no payload");
-    }
-    let Some(mut harness) = harness(Which::Vello) else {
+    let routes = GlyphsOnly::default();
+    let still = payloads(&canvas(series(), Affine::IDENTITY), &routes);
+    let panned = payloads(&canvas(series(), pan), &routes);
+    assert!(
+        same_payloads(&still, &panned),
+        "the pan records the payload it recorded before, so the compositor uploads none"
+    );
+
+    let Some(mut gpu) = Gpu::open(SIDE as u32) else {
         return;
     };
-    let mut content = ContentCache::new(AtlasLimits::default());
-    let mut scene = Scene::new();
-    let drawing = canvas(series(), pan);
-    with_glyphs(&mut content, &mut harness.renderer, |glyphs| {
-        encode(&drawing, glyphs, 1, None, &mut scene);
-    });
+    drawn(&mut gpu, &canvas(series(), Affine::IDENTITY), &routes);
+    let moved = drawn(&mut gpu, &canvas(series(), pan), &routes);
+    let fresh = drawn(&mut gpu, &canvas(series(), pan), &GlyphsOnly::default());
     assert!(
-        !scene.primitives.marks.is_empty(),
-        "the series draws as glyphs"
-    );
-    let expected = present(&mut harness.renderer, &scene);
-    assert!(
-        (0..SIDE).any(|x| pixels.rgba(x, 40)[0] > 0),
+        (0..SIDE).any(|x| moved.pixels.rgba(x, 40)[0] > 0),
         "the series draws"
     );
-    assert_eq!(pixels.max_difference(&expected), 0);
+    assert_eq!(moved.pixels.max_difference(&fresh.pixels), 0);
 }

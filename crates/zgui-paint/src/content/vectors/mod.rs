@@ -18,31 +18,30 @@
 mod cache;
 mod cpu;
 mod layer;
-mod mask;
 pub(crate) mod path_glyphs;
 pub(crate) mod payloads;
 mod recognitions;
+mod routes;
 
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
 #[doc(hidden)]
 pub use crate::content::vectors::layer::{
-    LayerAnswer, LayerFallback, LayerRequest, Tiles, VectorLayerSource,
+    LayerAnswer, LayerFallback, LayerPixels, LayerRequest, Tile, Tiles, VectorLayerSource,
 };
 pub(crate) use crate::content::vectors::layer::{VectorLayerCache, phase_of};
 #[doc(hidden)]
-pub use crate::content::vectors::mask::CachedMarks;
-pub(crate) use crate::content::vectors::mask::VectorMaskCache;
-pub use crate::content::vectors::mask::{
-    AnalyticOnly, MarksOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource,
-    VectorMaskStyle,
-};
-#[doc(hidden)]
-pub use crate::content::vectors::path_glyphs::{GlyphRequest, GlyphSheets, Splits};
+pub use crate::content::vectors::path_glyphs::Splits;
 #[doc(hidden)]
 pub use crate::content::vectors::payloads::MarkPayloads;
 pub(crate) use crate::content::vectors::recognitions::PartKey;
 #[doc(hidden)]
 pub use crate::content::vectors::recognitions::Recognitions;
+#[doc(hidden)]
+pub use crate::content::vectors::routes::CachedMarks;
+pub(crate) use crate::content::vectors::routes::VectorRouteCache;
+pub use crate::content::vectors::routes::{
+    AnalyticOnly, MarksOnly, NoVectorMasks, VectorMaskSource,
+};
 
 use std::sync::{Arc, OnceLock};
 

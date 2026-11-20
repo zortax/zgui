@@ -5,7 +5,7 @@
 //!
 //! - A fragment encoded this frame is recorded as the chunk of its key, replacing it.
 //! - A replayed fragment that moved has its chunk's offset written.
-//! - A box's outline is a chunk of its own, recorded when it changed.
+//! - A box's outline and its backdrop are chunks of their own, recorded when they changed.
 //! - A retired fragment's chunks are removed at the end of the frame, unless a fragment rebuilt
 //!   in its place recorded the same keys.
 //! - The tables' changes become node and slot writes.
@@ -17,11 +17,12 @@
 
 mod flush;
 mod key;
-mod lower;
 mod mirror;
 mod order;
 mod resolve;
 
+pub(crate) use self::key::Part;
+pub(crate) use self::mirror::images::whole;
 pub(crate) use self::resolve::Resolver;
 
 use compositor_types::{ChunkKey, OutputId, ScrollId, Transaction};
@@ -33,7 +34,6 @@ use zgui_scene::spatial::PropertyOwner;
 use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId};
 
 use crate::emit::record::{Items, Recorder};
-use crate::sync::key::Part;
 use crate::sync::mirror::{Held, Mirror};
 use crate::sync::order::Order;
 
@@ -46,10 +46,10 @@ pub struct CompositorSync {
     order: Order,
     chunks: FxHashMap<FragKey, Chunk>,
     owners: FxHashMap<ChunkKey, FragKey>,
-    outlines: FxHashMap<ChunkKey, Outline>,
+    extras: FxHashMap<ChunkKey, Extra>,
     outlined: FxHashMap<FragKey, ChunkKey>,
+    backdropped: FxHashMap<FragKey, ChunkKey>,
     retired: FxHashSet<ChunkKey>,
-    merged: Items,
     report: SyncReport,
     forgotten: Option<Held>,
 }
@@ -61,9 +61,9 @@ struct Chunk {
     offset: [f32; 2],
 }
 
-/// The outline chunk of a box, and the items it was last recorded with.
+/// The outline or the backdrop chunk of a box, and the items it was last recorded with.
 #[derive(Debug)]
-struct Outline {
+struct Extra {
     fragment: FragKey,
     items: Items,
 }
@@ -97,10 +97,10 @@ impl CompositorSync {
             order: Order::default(),
             chunks: FxHashMap::default(),
             owners: FxHashMap::default(),
-            outlines: FxHashMap::default(),
+            extras: FxHashMap::default(),
             outlined: FxHashMap::default(),
+            backdropped: FxHashMap::default(),
             retired: FxHashSet::default(),
-            merged: Items::default(),
             report: SyncReport::default(),
             forgotten: None,
         }
@@ -127,7 +127,7 @@ impl CompositorSync {
         self.release_forgotten(scene);
         for key in self.retired.drain() {
             self.owners.remove(&key);
-            self.outlines.remove(&key);
+            self.extras.remove(&key);
             transaction.remove_chunk(key);
             self.mirror.chunk_removed(key);
             self.report.removed += 1;
@@ -137,15 +137,18 @@ impl CompositorSync {
         }
         // The walk's replays rewrite the slots of the clips they carry along.
         self.report.table_writes += self.mirror.sync(&mut transaction, scene);
-        let outlines = &self.outlines;
+        let extras = &self.extras;
         let outlined =
-            |owner: BoxKey| outlines.contains_key(&key::at(owner.as_u64(), 0, Part::Outline));
+            |owner: BoxKey| extras.contains_key(&key::at(owner.as_u64(), 0, Part::Outline));
+        let backdropped =
+            |owner: BoxKey| extras.contains_key(&key::at(owner.as_u64(), 0, Part::Backdrop));
         let order = self.order.sync(&mut order::Context {
             tx: &mut transaction,
             store,
             mirror: &mut self.mirror,
             scene,
             outlined: &outlined,
+            backdropped: &backdropped,
         });
         self.report.order_entries += order.entries;
         self.report.table_writes += order.effects;
@@ -179,6 +182,11 @@ impl CompositorSync {
         self.mirror
             .spaces
             .scroll_of(&scene.spatial, PropertyOwner::of(container))
+    }
+
+    /// Reports whether the compositor holds an image of `key`.
+    pub fn holds_image(&self, key: crate::emit::record::ImageKey) -> bool {
+        self.mirror.images.holds(key)
     }
 
     /// Returns the box whose scroll offset the scroll node `scroll` applies.
@@ -231,9 +239,10 @@ impl CompositorSync {
         }
     }
 
-    /// Records `items` and the quads of `prims` as the painting of `fragment`.
+    /// Records `items` as the painting of `fragment`.
     ///
-    /// The other primitives of `prims` are of kinds the chunks do not record yet.
+    /// `prims` holds what the fragment pushed into the scene, which are kinds the chunks do not
+    /// record yet.
     pub(crate) fn record(
         &mut self,
         store: &LayoutStore,
@@ -259,17 +268,11 @@ impl CompositorSync {
         if self.owners.insert(key, fragment.key) != Some(fragment.key) && !replaces {
             self.order.fragments_changed(fragment.box_);
         }
-        let items = if lower::holds_quads(prims) {
-            let resolver = Resolver::new(transaction, &mut self.mirror);
-            lower::merge(items, prims, scene, resolver, &mut self.merged);
-            &self.merged
-        } else {
-            items
-        };
         flush::record(transaction, &mut self.mirror, scene, key, items);
         self.mirror.recorded(key);
         self.report.recorded += 1;
-        self.report.omitted_primitives += prims.len() - prims.quads.len();
+        self.report.omitted_primitives += prims.len();
+        self.report.omitted_instances += items.instanced;
         self.chunks.insert(
             fragment.key,
             Chunk {
@@ -279,37 +282,43 @@ impl CompositorSync {
         );
     }
 
-    /// Records `items` as the outline of the box whose first fragment is `fragment`.
+    /// Records `items` as `part` of the box whose first fragment is `fragment`: its outline or its
+    /// backdrop.
     ///
-    /// The outline's chunk depends on the items:
+    /// The chunk depends on the items:
     ///
     /// - If they are empty, the chunk is removed.
     /// - If the chunk holds them already for `fragment`, nothing is written.
     /// - Otherwise the chunk is recorded.
-    pub(crate) fn record_outline(
+    pub(crate) fn record_extra(
         &mut self,
         store: &LayoutStore,
         fragment: &Fragment,
+        part: Part,
         items: &Items,
         scene: &mut Scene,
     ) {
         let Some(transaction) = &mut self.transaction else {
             return;
         };
-        let key = key::of(store, fragment, Part::Outline);
+        let key = key::of(store, fragment, part);
         let replaces = self.retired.remove(&key);
+        let by_fragment = match part {
+            Part::Backdrop => &mut self.backdropped,
+            Part::Body | Part::Outline => &mut self.outlined,
+        };
         if items.is_empty() {
-            if self.outlines.remove(&key).is_some() || replaces {
+            if self.extras.remove(&key).is_some() || replaces {
                 self.owners.remove(&key);
-                self.outlined.remove(&fragment.key);
+                by_fragment.remove(&fragment.key);
                 transaction.remove_chunk(key);
                 self.mirror.chunk_removed(key);
                 self.report.removed += 1;
-                self.order.fragments_changed(fragment.box_);
+                self.order.part_changed(fragment.box_, part);
             }
             return;
         }
-        if let Some(held) = self.outlines.get(&key)
+        if let Some(held) = self.extras.get(&key)
             && held.fragment == fragment.key
             && held.items == *items
         {
@@ -317,40 +326,44 @@ impl CompositorSync {
             self.mirror.recorded(key);
             return;
         }
-        if !replaces && !self.outlines.contains_key(&key) {
-            self.order.fragments_changed(fragment.box_);
+        if !replaces && !self.extras.contains_key(&key) {
+            self.order.part_changed(fragment.box_, part);
         }
         flush::record(transaction, &mut self.mirror, scene, key, items);
         self.mirror.recorded(key);
         self.report.recorded += 1;
         self.owners.insert(key, fragment.key);
-        self.outlined.insert(fragment.key, key);
-        self.outlines.insert(
+        by_fragment.insert(fragment.key, key);
+        self.extras.insert(
             key,
-            Outline {
+            Extra {
                 fragment: fragment.key,
                 items: items.clone(),
             },
         );
     }
 
-    /// Removes the outline chunk of the box `owner`, if it has one.
-    pub(crate) fn drop_outline(&mut self, owner: BoxKey) {
-        if self.outlines.is_empty() {
+    /// Removes the chunk of `part` of the box `owner`, its outline or its backdrop, if it has
+    /// one.
+    pub(crate) fn drop_extra(&mut self, owner: BoxKey, part: Part) {
+        if self.extras.is_empty() {
             return;
         }
         let Some(transaction) = &mut self.transaction else {
             return;
         };
-        let key = key::at(owner.as_u64(), 0, Part::Outline);
-        if let Some(outline) = self.outlines.remove(&key) {
+        let key = key::at(owner.as_u64(), 0, part);
+        if let Some(extra) = self.extras.remove(&key) {
             self.owners.remove(&key);
-            self.outlined.remove(&outline.fragment);
+            match part {
+                Part::Backdrop => self.backdropped.remove(&extra.fragment),
+                Part::Body | Part::Outline => self.outlined.remove(&extra.fragment),
+            };
             self.retired.remove(&key);
             transaction.remove_chunk(key);
             self.mirror.chunk_removed(key);
             self.report.removed += 1;
-            self.order.fragments_changed(owner);
+            self.order.part_changed(owner, part);
         }
     }
 
@@ -378,10 +391,12 @@ impl CompositorSync {
             {
                 self.retired.insert(chunk.key);
             }
-            if let Some(key) = self.outlined.remove(fragment)
-                && self.owners.get(&key) == Some(fragment)
-            {
-                self.retired.insert(key);
+            for extras in [&mut self.outlined, &mut self.backdropped] {
+                if let Some(key) = extras.remove(fragment)
+                    && self.owners.get(&key) == Some(fragment)
+                {
+                    self.retired.insert(key);
+                }
             }
         }
     }

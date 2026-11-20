@@ -12,6 +12,7 @@ use compositor_capture::Transcript;
 pub struct Drawing {
     transcript: Transcript,
     instances: Vec<Instance>,
+    objects: Vec<Instance>,
 }
 
 /// One instance a frame draws, such as a quad or a glyph sprite.
@@ -22,21 +23,33 @@ pub struct Instance {
 }
 
 impl Drawing {
-    /// Reads the instances of a capture's drawing transcript.
+    /// Reads the instances and the objects of a capture's drawing transcript.
     pub fn of(transcript: Transcript) -> Self {
         let instances = transcript
             .lines()
             .filter_map(|line| line.strip_prefix("    "))
             .filter(|line| !line.starts_with(' '))
-            .map(|line| Instance {
-                kind: line.split(' ').next().unwrap_or_default().to_owned(),
-                text: line.to_owned(),
-            })
+            .map(Instance::of)
+            .collect();
+        let objects = transcript
+            .lines()
+            .filter_map(|line| line.strip_prefix("  "))
+            .map(Instance::of)
+            .filter(|object| OBJECTS.contains(&object.kind()))
             .collect();
         Self {
             transcript,
             instances,
+            objects,
         }
+    }
+
+    /// Returns the objects of `kind` the frame draws one at a time, such as `backdrop`,
+    /// `external`, `group_begin` or `group_end`, in draw order.
+    pub fn objects<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Instance> + 'a {
+        self.objects
+            .iter()
+            .filter(move |object| object.kind == kind)
     }
 
     /// Returns the transcript.
@@ -77,7 +90,18 @@ impl fmt::Display for Drawing {
     }
 }
 
+/// The kinds of the objects a frame draws one at a time, each a line of its own.
+const OBJECTS: [&str; 4] = ["backdrop", "external", "group_begin", "group_end"];
+
 impl Instance {
+    /// Reads one line of a transcript.
+    fn of(line: &str) -> Self {
+        Self {
+            kind: line.split(' ').next().unwrap_or_default().to_owned(),
+            text: line.to_owned(),
+        }
+    }
+
     /// Returns the instance's kind, the first word of its line.
     pub fn kind(&self) -> &str {
         &self.kind

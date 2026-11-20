@@ -27,9 +27,11 @@ mod filter;
 
 use std::sync::Arc;
 
+use compositor_types::Backdrop;
 use zgui_layout::{Fragment, FragmentFlags};
-use zgui_scene::{BackdropFilter, ClipId, ClipLink, Scene, SpatialId};
+use zgui_scene::{ClipId, ClipLink};
 
+use crate::emit::record::{Recorder, local_rect};
 use crate::lower::PaintStyle;
 
 /// The highest opacity that draws nothing a display shows: it moves no 8-bit channel by half a
@@ -167,19 +169,20 @@ pub fn effect(
     }
 }
 
-/// Emits a fragment's `backdrop-filter`, which samples what has already been drawn beneath it.
+/// Records a fragment's `backdrop-filter`, which filters what has already been drawn beneath it,
+/// and returns how many items were recorded.
 ///
-/// It is pushed *before* the group's own content, because what it reads is what is under the group
-/// and not what the group draws.
+/// The backdrop goes into a chunk the owner's order list holds before the box's own node, because
+/// what it reads is what is under the box and not what the box draws. The filtered result is cut
+/// to the rounded border box, as the box's background is. `computed` is the box's computed style,
+/// which gives the radii.
 ///
-/// The filtered result is cut to the rounded border box, as the box's background is. `computed` is
-/// the box's computed style, which gives the radii.
+/// A filter step of an application shader has no compositor counterpart yet and is left out.
 pub fn backdrop(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     style: &PaintStyle,
     computed: &zgui_css::ComputedStyle,
     fragment: &Fragment,
-    clip: ClipId,
     shaders: &dyn crate::content::shader::ShaderSource,
     scale: f32,
 ) -> usize {
@@ -187,7 +190,7 @@ pub fn backdrop(
     // After the chain the `backdrop-filter` property wrote, for the reason a filter effect goes
     // after the `filter` chain: the two are separate properties with no order between them.
     if let Some(step) = crate::emit::shader::filter_step(
-        scene,
+        rec.scene(),
         style
             .shader
             .as_ref()
@@ -197,31 +200,28 @@ pub fn backdrop(
     ) {
         filters.push(step);
     }
-    if filters.is_empty() {
+    let mut chain = Vec::new();
+    filter::convert(&filters, &mut chain);
+    if chain.is_empty() {
         return 0;
     }
     // The border box is in the box's own coordinate system, as every other rectangle it paints.
-    let space = fragment.transform.filter(|id| *id != SpatialId::VIEWPORT);
+    let space = crate::lower::transform::of(fragment);
     let radii = crate::lower::border::radii_of(computed, fragment.border_box, scale);
-    let corners = ClipLink::shaped(
-        fragment.border_box,
-        radii,
-        style.corner_shape,
-        space.unwrap_or(SpatialId::VIEWPORT),
-    );
-    // The clip is unnamed: the box owner's name is the clip it gives its children. A replay
-    // re-interns a noted clip at the position the content moved to.
+    let corners = ClipLink::shaped(fragment.border_box, radii, style.corner_shape, space);
     let clip = if corners.is_rounded() {
-        let rounded = scene.clips.push(clip, corners);
-        scene.note_minted_clip(rounded);
-        rounded
+        rec.local_clip(fragment.clip, corners)
     } else {
-        clip
+        rec.clip(fragment.clip)
     };
-    let filter = BackdropFilter::new(fragment.border_box, filters)
-        .clipped(clip)
-        .in_space(space);
-    usize::from(scene.push_backdrop(filter).is_some())
+    let item = Backdrop {
+        bounds: local_rect(fragment.border_box),
+        filters: 0,
+        clip,
+        space: rec.space(space),
+    };
+    rec.backdrop(item, Arc::from(chain));
+    1
 }
 
 #[cfg(test)]
@@ -392,10 +392,9 @@ mod tests {
         )
     }
 
-    /// A backdrop is measured in the box's own coordinate system, as the box's other rectangles
-    /// are, so the renderer can put it where the system is in the frame it draws.
+    /// A backdrop filters the border box with its chain, in the box's own coordinate system.
     #[test]
-    fn a_backdrop_is_measured_in_the_coordinate_system_of_its_box() {
+    fn a_backdrop_filters_the_border_box_with_its_chain() {
         let mut style = translucent(1.0);
         style.group.backdrop.push(zgui_scene::Filter::Blur(4.0));
         let mut fragment = fragment(true, false);
@@ -411,18 +410,23 @@ mod tests {
         let viewport = scene.spatial.viewport();
         let space = scene.spatial.space_of(viewport, owner, own);
         fragment.transform = Some(space);
+        let mut recording = crate::emit::record::Recording::new();
+        let mut rec = recording.recorder(&mut scene, space, zgui_scene::ClipId::ROOT);
         let pushed = super::backdrop(
-            &mut scene,
+            &mut rec,
             &style,
             &StyleDraft::initial().build(),
             &fragment,
-            zgui_scene::ClipId::ROOT,
             &crate::content::shader::NoShaders,
             1.0,
         );
         assert_eq!(pushed, 1);
-        let backdrop = &scene.primitives.backdrops[0];
-        assert_eq!(backdrop.transform, Some(space));
-        assert_eq!(backdrop.bounds, rect(10.0, 10.0, 40.0, 30.0));
+        let backdrop = &recording.backdrops()[0];
+        assert_eq!(backdrop.space, compositor_types::SpaceRef::INHERIT);
+        assert_eq!(backdrop.bounds, [10.0, 10.0, 40.0, 30.0]);
+        assert_eq!(
+            recording.filters(backdrop).as_ref(),
+            [compositor_types::Filter::Blur(4.0)]
+        );
     }
 }

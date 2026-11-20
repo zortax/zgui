@@ -1,6 +1,8 @@
 //! zgui's tables resolved into compositor nodes and slots while a chunk's items are built.
 
-use compositor_types::{ClipId, PaintId, PaintKind, Transaction, TransformId};
+use compositor_types::{
+    ClipId, ImageDesc, ImageId, ImageWrite, PaintId, PaintKind, Transaction, TransformId,
+};
 use zgui_scene::Scene;
 
 use crate::sync::mirror::Mirror;
@@ -20,7 +22,7 @@ impl<'a> Resolver<'a> {
         Self { tx, mirror }
     }
 
-    /// Returns a resolver over the same transaction and mirror for a shorter time.
+    /// Returns a resolver over the same transaction and mirror for a shorter borrow.
     pub(crate) fn reborrow(&mut self) -> Resolver<'_> {
         Resolver {
             tx: self.tx,
@@ -46,5 +48,26 @@ impl<'a> Resolver<'a> {
         paint: zgui_scene::PaintId,
     ) -> Option<(PaintId, PaintKind)> {
         self.mirror.paint(self.tx, scene, paint)
+    }
+
+    /// Returns the image of `key` and its description, creating or updating it from `pixels`, or
+    /// `None` when nothing is mirrored for `key` and `pixels` is `None`.
+    pub(crate) fn image(
+        &mut self,
+        key: crate::emit::record::ImageKey,
+        pixels: Option<crate::emit::record::ImagePixels<'_>>,
+    ) -> Option<(ImageId, ImageDesc)> {
+        self.mirror.image(self.tx, key, pixels)
+    }
+
+    /// Writes `write` into the image of `key`, which then holds the texels of `revision`, and
+    /// reports whether one is mirrored.
+    pub(crate) fn write_image(
+        &mut self,
+        key: crate::emit::record::ImageKey,
+        write: ImageWrite,
+        revision: u64,
+    ) -> bool {
+        self.mirror.images.write(self.tx, key, write, revision)
     }
 }

@@ -895,6 +895,7 @@ fn a_provisional_record_is_never_replayed() {
             provisional: true,
             promote: false,
             tiled: None,
+            tiles: None,
             window: None,
         },
     );
@@ -910,6 +911,7 @@ fn a_provisional_record_is_never_replayed() {
             provisional: false,
             promote: false,
             tiled: None,
+            tiles: None,
             window: None,
         },
     );
@@ -935,6 +937,7 @@ fn a_promotable_record_encodes_again_after_three_drawn_replays() {
             provisional: false,
             promote: true,
             tiled: None,
+            tiles: None,
             window: None,
         },
     );

@@ -1,4 +1,4 @@
-//! Analytic quads against the general route, on a real device.
+//! Analytic quads against the general route, drawn by the compositor on a device.
 //!
 //! One list of shapes is drawn twice: once with the analytic route allowed, as quads, and once
 //! through the general route, by the path renderer. See [`support::conformance`] for the rule.
@@ -13,8 +13,8 @@ use zgui_scene::kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
 use zgui_scene::peniko;
 use zgui_svg::{Fill, Ink, Paint, Shape, Stroke};
 
+use support::conformance::opaque;
 use support::conformance::{self, Route};
-use support::opaque;
 
 /// A solid paint.
 fn solid(color: Color) -> Paint {

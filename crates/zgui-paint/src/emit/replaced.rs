@@ -1,31 +1,36 @@
 //! Content this engine does not lay out: images, video frames, embedded surfaces.
 //!
 //! A replaced box draws two things and they come from different places. Its box decorations are
-//! ordinary — a background, a border, a shadow — and are emitted like any other box's. Its
-//! *content* is a texture somebody else owns, and where that texture lives decides which primitive
-//! carries it: a decoded image is a tile in this framework's own atlas, and a video frame or a
-//! surface from another process is not, so it is drawn from the texture it is already in.
+//! ordinary, a background, a border or a shadow, and are emitted like any other box's. Its content
+//! is either decoded texels, which the compositor keeps as an image, or a video frame or a surface
+//! from another process, which is drawn from the texture it is already in.
 
+use std::sync::Arc;
+
+use compositor_types::{Extend, Image, ImageDesc, ImageFilter, ImageFlags, ImageFormat, PaintRef};
 use zgui_css::values::size::{ObjectFitValue, ObjectPositionValue};
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{
-    ClipId, ColorSprite, ExternalQuad, ExternalTextureId, Resource, Scene, SpatialId,
-};
+use zgui_scene::{ClipId, ExternalQuad, ExternalTextureId, SpatialId};
+
+use crate::emit::record::{ImageKey, ImagePixels, Recorder, flat_radii, local_rect};
 
 /// Where a replaced box's content lives.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// A decoded image, in this framework's own atlas.
-    ///
-    /// Its texels are premultiplied, because the decode premultiplies once and the cache holds that
-    /// form — so a re-upload after a lost device cannot reintroduce straight alpha.
+    /// Decoded texels, premultiplied, gamma-encoded sRGB, four bytes per texel.
     Decoded {
-        /// The tile the texels are in.
-        resource: Resource,
-        /// The image's own extent, read as CSS pixels — which may be larger than the tile, whose
-        /// texels are sized by the box the image is shown in. `object-fit: none` draws at *this*
+        /// The image the compositor keeps the texels as.
+        key: ImageKey,
+        /// The extent of the texels.
+        size: Size<u32, Device>,
+        /// The image's own extent, read as CSS pixels, which may be larger than the texels, whose
+        /// extent is sized by the box the image is shown in. `object-fit: none` draws at this
         /// size, and the fitted rectangle's aspect comes from it.
         natural: Size<u32, Device>,
+        /// The texels, or `None` once their host copy has been given back.
+        texels: Option<Arc<Vec<u8>>>,
+        /// A number that moves whenever the texels under `key` change.
+        revision: u64,
     },
     /// A texture owned by something else, drawn from where it already is.
     External(ExternalTextureId),
@@ -53,40 +58,68 @@ pub struct ReplacedPlacement {
     pub scale: f32,
 }
 
-/// Emits a replaced box's content, and returns how many primitives were pushed.
+/// Records a replaced box's content, and returns how many items were recorded and primitives
+/// pushed.
 ///
 /// Nothing is drawn for a content box with no area, which is what an image sized to zero by its
-/// container is — and pushing one would cost a spatial-index query to draw nothing.
-pub fn emit(scene: &mut Scene, source: Source, placement: ReplacedPlacement) -> usize {
+/// container is.
+///
+/// Returns `None` when the texels' host copy has been given back and the compositor holds no image
+/// of them.
+pub fn emit(rec: &mut Recorder<'_>, source: Source, placement: ReplacedPlacement) -> Option<usize> {
     if placement.content_box.is_empty() {
-        return 0;
+        return Some(0);
     }
-    let landed = match source {
-        Source::Decoded { resource, natural } => {
-            let destination = destination(&placement, natural);
-            let mut sprite = ColorSprite::new(destination, resource)
-                .framed(placement.content_box)
-                .clipped(placement.clip)
-                .with_radii(placement.radii);
-            sprite.transform = placement.transform.index();
-            sprite.opacity = placement.opacity;
-            scene.push_color_sprite(sprite).is_some()
+    match source {
+        Source::Decoded {
+            key,
+            size,
+            natural,
+            texels,
+            revision,
+        } => {
+            let pixels = texels.as_deref().map(|texels| ImagePixels {
+                desc: ImageDesc {
+                    width: size.width,
+                    height: size.height,
+                    format: ImageFormat::RGBA8_PREMULTIPLIED,
+                },
+                revision,
+                texels: Some(texels.as_slice()),
+            });
+            let (image, [width, height]) = rec.image_slot(key, pixels)?;
+            let item = Image {
+                bounds: local_rect(destination(&placement, natural)),
+                frame: local_rect(placement.content_box),
+                source: [0.0, 0.0, width as f32, height as f32],
+                radii: flat_radii(placement.radii),
+                shapes: compositor_types::ROUND,
+                paint: PaintRef::NONE,
+                image,
+                opacity: placement.opacity,
+                clip: rec.clip(placement.clip),
+                space: rec.space(placement.transform),
+                flags: ImageFlags::default(),
+                extend: [Extend::NONE; 2],
+                filter: ImageFilter::LINEAR,
+            };
+            rec.image(item);
+            Some(1)
         }
         Source::External(texture) => {
             let mut quad =
                 ExternalQuad::new(placement.content_box, texture).clipped(placement.clip);
             quad.transform = placement.transform;
             quad.opacity = placement.opacity;
-            scene.push_external(quad).is_some()
+            Some(usize::from(rec.scene().push_external(quad).is_some()))
         }
-    };
-    usize::from(landed)
+    }
 }
 
 /// The rectangle `object-fit` and `object-position` place the content at, in device pixels.
 ///
-/// The sprite's quad is this rectangle and its frame is the content box: a `cover` overflow is
-/// cut by the frame, and a `contain` letterbox simply draws nothing where the content is not.
+/// The image is drawn over this rectangle and cut to the content box: a `cover` overflow is cut
+/// by the frame, and a `contain` letterbox simply draws nothing where the content is not.
 fn destination(
     placement: &ReplacedPlacement,
     natural: Size<u32, Device>,
@@ -150,6 +183,7 @@ mod tests {
     use zgui_scene::{ClipId, ExternalTextureId, Scene, SpatialId};
 
     use super::{ReplacedPlacement, Source, emit};
+    use crate::emit::record::Recording;
 
     /// A placement over the given content box, with the initial fit: `fill` at `50% 50%`.
     fn placement(rect: Rect<DevicePx, Device>) -> ReplacedPlacement {
@@ -173,13 +207,15 @@ mod tests {
             Point::new(DevicePx(0.0), DevicePx(0.0)),
             Size::new(DevicePx(32.0), DevicePx(32.0)),
         );
+        let mut recording = Recording::new();
+        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
         assert_eq!(
             emit(
-                &mut scene,
+                &mut rec,
                 Source::External(ExternalTextureId(7)),
                 placement(rect)
             ),
-            1
+            Some(1)
         );
         assert_eq!(scene.primitives.externals.len(), 1);
     }
@@ -273,13 +309,15 @@ mod tests {
             Point::new(DevicePx(4.0), DevicePx(4.0)),
             Size::new(DevicePx(0.0), DevicePx(16.0)),
         );
+        let mut recording = Recording::new();
+        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
         assert_eq!(
             emit(
-                &mut scene,
+                &mut rec,
                 Source::External(ExternalTextureId(1)),
                 placement(empty)
             ),
-            0
+            Some(0)
         );
         assert!(scene.primitives.externals.is_empty());
     }

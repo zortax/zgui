@@ -8,6 +8,8 @@
 #![allow(dead_code, unreachable_pub)]
 
 pub(crate) mod chunk;
+pub(crate) mod conformance;
+pub(crate) mod gpu;
 
 use std::sync::Arc;
 
@@ -32,6 +34,7 @@ use zgui_text_style::TextPaint;
 use zgui_text_style::TextStyle;
 
 pub(crate) mod compositor;
+pub(crate) mod drawn;
 
 /// The poison test mode's offset. See [`zgui_scene::spatial::poison`].
 ///
