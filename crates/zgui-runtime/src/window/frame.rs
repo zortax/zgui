@@ -245,6 +245,15 @@ impl Window {
 
     /// Records when a frame is owed again after `outcome`, and what a presented frame resets.
     fn settle_retry(&mut self, outcome: FrameOutcome, now: Instant) {
+        if matches!(
+            outcome,
+            FrameOutcome::Recovered | FrameOutcome::Skipped(SkipReason::Outdated)
+        ) {
+            // The renderer widens its next draw to the whole target after recovery.
+            // Carry that obligation through layout and paint emission so the scene
+            // includes unchanged content when the target is cleared.
+            self.damage = DamageSet::full();
+        }
         self.retry_after = match outcome {
             FrameOutcome::Skipped(SkipReason::Timeout) => {
                 self.starved = true;
