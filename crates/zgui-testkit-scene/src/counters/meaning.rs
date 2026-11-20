@@ -2,9 +2,9 @@
 
 use zgui_profile::{Counter, Counters};
 
-/// The counters a capture renderer cannot move, in declaration order.
+/// The counters a renderer that draws nothing cannot move, in declaration order.
 ///
-/// They are incremented by the graphics backend, so under this crate's renderer they read zero
+/// They are incremented by the graphics backend, so under a recording renderer they read zero
 /// because nothing drew — not because nothing was drawn. Every other counter is produced by a
 /// stage that does not know what draws its result and means exactly what it says here.
 ///
@@ -32,7 +32,7 @@ pub const RENDERER_SPECIFIC: [Counter; 19] = [
     Counter::MarksPayloadBytes,
 ];
 
-/// Whether an assertion on `counter` means anything under a capture renderer.
+/// Whether an assertion on `counter` means anything under a renderer that draws nothing.
 ///
 /// The question is only about the renderer. A counter of *avoided* work carries a second hazard —
 /// it reads zero whether the stage is perfect or absent — but that hazard is the same under every

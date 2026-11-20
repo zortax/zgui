@@ -22,7 +22,7 @@ const DOWNCASTS: &[&str] = &[
 ];
 
 /// The paths of zgui's own pipeline crates, whose types share names with the compositor's.
-const PIPELINE: &[&str] = &["zgui_render_wgpu::", "zgui_testkit_scene::"];
+const PIPELINE: &[&str] = &["zgui_render_wgpu::"];
 
 /// Returns each line of `text` that names an implementation, by line number from one, with what
 /// it names.
@@ -101,7 +101,7 @@ mod tests {
                 .len(),
             1
         );
-        assert!(findings("any.downcast_ref::<zgui_testkit_scene::CaptureRenderer>()").is_empty());
+        assert!(findings("any.downcast_ref::<zgui_render_wgpu::WgpuRenderer>()").is_empty());
         assert!(findings("any.downcast_mut::<V::State>()").is_empty());
     }
 

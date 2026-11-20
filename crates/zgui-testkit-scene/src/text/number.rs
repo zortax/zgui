@@ -12,7 +12,7 @@
 /// change a rendered image and far above the noise two routes to the same coordinate accumulate.
 pub const DECIMALS: usize = 4;
 
-/// One number, rendered the way every transcript and every tree dump renders it.
+/// One number, rendered the way every tree dump renders it.
 ///
 /// ```
 /// use zgui_testkit_scene::text::number::float;

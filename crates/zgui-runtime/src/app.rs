@@ -29,6 +29,7 @@ use zgui_platform::{
     AppHandler, Clock, CloseReason, IdlePolicy, PlatformCx, PlatformError, Surface,
     SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,
 };
+use zgui_profile::{Counter, counter};
 use zgui_view::{Anchor, BuildCx};
 
 use crate::commands::{CloseResponse, WindowCommand, WindowCommands, WindowSpec, WindowToken};
@@ -1484,6 +1485,7 @@ impl AppHandler for Runtime {
     }
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
+        counter::bump(Counter::Wakes);
         match reason {
             // Something asked for a window, or for the application to stop. Nothing else here can
             // carry that out: a surface is made from a platform context, and this is one.
@@ -1620,6 +1622,7 @@ impl AppHandler for Runtime {
     }
 
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
+        counter::bump(Counter::Wakes);
         // The edge without which a parked deadline produces no frame at all. Reaching a deadline
         // draws nothing by itself: the loop wakes, this runs, and the surfaces whose deadline has
         // passed — and no others — are asked for the frame that services it.

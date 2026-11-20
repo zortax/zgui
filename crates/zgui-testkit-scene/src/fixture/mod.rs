@@ -1,4 +1,4 @@
-//! What a harness is built from, and the three rules a budget fixture obeys.
+//! The three rules a budget fixture obeys.
 //!
 //! Each rule below was forced by a running program, and each one exists because a fixture that
 //! breaks it produces a test that measures something other than what it names — usually while
@@ -35,38 +35,3 @@
 pub mod leak;
 pub mod walk;
 pub mod zone;
-
-use zgui_geom::{Device, Size};
-
-use crate::harness::frame::Pipeline;
-
-/// A document, its surface, and whatever builds a frame from it.
-///
-/// This is what [`Harness::new`](crate::Harness::new) is given. The frame body is a
-/// [`Pipeline`]: a test supplies a closure, and a real engine supplies itself, so the same harness
-/// measures both.
-pub struct Fixture {
-    /// The surface extent frames are built for.
-    pub viewport: Size<i32, Device>,
-    /// What builds each frame.
-    pub pipeline: Box<dyn Pipeline>,
-}
-
-impl Fixture {
-    /// The default surface a fixture is built for, in device pixels.
-    pub const DEFAULT_VIEWPORT: Size<i32, Device> = Size::new(800, 600);
-
-    /// A fixture whose frames are built by `pipeline`, on the default surface.
-    pub fn new(pipeline: impl Pipeline + 'static) -> Self {
-        Self {
-            viewport: Self::DEFAULT_VIEWPORT,
-            pipeline: Box::new(pipeline),
-        }
-    }
-
-    /// The same fixture on a surface of `viewport` device pixels.
-    pub fn sized(mut self, viewport: Size<i32, Device>) -> Self {
-        self.viewport = viewport;
-        self
-    }
-}

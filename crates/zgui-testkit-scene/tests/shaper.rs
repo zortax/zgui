@@ -304,7 +304,7 @@ fn nothing_reachable_from_this_crate_is_a_font_engine() {
                 .unwrap_or_default()
         })
         .collect();
-    for expected in ["zgui-interned", "zgui-vocab"] {
+    for expected in ["zgui-interned", "zgui-arena"] {
         assert!(
             names.iter().any(|name| name == expected),
             "the walk never reached {expected}, so it did not follow the graph; it reached {names:?}"

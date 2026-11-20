@@ -1,4 +1,4 @@
-//! The indented line writer both a scene transcript and a tree dump are built with.
+//! The indented line writer a tree dump is built with.
 
 /// Collects indented lines into one diffable block of text.
 ///

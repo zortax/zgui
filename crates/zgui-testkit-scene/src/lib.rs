@@ -1,21 +1,19 @@
-//! The instrument the rest of the framework is tested with: no graphics device, no font files, and
-//! a clock that only moves when a test moves it.
+//! The instrument the rest of the framework is tested with: no font files, and a clock that only
+//! moves when a test moves it.
 //!
 //! Everything here exists so that a test measures the *design* rather than the machine it runs on.
-//! A display list is a value, so it can be captured as text and diffed in a review. A shaper with a
-//! fixed face gives the same answer on a machine with no fonts installed as on one with a thousand.
-//! A virtual clock turns a seven-hundred-millisecond delay into a microsecond. And the frame
-//! counters turn "this frame did the minimum" from a hope into an assertion.
+//! A shaper with a fixed face gives the same answer on a machine with no fonts installed as on one
+//! with a thousand. A virtual clock turns a seven-hundred-millisecond delay into a microsecond. And
+//! the frame counters turn "this frame did the minimum" from a hope into an assertion. What a frame
+//! draws is read through `zgui-testkit-compositor`.
 //!
 //! | Piece | What it is for |
 //! |---|---|
-//! | [`CaptureRenderer`] | a [`Renderer`](zgui_render::Renderer) that records the scene as stable text and draws nothing |
 //! | [`MonoShaper`] | a [`ParagraphShaper`](zgui_text::ParagraphShaper) with fixed 8×16 metrics and no font files |
 //! | [`FixedMetrics`] | the matching metrics source the cascade resolves `ex` and `ch` against |
 //! | [`TreeDump`] | the seam every tree dumper is written against, with golden comparison and blessing |
-//! | [`Harness`] | the frame loop, its virtual clock, its parking and its counters |
 //! | [`counters`] | budget assertions that cannot pass by accident |
-//! | [`fixture`] | what a harness is built from, and the three rules a budget fixture obeys |
+//! | [`fixture`] | the three rules a budget fixture obeys |
 //!
 //! # The one idea everything here is arranged around
 //!
@@ -23,7 +21,7 @@
 //! is a claim of coverage where there is none. Three shapes of that failure are structurally
 //! prevented rather than warned about:
 //!
-//! * a counter assertion whose counter reads zero because nothing in the harness moves it —
+//! * a counter assertion whose counter reads zero because nothing in the test moves it —
 //!   [`Measurement::assert_zero`](counters::Measurement::assert_zero) demands a
 //!   [`Control`](counters::Control), which has no constructor other than a run in which the counter
 //!   did move;
@@ -47,30 +45,14 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub mod capture;
 pub mod counters;
 pub mod dump;
 pub mod fixture;
-pub mod harness;
 pub mod shaper;
 pub mod text;
-pub mod transcript;
 
-pub use crate::capture::CaptureRenderer;
 pub use crate::dump::{TreeDump, to_text};
-pub use crate::fixture::Fixture;
-pub use crate::harness::Harness;
-pub use crate::harness::frame::{FrameCx, Pipeline};
 pub use crate::shaper::{MonoLayout, MonoShaper, glyph_id};
-pub use crate::transcript::Transcript;
-
-/// The clock a test moves by hand, re-exported.
-///
-/// It lives with the platform contract rather than here because a backend with no windowing system
-/// behind it runs on one too — but it is the clock [`Harness`] advances, so it is named here as
-/// well. There is exactly one implementation, so a frame run by hand and a frame run by that
-/// backend cannot disagree about what time it is.
-pub use zgui_platform::VirtualClock;
 
 /// The fixed-metrics font source, re-exported.
 ///

@@ -9,8 +9,8 @@
 //! 1. **The counters were compiled out.** Every counter then reads zero and every upper bound
 //!    holds. [`Recording::begin`] refuses to start unless
 //!    [`COUNTERS_ENABLED`](zgui_profile::COUNTERS_ENABLED) is true.
-//! 2. **The counter belongs to the renderer.** Under a capture renderer `draw_calls`, `damage_px`
-//!    and `bytes_uploaded` read zero because nothing drew. [`Measurement::get`] refuses them by
+//! 2. **The counter belongs to the renderer.** Under a renderer that draws nothing `draw_calls`,
+//!    `damage_px` and `bytes_uploaded` read zero because nothing drew. [`Measurement::get`] refuses them by
 //!    name, and every whole-snapshot read hands them back as [`POISON`] rather than as that zero,
 //!    so a test that asserts on one fails loudly by either route instead of passing silently.
 //! 3. **The mechanism never ran.** `elements_restyled == 0` is equally true of a pipeline that
@@ -46,9 +46,9 @@
 //!
 //! **That makes it a rule about the whole test binary and not about each test.** A recording
 //! excludes other *recordings*; it cannot stop an unguarded test in another thread from doing work
-//! that moves a counter. So measuring tests go in a target where **every** test either holds a
-//! [`Recording`] or holds a [`Harness`](crate::Harness), which holds one for its whole life. Cargo
-//! runs test targets one at a time, so such a target measures exactly what it says.
+//! that moves a counter. So measuring tests go in a target where **every** test holds a
+//! [`Recording`]. Cargo runs test targets one at a time, so such a target measures exactly what it
+//! says.
 //!
 //! Documentation examples are one such target, and they are merged into one binary: an example that
 //! measures a counter another example moves unguarded would be intermittently wrong. So the examples
