@@ -1,8 +1,14 @@
 //! Images the recorder names, created in the compositor from zgui's texels.
 
+use std::sync::Arc;
+
 use compositor_types::{Image, ImageDesc, ImageWrite};
+use zgui_geom::{Device, DevicePx, Rect};
 
 use crate::emit::record::{Recorder, Ref, refer};
+
+/// The tile images a drawing shows, each with its rectangle in the fragment's space.
+pub type ShownTiles = Arc<[(ImageKey, Rect<DevicePx, Device>)]>;
 
 /// The zgui name of an image's texels.
 ///

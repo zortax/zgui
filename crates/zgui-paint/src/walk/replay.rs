@@ -49,7 +49,7 @@ use zgui_profile::{Counter, counter};
 
 use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId, TableHolds};
 
-use crate::emit::record::ImageKey;
+use crate::emit::record::ShownTiles;
 use crate::lower::cache::PaintStyleRef;
 use crate::walk::replay::hold::ResourceOwner;
 
@@ -240,7 +240,7 @@ pub struct Record {
     pub tiled: Option<u64>,
     /// The tile images the chunk draws, with their rectangles in the fragment's space as the
     /// encoding placed them.
-    pub tiles: Option<Arc<[(ImageKey, Rect<DevicePx, Device>)]>>,
+    pub tiles: Option<ShownTiles>,
     /// The region of the fragment's space whose prims a series cut to it draws, as the encoding
     /// measured it.
     ///
@@ -262,7 +262,7 @@ pub struct LayerRecord {
     /// The number of the tiled source whose tiles the encoding recorded.
     pub tiled: Option<u64>,
     /// The tile images the encoding recorded, with their rectangles in the fragment's space.
-    pub tiles: Option<Arc<[(ImageKey, Rect<DevicePx, Device>)]>>,
+    pub tiles: Option<ShownTiles>,
     /// The region of the fragment's space whose prims a series cut to it draws.
     pub window: Option<zgui_scene::kurbo::Rect>,
 }
@@ -626,7 +626,7 @@ impl PaintCache {
 
     /// The tile images the chunk of `fragment` draws, with their rectangles in the fragment's
     /// space as the encoding placed them.
-    pub fn tiles(&self, fragment: FragKey) -> Option<&Arc<[(ImageKey, Rect<DevicePx, Device>)]>> {
+    pub fn tiles(&self, fragment: FragKey) -> Option<&ShownTiles> {
         self.records
             .get(&fragment)
             .and_then(|record| record.tiles.as_ref())

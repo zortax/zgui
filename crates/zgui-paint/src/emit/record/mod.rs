@@ -8,7 +8,7 @@ mod image;
 mod items;
 mod recording;
 
-pub use self::image::{ImageKey, ImagePixels};
+pub use self::image::{ImageKey, ImagePixels, ShownTiles};
 pub(crate) use self::items::{Items, Ref};
 pub use self::recording::Recording;
 

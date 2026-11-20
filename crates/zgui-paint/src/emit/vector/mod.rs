@@ -260,8 +260,7 @@ pub(crate) struct LayerOutcome {
     /// The number of the tiled source whose tiles the drawing recorded.
     pub(crate) tiled: Option<u64>,
     /// The tile images the drawing recorded, with their rectangles in the fragment's space.
-    pub(crate) tiles:
-        Option<std::sync::Arc<[(crate::emit::record::ImageKey, Rect<DevicePx, Device>)]>>,
+    pub(crate) tiles: Option<crate::emit::record::ShownTiles>,
     /// The region of local space whose prims a series cut to it draws.
     pub(crate) window: Option<zgui_scene::kurbo::Rect>,
 }

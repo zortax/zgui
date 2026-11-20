@@ -480,9 +480,9 @@ fn marks_through_a_fit_draw_as_the_placed_shapes() {
     );
     let expected = &placed.pixels;
     assert!(
-        through.max_difference(&expected) <= 1,
+        through.max_difference(expected) <= 1,
         "marks through the fit differ by {}",
-        through.max_difference(&expected)
+        through.max_difference(expected)
     );
 }
 
