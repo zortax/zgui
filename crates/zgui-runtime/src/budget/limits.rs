@@ -81,6 +81,13 @@ pub const PLACED_DRAWINGS: usize = 16_384;
 /// one is a clean miss: the next frame that reaches its fragment encodes it again.
 pub const PAINT_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
 
+/// How many bytes of atlas pages the compositor holds before unpinned entries are evicted.
+///
+/// Sixty-four mebibytes: several times what a text-heavy document's glyphs cost at any ordinary
+/// scale, and well under what the atlas grows to if nothing bounds it. The compositor evicts down to
+/// it when it builds a frame. Pinned entries stay, so the atlas can remain above it.
+pub const ATLAS_BYTES: u64 = 64 * 1024 * 1024;
+
 /// The levels one window holds its entry-counted caches to.
 ///
 /// Settable rather than constant, for the same reason the atlas's level is: how much of the

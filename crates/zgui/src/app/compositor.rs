@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use compositor_api::{Compositor, Renderer};
+use compositor_api::{Compositor, CompositorBudgets, Renderer};
 use compositor_core::CompositorImpl;
 use compositor_text::SwashRaster;
 use compositor_types::{RenderTarget, VectorBackend};
@@ -11,15 +11,20 @@ use compositor_wgpu::{
     Gpu, LatencyMarks, PrePresent, PresentPacing, SharedGraphics, VectorFactory,
 };
 use zgui_platform::{PlatformError, Surface};
+use zgui_runtime::budget::limits::ATLAS_BYTES;
 use zgui_runtime::{AppError, RendererFactory};
 
 /// Returns the compositor an application's windows draw through, drawing text in `fonts`.
 ///
-/// It is the reference compositor, and it rasterises glyphs with swash.
+/// It is the reference compositor, it rasterises glyphs with swash, and its atlas is held to
+/// [`ATLAS_BYTES`].
 pub fn compositor(fonts: &crate::app::Fonts) -> Box<dyn Compositor> {
     let mut compositor = CompositorImpl::new();
     compositor.use_font_registry(fonts.compositor_registry());
     compositor.use_glyph_raster(Arc::new(SwashRaster::new()));
+    compositor.set_budgets(CompositorBudgets {
+        atlas_bytes: Some(ATLAS_BYTES),
+    });
     Box::new(compositor)
 }
 
