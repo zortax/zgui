@@ -601,7 +601,7 @@ fn calibrate_the_tile_cost_model() {
         };
         fixture.cache.painter.paint(&job, &mut texels);
         let runs = 5;
-        let start = std::time::Instant::now();
+        let start = web_time::Instant::now();
         for _ in 0..runs {
             fixture.cache.painter.paint(&job, &mut texels);
         }

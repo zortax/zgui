@@ -2,12 +2,12 @@ version = 4
 
 [[package]]
 name = "wgpu"
-version = "29.0.4"
+version = "30.0.2"
 
 # PLANTED VIOLATION: two wgpu versions means two devices and no shared texture.
 [[package]]
 name = "wgpu"
-version = "28.0.1"
+version = "29.0.4"
 
 [[package]]
 name = "skrifa"

@@ -97,19 +97,27 @@ impl Window {
     /// stream of pointer moves is.
     pub(crate) fn drain_input(&mut self, timestamp: Timestamp) -> bool {
         let mut owed = false;
+        let events = core::mem::take(&mut self.queued);
         // The answers to paste requests an earlier frame recorded, applied ahead of this frame's
         // own events and settled like one of them, so a handler for the input a paste announces
-        // has mounted whatever it opens before the next event is routed.
+        // has mounted whatever it opens before the next event is routed. A paste carries the
+        // earliest stamp of the batch, so the stamps of the events after it do not go backwards.
+        let earliest = events
+            .iter()
+            .filter_map(|queued| queued.event.timestamp())
+            .fold(timestamp, Timestamp::min);
         for (node, text) in core::mem::take(&mut self.pastes) {
-            self.apply_paste(node, &text, timestamp);
-            owed |= self.settle_between_events(timestamp);
+            self.apply_paste(node, &text, earliest);
+            owed |= self.settle_between_events(earliest);
         }
-        let events = core::mem::take(&mut self.queued);
         let last = events.len().saturating_sub(1);
         for (position, queued) in events.iter().enumerate() {
-            self.dispatch_one(&queued.event, &queued.samples, timestamp);
+            // Each event and the events it causes carry the moment the platform stamped it. Events
+            // without a stamp carry the frame's moment.
+            let stamp = queued.event.timestamp().unwrap_or(timestamp);
+            self.dispatch_one(&queued.event, &queued.samples, stamp);
             if position < last {
-                owed |= self.settle_between_events(timestamp);
+                owed |= self.settle_between_events(stamp);
             }
         }
         owed
@@ -165,6 +173,14 @@ impl Window {
             } => self.focus_modality = zgui_input::FocusSource::Pointer,
             _ => {}
         }
+        // A drag's motion is tracked first, so a drop's listeners already see the drag-over
+        // state cleared. Only the drop itself goes on to the dispatch below.
+        if let SurfaceEvent::Drag(drag) = event {
+            self.drag_moved(drag, timestamp);
+            if !drag.is_drop() {
+                return;
+            }
+        }
         let Some((kind, payload)) = event.to_dispatch() else {
             return;
         };
@@ -209,9 +225,18 @@ impl Window {
                         .key(&world, *state, event, modifiers, &shortcuts);
                     (routed.target(), routed.steps.to_vec(), routed.default)
                 }
-                // An input method's edits and a drop are aimed at whatever has focus. No
-                // interaction state changes and there is no framework behaviour to compute: the
-                // path is resolved, walked, and that is all.
+                SurfaceEvent::Drag(zgui_platform::DragEvent::Dropped { position, .. }) => {
+                    let chain = world.chain_at(zgui_geom::Point::new(
+                        zgui_geom::DevicePx(position.x.0 * self.scale),
+                        zgui_geom::DevicePx(position.y.0 * self.scale),
+                    ));
+                    let mut plan = zgui_input::dispatch::Plan::default();
+                    zgui_input::dispatch::resolve(document.store(), &chain, kind, &mut plan);
+                    (chain.target(), plan.steps().to_vec(), None)
+                }
+                // An input method's edits are aimed at whatever has focus. No interaction state
+                // changes and there is no framework behaviour to compute: the path is resolved,
+                // walked, and that is all.
                 _ => {
                     let chain = match self.router.interaction().focus.focused() {
                         Some(node) => zgui_input::HitChain::to_root(document.store(), node),
@@ -595,8 +620,16 @@ impl Window {
     /// to the corner of the field every time the surface hands the keyboard back — the candidate
     /// window of a person who alt-tabbed away mid-word opens at the start of the field they are
     /// halfway along.
+    ///
+    /// A surface without the keyboard has no input method, so text input stays disabled there
+    /// even while an element of its document has focus.
     pub(crate) fn report_text_input(&mut self) {
-        let focused = self.router.interaction().focus.focused();
+        let focused = self
+            .router
+            .interaction()
+            .focus
+            .focused()
+            .filter(|_| self.surface_focused);
         let editable = focused.filter(|node| {
             let document = self.document.borrow();
             crate::editing::Editors::is_editable(&document, *node)

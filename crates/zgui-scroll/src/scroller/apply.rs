@@ -4,7 +4,7 @@ use smallvec::SmallVec;
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_layout::LayoutStore;
-use zgui_layout::scroll_region::region_of_element;
+use zgui_layout::scroll_region::code_region_of_element;
 
 use crate::chain;
 use crate::motion::{Behavior, Momentum, Motion, Tween};
@@ -76,7 +76,7 @@ impl Scroller {
         to: Point<DevicePx, Device>,
         behavior: Behavior,
     ) -> Option<Point<DevicePx, Device>> {
-        let limit = region_of_element(store, container)?.limit();
+        let limit = code_region_of_element(store, container)?.limit();
         let clamped = Point::new(
             DevicePx(to.x.0.clamp(0.0, limit.x.0)),
             DevicePx(to.y.0.clamp(0.0, limit.y.0)),

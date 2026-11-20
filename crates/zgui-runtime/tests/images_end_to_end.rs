@@ -8,7 +8,7 @@
 
 mod support;
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_platform_headless::Harness;
 use zgui_runtime::Runtime;

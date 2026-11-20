@@ -79,7 +79,7 @@ pub mod slot_vec;
 #[cfg(test)]
 mod proptest_config;
 
-pub use crate::chunk::{BLOCK_LEN, ChunkArena};
+pub use crate::chunk::{BLOCK_LEN, ChunkArena, Succession};
 pub use crate::key::{
     ARENA_KIND_COUNT, ArenaKey, ArenaKind, DOCUMENT_COUNT, DocumentId, DomainId, Generation, Key,
 };

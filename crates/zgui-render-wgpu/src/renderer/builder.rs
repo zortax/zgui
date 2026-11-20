@@ -1,6 +1,7 @@
 //! Opening a device, and refusing to guess when none of them works.
 
 use std::ffi::CStr;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use zgui_geom::{Device, Size};
@@ -21,6 +22,12 @@ use crate::target::swapchain::{Offscreen, Presentation};
 /// known once a device has been created from it and a surface configured for it — adapters on
 /// hybrid graphics report capabilities a device made from them turns out not to have. So: take the
 /// window's handles, make a surface on each candidate's instance, then configure it.
+///
+/// Each builder creates its own instances, and its renderer destroys them when it drops. Use
+/// [`SharedGraphics`](crate::SharedGraphics) for more than one window: it keeps one instance for
+/// all of them. On the NVIDIA Vulkan driver 610.43 under Wayland, the destruction of one instance
+/// breaks the swap chains of every other instance on the same display. The next swap chain that
+/// is created or destroyed there crashes the process inside the driver.
 pub struct Builder {
     /// One instance per backend tier, each created when the candidate loop reaches it.
     instances: adapter::Instances,
@@ -161,9 +168,9 @@ impl Builder {
         origin: Origin,
         present: impl Proof,
     ) -> Result<WgpuRenderer, GpuUnavailable> {
-        let (gpu, presentation) = open_device(&self.instances, &[], present)?;
+        let (state, presentation) = open_device(&self.instances, &[], present)?;
         Ok(WgpuRenderer::assemble(
-            DeviceState::new(gpu),
+            state,
             None,
             presentation,
             target,
@@ -185,6 +192,16 @@ impl Builder {
 /// A tier is enumerated only when every tier before it has failed, so the backends kept as a
 /// fallback cost a machine that never needs them nothing at all.
 ///
+/// # An adapter that draws on the processor is not a tier
+///
+/// Such an adapter is held back past every tier and tried only when no card answered on any of
+/// them. A tier is ordered by *backend*, and that order says nothing about whether the device
+/// behind it is real: Mesa installs `lavapipe`, a software Vulkan driver, on machines whose card
+/// has a working OpenGL driver and no Vulkan one at all. Taking the first tier that answers puts
+/// such a machine on its processor while its graphics card sits idle, and it looks like a working
+/// program that is merely slow — which is the hardest kind of fault to see. So a card on any tier
+/// beats the processor on every tier.
+///
 /// Separate from [`Builder`] because opening a device and assembling a renderer are two things:
 /// [`SharedGraphics`](crate::SharedGraphics) opens one device and assembles many renderers on it.
 ///
@@ -200,12 +217,16 @@ pub(crate) fn open_device(
     instances: &adapter::Instances,
     extensions: &[&'static CStr],
     mut present: impl Proof,
-) -> Result<(Arc<Gpu>, Presentation), GpuUnavailable> {
+) -> Result<(Rc<DeviceState>, Presentation), GpuUnavailable> {
     let mut rejections: Vec<(String, String)> = Vec::new();
     let mut enumerated = 0usize;
     // Adapters passed over for having the names and then being refused a device carrying them.
     // Offered again at the end, where nothing else opened at all.
     let mut deferred: Vec<(wgpu::Instance, wgpu::Adapter)> = Vec::new();
+    // Adapters that rasterise on the processor. Held back past every tier, because a tier is
+    // ordered by backend and a software adapter beats no hardware on any backend. See the head of
+    // this function.
+    let mut software: Vec<(wgpu::Instance, wgpu::Adapter)> = Vec::new();
     // Whether a list was asked for at all. With none, every candidate is equal and the pairing
     // below leaves the preference order exactly as `adapter::candidates` produced it.
     let asked = !extensions.is_empty();
@@ -228,7 +249,17 @@ pub(crate) fn open_device(
         // Stable, so the existing preference survives inside each group.
         candidates.sort_by_key(|(grants, _)| !grants);
         for (grants, candidate) in candidates {
-            let name = adapter::describe(&candidate.get_info());
+            let info = candidate.get_info();
+            let name = adapter::describe(&info);
+            // An adapter named by `ZGUI_DEVICE_ID` is tried in its tier. The name is how a
+            // software adapter is selected on a machine that also has a card.
+            let named = adapter::preferred_device_id() == Some(info.device);
+            if adapter::is_software(&info) && !named {
+                // Held back rather than rejected: it is what a machine with no graphics driver at
+                // all runs on, and it opens once every tier has been walked.
+                software.push((instance.clone(), candidate));
+                continue;
+            }
             // Kept only where it is about to be judged on the list, so the ordinary path clones
             // nothing.
             let again = grants.then(|| (instance.clone(), candidate.clone()));
@@ -253,9 +284,9 @@ pub(crate) fn open_device(
                 continue;
             }
             match offer(&gpu, &mut present) {
-                Ok(presentation) => {
+                Ok(opened) => {
                     tracing::info!(adapter = %gpu.describe(), "graphics device opened");
-                    return Ok((gpu, presentation));
+                    return Ok(opened);
                 }
                 Err(reason) => rejections.push((name, reason)),
             }
@@ -276,13 +307,39 @@ pub(crate) fn open_device(
             }
         };
         match offer(&gpu, &mut present) {
-            Ok(presentation) => {
+            Ok(opened) => {
                 tracing::warn!(
                     adapter = %gpu.describe(),
                     "graphics device opened without the Vulkan device extensions that were asked \
                      for"
                 );
-                return Ok((gpu, presentation));
+                return Ok(opened);
+            }
+            Err(reason) => rejections.push((name, reason)),
+        }
+    }
+
+    // Every tier has been walked and no card answered, so the adapters that draw on the processor
+    // are what is left. This is the whole of what makes them a last resort rather than a tier: the
+    // tiers are ordered by backend, and a machine can have a software Vulkan driver beside a real
+    // OpenGL one — Mesa's `lavapipe` beside a card whose Vulkan driver does not exist.
+    for (instance, candidate) in software {
+        let name = adapter::describe(&candidate.get_info());
+        let gpu = match Gpu::open(instance.clone(), candidate, extensions) {
+            Ok(gpu) => Arc::new(gpu),
+            Err(reason) => {
+                rejections.push((name, reason));
+                continue;
+            }
+        };
+        match offer(&gpu, &mut present) {
+            Ok(opened) => {
+                tracing::warn!(
+                    adapter = %gpu.describe(),
+                    "no graphics card on this machine could be drawn on, so every pixel is drawn \
+                     on the processor"
+                );
+                return Ok(opened);
             }
             Err(reason) => rejections.push((name, reason)),
         }
@@ -357,29 +414,137 @@ impl<W: Into<wgpu::SurfaceTarget<'static>> + Clone> Proof for WindowSurface<W> {
         if surface.get_capabilities(gpu.adapter()).formats.is_empty() {
             return Err("the surface is not compatible with this adapter".to_owned());
         }
-        Ok(Presentation::Surface(Box::new(ConfiguredSurface::new(
-            gpu, surface, self.setup,
-        ))))
+        Ok(Presentation::Surface(Box::new(
+            ConfiguredSurface::unconfigured(
+                gpu,
+                surface,
+                self.setup,
+                crate::target::native::NativeWindow::of(self.window.clone()),
+            ),
+        )))
     }
 }
 
-/// Offers `gpu` to `present`, and answers what came back or why nothing did.
+/// Offers `gpu` to `present`, and answers the device state and what came back, or why nothing did.
 ///
 /// Configuring a surface is the only way to find out whether an adapter can present to it, and a
 /// failure there raises a validation error instead of returning one. So the attempt runs inside an
 /// error scope, and both halves of the answer are read.
-fn offer(gpu: &Arc<Gpu>, present: &mut impl Proof) -> Result<Presentation, String> {
+///
+/// A surface comes back unconfigured, and the pipelines for its formats are built before its swap
+/// chain is configured. On Vulkan on Linux the configure runs on a scoped thread while this thread
+/// builds the pipelines: on a new device each takes 8 to 20 ms, and the configure mostly waits for
+/// the driver and the compositor. Error scopes belong to one thread, so the configure's scope is
+/// pushed and popped on the scoped thread. Other targets configure on this thread, after the
+/// pipelines: a GL context or a Metal layer is bound to the thread that uses it, and a Windows
+/// swap chain can send messages to the window's thread while this thread waits. A candidate that
+/// is refused at the configure discards the pipelines built for it.
+fn offer(
+    gpu: &Arc<Gpu>,
+    present: &mut impl Proof,
+) -> Result<(Rc<DeviceState>, Presentation), String> {
     let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
     let presentation = present.present(gpu);
     let validation = futures::executor::block_on(scope.pop());
-    match (presentation, validation) {
-        (Ok(presentation), None) => Ok(presentation),
-        (Ok(_), Some(error)) => Err(error.to_string()),
-        (Err(reason), _) => Err(reason),
+    let mut presentation = match (presentation, validation) {
+        (Ok(presentation), None) => presentation,
+        (Ok(_), Some(error)) => return Err(error.to_string()),
+        (Err(reason), _) => return Err(reason),
+    };
+    let state = DeviceState::new(Arc::clone(gpu));
+    if presentation.is_configured() {
+        return Ok((state, presentation));
+    }
+    let formats = presentation.formats();
+    let configure = |presentation: &mut Presentation| {
+        let scope = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
+        presentation.apply_pending(gpu);
+        futures::executor::block_on(scope.pop())
+    };
+    let threaded =
+        cfg!(target_os = "linux") && gpu.adapter().get_info().backend == wgpu::Backend::Vulkan;
+    let validation = if threaded {
+        let configured = std::thread::scope(|threads| {
+            let configuring = threads.spawn(|| configure(&mut presentation));
+            state.prepare(formats);
+            configuring.join()
+        });
+        configured.unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+    } else {
+        state.prepare(formats);
+        configure(&mut presentation)
+    };
+    match validation {
+        None => Ok((state, presentation)),
+        Some(error) => Err(error.to_string()),
     }
 }
 
 /// The extent a target asks for, never smaller than one pixel.
 fn extent(target: RenderTarget) -> Size<i32, Device> {
     Size::new(target.size.width.max(1), target.size.height.max(1))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use zgui_geom::Size;
+
+    use super::open_device;
+    use crate::gpu::adapter;
+    use crate::gpu::device::Gpu;
+    use crate::pipeline::kind::PipelineKind;
+    use crate::target::swapchain::{Presentation, Supplied};
+
+    /// A presentation that is not configured: a supplied set out of step with its target.
+    ///
+    /// Its `apply_pending` does nothing, so the open takes the path of a new surface without a
+    /// window.
+    fn unconfigured(gpu: &Arc<Gpu>) -> Result<Presentation, String> {
+        let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
+            label: Some("zgui.test.unconfigured"),
+            size: wgpu::Extent3d {
+                width: 8,
+                height: 8,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Bgra8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            view_formats: &[],
+        });
+        let supplied = Supplied::new(vec![texture]).ok_or("the texture was refused")?;
+        let mut presentation = Presentation::Supplied(Box::new(supplied));
+        presentation.resize(gpu, Size::new(16, 16));
+        Ok(presentation)
+    }
+
+    #[test]
+    fn a_device_opened_for_an_unconfigured_presentation_has_its_pipelines_built() {
+        let instances = adapter::Instances::new(adapter::requested_backends());
+        let (state, presentation) = match open_device(&instances, &[], unconfigured) {
+            Ok(opened) => opened,
+            Err(failure) => {
+                eprintln!("skipped: no usable graphics device ({failure})");
+                return;
+            }
+        };
+        assert!(
+            !presentation.is_configured(),
+            "the supplied set is still out of step with its target"
+        );
+        let formats = presentation.formats();
+        let pipelines = state.pipelines.borrow();
+        assert!(
+            pipelines.is_built(PipelineKind::Quad, formats.scene),
+            "the open builds the scene pipelines before it configures the surface"
+        );
+        assert!(
+            pipelines.is_built(PipelineKind::Blit, formats.present_attachment()),
+            "the open builds the final copy for the attachment it presents to"
+        );
+    }
 }

@@ -2,22 +2,30 @@
 
 pub mod fonts;
 mod graphics;
+#[cfg(target_arch = "wasm32")]
+mod web;
 
 use zgui_platform::{AppHandler, Decorations, PlatformError};
 use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 pub use crate::app::fonts::Fonts;
+#[cfg(target_arch = "wasm32")]
+pub use crate::app::web::Mounted;
+#[cfg(target_arch = "wasm32")]
+pub use zgui_platform_web::{Mount, enable_accessibility};
 
 /// Shaping text outside the paragraph pipeline: the shaper [`Fonts::shaper`] answers with, what one
-/// line is asked for in, and what the resolved face measures.
+/// line is asked for in, the OpenType settings on top of that, and what the resolved face measures.
 ///
 /// An element that positions its own glyphs — text in cells, one line at a time — shapes through
 /// these and draws the result with
 /// [`ScenePainter::glyphs`](zgui_custom::ScenePainter::glyphs). The shaped runs are owned
 /// ([`ShapedRunOwned`](zgui_text::ShapedRunOwned)), so they are held across frames rather than
 /// rebuilt for each one.
-pub use zgui_text_parley::{LineRequest, ResolvedLineMetrics, Shaper};
+pub use zgui_text_parley::{
+    FontFeature, FontVariation, LineRequest, LineSettings, ResolvedLineMetrics, Shaper, tag,
+};
 
 /// A platform backend's entry point: it takes the application and drives it until it stops.
 ///
@@ -58,7 +66,22 @@ pub fn desktop() -> Driver {
     if wayland_wanted() {
         return zgui_platform_wayland::run;
     }
-    zgui_platform_winit::run
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        zgui_platform_winit::run
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        no_desktop
+    }
+}
+
+/// The driver on a target with no desktop. A browser application starts with [`App::mount`].
+#[cfg(target_arch = "wasm32")]
+fn no_desktop(_handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
+    Err(PlatformError::Backend(
+        "a browser has no desktop to block on; start the application with `App::mount`".to_owned(),
+    ))
 }
 
 /// Whether this program should speak to a compositor directly.
@@ -139,6 +162,8 @@ pub struct App {
     fonts: std::cell::OnceCell<Fonts>,
     /// What draws its windows, when it is not this machine's own graphics device.
     renderer: Option<zgui_runtime::RendererFactory>,
+    /// How precisely the default renderer holds a plain group, when the application set it.
+    group_precision: Option<crate::GroupPrecision>,
     /// The application's own context setup, held until the faces are known.
     ///
     /// Held here rather than passed straight down because the faces are provided in the same scope
@@ -167,6 +192,7 @@ impl App {
             inner: zgui_runtime::App::new(),
             fonts: std::cell::OnceCell::new(),
             renderer: None,
+            group_precision: None,
             context: None,
         }
     }
@@ -304,6 +330,19 @@ impl App {
         self
     }
 
+    /// Whether the window composes its next frame before the platform is ready to show it.
+    ///
+    /// [`ComposeAhead::Auto`](zgui_platform::ComposeAhead::Auto) is the default: the window
+    /// composes ahead only while its frames do not fit the refresh interval.
+    /// [`Always`](zgui_platform::ComposeAhead::Always) suits an application that animates
+    /// continuously and gives throughput priority over input latency. Windows opened later take
+    /// their own setting through
+    /// [`WindowOptions::with_compose_ahead`](zgui_runtime::WindowOptions::with_compose_ahead).
+    pub fn with_compose_ahead(mut self, compose_ahead: zgui_platform::ComposeAhead) -> Self {
+        self.inner.attributes_mut().compose_ahead = compose_ahead;
+        self
+    }
+
     /// Runs `setup` in the scope above every window, before the first one opens.
     ///
     /// Where state belonging to the *application* rather than to one window goes. A context
@@ -327,6 +366,64 @@ impl App {
     /// ```
     pub fn with_context(mut self, setup: impl FnOnce() + 'static) -> Self {
         self.context = Some(Box::new(setup));
+        self
+    }
+
+    /// Makes the window the application starts with a shell window, such as a bar or a dock.
+    ///
+    /// The desktop draws no frame around it and the user cannot move or resize it. A desktop that
+    /// has no shell windows refuses to open it, and the application stops with that error; see
+    /// [`PlatformCapabilities::layer_surfaces`](zgui_platform::PlatformCapabilities::layer_surfaces).
+    ///
+    /// ```no_run
+    /// use zgui::geom::{CssPx, Edges};
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_layer(
+    ///         LayerOptions::top()
+    ///             .with_anchors(Edges::new(true, true, false, true))
+    ///             .with_size(0.0, 34.0)
+    ///             .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(34.0))),
+    ///     )
+    ///     .run(|| view! { row() })
+    /// # }
+    /// ```
+    pub fn with_layer(mut self, layer: zgui_runtime::LayerOptions) -> Self {
+        self.inner = self.inner.with_layer(layer);
+        self
+    }
+
+    /// Starts the application with no window open.
+    ///
+    /// The view that [`App::run`] takes is then not built, and the window settings on this builder
+    /// are not used. The application opens every window itself, from [`App::with_context`] or
+    /// from anything that runs under it, through [`use_windows`](zgui_runtime::use_windows). A
+    /// desktop shell starts this way: it opens one bar for each monitor and a pop-over on demand.
+    ///
+    /// Pair it with [`ExitPolicy::Explicit`](zgui_runtime::ExitPolicy::Explicit) when the
+    /// application must keep running while no window is open, and stop it with
+    /// [`Windows::quit`](zgui_runtime::Windows::quit).
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .without_primary_window()
+    ///     .with_exit_policy(ExitPolicy::Explicit)
+    ///     .with_context(|| {
+    ///         use_windows().open(
+    ///             WindowOptions::layer(LayerOptions::top().with_size(0.0, 34.0)),
+    ///             || view! { row() },
+    ///         );
+    ///     })
+    ///     .run(|| ())
+    /// # }
+    /// ```
+    pub fn without_primary_window(mut self) -> Self {
+        self.inner = self.inner.without_primary_window();
         self
     }
 
@@ -441,6 +538,53 @@ impl App {
         self
     }
 
+    /// Sets how precisely the default renderer holds a plain group of content.
+    ///
+    /// The default is [`GroupPrecision::Compact`](crate::GroupPrecision::Compact), which holds a
+    /// plain group in the surface format when that format is `Bgra8Unorm` or `Rgba8Unorm`. That
+    /// target has half the bytes of a sixteen-bit one.
+    /// [`GroupPrecision::High`](crate::GroupPrecision::High) holds every group in sixteen-bit
+    /// float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
+    /// value. A renderer set with [`App::with_renderer`] ignores it.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_group_precision(zgui::GroupPrecision::High)
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_group_precision(mut self, precision: crate::GroupPrecision) -> Self {
+        self.group_precision = Some(precision);
+        self
+    }
+
+    /// How every window antialiases its text.
+    ///
+    /// The default is [`TextAntialiasing::Auto`](crate::TextAntialiasing::Auto), which follows
+    /// the subpixel layout the platform reports for the display. Text with one coverage for each
+    /// colour channel shows coloured edges on a display with no horizontal stripes, such as most
+    /// OLED panels, and no platform reports those reliably. An application for such a display
+    /// states [`TextAntialiasing::Grayscale`](crate::TextAntialiasing::Grayscale). The
+    /// `ZGUI_TEXT_AA` environment variable (`auto`, `gray`, `rgb` or `bgr`) overrides this value,
+    /// so a user can state the display.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// # fn main() -> Result<(), zgui::Error> {
+    /// app()
+    ///     .with_text_antialiasing(zgui::TextAntialiasing::Grayscale)
+    ///     .run(|| view! { column() })
+    /// # }
+    /// ```
+    pub fn with_text_antialiasing(mut self, antialiasing: crate::TextAntialiasing) -> Self {
+        self.inner = self.inner.with_text_antialiasing(antialiasing);
+        self
+    }
+
     /// The faces this application draws with, for registering one of its own.
     ///
     /// Asking settles the question [`App::with_fonts`] would otherwise answer: an application that
@@ -455,12 +599,48 @@ impl App {
     ///
     /// Returns whatever stopped it: a desktop that would not open a window, a machine with no
     /// usable graphics device, or an executor slot another asynchronous runtime already holds.
+    ///
+    /// # In a browser
+    ///
+    /// A page gives a program no thread to block, so on `wasm32` this function starts the
+    /// application on a canvas that fills the page and returns `Ok(())` at once. A failure to
+    /// start goes to the page's console. `App::mount` is the entry point that reports it to the
+    /// caller, and the one that takes a canvas of the page.
     pub fn run<F, V>(self, view: F) -> Result<(), AppError>
     where
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
-        self.run_on(desktop(), view)
+        #[cfg(target_arch = "wasm32")]
+        {
+            web::start(self, view);
+            Ok(())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.run_on(desktop(), view)
+        }
+    }
+
+    /// Starts the application in a page and resolves when the page drives it.
+    ///
+    /// `mount` names the canvas: one of the page, or a new one that fills the viewport. The page
+    /// sets the size of its own canvas with CSS, and [`App::with_size`] does not change it. The
+    /// future opens the graphics device, which a browser does through a promise, so the caller
+    /// awaits it. A page runs one application at a time.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AppError::Platform`] when the canvas does not exist or the page already runs an
+    /// application, and [`AppError::GpuUnavailable`] when the browser offers neither WebGPU nor
+    /// WebGL 2. An error after the start goes to the page's console.
+    #[cfg(target_arch = "wasm32")]
+    pub async fn mount<F, V>(self, mount: Mount, view: F) -> Result<Mounted, AppError>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        web::mount(self, mount, view).await
     }
 
     /// The same, over a platform backend of the caller's choosing.
@@ -500,7 +680,10 @@ impl App {
         // opening the window and the graphics device rather than in front of them.
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
-        let renderer = self.renderer.unwrap_or_else(graphics::factory);
+        let group_precision = self.group_precision;
+        let renderer = self
+            .renderer
+            .unwrap_or_else(|| graphics::factory(group_precision));
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and
         // therefore resolves them like any other context.

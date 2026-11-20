@@ -438,7 +438,7 @@ fn a_pass_that_would_trap_a_primitive_under_its_composite_is_split_into_one_pass
 #[test]
 fn a_long_pass_past_many_backgrounds_plans_quickly() {
     let mut scene = label_field(8000);
-    let started = std::time::Instant::now();
+    let started = web_time::Instant::now();
     let planned = passes(&mut scene, &DamageSet::full(), Overlap::PerItemInk);
     let elapsed = started.elapsed();
     assert_eq!(planned, 1);

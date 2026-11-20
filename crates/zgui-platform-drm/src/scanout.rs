@@ -74,7 +74,7 @@ use std::time::{Duration, Instant};
 
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
-use zgui_drm::commit::{Commit, Pipe, waits_for_a_fence};
+use zgui_drm::commit::{Commit, DamageClip, Pipe, waits_for_a_fence};
 use zgui_drm::format::{Format, Modifier};
 use zgui_drm::framebuffer::Framebuffer;
 use zgui_drm::resources::Mode;
@@ -169,6 +169,16 @@ pub struct Scanout {
     /// A completion is what frees the buffer behind it, so a completion that never arrives stops
     /// this display for good. [`Scanout::overdue`] is when waiting for it stops.
     owed_since: Option<Instant>,
+    /// Per buffer: what the frame in it changed, compared with the frame committed before it.
+    ///
+    /// Set when a drawn frame is given over and taken by the commit that shows it, which can be a
+    /// vertical blank later. Empty says that the whole frame changed.
+    damage: Vec<Vec<DamageClip>>,
+    /// Whether the last commit was refused.
+    ///
+    /// The next frame's damage is then compared with a frame that never reached the screen, so
+    /// that frame is shown as wholly changed.
+    damage_lost: bool,
 }
 
 /// The buffers a display is driven from, in one of the two shapes.
@@ -566,6 +576,7 @@ impl Scanout {
         &mut self,
         device: &Device,
         commit: &mut dyn Commit,
+        damage: &[DamageClip],
     ) -> Result<bool, PlatformError> {
         let Buffers::Imported { handover, .. } = &mut self.buffers else {
             return Err(PlatformError::Backend(
@@ -575,12 +586,20 @@ impl Scanout {
             ));
         };
         let Some(slot) = self.rotation.drawn() else {
+            self.damage_lost = true;
             return Ok(false);
         };
 
-        let fence = handover
-            .release(slot)
-            .map_err(|refusal| PlatformError::Backend(refusal.to_string()))?;
+        let fence = handover.release(slot).map_err(|refusal| {
+            self.damage_lost = true;
+            PlatformError::Backend(refusal.to_string())
+        })?;
+        if let Some(held) = self.damage.get_mut(slot) {
+            held.clear();
+            if !self.damage_lost {
+                held.extend_from_slice(damage);
+            }
+        }
 
         let Some(ready) = self.rotation.finished(slot, fence) else {
             return Ok(true);
@@ -738,17 +757,19 @@ impl Scanout {
     fn new(output: &Output, buffers: Buffers) -> Self {
         // Nothing is on the screen, so every buffer is free: the first frame goes into the first of
         // them and the modeset puts that one up.
-        let rotation = Rotation::new(match &buffers {
+        let count = match &buffers {
             Buffers::Copied { buffers, .. } => buffers.len(),
             Buffers::Imported { buffers, .. } => buffers.len(),
-        });
+        };
         Self {
             pipe: output.pipe,
             mode: output.mode,
             buffers,
-            rotation,
+            rotation: Rotation::new(count),
             lit: false,
             owed_since: None,
+            damage: vec![Vec::new(); count],
+            damage_lost: false,
         }
     }
 
@@ -789,12 +810,19 @@ impl Scanout {
         let framebuffer = self.framebuffer(slot);
         let fence = ready.fence.as_ref().map(AsFd::as_fd);
         let flipping = self.lit;
+        let damage = self
+            .damage
+            .get_mut(slot)
+            .map(core::mem::take)
+            .unwrap_or_default();
         let taken = if flipping {
-            commit.flip(device, self.pipe, framebuffer, fence)
+            commit.flip_damaged(device, self.pipe, framebuffer, fence, &damage)
         } else {
+            // A modeset shows the whole frame, whatever it changed.
             commit.modeset(device, self.pipe, &self.mode, framebuffer, fence)
         };
         drop(ready.fence);
+        self.damage_lost = taken.is_err();
         taken.map_err(backend)?;
 
         // After the commit, so that what the rotation records is a frame the driver took. A refusal

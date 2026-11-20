@@ -27,6 +27,8 @@ accesskit.workspace = true
 accesskit_unix.workspace = true
 calloop.workspace = true
 calloop-wayland-source.workspace = true
+# Drives the settings portal connection on its own thread.
+futures.workspace = true
 raw-window-handle.workspace = true
 rustix.workspace = true
 smithay-client-toolkit.workspace = true
@@ -34,6 +36,7 @@ tracing.workspace = true
 wayland-backend.workspace = true
 wayland-client.workspace = true
 wayland-protocols.workspace = true
+wayland-scanner.workspace = true
 # The settings portal, which is where this desktop keeps its light-or-dark preference.
 zbus.workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
@@ -49,6 +52,8 @@ tracing-subscriber.workspace = true
 # A headless compositor has a seat with no devices on it, so a property about input has to supply
 # one. This is how: a virtual pointer, created by the test over a connection of its own.
 wayland-protocols-wlr.workspace = true
+# A property about the lock keys needs a keyboard, which a headless session lacks as well.
+wayland-protocols-misc.workspace = true
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
@@ -80,6 +85,11 @@ path = "tests/clipboard.rs"
 harness = false
 
 [[test]]
+name = "file_drop"
+path = "tests/file_drop.rs"
+harness = false
+
+[[test]]
 name = "wake_idle"
 path = "tests/wake_idle.rs"
 harness = false
@@ -87,6 +97,61 @@ harness = false
 [[test]]
 name = "wake_signal"
 path = "tests/wake_signal.rs"
+harness = false
+
+[[test]]
+name = "output_rate"
+path = "tests/output_rate.rs"
+harness = false
+
+[[test]]
+name = "layer_shell"
+path = "tests/layer_shell.rs"
+harness = false
+
+[[test]]
+name = "hidden_layer"
+path = "tests/hidden_layer.rs"
+harness = false
+
+[[test]]
+name = "layer_toggle"
+path = "tests/layer_toggle.rs"
+harness = false
+
+[[test]]
+name = "fatal_error"
+path = "tests/fatal_error.rs"
+harness = false
+
+[[test]]
+name = "connection_lost"
+path = "tests/connection_lost.rs"
+harness = false
+
+[[test]]
+name = "monitors"
+path = "tests/monitors.rs"
+harness = false
+
+[[test]]
+name = "focus_grab"
+path = "tests/focus_grab.rs"
+harness = false
+
+[[test]]
+name = "layer_popup"
+path = "tests/layer_popup.rs"
+harness = false
+
+[[test]]
+name = "session_lock"
+path = "tests/session_lock.rs"
+harness = false
+
+[[test]]
+name = "lock_keys"
+path = "tests/lock_keys.rs"
 harness = false
 
 # A declined redraw must not wait out the watchdog's grace, which only a wall-clock bound can see.

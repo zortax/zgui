@@ -6,7 +6,7 @@ use zgui_scene::Scene;
 
 use crate::capabilities::RenderCapabilities;
 use crate::memory::MemoryReport;
-use crate::outcome::FrameOutcome;
+use crate::outcome::{FrameOutcome, SkipReason};
 use crate::pool::TargetPoolReport;
 use crate::shift::ScrollShift;
 use crate::target::RenderTarget;
@@ -62,6 +62,15 @@ pub trait Renderer {
     /// False by default, so a renderer that has not thought about it is correct.
     fn shifts_composed_pixels(&self) -> bool {
         false
+    }
+
+    /// States which way round the subpixels of the display run, for text drawn with one coverage
+    /// for each colour channel.
+    ///
+    /// The caller damages the whole surface when the order changes. Nothing by default, which is
+    /// correct for a renderer that draws no such text.
+    fn set_subpixel_order(&mut self, order: crate::SubpixelOrder) {
+        let _ = order;
     }
 
     /// Whether the picture composed before the last [`Renderer::configure`] is still there to draw
@@ -149,6 +158,15 @@ pub trait Renderer {
     /// and for one whose surface always has an image spare: neither made the frame wait.
     fn acquire_block(&self) -> core::time::Duration {
         core::time::Duration::ZERO
+    }
+
+    /// Presents the frame that [`draw`](Renderer::draw) held back with [`SkipReason::Held`].
+    ///
+    /// The frame's work is already submitted, so this is only the copy to the surface and the
+    /// handover. A frame that a later [`configure`](Renderer::configure) made obsolete is not
+    /// presented. The default holds nothing, so it presents nothing.
+    fn present_held(&mut self) -> FrameOutcome {
+        FrameOutcome::Skipped(SkipReason::Undamaged)
     }
 
     /// Where rasterised content is uploaded: the device side of the texture atlas.

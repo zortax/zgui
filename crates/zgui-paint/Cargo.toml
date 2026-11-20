@@ -13,6 +13,7 @@ include.workspace = true
 
 # L4 — engines. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
+web-time.workspace = true
 # Generation-checked handles, which a fragment key is one of.
 zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
 # Glyph tiles and mask tiles are named by the primitives this crate emits.

@@ -11,7 +11,11 @@
 //! the measurement behind it broke; [`reference::sample`] takes the medians the points are made of;
 //! [`reference::watch`] records what a frame damaged, which is a fraction and therefore already
 //! dimensionless.
+//!
+//! [`probe`] serves the diagnostic probes. They gate nothing, so they print absolute numbers:
+//! per-frame counters, wall time and GPU time.
 
 #![forbid(unsafe_code)]
 
+pub mod probe;
 pub mod reference;

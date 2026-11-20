@@ -28,7 +28,7 @@ fn throughput_is_recorded_rather_than_asserted() {
              box:nth-child(odd) { background-color: rgb(2, 0, 0) }\n\
              .lit + box { border-top-left-radius: 4px }",
         );
-        let started = std::time::Instant::now();
+        let started = web_time::Instant::now();
         match workers {
             Some(width) => {
                 let pool = StylePool::new(width);

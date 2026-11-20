@@ -4,7 +4,7 @@ use zgui_geom::{DevicePx, Point};
 use zgui_layout::FragmentFlags;
 use zgui_layout::fragment::diff::Everything;
 
-use crate::probe::{box_named, own_fragment};
+use crate::probe::{box_named, device_box, drawn_matrix, own_fragment};
 use crate::support::{Element, Fixture, fragments, lay_out, measurer};
 
 #[test]
@@ -22,12 +22,11 @@ fn a_fragment_sits_where_the_whole_ancestor_chain_puts_it() {
     );
     let mut store = fixture.box_tree();
     let mut content = measurer();
-    lay_out(&mut store, &mut content, 400.0, 400.0);
+    let frame = lay_out(&mut store, &mut content, 400.0, 400.0);
 
     let inner = box_named(&store, &fixture, "inner");
-    let fragment = own_fragment(&store, inner);
     assert_eq!(
-        fragment.border_box.origin,
+        device_box(&store, &frame, inner).origin,
         Point::new(DevicePx(17.0), DevicePx(17.0)),
         "10 of the root's padding, 2 of the outer's border and 5 of its padding"
     );
@@ -82,7 +81,7 @@ fn a_scrolled_container_moves_its_contents_and_leaves_itself_alone() {
 
     let port = box_named(&store, &fixture, "port");
     let row = box_named(&store, &fixture, "row");
-    let before = own_fragment(&store, row).border_box.origin.y.0;
+    let before = device_box(&store, &frame, row).origin.y.0;
 
     let scrolled = frame.scroll.scroll_to(
         &store,
@@ -97,12 +96,12 @@ fn a_scrolled_container_moves_its_contents_and_leaves_itself_alone() {
     fragments(&mut frame, &mut store, root, &mut Everything);
 
     assert_eq!(
-        own_fragment(&store, row).border_box.origin.y.0,
+        device_box(&store, &frame, row).origin.y.0,
         before - 60.0,
         "the row moved up by the scroll offset"
     );
     assert_eq!(
-        own_fragment(&store, port).border_box.origin.y.0,
+        device_box(&store, &frame, port).origin.y.0,
         0.0,
         "the container itself did not move"
     );
@@ -164,7 +163,7 @@ fn a_sticky_header_stops_at_the_top_of_its_scrollport() {
             .flags
             .contains(FragmentFlags::IS_STICKY)
     );
-    assert_eq!(own_fragment(&store, head).border_box.origin.y.0, 100.0);
+    assert_eq!(device_box(&store, &frame, head).origin.y.0, 100.0);
 
     // Scrolled past where the header sat, it stays at the top of the port instead of leaving it.
     frame.scroll.scroll_to(
@@ -178,7 +177,7 @@ fn a_sticky_header_stops_at_the_top_of_its_scrollport() {
     let root = store.root().expect("a root");
     fragments(&mut frame, &mut store, root, &mut Everything);
     assert_eq!(
-        own_fragment(&store, head).border_box.origin.y.0,
+        device_box(&store, &frame, head).origin.y.0,
         0.0,
         "the header is held at the scrollport's top edge"
     );
@@ -372,17 +371,14 @@ fn a_fixed_box_at_half_the_viewport_pulled_back_by_half_itself_is_centred() {
     // A transform does not move the layout box, so the box itself is at the centre; what centres
     // the panel is the matrix the fragment carries.
     assert_eq!(
-        fragment.border_box.origin,
+        device_box(&store, &frame, panel).origin,
         Point::new(DevicePx(400.0), DevicePx(300.0)),
         "half the viewport, which is where the leading corner belongs before the pull-back"
     );
     let id = fragment
         .transform
         .expect("a translated panel carries a matrix");
-    let matrix = frame
-        .spatial
-        .resolve(id)
-        .expect("the name resolves to a matrix");
+    let matrix = drawn_matrix(&frame, id);
     assert_eq!(
         (matrix.columns[3][0], matrix.columns[3][1]),
         (-200.0, -100.0),

@@ -472,9 +472,21 @@ pub(crate) fn fragments(
     root: zgui_layout::BoxKey,
     dirty: &mut impl zgui_layout::fragment::diff::FrameDirty,
 ) {
+    fragments_after(frame, store, root, dirty, &zgui_scene::Placements::EMPTY);
+}
+
+/// [`fragments`], with `drawn` as the matrices the standing fragments were last published with.
+pub(crate) fn fragments_after(
+    frame: &mut Frame,
+    store: &mut LayoutStore,
+    root: zgui_layout::BoxKey,
+    dirty: &mut impl zgui_layout::fragment::diff::FrameDirty,
+    drawn: &zgui_scene::Placements,
+) {
     let mut tables = zgui_layout::fragment::build::Tables {
         clips: &mut frame.clips,
         spatial: &mut frame.spatial,
+        drawn,
         device: DeviceStyle::default(),
         scroll: &frame.scroll,
         placements: &[],

@@ -43,6 +43,8 @@ pub struct EmbedSyncCx<'a> {
     pub document: &'a Rc<RefCell<Document>>,
     /// The laid-out boxes, for the content box a producer's texture is stretched over.
     pub layout: &'a Rc<RefCell<LayoutStore>>,
+    /// The drawn frame's matrices, which put a fragment's ink on the device.
+    pub placements: &'a zgui_scene::Placements,
     /// The renderer, for registering and releasing externals — and, through
     /// [`Renderer::as_any_mut`], for whatever the backend companion needs that the contract
     /// cannot name.

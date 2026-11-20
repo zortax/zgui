@@ -3,9 +3,11 @@
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_vocab::SharedString;
 
+use crate::monitor::MonitorTarget;
 use crate::surface::chrome::{Decorations, FullscreenMode, WindowLevel};
 use crate::surface::icon::WindowIcon;
 use crate::surface::role::{LayerPlacement, PopupPlacement, SurfaceRole};
+use crate::surface::timing::ComposeAhead;
 use crate::theme::ColorScheme;
 
 /// What a surface should be when it is created.
@@ -65,6 +67,8 @@ pub struct SurfaceAttributes {
     /// Read only with [`Decorations::NoTitleBar`] on a desktop that draws its buttons over the
     /// content, which is macOS. Absent leaves them where the desktop puts them.
     pub title_buttons: Option<TitleButtons>,
+    /// Whether the surface composes its next frame before the platform is ready to show it.
+    pub compose_ahead: ComposeAhead,
 }
 
 /// Where the window buttons sit over a window that has no title bar.
@@ -109,6 +113,7 @@ impl SurfaceAttributes {
             icon: None,
             theme: None,
             title_buttons: None,
+            compose_ahead: ComposeAhead::Auto,
         }
     }
 
@@ -151,6 +156,18 @@ impl SurfaceAttributes {
     pub fn layer(placement: LayerPlacement) -> Self {
         Self {
             role: SurfaceRole::Layer(placement),
+            resizable: false,
+            decorations: Decorations::None,
+            ..Self::new("")
+        }
+    }
+
+    /// The lock screen on the output `monitor` names.
+    ///
+    /// Undecorated and not resizable: the desktop gives it the extent of the whole output.
+    pub fn lock(monitor: impl Into<MonitorTarget>) -> Self {
+        Self {
+            role: SurfaceRole::Lock(monitor.into()),
             resizable: false,
             decorations: Decorations::None,
             ..Self::new("")
@@ -202,6 +219,11 @@ mod tests {
         let layer = SurfaceAttributes::layer(LayerPlacement::default());
         assert!(matches!(layer.role, SurfaceRole::Layer(_)));
         assert_eq!(layer.decorations, Decorations::None);
+
+        let lock = SurfaceAttributes::lock("DP-1");
+        assert_eq!(lock.role, SurfaceRole::Lock("DP-1".into()));
+        assert!(!lock.resizable);
+        assert_eq!(lock.decorations, Decorations::None);
     }
 
     #[test]

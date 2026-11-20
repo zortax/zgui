@@ -140,14 +140,13 @@ impl FrameWaker for RuntimeWaker {
         if self.gate.request() {
             return;
         }
+        // With no surface the wake still goes out, naming none. An application with no window open
+        // has no frame to flush its work, and the runtime flushes it on the wake instead.
         let surfaces = self
             .surfaces
             .lock()
             .expect("the set is not poisoned")
             .clone();
-        if surfaces.is_empty() {
-            return;
-        }
         self.platform.wake(WakeReason::ReactiveWork {
             surfaces: surfaces.into_boxed_slice(),
         });
@@ -207,13 +206,16 @@ mod tests {
     }
 
     #[test]
-    fn a_wake_belonging_to_no_surface_goes_nowhere() {
+    fn a_wake_belonging_to_no_surface_wakes_the_loop_and_names_no_surface() {
+        // An application with no window open still has work to flush, so the loop must wake. No
+        // surface is named, so no surface draws for it.
         let platform = Arc::new(Recording::default());
         let gate = Arc::new(FrameGate::new());
         let waker = RuntimeWaker::new(Arc::clone(&platform) as Arc<dyn Waker>, gate);
         waker.owns(SurfaceId::new(3));
         waker.disowns(SurfaceId::new(3));
         waker.wake();
-        assert!(platform.0.lock().expect("not poisoned").is_empty());
+        let recorded = platform.0.lock().expect("not poisoned");
+        assert_eq!(recorded.as_slice(), [Vec::<SurfaceId>::new()]);
     }
 }

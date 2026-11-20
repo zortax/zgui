@@ -11,7 +11,7 @@
 //! rasterises too often is drawn shape by shape for a while.
 
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 use rustc_hash::FxHashMap;
 use zgui_atlas::{Atlas, AtlasKey, AtlasTile, TextureKind};

@@ -136,6 +136,10 @@ pub mod prelude;
 
 pub use crate::app::{App, app};
 pub use crate::error::Error;
+/// How precisely the default renderer holds a plain group, see [`App::with_group_precision`].
+pub use zgui_render_wgpu::GroupPrecision;
+/// How a window antialiases its text, see [`App::with_text_antialiasing`].
+pub use zgui_runtime::TextAntialiasing;
 
 /// A view written as nested calls, a component written as a function, and the styling macros.
 pub use zgui_view_macro::{component, css, slot, style, variants, view};
@@ -164,6 +168,14 @@ pub mod desktop {
 }
 /// The pixel spaces and the geometry every stage agrees in.
 pub use zgui_geom as geom;
+/// The clocks an application reads.
+///
+/// On a native target these are the standard library's types. In a browser they read the page's
+/// clocks, where the standard library's `now` functions panic. An application that also runs in a
+/// browser takes its clocks from here.
+pub mod time {
+    pub use web_time::{Duration, Instant, SystemTime, SystemTimeError, UNIX_EPOCH};
+}
 /// The windowing contract every platform backend implements.
 pub use zgui_platform as platform;
 /// Signals, memos, stores, contexts, ownership and the flush the frame loop drives.

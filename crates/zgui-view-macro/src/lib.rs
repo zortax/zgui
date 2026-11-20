@@ -106,6 +106,9 @@
 //!
 //! A toggle written with no value is on: `state:disabled` means `state:disabled=true`.
 //!
+//! The runtime sets the custom state `drag-over` while an external drag is over an element. Do not
+//! use that name for an author-defined state.
+//!
 //! A value is one Rust expression, ending at the `,` or `)` that follows it, so a comparison, a
 //! shift and a typed closure parameter are all written unbraced. Braces around a value are
 //! optional and are unwrapped: `flag={a > b}` and `flag = a > b` are the same attribute.

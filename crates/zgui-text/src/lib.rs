@@ -53,10 +53,10 @@
 //!
 //! # Why a brush is an index
 //!
-//! [`Brush`] is a slot number in a table that lives as long as the document, never a colour. A
-//! shaped paragraph outlives the frame that produced it, so storing a colour would mean a theme
-//! change invalidated every one of them; storing an index means the same change is a handful of
-//! writes into the table with nothing re-shaped.
+//! [`Brush`] is a slot number in a table the document owns, never a colour. A shaped paragraph
+//! outlives the frame that produced it, so storing a colour would mean a theme change invalidated
+//! every one of them; storing an index means the same change is a handful of writes into the table
+//! with nothing re-shaped.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
@@ -85,10 +85,10 @@ pub use crate::cluster::{ClusterRun, ShapedClusters};
 pub use crate::font::{FaceId, FaceRecord, FontData, FontError, FontSource};
 pub use crate::geometry::{LineGeometry, StrutMetrics, TextGeometry};
 pub use crate::glyph::{
-    ATLAS_MAX_SIZE, AtlasGlyph, GlyphFormat, GlyphImage, GlyphKey, GlyphOutline, GlyphRaster,
-    NoRaster, OutlineKey, PenPosition, RasterPath, RasterStyle, RunProfile, RunSurface,
-    SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun, ShapedRunOwned, SubpixelOffset,
-    VariationInstance,
+    ATLAS_MAX_SIZE, ATLAS_MAX_STRETCH, AtlasGlyph, GlyphFormat, GlyphImage, GlyphKey, GlyphOutline,
+    GlyphRaster, NoRaster, OutlineKey, PenPosition, RasterPath, RasterStyle, RunProfile,
+    RunSurface, RunTransform, SUBPIXEL_MAX_SIZE, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs,
+    ShapedRun, ShapedRunOwned, SubpixelOffset, VariationInstance,
 };
 pub use crate::map::{Segment, SourcePos, TextMap};
 pub use crate::metrics::{FaceMetrics, FaceQuery, FixedMetrics, FontMetricsSource};

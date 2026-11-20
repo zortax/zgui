@@ -13,6 +13,7 @@ license = "Apache-2.0 AND MPL-2.0"
 
 # L4 — engines. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
+web-time.workspace = true
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-css = { path = "../zgui-css", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }

@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use crate::error::{Error, Result, read_to_string};
+use crate::root::is_build_output;
 
 /// One source file, with its text held in memory.
 #[derive(Debug, Clone)]
@@ -17,7 +18,9 @@ pub(crate) struct SourceFile {
 const EXTENSIONS: [&str; 2] = ["rs", "wgsl"];
 
 /// Directory names never descended into.
-const SKIP: [&str; 3] = ["target", ".git", "fixtures"];
+///
+/// Cargo build output is skipped too, by [`is_build_output`].
+const SKIP: [&str; 2] = [".git", "fixtures"];
 
 /// Directories holding a record of what was once proposed, which is not a document to keep up to
 /// date and is therefore not read by the checks that read prose.
@@ -58,7 +61,10 @@ fn markdown(root: &Path, directory: &Path, out: &mut Vec<SourceFile>) -> Result<
         if path.is_dir() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if SKIP.contains(&name.as_ref()) || RECORDS.contains(&name.as_ref()) {
+            if SKIP.contains(&name.as_ref())
+                || RECORDS.contains(&name.as_ref())
+                || is_build_output(&path)
+            {
                 continue;
             }
             markdown(root, &path, out)?;
@@ -84,7 +90,7 @@ fn walk(root: &Path, directory: &Path, out: &mut Vec<SourceFile>) -> Result<()> 
         if path.is_dir() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if SKIP.contains(&name.as_ref()) {
+            if SKIP.contains(&name.as_ref()) || is_build_output(&path) {
                 continue;
             }
             walk(root, &path, out)?;

@@ -3,7 +3,7 @@
 //! `cargo xtask ci` runs the full definition of done, and `cargo xtask ci --hosted` runs it
 //! without the steps a hosted machine cannot pass; `cargo xtask lint` runs clippy over the
 //! workspace in both profiles, which `ci` also does; `cargo xtask wall-clock` runs the wall-clock
-//! budgets in an optimised build, which `ci` also does; `cargo xtask perf` runs the five end-to-end
+//! budgets in an optimised build, which `ci` also does; `cargo xtask perf` runs the seven end-to-end
 //! scenarios against their bands and regenerates `docs/performance.md`, which `ci` also does;
 //! `cargo xtask docs` runs the documentation gate; `cargo xtask release` checks that the tree can
 //! be published in lockstep and that its public surface still keeps the last release's promise;
@@ -22,6 +22,7 @@
 //! stored and fails on any duration published without its distribution; both are also steps of
 //! `ci`. `cargo xtask perf pacing` measures a scripted scroll's frame intervals and is deliberately
 //! not one, because it measures on the real output or it does not measure.
+//! `cargo xtask wayland` runs the Wayland backend's compositor tests on a nested headless sway.
 //! `cargo xtask ledger` runs the mechanical ledgers on their own; `cargo xtask tsan` runs the
 //! thread sanitiser over the threaded targets together with the control that proves it was
 //! watching; `cargo xtask new-crate` stamps out a member that already satisfies the ledgers.
@@ -50,6 +51,8 @@ mod tails;
 mod tsan;
 mod verify;
 mod wall_clock;
+mod wayland;
+mod web;
 mod workloads;
 
 use std::process::ExitCode;
@@ -77,7 +80,7 @@ fn main() -> ExitCode {
     let outcome = match command {
         Command::Ci { hosted } => ci::run(&root, hosted),
         Command::Lint => lint::run(&root),
-        Command::WallClock => wall_clock::run(&root),
+        Command::WallClock => wall_clock::run(&root, false),
         Command::Perf => perf::run(&root),
         Command::PerfPacing { size, seconds } => perf::pacing(&root, &size, seconds),
         Command::Growth => growth::run(&root),
@@ -94,7 +97,12 @@ fn main() -> ExitCode {
         Command::Release => release::run(&root, release::Packaging::Built),
         Command::Ledger { only } => ledger::run(&root, only.as_deref()),
         Command::LedgerSelfTest => ledger::self_test::run(&root),
+        Command::Wayland { args } => wayland::run(&root, &args),
         Command::Tsan => tsan::run(&root),
+        Command::Web { build, serve } => match serve {
+            Some(port) => web::serve(&root, &build, port),
+            None => web::build(&root, &build).map(|_| ()),
+        },
         Command::NewCrate { name, layer } => new_crate::run(&root, &name, layer),
         Command::Help => {
             println!("{}", cli::USAGE);

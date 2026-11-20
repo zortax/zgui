@@ -417,6 +417,65 @@ fn a_multiple_selection_toggle_group_keeps_both_on() {
     );
 }
 
+#[test]
+fn a_disabled_toggle_group_or_item_refuses_a_press() {
+    // The disabled flags are signals, so a press reads them as the caller holds them now.
+    let harness = Harness::open();
+    let (on_change, seen) = recorder::<Vec<String>>();
+    let group_out = RwSignal::new_local(true);
+    let item_out = RwSignal::new_local(true);
+    harness.mount(move || {
+        view! {
+            column {
+                ToggleGroup(disabled = group_out, on_change = on_change, label = "Alignment") {
+                    ToggleGroupItem(value = "left", label = "Left") {"L"}
+                }
+                ToggleGroup(selection = ToggleSelection::Multiple, label = "Formatting") {
+                    ToggleGroupItem(value = "bold", disabled = item_out, label = "Bold") {"B"}
+                }
+            }
+        }
+    });
+    let items: Vec<NodeId> = harness
+        .all()
+        .into_iter()
+        .filter(|node| {
+            harness
+                .window
+                .dom
+                .tree()
+                .classes(*node)
+                .contains(&zgui::view::ClassName::new("zui-toggle-group__item"))
+        })
+        .collect();
+    assert_eq!(items.len(), 2);
+
+    harness.press(items[0], NamedKey::Space);
+    harness.press(items[1], NamedKey::Space);
+    assert!(
+        !harness.state(items[0]).contains(UiState::CHECKED),
+        "a disabled group changed"
+    );
+    assert!(
+        !harness.state(items[1]).contains(UiState::CHECKED),
+        "a disabled item changed"
+    );
+    assert!(
+        seen.borrow().is_empty(),
+        "a disabled group reported a change"
+    );
+
+    // Back in action, the same presses go through.
+    group_out.set(false);
+    item_out.set(false);
+    harness.window.frame();
+    harness.press(items[0], NamedKey::Space);
+    harness.press(items[1], NamedKey::Space);
+    assert!(harness.state(items[0]).contains(UiState::CHECKED));
+    assert!(harness.state(items[1]).contains(UiState::CHECKED));
+    assert_eq!(*seen.borrow(), [vec!["left".to_owned()]]);
+}
+
 // ---- slider -----------------------------------------------------------------------------------
 
 #[test]

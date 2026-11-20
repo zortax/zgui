@@ -1,6 +1,6 @@
 //! The caret's on-and-off phase, measured on the loop's own clock.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// How long the caret stays in one phase.
 ///
@@ -102,7 +102,7 @@ impl Blink {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     use super::{Blink, HALF_PERIOD, PHASES};
 

@@ -264,7 +264,7 @@ fn stored_hash(store: &LayoutStore) -> u64 {
                 zgui_layout::fragment::FragmentKind::Line { .. }
             )
         })
-        .map(|fragment| fragment.content_hash)
+        .map(|fragment| store.fragment_extra(fragment).content_hash)
         .expect("the label has a line fragment")
 }
 

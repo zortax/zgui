@@ -126,7 +126,7 @@ const USAGE: wgpu::TextureUsages = wgpu::TextureUsages::RENDER_ATTACHMENT;
 
 /// The same decision, as wgpu's hal states it.
 ///
-/// wgpu 29.0.4 reads none of it. `texture_from_raw` takes the label, the format and the copy extent
+/// wgpu 30.0.2 reads none of it. `texture_from_raw` takes the label, the format and the copy extent
 /// out of the hal descriptor and reads neither the usage nor the memory flags nor the view formats,
 /// and wgpu-core maps [`USAGE`] itself for the barriers it records. So this is stated for two
 /// reasons: the descriptor has the field, and a field that says something untrue is a trap for
@@ -526,16 +526,19 @@ fn wrap(
         usage: USAGE,
         view_formats: &[],
     };
-    // SAFETY: wgpu states three requirements of a hal texture and each is answered here. It was
+    // SAFETY: wgpu states four requirements of a hal texture and each is answered here. It was
     // created immediately above from this device's own handle. It was created respecting this
-    // descriptor, which states the same extent, format and usage. And it is initialized: `image`
-    // bound memory to it before this, so the object is complete. Its *contents* are undefined,
-    // which is a different question and one wgpu accounts for — it records a texture handed to it
-    // as uninitialised and lays its first barrier down from `UNDEFINED`. It is handed over once and
-    // nothing else names it.
+    // descriptor, which states the same extent, format and usage. It is initialized: `image` bound
+    // memory to it before this, so the object is complete. And its initial state is
+    // `UNINITIALIZED`, which says its contents may be discarded, so wgpu lays the first barrier
+    // down from `UNDEFINED`. It is handed over once and nothing else names it.
     let texture = unsafe {
         gpu.device()
-            .create_texture_from_hal::<wgpu::hal::api::Vulkan>(texture, &descriptor)
+            .create_texture_from_hal::<wgpu::hal::api::Vulkan>(
+                texture,
+                &descriptor,
+                wgpu::TextureUses::UNINITIALIZED,
+            )
     };
 
     Imported {

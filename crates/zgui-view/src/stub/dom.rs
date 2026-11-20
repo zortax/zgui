@@ -334,6 +334,15 @@ impl Dom for StubDom {
         }
     }
 
+    fn text_is(&self, node: NodeId, data: &str) -> bool {
+        self.check(node);
+        self.tree
+            .borrow()
+            .nodes
+            .get(&node)
+            .is_some_and(|record| record.text == data)
+    }
+
     fn insert(&self, parent: NodeId, child: NodeId, before: Option<NodeId>) {
         self.check(parent);
         self.check(child);

@@ -1,7 +1,7 @@
 //! What one composite of an isolated target is told.
 
 use bytemuck::{Pod, Zeroable};
-use zgui_geom::{Device, DevicePx, Rect, Size};
+use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 
 use crate::filter::matrix::ColorMatrix;
 use crate::target::scale::TargetScale;
@@ -28,6 +28,8 @@ pub struct CompositeParams {
     pub matrix3: [f32; 4],
     /// Its constant term.
     pub matrix_offset: [f32; 4],
+    /// The device pixel the sampled target's first texel holds, then two unused lanes.
+    pub origin: [f32; 4],
 }
 
 impl CompositeParams {
@@ -36,11 +38,13 @@ impl CompositeParams {
     /// Run the sampled colour through the filter matrix.
     pub const MATRIX: u32 = 2;
 
-    /// A composite of `bounds`, sampling a target of `extent` texels held at `scale`.
+    /// A composite of `bounds`, sampling a target of `extent` texels held at `scale`, whose first
+    /// texel holds the device pixel `origin`.
     pub fn new(
         bounds: Rect<DevicePx, Device>,
         extent: Size<i32, Device>,
         scale: TargetScale,
+        origin: Point<i32, Device>,
         clip: u32,
     ) -> Self {
         let identity = ColorMatrix::identity().columns();
@@ -64,6 +68,7 @@ impl CompositeParams {
             matrix2: identity[2],
             matrix3: identity[3],
             matrix_offset: identity[4],
+            origin: [origin.x as f32, origin.y as f32, 0.0, 0.0],
         }
     }
 
@@ -121,24 +126,42 @@ mod tests {
 
     #[test]
     fn a_group_with_no_per_pixel_filter_does_not_ask_for_the_matrix() {
-        let params = CompositeParams::new(bounds(), Size::new(64, 64), TargetScale::Full, 0)
-            .with_matrix(ColorMatrix::identity());
+        let params = CompositeParams::new(
+            bounds(),
+            Size::new(64, 64),
+            TargetScale::Full,
+            Point::new(0, 0),
+            0,
+        )
+        .with_matrix(ColorMatrix::identity());
         assert_eq!(params.flags() & CompositeParams::MATRIX, 0);
         assert_eq!(params.matrix0, [1.0, 0.0, 0.0, 0.0]);
     }
 
     #[test]
     fn a_real_filter_asks_for_the_matrix_and_carries_its_columns() {
-        let params = CompositeParams::new(bounds(), Size::new(64, 64), TargetScale::Full, 0)
-            .with_matrix(ColorMatrix::invert(1.0));
+        let params = CompositeParams::new(
+            bounds(),
+            Size::new(64, 64),
+            TargetScale::Full,
+            Point::new(0, 0),
+            0,
+        )
+        .with_matrix(ColorMatrix::invert(1.0));
         assert_ne!(params.flags() & CompositeParams::MATRIX, 0);
         assert_eq!(params.matrix_offset, [1.0, 1.0, 1.0, 0.0]);
     }
 
     #[test]
     fn a_shadow_carries_its_colour_and_its_displacement() {
-        let params = CompositeParams::new(bounds(), Size::new(64, 64), TargetScale::Half, 3)
-            .as_shadow([0.0, 0.0, 0.0, 0.5], (4.0, -2.0));
+        let params = CompositeParams::new(
+            bounds(),
+            Size::new(64, 64),
+            TargetScale::Half,
+            Point::new(0, 0),
+            3,
+        )
+        .as_shadow([0.0, 0.0, 0.0, 0.5], (4.0, -2.0));
         assert_ne!(params.flags() & CompositeParams::TINT, 0);
         assert_eq!(params.control[2], 4.0);
         assert_eq!(params.control[3], -2.0);
@@ -147,5 +170,22 @@ mod tests {
             "a half-resolution target is magnified"
         );
         assert_eq!(params.control[0], 3.0, "the clip chain reaches the shader");
+    }
+
+    #[test]
+    fn the_sampled_target_origin_reaches_the_shader() {
+        let params = CompositeParams::new(
+            bounds(),
+            Size::new(64, 64),
+            TargetScale::Full,
+            Point::new(32, -8),
+            0,
+        );
+        assert_eq!(params.origin, [32.0, -8.0, 0.0, 0.0]);
+        assert_eq!(
+            params.source[..2],
+            [64.0, 64.0],
+            "the origin moves no extent"
+        );
     }
 }

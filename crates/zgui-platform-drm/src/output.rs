@@ -11,13 +11,25 @@
 use tracing::{info, warn};
 use zgui_drm::commit::Pipe;
 use zgui_drm::property::ObjectKind;
-use zgui_drm::resources::{Connector, Mode};
+use zgui_drm::resources::{Connector, Mode, Subpixel};
 use zgui_drm::{Device, Error};
 use zgui_geom::{DevicePx, Point, Size};
-use zgui_platform::{MonitorInfo, PlatformError};
+use zgui_platform::{MonitorInfo, PlatformError, SubpixelLayout};
 
 /// The plane property that says what a plane is for.
 const PLANE_TYPE: &str = "type";
+
+/// The layout the contract states for a kernel subpixel order.
+///
+/// This backend scans out with no turn, so the order of the panel is the order a surface sees.
+fn layout(subpixel: Subpixel) -> SubpixelLayout {
+    match subpixel {
+        Subpixel::HorizontalRgb => SubpixelLayout::HorizontalRgb,
+        Subpixel::HorizontalBgr => SubpixelLayout::HorizontalBgr,
+        Subpixel::VerticalRgb | Subpixel::VerticalBgr | Subpixel::None => SubpixelLayout::None,
+        _ => SubpixelLayout::Unknown,
+    }
+}
 
 /// What the kernel numbers `DRM_PLANE_TYPE_PRIMARY`.
 ///
@@ -39,6 +51,8 @@ pub struct Output {
     pub crtc_index: usize,
     /// The mode the display is driven at.
     pub mode: Mode,
+    /// How the colour stripes of the display are arranged, as the kernel states it.
+    pub subpixel: SubpixelLayout,
 }
 
 impl Output {
@@ -139,6 +153,7 @@ impl Output {
                 },
                 crtc_index: index as usize,
                 mode,
+                subpixel: layout(connector.subpixel()),
             });
         }
         Ok(outputs)
@@ -355,6 +370,7 @@ mod tests {
             },
             crtc_index: crtc as usize,
             mode: Mode::builder(clock, horizontal, vertical).build(),
+            subpixel: zgui_platform::SubpixelLayout::Unknown,
         }
     }
 

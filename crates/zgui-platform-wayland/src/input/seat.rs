@@ -69,6 +69,10 @@ pub struct Seat {
     /// A level rather than an event: the compositor reports a change, and everything above the
     /// contract is written against the set that was held when something happened.
     pub(crate) held: Modifiers,
+    /// Which locks are on: caps lock and num lock.
+    ///
+    /// Reported with the held set when either changes, and never stamped on an input event.
+    pub(crate) locks: Modifiers,
     /// Which surface has the keyboard.
     pub(crate) keyboard_focus: Option<SurfaceId>,
     /// Which surface the pointer is over.

@@ -16,7 +16,7 @@
 //!   after that is the cadence's.
 
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_view::FrameRequestId;
 use zgui_vocab::Timestamp;
@@ -96,7 +96,7 @@ impl FrameCallbacks {
 mod tests {
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::time::Instant;
+    use web_time::Instant;
 
     use zgui_vocab::Timestamp;
 

@@ -311,7 +311,7 @@ impl RuntimeHost {
     }
 
     /// When the first pending frame callback was registered, for the deadline merge.
-    pub(crate) fn frame_callbacks_since(&self) -> Option<std::time::Instant> {
+    pub(crate) fn frame_callbacks_since(&self) -> Option<web_time::Instant> {
         self.frame_callbacks.borrow().pending_since()
     }
 

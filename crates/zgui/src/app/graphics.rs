@@ -4,13 +4,15 @@ use std::sync::Arc;
 
 use zgui_platform::{PlatformError, Surface};
 use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{PresentPacing, SharedGraphics, renderer::PrePresent};
+use zgui_render_wgpu::{GroupPrecision, PresentPacing, SharedGraphics, renderer::PrePresent};
 use zgui_runtime::{AppError, RendererFactory};
 
 /// The compositor notification belonging to `surface`, kept alive with it.
 fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
     let surface = Arc::clone(surface);
-    pre_present_callback(move || surface.pre_present_notify())
+    pre_present_callback(move |target| {
+        surface.pre_present_frame(target.size, f64::from(target.scale.get()));
+    })
 }
 
 /// Whether `surface` is told that a frame is about to be presented.
@@ -49,7 +51,7 @@ fn pacing_of(surface: &Arc<dyn Surface>) -> PresentPacing {
 }
 
 /// Boxes a platform notification for the renderer seam.
-fn pre_present_callback(notify: impl Fn() + Send + Sync + 'static) -> PrePresent {
+fn pre_present_callback(notify: impl Fn(RenderTarget) + Send + Sync + 'static) -> PrePresent {
     Box::new(notify)
 }
 
@@ -61,15 +63,21 @@ fn pre_present_callback(notify: impl Fn() + Send + Sync + 'static) -> PrePresent
 /// allocates, none of which is per-window work. The device itself is opened by the first window,
 /// because which adapter is usable is only known against something to present to.
 ///
+/// Each renderer gets the group precision the application set in `precision`.
+/// [`GroupPrecision::VARIABLE`] overrides it.
+///
 /// # Errors
 ///
 /// The factory returns [`AppError::GpuUnavailable`] when no adapter on this machine could present
 /// to the window, naming every one that was tried, and [`AppError::Platform`] when the window
 /// offers no handles a graphics API can draw into at all. Neither is answered with a renderer that
 /// draws nowhere: a window that opens and never paints looks like a program that has hung.
-pub(crate) fn factory() -> RendererFactory {
+pub(crate) fn factory(precision: Option<GroupPrecision>) -> RendererFactory {
     let graphics = SharedGraphics::new();
-    Box::new(move |surface, target| renderer(&graphics, surface, target))
+    let precision = GroupPrecision::from_environment()
+        .or(precision)
+        .unwrap_or_default();
+    Box::new(move |surface, target| renderer(&graphics, surface, target, precision))
 }
 
 /// Opens a renderer for `surface` on the shared graphics.
@@ -77,6 +85,7 @@ fn renderer(
     graphics: &SharedGraphics,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
+    precision: GroupPrecision,
 ) -> Result<Box<dyn Renderer>, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Err(AppError::Platform(PlatformError::Backend(
@@ -94,6 +103,15 @@ fn renderer(
         pacing,
         notify_wanted(pacing).then(|| pre_present(surface)),
     )?;
+    // A platform that paces its own frames also decides when a composed frame is handed over.
+    if pacing == PresentPacing::Platform {
+        let gate = Arc::clone(surface);
+        renderer.set_present_gate(Box::new(move || gate.present_now()));
+    }
+    // A surface that shows only the frame's extent of each image lets the swap chain stay at a
+    // size class, so most resize steps rebuild nothing.
+    renderer.set_crops_buffers(surface.crops_buffers());
+    renderer.set_group_precision(precision);
     // Without this a display list's vector passes are planned, counted and then drawn from nothing,
     // so every drawing in the window — every icon — is empty space. Which rasteriser this is comes
     // from what the device turned out to be able to run, and the fallback needs no compute shaders,
@@ -112,11 +130,14 @@ mod tests {
     fn the_default_renderer_callback_runs_its_platform_notification() {
         let notifications = Arc::new(AtomicUsize::new(0));
         let recorded = Arc::clone(&notifications);
-        let notify = pre_present_callback(move || {
+        let notify = pre_present_callback(move |_| {
             recorded.fetch_add(1, Ordering::Relaxed);
         });
 
-        notify();
+        notify(RenderTarget::new(
+            zgui_geom::Size::new(1, 1),
+            zgui_geom::Scale::new(1.0),
+        ));
 
         assert_eq!(
             notifications.load(Ordering::Relaxed),
@@ -130,6 +151,6 @@ mod tests {
         // Making the factory must not enumerate adapters: it is built while the application is
         // still being described, on a thread that may have no display connection yet, and the
         // device is opened by the first window instead.
-        let _factory = factory();
+        let _factory = factory(None);
     }
 }

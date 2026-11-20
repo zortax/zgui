@@ -3,7 +3,7 @@
 use rustc_hash::{FxHashMap, FxHashSet};
 use style::shared_lock::SharedRwLock;
 use style::values::AtomIdent;
-use zgui_arena::{ChunkArena, DomainId};
+use zgui_arena::{ChunkArena, DomainId, Generation, Succession};
 use zgui_interned::{Ident, NamespaceId};
 
 use crate::arena::class_pool::ClassPool;
@@ -64,6 +64,8 @@ pub struct DocumentStore {
     /// the store; the lock is taken for one insertion or one read and never held across a call
     /// out of this module. See [`DirtyChildren`](crate::dirty::children::DirtyChildren).
     dirty_overflow: std::sync::Mutex<FxHashMap<NodeIndex, FxHashSet<NodeIndex>>>,
+    /// How many nodes were dropped since the store was made.
+    dropped: u64,
 }
 
 const _: () = crate::assert_sync::<DocumentStore>();
@@ -71,9 +73,33 @@ const _: () = crate::assert_sync::<DocumentStore>();
 impl DocumentStore {
     /// An empty store for `document`.
     pub fn new(document: DocumentId) -> Self {
+        Self::over(document, ChunkArena::new(node_domain(document)))
+    }
+
+    /// An empty store for `document`, taking the identity over from the store `succession` came
+    /// from.
+    ///
+    /// No node key of the old store resolves here. See [`DocumentStore::succession`].
+    pub fn succeeding(document: DocumentId, succession: &Succession) -> Self {
+        Self::over(
+            document,
+            ChunkArena::succeeding(node_domain(document), succession),
+        )
+    }
+
+    /// The node counters this store hands on to a store that takes its identity over.
+    ///
+    /// Every node counts as dropped, so a key to any node of this store never resolves in the
+    /// successor.
+    pub fn succession(&self) -> Succession {
+        self.arena.succession()
+    }
+
+    /// An empty store for `document` over the node arena `arena`.
+    fn over(document: DocumentId, arena: ChunkArena<NodeInner>) -> Self {
         let domain = node_domain(document);
         Self {
-            arena: ChunkArena::new(domain),
+            arena,
             keys: Vec::new(),
             classes: ClassPool::new(),
             idents: IdentTable::new(),
@@ -84,6 +110,7 @@ impl DocumentStore {
             interned_runs: FxHashMap::default(),
             host: HostSeams::new(),
             dirty_overflow: std::sync::Mutex::new(FxHashMap::default()),
+            dropped: 0,
         }
     }
 
@@ -451,12 +478,17 @@ impl DocumentStore {
     pub(crate) fn push(&mut self, make: impl FnOnce(NodeKey) -> NodeInner) -> NodeIndex {
         let key = self.arena.insert_with(make);
         let slot = key.index() as usize;
+        // An arena that took its domain over skips the slots its predecessor retired. They hold a
+        // key that never resolves, because a retired slot has no counter.
+        let domain = self.arena.domain();
+        while self.keys.len() < slot {
+            let skipped = self.keys.len() as u32;
+            self.keys
+                .push(NodeKey::new(skipped, Generation::LAST, domain));
+        }
         match self.keys.get_mut(slot) {
             Some(held) => *held = key,
-            None => {
-                debug_assert_eq!(slot, self.keys.len(), "the arena hands out slots in order");
-                self.keys.push(key);
-            }
+            None => self.keys.push(key),
         }
         NodeIndex::new(key.index())
     }
@@ -472,7 +504,26 @@ impl DocumentStore {
             return;
         };
         self.columns.clear(key);
-        self.arena.remove(key);
+        if self.arena.remove(key) {
+            self.dropped += 1;
+        }
+        // A record of marked children that moved to the overflow set leaves it behind when the
+        // record is cleared, so the node's set goes with the node.
+        let overflow = self
+            .dirty_overflow
+            .get_mut()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !overflow.is_empty() {
+            overflow.remove(&node);
+        }
+    }
+
+    /// How many nodes were dropped since the store was made.
+    ///
+    /// A consumer that keeps a record per node compares two readings to find out whether any of its
+    /// records can name a node that is gone, and so whether a sweep of them can free anything.
+    pub fn dropped(&self) -> u64 {
+        self.dropped
     }
 
     /// The node arena, for the recycling pass.

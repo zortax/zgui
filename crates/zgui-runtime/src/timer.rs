@@ -20,7 +20,7 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_view::DocumentId;
 use zgui_view::host::{Repeat, TimerId};
@@ -220,7 +220,7 @@ mod tests {
     use super::Timers;
     use std::cell::Cell;
     use std::rc::Rc;
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
     use zgui_view::DocumentId;
     use zgui_view::host::Repeat;
 

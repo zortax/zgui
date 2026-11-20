@@ -49,6 +49,36 @@ fn a_clean_subtree_far_from_the_damage_is_skipped_whole() {
 }
 
 #[test]
+fn full_damage_reaches_only_the_surface() {
+    // A resize damages the whole surface. The rows below the window are not on it, so the walk
+    // must not visit them: a document of thousands of rows would cost thousands of encodes.
+    let mut harness = Harness::sized(
+        rows(2000),
+        "root { display: block; width: 300px }
+         .btn { display: block; height: 20px; background: #eee }",
+        300.0,
+        400.0,
+    );
+    let unbounded = harness.paint_everything();
+    let report = harness.paint_surface();
+    assert!(
+        report.emitted.len() < 30,
+        "a full frame over a 400px surface emitted {} fragments",
+        report.emitted.len()
+    );
+    assert!(
+        unbounded.emitted.len() > 2000,
+        "an unbounded full frame has to reach every row, or this compares nothing"
+    );
+    assert!(
+        report.skipped_subtrees > 1900,
+        "the rows off the surface were not skipped whole"
+    );
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    report.assert_emission_complete(&harness.store, &harness.damage, &placements);
+}
+
+#[test]
 fn every_fragment_the_damage_reaches_is_emitted() {
     // The emission-completeness oracle. It is the direct test of where the expansion runs: a
     // damage-rectangle assertion structurally cannot see a region that was added and then painted
@@ -69,7 +99,8 @@ fn every_fragment_the_damage_reaches_is_emitted() {
     harness.damage.absorb(rect(0, 0, 300, 30));
     harness.expand();
     let report = harness.paint();
-    report.assert_emission_complete(&harness.store, &harness.damage);
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
 #[test]
@@ -121,7 +152,8 @@ fn a_blurred_panel_over_animating_content_has_its_source_region_repainted() {
     );
 
     let report = harness.paint();
-    report.assert_emission_complete(&harness.store, &harness.damage);
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
 #[test]
@@ -174,7 +206,11 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
     harness.paint_everything();
 
     let key = harness.document.store().key_of(harness.element("gone"));
-    let vacated_ink = zgui_layout::fragment::index::ink_of(&harness.store, key);
+    let vacated_ink = zgui_layout::fragment::index::device_ink_of(
+        &harness.store,
+        key,
+        &zgui_scene::Placements::of(&harness.scene.spatial),
+    );
     assert!(
         !vacated_ink.is_empty(),
         "the fixture's removed box has to have painted something"
@@ -184,7 +220,12 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
     harness.edit_and_restyle(|batch| batch.remove(gone));
     harness.clear_damage();
 
-    let absorbed = zgui_paint::vacated(&mut harness.document, &harness.store, &mut harness.damage);
+    let absorbed = zgui_paint::vacated(
+        &mut harness.document,
+        &harness.store,
+        &mut harness.damage,
+        &zgui_scene::Placements::of(&harness.scene.spatial),
+    );
     assert_eq!(absorbed, 1, "one root was removed and one contributed");
     assert!(
         harness
@@ -198,7 +239,12 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
 
     // The list is consumed rather than borrowed, which is why there is exactly one consumer and
     // this is it: a second reader would find it emptied and absorb nothing, silently.
-    let again = zgui_paint::vacated(&mut harness.document, &harness.store, &mut harness.damage);
+    let again = zgui_paint::vacated(
+        &mut harness.document,
+        &harness.store,
+        &mut harness.damage,
+        &zgui_scene::Placements::of(&harness.scene.spatial),
+    );
     assert_eq!(again, 0);
 }
 
@@ -366,6 +412,27 @@ fn an_empty_damage_set_paints_nothing_and_a_full_one_paints_everything() {
 
     let all = harness.paint_everything();
     assert!(all.primitives > 0);
+}
+
+#[test]
+fn the_expansion_settles_over_one_blurred_panel() {
+    // One registered panel: the pass that absorbs it grows the damage, and the pass after it finds
+    // nothing left, which is the fixpoint and no escalation.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("one")]),
+        "root { display: block; width: 400px; height: 400px }
+         one { display: block; height: 40px; filter: blur(6px) }",
+        400.0,
+        400.0,
+    );
+    harness.paint_everything();
+    harness.clear_damage();
+    harness.damage.absorb(rect(0, 0, 10, 10));
+    let expansion = harness.expand();
+    assert_eq!(expansion.absorbed, 1);
+    assert_eq!(expansion.passes, 2);
+    assert!(!expansion.escalated, "one small panel is not a full redraw");
+    assert!(!harness.damage.is_full());
 }
 
 #[test]

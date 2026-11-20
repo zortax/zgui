@@ -103,7 +103,12 @@ fn rtl_hit_testing_maps_to_the_logical_tail() {
     let broken = shaper.break_lines(&mut shaped, &BreakRequest::new(&content, Some(BOX_WIDTH)));
     assert!(broken.geometry.is_rtl);
 
-    let line = shaped.engine.layout.get(0).expect("one line");
+    let line = shaped
+        .engine
+        .layout()
+        .expect("a live form")
+        .get(0)
+        .expect("one line");
     let baseline = line.metrics().baseline - 1.0;
     let x = line.metrics().offset + 1.0;
     let (cluster, _) = parley_cluster(&shaped.engine, x, baseline);
@@ -124,7 +129,12 @@ fn rtl_hit_testing_maps_to_the_logical_tail() {
     let content = fixture.content();
     let mut shaped = shaper.shape(&content);
     shaper.break_lines(&mut shaped, &BreakRequest::new(&content, Some(BOX_WIDTH)));
-    let line = shaped.engine.layout.get(0).expect("one line");
+    let line = shaped
+        .engine
+        .layout()
+        .expect("a live form")
+        .get(0)
+        .expect("one line");
     let (cluster, _) = parley_cluster(&shaped.engine, 1.0, line.metrics().baseline - 1.0);
     assert_eq!(
         shaped.map().to_source_snapped(cluster).map(|at| at.offset),
@@ -139,7 +149,7 @@ fn rtl_hit_testing_maps_to_the_logical_tail() {
 /// the directional prefix and has to have it taken off before it means anything to the caller's
 /// map. Everything this crate hands out has had that done for it already.
 fn parley_cluster(shaped: &zgui_text_parley::ShapedLayout, x: f32, y: f32) -> (usize, bool) {
-    match parley::Cluster::from_point(&shaped.layout, x, y) {
+    match parley::Cluster::from_point(shaped.layout().expect("a live form"), x, y) {
         Some((cluster, _)) => (
             cluster.text_range().start.saturating_sub(shaped.prefix),
             true,

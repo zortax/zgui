@@ -114,6 +114,16 @@ struct Identity {
 /// How many identity entries a cache holds before a sweep is worth its scan.
 const SWEEP_FLOOR: usize = 1024;
 
+/// How many lowerings a cache holds before a sweep may empty it.
+///
+/// Each frame of an animated colour or opacity is a lowering of its own, and the lowerings stay
+/// after their styles go. Past this count, and past several lowerings per live identity, the sweep
+/// empties the cache, and the styles still in use lower again on the frames that need them.
+const LOWERED_CEILING: usize = 256;
+
+/// How many lowerings per identity entry a cache holds before a sweep may empty it.
+const LOWERED_PER_IDENTITY: usize = 2;
+
 impl Default for PaintStyleCache {
     fn default() -> Self {
         Self::new()
@@ -164,11 +174,13 @@ impl PaintStyleCache {
     ///
     /// Every length in a lowering is in device pixels, so a change of device scale makes every
     /// entry wrong. It is a whole-cache event because it is a whole-document event.
+    ///
+    /// The cache gives its memory back as well, since a cache that outgrew its use is emptied too.
     pub fn clear(&mut self) {
-        self.lowered.clear();
-        self.by_identity.clear();
+        self.lowered = Vec::new();
+        self.by_identity = FxHashMap::default();
         self.swept_to = 0;
-        self.by_content.clear();
+        self.by_content = FxHashMap::default();
         // Every reference handed out before now indexes a list that is about to stop existing, and
         // the indices are handed out again from zero. This is what stops one of them comparing equal
         // to a reference issued afterwards — see [`PaintStyleRef`].
@@ -228,14 +240,25 @@ impl PaintStyleCache {
     /// The scan reads every entry, so it runs only once the table has doubled since the last
     /// sweep left it: each sweep is then paid for by at least as many insertions as it examines,
     /// while what a churning document holds stays within a factor of two of what it uses.
+    ///
+    /// The lowerings stay until they outgrow `LOWERED_CEILING` and the live identities. Then the
+    /// sweep empties the cache as a change of scale does, so the values of an animation do not
+    /// pile up for the life of the document.
     pub fn sweep(&mut self) -> usize {
-        if self.by_identity.len() <= SWEEP_FLOOR.max(self.swept_to.saturating_mul(2)) {
+        let outgrown = |lowered: usize, identities: usize| {
+            lowered > LOWERED_CEILING.max(identities.saturating_mul(LOWERED_PER_IDENTITY))
+        };
+        let crowded = outgrown(self.lowered.len(), self.swept_to);
+        if !crowded && self.by_identity.len() <= SWEEP_FLOOR.max(self.swept_to.saturating_mul(2)) {
             return 0;
         }
         let before = self.by_identity.len();
         self.by_identity
             .retain(|_, identity| !identity._style.is_unique());
         self.swept_to = self.by_identity.len();
+        if crowded && outgrown(self.lowered.len(), self.swept_to) {
+            self.clear();
+        }
         before - self.swept_to
     }
 }
@@ -384,6 +407,30 @@ mod tests {
             "the style something still holds keeps its entry"
         );
         assert_eq!(cache.len(), 1, "the lowerings themselves are not swept");
+    }
+
+    /// Every frame of an animated colour is a lowering of its own. Past the ceiling the sweep
+    /// empties the cache, and a reference from before reads as one the cache no longer issues.
+    #[test]
+    fn a_sweep_empties_a_cache_that_animated_values_outgrew() {
+        let mut cache = PaintStyleCache::new();
+        let first = cache.lower(&StyleDraft::initial().build(), 1.0);
+        for step in 0..=super::LOWERED_CEILING {
+            let mut draft = StyleDraft::initial();
+            let level = step as f32 / (super::LOWERED_CEILING as f32 + 1.0);
+            draft.inherited_text().color =
+                zgui_css::values::color::AbsoluteColor::srgb_legacy(10, 20, 30, level);
+            cache.lower(&draft.build(), 1.0);
+        }
+        assert!(cache.len() > super::LOWERED_CEILING);
+        cache.sweep();
+        assert!(cache.is_empty(), "the outgrown cache starts again");
+        assert!(
+            cache.get(first).is_none(),
+            "a reference from before reads as stale"
+        );
+        let again = cache.lower(&StyleDraft::initial().build(), 1.0);
+        assert!(cache.get(again).is_some());
     }
 
     #[test]

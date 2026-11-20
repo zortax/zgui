@@ -7,23 +7,40 @@
 
 use smallvec::SmallVec;
 use zgui_css::ComputedStyle;
+use zgui_css::values::custom;
 use zgui_css::values::effect::FilterValue;
 use zgui_scene::Filter;
+
+use crate::fragment::custom_properties::CustomProperties;
 
 /// A filter chain, which is short in every document that has one at all.
 pub type FilterChain = SmallVec<[Filter; 2]>;
 
 /// The `filter` chain applied to a box's own content.
 pub fn own(style: &ComputedStyle, scale: f32) -> FilterChain {
+    own_with(style, CustomProperties::ALL, scale)
+}
+
+/// [`own`], for a style that declares `declared`.
+pub fn own_with(style: &ComputedStyle, declared: CustomProperties, scale: f32) -> FilterChain {
     let mut chain = chain(&style.get_effects().filter.0, scale);
-    chain.extend(effect(style, zgui_scene::property::FILTER, scale));
+    if declared.filter() {
+        chain.extend(effect(style, &custom::FILTER, scale));
+    }
     chain
 }
 
 /// The `backdrop-filter` chain a box samples what is behind it through.
 pub fn backdrop(style: &ComputedStyle, scale: f32) -> FilterChain {
+    backdrop_with(style, CustomProperties::ALL, scale)
+}
+
+/// [`backdrop`], for a style that declares `declared`.
+pub fn backdrop_with(style: &ComputedStyle, declared: CustomProperties, scale: f32) -> FilterChain {
     let mut chain = chain(&style.get_effects().backdrop_filter.0, scale);
-    chain.extend(effect(style, zgui_scene::property::BACKDROP_FILTER, scale));
+    if declared.backdrop_filter() {
+        chain.extend(effect(style, &custom::BACKDROP_FILTER, scale));
+    }
     chain
 }
 
@@ -32,8 +49,8 @@ pub fn backdrop(style: &ComputedStyle, scale: f32) -> FilterChain {
 /// The parameters are deliberately absent: this conversion exists to answer how far a fragment
 /// reads, which is the effect's own declaration and nothing else. What the effect is *drawn* with
 /// is resolved where it is emitted, against a scene this stage does not have.
-fn effect(style: &ComputedStyle, property: &str, scale: f32) -> Option<Filter> {
-    let name = zgui_css::values::custom::text(style, property)?.trim();
+fn effect(style: &ComputedStyle, property: &custom::Property, scale: f32) -> Option<Filter> {
+    let name = property.text(style)?.trim();
     if name.is_empty() || name == "none" {
         return None;
     }
@@ -52,19 +69,29 @@ fn effect(style: &ComputedStyle, property: &str, scale: f32) -> Option<Filter> {
 ///
 /// This is the question the read-extent registry is a list of the answers to: a chain of per-pixel
 /// filters, or no chain at all, reads exactly what it writes and never needs to be found again.
-pub fn reads_outside(style: &ComputedStyle, scale: f32) -> bool {
-    own(style, scale).iter().any(|it| !it.is_per_pixel())
-        || backdrop(style, scale).iter().any(|it| !it.is_per_pixel())
+///
+/// `declared` is the set of framework properties `style` declares, or [`CustomProperties::ALL`].
+pub fn reads_outside(style: &ComputedStyle, declared: CustomProperties, scale: f32) -> bool {
+    own_with(style, declared, scale)
+        .iter()
+        .any(|it| !it.is_per_pixel())
+        || backdrop_with(style, declared, scale)
+            .iter()
+            .any(|it| !it.is_per_pixel())
         // A backdrop reads what is beneath it whatever its chain does, and an application's is no
         // different: the copy it samples is a region of the composite, not of anything it wrote.
-        || filters_backdrop(style)
+        || filters_backdrop(style, declared)
 }
 
 /// Whether the box declares a `backdrop-filter`, its own or an application's.
-pub fn filters_backdrop(style: &ComputedStyle) -> bool {
+///
+/// `declared` is the set of framework properties `style` declares, or [`CustomProperties::ALL`].
+pub fn filters_backdrop(style: &ComputedStyle, declared: CustomProperties) -> bool {
     !style.get_effects().backdrop_filter.0.is_empty()
-        || zgui_css::values::custom::text(style, zgui_scene::property::BACKDROP_FILTER)
-            .is_some_and(|name| !name.trim().is_empty())
+        || (declared.backdrop_filter()
+            && custom::BACKDROP_FILTER
+                .text(style)
+                .is_some_and(|name| !name.trim().is_empty()))
 }
 
 /// One computed list, converted entry by entry.
