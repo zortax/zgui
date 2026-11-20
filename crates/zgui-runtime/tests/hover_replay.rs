@@ -24,20 +24,13 @@ const CSS: &str = ":root { display: block; width: 400px; height: 300px }
                    .row { display: block; height: 10px; background-color: rgb(200, 200, 200) }
                    .row.hov { background-color: rgb(10, 10, 10) }";
 
-/// The red channel of every solid quad in the display list.
+/// The red channel of every solid quad the window shows.
 fn drawn_reds(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<u8> {
-    let scene = harness.app().windows()[0].scene();
-    scene
-        .primitives
-        .quads
+    support::drawing(&harness.app().windows()[0])
+        .quads()
         .iter()
-        .filter_map(|quad| match scene.paints.get(quad.fill.id()?) {
-            Some(zgui_scene::Paint::Solid(color)) => {
-                let [red, _, _] = color.to_space(zgui_color::ColorSpace::Srgb).components();
-                Some((red * 255.0).round() as u8)
-            }
-            _ => None,
-        })
+        .filter_map(|quad| quad.color("fill"))
+        .map(|[red, ..]| (red * 255.0).round() as u8)
         .collect()
 }
 

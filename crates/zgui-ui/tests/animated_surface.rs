@@ -13,6 +13,7 @@ use zgui::surface::{SurfaceElementExt, SurfaceRenderCx, SurfaceRenderer, wgpu};
 use zgui::view;
 use zgui::view::AnyView;
 
+use crate::device::Pipeline;
 use crate::painted::stage::Stage;
 
 const SHEET: &str = ":root { background-color: #ffffff }
@@ -87,7 +88,7 @@ fn every_frame_shows_one_surface_frame_at_a_fractional_scale() {
 fn run(scale: f64) {
     crate::device::use_real_damage();
     let badge = RwSignal::new(false);
-    let Some(mut stage) = Stage::open(SHEET, scene(badge)) else {
+    let Some(mut stage) = Stage::open_on(Pipeline::Scene, SHEET, scene(badge)) else {
         eprintln!("skipped: no usable graphics device");
         return;
     };

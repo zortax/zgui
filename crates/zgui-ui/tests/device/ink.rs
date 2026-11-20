@@ -6,8 +6,8 @@
 //! *pixels that differ from the surface around them*, which is the only thing that separates the
 //! two.
 
+use crate::device::picture::Picture;
 use zgui::geom::{Device, DevicePx, Rect};
-use zgui_render_wgpu::Pixels;
 
 /// How far apart two colours have to be to count as different, per channel.
 ///
@@ -26,7 +26,7 @@ const TOLERANCE: i32 = 8;
 /// Zero for a rectangle outside the surface, and for one that is entirely flat — which is what a
 /// drawing that was planned, counted, composited from an unwritten scratch and never rasterised
 /// looks like.
-pub fn fraction(pixels: &Pixels, rect: Rect<DevicePx, Device>) -> f32 {
+pub fn fraction(pixels: &Picture, rect: Rect<DevicePx, Device>) -> f32 {
     let Some(bounds) = clamped(pixels, rect) else {
         return 0.0;
     };
@@ -59,7 +59,7 @@ fn unlike(left: [u8; 4], right: [u8; 4]) -> bool {
 }
 
 /// `rect` in whole pixels, cut down to what was read back, or nothing if none of it was.
-fn clamped(pixels: &Pixels, rect: Rect<DevicePx, Device>) -> Option<(i32, i32, i32, i32)> {
+fn clamped(pixels: &Picture, rect: Rect<DevicePx, Device>) -> Option<(i32, i32, i32, i32)> {
     let size = pixels.size();
     let left = rect.origin.x.0.floor() as i32;
     let top = rect.origin.y.0.floor() as i32;

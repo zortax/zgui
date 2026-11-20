@@ -21,7 +21,7 @@
 //! phase introduces — records retained across frames independently of the boxes that made them.
 //!
 //! What has been watched failing here is the *path*: inverting the comparison in `spatial_faults`
-//! makes both cases below panic out of the frame loop, naming the real quads of a real frame. So
+//! makes both cases below panic out of the frame loop, naming the real primitives of a real frame. So
 //! the call site executes, over names a real window recorded, and a fault would stop the frame
 //! rather than reach a renderer. What is untested is only whether this phase can produce one.
 
@@ -43,14 +43,33 @@ root { display: block; width: 400px; height: 300px }
         transform: translateX(30px) }
 .pip { display: block; width: 10px; height: 10px;
        background-color: rgb(250, 250, 250) }
+.icon { display: block; width: 10px; height: 10px }
 ";
+
+/// A card with a pip and an icon in it.
+fn card() -> zgui_view::AnyView {
+    // The icon is drawn through the scene, so the check has primitives to name.
+    let triangle =
+        zgui_elements::kurbo::BezPath::from_svg("M0 0 L24 0 L24 24 Z").expect("the fixture parses");
+    zgui_view::AnyView::new(
+        zgui_elements::column()
+            .class("card")
+            .child(zgui_elements::column().class("pip"))
+            .child(
+                zgui_elements::vector()
+                    .class("icon")
+                    .view_box(0.0, 0.0, 24.0, 24.0)
+                    .paths([triangle]),
+            ),
+    )
+}
 
 /// A window holding whichever of the two cards a signal selects.
 fn cards(
     second: zgui_reactive::RwSignal<bool, zgui_reactive::reexport::LocalStorage>,
 ) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
     use zgui_reactive::prelude::Get;
-    use zgui_view::{AnyView, ShowProps};
+    use zgui_view::ShowProps;
 
     support::app(CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
         Box::new(
@@ -59,20 +78,8 @@ fn cards(
                 .child(
                     ShowProps::builder()
                         .when(move || !second.get())
-                        .children(|| {
-                            AnyView::new(
-                                zgui_elements::column()
-                                    .class("card")
-                                    .child(zgui_elements::column().class("pip")),
-                            )
-                        })
-                        .fallback(|| {
-                            AnyView::new(
-                                zgui_elements::column()
-                                    .class("card")
-                                    .child(zgui_elements::column().class("pip")),
-                            )
-                        })
+                        .children(card)
+                        .fallback(card)
                         .build()
                         .render(),
                 )
@@ -106,7 +113,7 @@ fn a_window_asked_to_keep_the_names_keeps_one_for_the_primitives_it_pushes() {
     let recorded = harness.app().windows()[0].spatial_dependencies_recorded();
     assert!(
         recorded > 0,
-        "a frame that drew a card and a pip recorded {recorded} names, so the check it feeds \
+        "a frame that drew a card with an icon recorded {recorded} names, so the check it feeds \
          passes over nothing",
     );
 

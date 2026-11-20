@@ -7,8 +7,6 @@
 
 #![allow(dead_code, unreachable_pub)]
 
-pub mod churn;
-
 use std::sync::Arc;
 
 use zgui_platform::Surface;
@@ -17,7 +15,7 @@ use zgui_render::{RenderTarget, Renderer};
 use zgui_runtime::{App, AppError, MAINTENANCE_DELAY, Runtime};
 use zgui_view::{Anchor, BuildCx};
 
-/// Builds an application whose window holds `view`, with the capture renderer under it.
+/// Builds an application whose window holds `view` and draws through [`compositor`].
 pub fn app<V>(css: &str, view: V) -> Harness<Runtime>
 where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
@@ -26,7 +24,7 @@ where
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(capture))
+        .with_renderer(Box::new(compositor))
         .into_handler(view)
         .expect("the reactive runtime installs");
     Harness::new(handler)
@@ -75,7 +73,7 @@ where
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(capture))
+        .with_renderer(Box::new(compositor))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
                 zgui_testkit_scene::MonoShaper::new(),
@@ -165,6 +163,99 @@ pub fn lines_on_device(
         }
     }
     found
+}
+
+/// A renderer that draws through a compositor, onto a recording renderer whose last frame is what
+/// the window shows.
+///
+/// The compositor's glyph rasteriser draws every glyph as a box on the baseline, half the em size
+/// wide and three quarters of it high.
+pub fn compositor(
+    _surface: &Arc<dyn Surface>,
+    target: RenderTarget,
+) -> Result<Box<dyn Renderer>, AppError> {
+    let mut compositor =
+        zgui_testkit_compositor::compositor().unwrap_or_else(|why| panic!("no compositor: {why}"));
+    zgui_testkit_compositor::with_fake_text(&mut *compositor);
+    let mut renderer = zgui_runtime::compositor::CompositorRenderer::new(
+        compositor,
+        Box::new(zgui_testkit_compositor::Screen::new()),
+    );
+    renderer.configure(target);
+    Ok(Box::new(renderer))
+}
+
+/// What `window` shows, as the compositor last drew it.
+///
+/// # Panics
+///
+/// Panics when the window does not draw through [`compositor`], or has drawn no frame.
+pub fn drawing(window: &zgui_runtime::window::Window) -> zgui_testkit_compositor::Drawing {
+    let bridge = window
+        .renderer()
+        .as_any()
+        .and_then(|any| any.downcast_ref::<zgui_runtime::compositor::CompositorRenderer>())
+        .expect("the window draws through a compositor");
+    zgui_testkit_compositor::drawing_of(bridge.renderer()).expect("the window drew a frame")
+}
+
+/// Returns how many frames the compositor of `window` has drawn.
+///
+/// # Panics
+///
+/// Panics when the window does not draw through [`compositor`].
+pub fn frames_drawn(window: &zgui_runtime::window::Window) -> u64 {
+    window
+        .renderer()
+        .as_any()
+        .and_then(|any| any.downcast_ref::<zgui_runtime::compositor::CompositorRenderer>())
+        .and_then(|bridge| bridge.renderer().as_any())
+        .and_then(|any| any.downcast_ref::<zgui_testkit_compositor::Screen>())
+        .expect("the window draws through a compositor onto a screen")
+        .frames()
+}
+
+/// Returns the bounds of `instance` in window space, as `[x, y, width, height]`.
+///
+/// The bounds are mapped through the world matrix in the instance's `space=` field, if it has
+/// one. A matrix that is more than a translation yields the box around the mapped corners.
+pub fn world(instance: &zgui_testkit_compositor::Instance) -> [f32; 4] {
+    let [x, y, width, height] = instance.bounds();
+    let Some(space) = instance.field("space") else {
+        return [x, y, width, height];
+    };
+
+    let numbers: Vec<f32> = space
+        .trim_start_matches("translate")
+        .split(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == 'e'))
+        .filter(|word| !word.is_empty())
+        .map(|word| word.parse().expect("a matrix entry is a number"))
+        .collect();
+    let map = |px: f32, py: f32| match numbers.as_slice() {
+        [tx, ty] => (px + tx, py + ty),
+        [a, b, _, _, c, d, _, _, _, _, _, _, tx, ty, _, _] => {
+            (a * px + c * py + tx, b * px + d * py + ty)
+        }
+        _ => panic!("`space={space}` is neither a translation nor a matrix"),
+    };
+
+    let corners = [
+        map(x, y),
+        map(x + width, y),
+        map(x, y + height),
+        map(x + width, y + height),
+    ];
+    let left = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min);
+    let top = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min);
+    let right = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let bottom = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    [left, top, right - left, bottom - top]
 }
 
 /// A renderer that records the display list instead of drawing it.

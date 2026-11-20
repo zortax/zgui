@@ -49,17 +49,16 @@ const CSS: &str = ":root { display: block; width: 400px; height: 300px }
 
 /// The grey every glyph in the window is drawn in, ordered down the window and then across it.
 fn drawn_greys(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<u8> {
-    let mut placed: Vec<_> = harness.app().windows()[0]
-        .scene()
-        .primitives
-        .mono_sprites
-        .iter()
-        .map(|sprite| {
-            (
-                sprite.bounds[1].to_bits(),
-                sprite.bounds[0].to_bits(),
-                (sprite.color[0] * 255.0).round() as u8,
-            )
+    let drawing = support::drawing(&harness.app().windows()[0]);
+    let mut placed: Vec<_> = drawing
+        .glyphs()
+        .into_iter()
+        .map(|glyph| {
+            let [x, y, ..] = support::world(glyph);
+            let [grey, ..] = glyph
+                .color("paint")
+                .unwrap_or_else(|| panic!("a glyph is drawn in a solid colour: {drawing}"));
+            (y.to_bits(), x.to_bits(), (grey * 255.0).round() as u8)
         })
         .collect();
     placed.sort_unstable();
@@ -148,31 +147,9 @@ fn opened_with_identical_text() -> (
     (hot, harness)
 }
 
-/// Damages the whole window without moving anything in it, so that every glyph is drawn again.
-///
-/// The display list holds what the frame emitted, and a frame that repainted one label emitted one
-/// label. Reading the colours of the whole window therefore needs a frame that was asked for all of
-/// them — and asking for them by damage rather than by a resize is what keeps the question about
-/// the brushes: nothing reflows, nothing is shaped again, and every glyph is drawn through the slot
-/// it named when it was shaped.
-fn repaint_everything(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>) {
-    let surface = harness
-        .platform()
-        .offscreens()
-        .first()
-        .map(|surface| zgui_platform::Surface::id(surface.as_ref()))
-        .expect("the application opened its window");
-    harness.deliver(surface, SurfaceEvent::Occluded(true));
-    harness.settle(8);
-    harness.deliver(surface, SurfaceEvent::Occluded(false));
-    harness.settle(8);
-    harness.advance(std::time::Duration::from_millis(50));
-    harness.settle(8);
-}
-
-/// Every glyph in the window, redrawn first so that the answer is about all of them.
+/// Every glyph in the window, after the window has settled.
 fn every_grey(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<u8> {
-    repaint_everything(harness);
+    harness.settle(8);
     drawn_greys(harness)
 }
 

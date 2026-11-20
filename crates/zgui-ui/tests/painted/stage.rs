@@ -16,7 +16,7 @@ use zgui_platform_headless::Harness;
 
 use crate::desktop::census::Census;
 use crate::desktop::grab::{self, Grab, Handles};
-use crate::device::{self, Log};
+use crate::device::{self, Log, Pipeline};
 
 /// How wide the surface every fixture opens is, in device pixels.
 pub const WIDTH: f32 = 900.0;
@@ -51,6 +51,10 @@ pub struct Stage {
     handles: Handles,
     /// Every frame the device drew, in order.
     log: Log,
+    /// The renderer the window draws through.
+    pipeline: Pipeline,
+    /// The surface's size, in device pixels.
+    extent: (f32, f32),
     /// Where the pointer is, so a press lands where the last move left it.
     pointer: Point<CssPx, Css>,
     /// Whether a pointer has ever been on the surface.
@@ -62,7 +66,8 @@ pub struct Stage {
 }
 
 impl Stage {
-    /// Opens `view` in a window styled by `sheet`, or nothing on a machine with no device.
+    /// Opens `view` in a window styled by `sheet` and drawn through the compositor, or nothing on a
+    /// machine with no device.
     ///
     /// # Panics
     ///
@@ -73,7 +78,20 @@ impl Stage {
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
-        if !device::available() {
+        Self::open_on(Pipeline::Compositor, sheet, view)
+    }
+
+    /// Opens `view` the way [`Stage::open`] does, drawn through `pipeline`.
+    ///
+    /// # Panics
+    ///
+    /// Panics as [`Stage::open`] does.
+    pub fn open_on<F, V>(pipeline: Pipeline, sheet: &str, view: F) -> Option<Self>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        if !device::available_on(pipeline) {
             return None;
         }
         let turn = exclusive();
@@ -81,10 +99,8 @@ impl Stage {
         grab::forget();
         let log: Log = Log::default();
         let mut view = view;
-        let handler = zgui::app()
-            .with_size(WIDTH, HEIGHT)
-            .with_stylesheet(sheet)
-            .with_renderer(Box::new(device::factory(&log)))
+        let app = zgui::app().with_size(WIDTH, HEIGHT).with_stylesheet(sheet);
+        let handler = device::drawn_on(app, pipeline, &log)
             .into_handler(move || (Grab, view().into_view()))
             .expect("the application builds");
         let mut inner: Option<Box<dyn AppHandler>> = None;
@@ -106,6 +122,8 @@ impl Stage {
             harness,
             handles,
             log,
+            pipeline,
+            extent: (WIDTH, HEIGHT),
             pointer: Point::new(CssPx(0.0), CssPx(0.0)),
             entered: false,
             _turn: turn,
@@ -169,6 +187,7 @@ impl Stage {
 
     /// Resizes the surface, exactly as a compositor does, and lets the frames that asks for run.
     pub fn resize(&mut self, width: f32, height: f32) {
+        self.extent = (width, height);
         self.harness
             .deliver_to_first(SurfaceEvent::Resized(Size::new(
                 DevicePx(width),
@@ -180,13 +199,14 @@ impl Stage {
     /// Tells the window it now shows `scale` device pixels per CSS pixel, as a compositor does.
     #[allow(dead_code, reason = "not every fixture changes the scale")]
     pub fn rescale(&mut self, scale: f64) {
+        self.extent = (
+            (f64::from(WIDTH) * scale) as f32,
+            (f64::from(HEIGHT) * scale) as f32,
+        );
         self.harness
             .deliver_to_first(SurfaceEvent::ScaleFactorChanged {
                 scale_factor: scale,
-                size: Size::new(
-                    DevicePx((f64::from(WIDTH) * scale) as f32),
-                    DevicePx((f64::from(HEIGHT) * scale) as f32),
-                ),
+                size: Size::new(DevicePx(self.extent.0), DevicePx(self.extent.1)),
             });
         self.harness.settle(64);
     }
@@ -207,11 +227,23 @@ impl Stage {
     /// same moment, the redraw waits for its deadline. The clock moves on one output frame at a
     /// time until the redraw ran.
     ///
+    /// The compositor builds no frame when nothing changed, and otherwise every frame covers the
+    /// whole window, so the last frame drawn is already the whole picture. With the real damage
+    /// set, the window is resized by a pixel and back instead, which makes the compositor redraw
+    /// the whole output. The resize lays the window out again, so the picture matches the one
+    /// before only once the window is at rest.
+    ///
     /// # Panics
     ///
     /// Panics when the window draws nothing after a few output frames.
     pub fn repaint(&mut self) {
-        let before = self.frames_drawn();
+        let whole = self.pipeline == Pipeline::Scene || device::real_damage();
+        let before = if whole { self.frames_drawn() } else { 0 };
+        if self.pipeline == Pipeline::Compositor && device::real_damage() {
+            let (width, height) = self.extent;
+            self.resize(width + 1.0, height);
+            self.resize(width, height);
+        }
         self.harness.deliver_to_first(SurfaceEvent::Occluded(true));
         self.harness.settle(64);
         self.harness.deliver_to_first(SurfaceEvent::Occluded(false));
@@ -446,9 +478,7 @@ impl Stage {
         let frame = frames
             .iter()
             .rev()
-            .find(|frame| {
-                !frame.quads.is_empty() || !frame.glyphs.is_empty() || !frame.drawings.is_empty()
-            })
+            .find(|frame| !frame.blank)
             .expect("the window drew something at least once");
         of(frame)
     }

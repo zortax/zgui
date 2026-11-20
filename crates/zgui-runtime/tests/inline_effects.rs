@@ -9,6 +9,7 @@ mod support;
 use zgui_interned::ClassName;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::*;
+use zgui_testkit_compositor::Drawing;
 use zgui_view::{BuildCx, IntoView, View};
 
 const CSS: &str = ":root { display: block; width: 400px; height: 300px }
@@ -21,23 +22,37 @@ const CSS: &str = ":root { display: block; width: 400px; height: 300px }
                    .sup { vertical-align: super }
                    .lit.on { background-color: rgb(0, 0, 255) }";
 
-/// A solid quad of the frame: its painting order, its colour as 8-bit sRGB and its rectangle.
-fn quads(scene: &zgui_scene::Scene) -> Vec<(u32, [u8; 3], [f32; 4])> {
-    scene
-        .primitives
-        .quads
+/// A solid quad the window shows: its place in the draw order, its colour as 8-bit sRGB and its
+/// rectangle.
+fn quads(drawing: &Drawing) -> Vec<(usize, [u8; 3], [f32; 4])> {
+    drawing
+        .instances()
         .iter()
-        .filter_map(|quad| match scene.paints.get(quad.fill.id()?) {
-            Some(zgui_scene::Paint::Solid(color)) => {
-                let rgb = color
-                    .to_space(zgui_color::ColorSpace::Srgb)
-                    .components()
-                    .map(|channel| (channel * 255.0).round() as u8);
-                Some((quad.order, rgb, quad.bounds))
-            }
-            _ => None,
+        .enumerate()
+        .filter(|(_, instance)| instance.kind() == "quad")
+        .filter_map(|(order, quad)| {
+            let [red, green, blue, alpha] = quad.color("fill")?;
+            let rgb = [red, green, blue].map(|channel| (channel / alpha * 255.0).round() as u8);
+            Some((order, rgb, support::world(quad)))
         })
         .collect()
+}
+
+/// Every glyph the window shows: its place in the draw order, its premultiplied colour and its
+/// rectangle.
+fn glyphs(drawing: &Drawing) -> Vec<(usize, Option<[f32; 4]>, [f32; 4])> {
+    drawing
+        .instances()
+        .iter()
+        .enumerate()
+        .filter(|(_, instance)| matches!(instance.kind(), "mono" | "subpixel" | "color"))
+        .map(|(order, glyph)| (order, glyph.color("paint"), support::world(glyph)))
+        .collect()
+}
+
+/// What the window of `harness` shows.
+fn shown(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Drawing {
+    support::drawing(&harness.app().windows()[0])
 }
 
 /// A paragraph of `aa ` and a chip holding `bbbb`, with `chip` deciding the chip's classes.
@@ -69,9 +84,9 @@ fn a_chip_is_painted_under_its_glyphs_across_its_own_range() {
     harness.settle(8);
     let window = &harness.app().windows()[0];
     let line = support::first_line_box(window);
-    let scene = window.scene();
+    let drawing = support::drawing(window);
 
-    let chips: Vec<_> = quads(scene)
+    let chips: Vec<_> = quads(&drawing)
         .into_iter()
         .filter(|(_, rgb, _)| *rgb == [255, 0, 0])
         .collect();
@@ -88,14 +103,11 @@ fn a_chip_is_painted_under_its_glyphs_across_its_own_range() {
         "the padding, then four characters"
     );
 
-    let glyphs: Vec<_> = scene
-        .primitives
-        .mono_sprites
-        .iter()
-        .map(|sprite| (sprite.order, sprite.bounds))
+    let glyphs: Vec<_> = glyphs(&drawing)
+        .into_iter()
+        .map(|(order, _, bounds)| (order, bounds))
         .collect();
     assert!(!glyphs.is_empty(), "the line drew no glyphs");
-    // The order is a painting order over overlaps: a glyph clear of the chip may share its place.
     let over = |glyph: &[f32; 4]| {
         glyph[0] < bounds[0] + bounds[2]
             && bounds[0] < glyph[0] + glyph[2]
@@ -132,7 +144,7 @@ fn a_chip_that_changes_colour_is_painted_in_the_new_one() {
         } else {
             [255, 0, 0]
         };
-        let colours: Vec<_> = quads(harness.app().windows()[0].scene())
+        let colours: Vec<_> = quads(&shown(&harness))
             .into_iter()
             .map(|(_, rgb, _)| rgb)
             .filter(|rgb| *rgb == [255, 0, 0] || *rgb == [0, 0, 255])
@@ -153,19 +165,17 @@ fn a_decorated_chip_draws_its_line_across_its_own_text() {
     harness.settle(8);
     let window = &harness.app().windows()[0];
     let line = support::first_line_box(window);
-    let scene = window.scene();
+    let drawing = support::drawing(window);
 
-    let lines: Vec<_> = scene
-        .primitives
-        .decorations
-        .iter()
-        .map(|line| (line.color, line.bounds))
+    let lines: Vec<_> = drawing
+        .of_kind("line")
+        .map(|line| (line.color("color"), support::world(line)))
         .collect();
     assert_eq!(lines.len(), 1, "one underlined chip, one line: {lines:?}");
     let (color, bounds) = lines[0];
     assert_eq!(
         color,
-        [0.0, 1.0, 0.0, 1.0],
+        Some([0.0, 1.0, 0.0, 1.0]),
         "in the chip's decoration colour"
     );
     assert_eq!(
@@ -174,11 +184,9 @@ fn a_decorated_chip_draws_its_line_across_its_own_text() {
         "from the start of the chip's text"
     );
     assert_eq!(bounds[2], 32.0, "across its four characters");
-    let glyph_bottom = scene
-        .primitives
-        .mono_sprites
+    let glyph_bottom = glyphs(&drawing)
         .iter()
-        .map(|sprite| sprite.bounds[1] + sprite.bounds[3])
+        .map(|(_, _, glyph)| glyph[1] + glyph[3])
         .fold(0.0_f32, f32::max);
     let centre = bounds[1] + bounds[3] * 0.5;
     assert!(
@@ -191,16 +199,14 @@ fn a_decorated_chip_draws_its_line_across_its_own_text() {
 
 /// The x of every glyph drawn in a colour, relative to the line box.
 fn glyphs_in(
-    scene: &zgui_scene::Scene,
+    drawing: &Drawing,
     line: zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
     color: [f32; 4],
 ) -> Vec<f32> {
-    let mut xs: Vec<f32> = scene
-        .primitives
-        .mono_sprites
-        .iter()
-        .filter(|sprite| sprite.color == color)
-        .map(|sprite| sprite.bounds[0] - line.origin.x.0)
+    let mut xs: Vec<f32> = glyphs(drawing)
+        .into_iter()
+        .filter(|(_, paint, _)| *paint == Some(color))
+        .map(|(_, _, bounds)| bounds[0] - line.origin.x.0)
         .collect();
     xs.sort_by(f32::total_cmp);
     xs
@@ -213,7 +219,7 @@ fn a_text_shadow_follows_only_the_run_that_declared_it() {
     harness.settle(8);
     let window = &harness.app().windows()[0];
     let line = support::first_line_box(window);
-    let shadows = glyphs_in(window.scene(), line, [1.0, 0.0, 1.0, 1.0]);
+    let shadows = glyphs_in(&support::drawing(window), line, [1.0, 0.0, 1.0, 1.0]);
     // The chip's four glyphs start after `aa ` and its padding, moved two pixels.
     assert_eq!(
         shadows,
@@ -244,7 +250,7 @@ fn a_run_that_declares_no_text_shadow_drops_the_inherited_one() {
     harness.settle(8);
     let window = &harness.app().windows()[0];
     let line = support::first_line_box(window);
-    let shadows = glyphs_in(window.scene(), line, [1.0, 0.0, 1.0, 1.0]);
+    let shadows = glyphs_in(&support::drawing(window), line, [1.0, 0.0, 1.0, 1.0]);
     assert_eq!(
         shadows,
         [2.0, 10.0],
@@ -260,12 +266,9 @@ fn a_superscript_draws_its_glyphs_raised_by_its_shift() {
     harness.settle(8);
     let window = &harness.app().windows()[0];
     let line = support::first_line_box(window);
-    let tops: Vec<(f32, f32)> = window
-        .scene()
-        .primitives
-        .mono_sprites
-        .iter()
-        .map(|sprite| (sprite.bounds[0] - line.origin.x.0, sprite.bounds[1]))
+    let tops: Vec<(f32, f32)> = glyphs(&support::drawing(window))
+        .into_iter()
+        .map(|(_, _, glyph)| (glyph[0] - line.origin.x.0, glyph[1]))
         .collect();
     let plain = tops
         .iter()
@@ -295,7 +298,7 @@ fn a_run_that_starts_painting_is_painted_and_one_that_stops_is_cleared() {
     let mut harness = support::app_with_text(CSS, chip_view(on, "lit"));
     harness.settle(8);
     let blue = |harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>| {
-        quads(harness.app().windows()[0].scene())
+        quads(&shown(harness))
             .into_iter()
             .filter(|(_, rgb, _)| *rgb == [0, 0, 255])
             .count()

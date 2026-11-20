@@ -11,6 +11,10 @@ use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 pub use crate::app::fonts::Fonts;
+
+/// A maker of the renderer a window's compositor draws with, given the window's first size in
+/// device pixels.
+pub type CompositorRendererMaker = Box<dyn FnMut([u32; 2]) -> Box<dyn compositor_api::Renderer>>;
 #[cfg(target_arch = "wasm32")]
 pub use crate::app::web::Mounted;
 #[cfg(target_arch = "wasm32")]
@@ -163,6 +167,8 @@ pub struct App {
     fonts: std::cell::OnceCell<Fonts>,
     /// What draws its windows, when it is not this machine's own graphics device.
     renderer: Option<zgui_runtime::RendererFactory>,
+    /// The renderer each window's compositor draws with, when the application chose one.
+    compositor_renderer: Option<CompositorRendererMaker>,
     /// How precisely the default renderer holds a plain group, when the application set it.
     group_precision: Option<crate::GroupPrecision>,
     /// The application's own context setup, held until the faces are known.
@@ -193,6 +199,7 @@ impl App {
             inner: zgui_runtime::App::new(),
             fonts: std::cell::OnceCell::new(),
             renderer: None,
+            compositor_renderer: None,
             group_precision: None,
             context: None,
         }
@@ -539,6 +546,16 @@ impl App {
         self
     }
 
+    /// Draws each window through a compositor of its own, with the renderer `make` returns for the
+    /// window's first size.
+    ///
+    /// The compositor shares the application's fonts and rasterises glyphs with swash. A factory
+    /// set with [`App::with_renderer`] takes precedence.
+    pub fn with_compositor_renderer(mut self, make: CompositorRendererMaker) -> Self {
+        self.compositor_renderer = Some(make);
+        self
+    }
+
     /// Sets how precisely the default renderer holds a plain group of content.
     ///
     /// The default is [`GroupPrecision::Compact`](crate::GroupPrecision::Compact), which holds a
@@ -683,12 +700,11 @@ impl App {
         let shaping = fonts.clone();
         let group_precision = self.group_precision;
         let compositor_fonts = fonts.compositor_registry();
-        let renderer = self.renderer.unwrap_or_else(|| {
-            if compositor::legacy_wanted() {
-                graphics::factory(group_precision)
-            } else {
-                compositor::factory(compositor_fonts)
-            }
+        let compositor_renderer = self.compositor_renderer;
+        let renderer = self.renderer.unwrap_or_else(|| match compositor_renderer {
+            Some(make) => compositor::wrapping(compositor_fonts, make),
+            None if compositor::legacy_wanted() => graphics::factory(group_precision),
+            None => compositor::factory(compositor_fonts),
         });
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and

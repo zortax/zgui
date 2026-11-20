@@ -1,9 +1,11 @@
 //! A graphics device under the gallery, drawing to a texture instead of to a window.
 //!
-//! It is the production stack minus the compositor: the same builder, the same format rules and the
-//! same rasteriser selection an opened window goes through. Only the destination differs, and it
-//! differs because a window's surface belongs to the compositor the instant it is presented and
-//! cannot be read back.
+//! A fixture draws through one of two pipelines, picked with a [`Pipeline`]. The compositor draws
+//! boxes and text onto its reference renderer, see [`compositor`]. zgui's own renderer draws the
+//! display list's vector content, images and groups, built by [`factory`] with the same builder,
+//! format rules and rasteriser selection an opened window goes through. Only the destination
+//! differs, because a window's surface belongs to the platform's compositor the instant it is
+//! presented and cannot be read back.
 
 #![allow(
     dead_code,
@@ -11,8 +13,10 @@
     reason = "one support module serves several groups of assertions, none of which uses all of it"
 )]
 
+pub mod compositor;
 pub mod frame;
 pub mod ink;
+pub mod picture;
 pub mod shot;
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -59,7 +63,8 @@ pub fn shifts() -> usize {
     SHIFTS.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-fn real_damage() -> bool {
+/// Reports whether frames are drawn with the application's own damage set.
+pub fn real_damage() -> bool {
     REAL_DAMAGE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
@@ -180,6 +185,31 @@ pub fn factory(
     }
 }
 
+/// The renderer a window under test draws through.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pipeline {
+    /// The compositor, which draws boxes and text.
+    Compositor,
+    /// zgui's own renderer, which draws the display list's vector content, images and groups.
+    Scene,
+}
+
+/// Returns `app` drawing every window through `pipeline`, with each frame written into `log`.
+pub fn drawn_on(app: zgui::App, pipeline: Pipeline, log: &Log) -> zgui::App {
+    match pipeline {
+        Pipeline::Compositor => app.with_compositor_renderer(compositor::factory(log)),
+        Pipeline::Scene => app.with_renderer(Box::new(factory(log))),
+    }
+}
+
+/// Reports whether this machine has a graphics device `pipeline` runs on.
+pub fn available_on(pipeline: Pipeline) -> bool {
+    match pipeline {
+        Pipeline::Compositor => compositor::available(),
+        Pipeline::Scene => available(),
+    }
+}
+
 /// Whether this machine has a graphics device these fixtures can run on at all.
 pub fn available() -> bool {
     static ANSWER: OnceLock<bool> = OnceLock::new();
@@ -192,16 +222,5 @@ pub fn available() -> bool {
                 false
             }
         }
-    })
-}
-
-/// Whether this machine's device draws text with per-channel coverage.
-pub fn subpixel_text() -> bool {
-    static ANSWER: OnceLock<bool> = OnceLock::new();
-    *ANSWER.get_or_init(|| {
-        let target = RenderTarget::new(zgui::geom::Size::new(64, 64), zgui::geom::Scale::new(1.0));
-        Builder::new()
-            .offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
-            .is_ok_and(|renderer| renderer.capabilities().subpixel_text)
     })
 }

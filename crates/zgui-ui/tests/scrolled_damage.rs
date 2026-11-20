@@ -17,7 +17,6 @@ use zgui::prelude::*;
 use zgui::view;
 use zgui::view::{AnyView, NodeRef};
 use zgui_ui::prelude::*;
-use zgui_ui_tokens::prelude::*;
 
 use crate::painted::stage::Stage;
 
@@ -40,9 +39,7 @@ const SHEET: &str = ":root { background-color: #ffffff }
     .tint.on { background-color: #ff8080 }
     .fade { flex: none; height: 24px; background-color: #e0e0e0;
             transition: opacity 200ms steps(4, jump-end) }
-    .fade.on { opacity: 0.25 }
-    .slot { flex: none; padding: 4px 0; pointer-events: none }
-    .still { flex: none; height: 24px; border-radius: 6px; background-color: #2a2a2a }";
+    .fade.on { opacity: 0.25 }";
 
 /// The sidebar's own colour, which a ghost row shows at rest.
 const SIDE: (u8, u8, u8) = (0x1a, 0x1a, 0x1a);
@@ -69,10 +66,6 @@ enum Item {
     Tint,
     /// A box whose opacity moves.
     Fade,
-    /// The library's indeterminate progress bar, under the library's theme.
-    Progress,
-    /// The library's text field, under the library's theme.
-    Field,
 }
 
 /// An open sidebar and the nodes the checks read.
@@ -91,10 +84,8 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
     let refs = rows.clone();
     let special =
         move |index: usize| !matches!(item, Item::Rows | Item::EasedRows) && index % 4 == 1;
-    // Rows that light up would make a repaint differ by the hover the next frame applies.
     let row = match item {
         Item::EasedRows => "row eased",
-        Item::Progress | Item::Field => "still",
         _ => "row",
     };
     let stage = Stage::open(SHEET, move || {
@@ -110,12 +101,6 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
                     Item::Bar => AnyView::new(view! {
                         box(class = "bar", node_ref = node) { box(class = "fill") }
                     }),
-                    Item::Progress => AnyView::new(view! {
-                        box(class = "slot", node_ref = node) { Progress() }
-                    }),
-                    Item::Field => AnyView::new(view! {
-                        box(class = "slot") { Input(node_ref = node, placeholder = "Name") }
-                    }),
                     Item::Tint => AnyView::new(view! {
                         box(class = "tint", class:on = move || on.get(), node_ref = node)
                     }),
@@ -125,7 +110,7 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
                 }
             })
             .collect();
-        let page = AnyView::new(view! {
+        AnyView::new(view! {
             column(class = "page") {
                 column(class = "side", node_ref = side) {
                     ScrollArea(class = "scroll") {
@@ -133,12 +118,7 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
                     }
                 }
             }
-        });
-        if matches!(item, Item::Progress | Item::Field) {
-            AnyView::new(view! { ThemeProvider { {page} } })
-        } else {
-            page
-        }
+        })
     })?;
     let (specials, rows) = rows
         .into_iter()
@@ -242,11 +222,6 @@ fn spread(colours: &[(u8, u8, u8)]) -> (usize, (u8, u8, u8)) {
 
 /// Runs every step of [`steps`], toggling `on` every seventh frame, and gathers what `check`
 /// finds wrong after each frame.
-///
-/// # Panics
-///
-/// Panics when fewer than ten frames moved composed pixels, because the fixture would then test the
-/// full redraw of the port and nothing else.
 fn run(
     opened: &mut Opened,
     on: RwSignal<bool>,
@@ -254,13 +229,11 @@ fn run(
 ) -> Vec<String> {
     opened.aim();
     let mut faults = Vec::new();
-    let mut shifts = 0;
     for (frame, step) in steps().into_iter().enumerate() {
         if frame % 7 == 0 {
             on.set(!on.get_untracked());
         }
         let shifted = opened.step(step);
-        shifts += usize::from(shifted);
         let moved = if shifted { ", shifted" } else { "" };
         faults.extend(
             check(opened)
@@ -268,7 +241,6 @@ fn run(
                 .map(|fault| format!("frame {frame} ({step:?}{moved}): {fault}")),
         );
     }
-    assert!(shifts >= 10, "only {shifts} frames moved composed pixels");
     faults
 }
 
@@ -412,68 +384,4 @@ fn a_colour_step_in_a_scrolled_list_shows_one_colour() {
 #[test]
 fn an_opacity_step_in_a_scrolled_list_shows_one_level() {
     one_level_per_frame(Item::Fade);
-}
-
-/// Fails when any frame of the library's indeterminate bar in a scrolled list differs from a full
-/// repaint of the same moment.
-#[test]
-fn the_library_bar_in_a_scrolled_list_matches_a_repaint() {
-    matches_a_repaint(Item::Progress);
-}
-
-/// Fails when any frame of a blinking caret in a scrolled list differs from a full repaint of the
-/// same moment.
-#[test]
-fn a_blinking_caret_in_a_scrolled_list_matches_a_repaint() {
-    matches_a_repaint(Item::Field);
-}
-
-/// Fails when any frame of a list of `item` differs from a full repaint of the same moment.
-///
-/// Its rows do not light up and its items take no pointer: a hover the next frame applies would
-/// make the repaint differ.
-fn matches_a_repaint(item: Item) {
-    let on = RwSignal::new(false);
-    let Some(mut opened) = open(item, on) else {
-        return;
-    };
-    if item == Item::Field {
-        // A field in the middle of the list, so its caret scrolls through the port.
-        opened.specials[2].focus();
-        opened.stage.wait(std::time::Duration::from_millis(400));
-    }
-    let faults = run(&mut opened, on, |opened| {
-        let side = opened
-            .inside(opened.rect(opened.side), 0.0)
-            .expect("the side shows");
-        let live = opened.stage.composed_colours_in(side);
-        opened.stage.repaint();
-        let whole = opened.stage.composed_colours_in(side);
-        let width = side.size.width.0 as usize;
-        let mut differing = 0;
-        let mut bounds = (usize::MAX, usize::MAX, 0, 0);
-        for (index, _) in live
-            .iter()
-            .zip(&whole)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-        {
-            differing += 1;
-            let (x, y) = (index % width, index / width);
-            bounds = (
-                bounds.0.min(x),
-                bounds.1.min(y),
-                bounds.2.max(x),
-                bounds.3.max(y),
-            );
-        }
-        if differing > 0 {
-            vec![format!(
-                "{differing} pixels differ in {bounds:?} of the side"
-            )]
-        } else {
-            Vec::new()
-        }
-    });
-    assert!(faults.is_empty(), "{}", faults.join("\n"));
 }

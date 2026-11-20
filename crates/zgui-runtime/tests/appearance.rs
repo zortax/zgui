@@ -5,183 +5,36 @@
 //! written over a hand-built [`DecorationStyle`], and in both cases the thing that was broken sat
 //! *between* the style engine and the display list — which is exactly the span no hand-built input
 //! crosses. So these mount a document, style it with the declaration in question, and ask what the
-//! frame put in the display list.
+//! window shows.
 //!
 //! Each case carries the control that stops it passing while the feature is dead. A translucent box
 //! is asserted to be *present*, at the alpha it was given, and beside a sibling that composites
 //! into a target of its own — because the failure was a primitive being swept into that sibling's
 //! target and clipped away, and a case with no such sibling never sees it. A decorated line is
-//! asserted to have a decoration primitive, in the colour the sheet named, over the line box the
+//! asserted to draw a decoration line, in the colour the sheet named, over the line box the
 //! text landed in — because the failure was no primitive at all, and "the style says line-through"
 //! is a claim about the cascade rather than about the frame.
 //!
 //! [`DecorationStyle`]: zgui_paint::emit::text::DecorationStyle
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
+mod support;
 
-use zgui_bits::DamageSet;
-use zgui_color::Color;
-use zgui_platform::Surface;
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
-use zgui_runtime::{App, AppError};
-use zgui_scene::Scene;
+use zgui_testkit_compositor::{Drawing, Instance};
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
-/// One quad of a frame, reduced to what these cases ask about.
-#[derive(Clone, Copy, Debug)]
-struct Quad {
-    /// Its solid fill, when it has one.
-    fill: Option<Color>,
-    /// Its rectangle, as `[x, y, width, height]`.
-    bounds: [f32; 4],
-}
-
-/// One decoration line of a frame.
-#[derive(Clone, Copy, Debug)]
-struct Line {
-    /// Its colour, premultiplied and gamma-encoded, as the display list carries it.
-    color: [f32; 4],
-    /// Its rectangle, as `[x, y, width, height]`.
-    bounds: [f32; 4],
-    /// Which of the five shapes it is.
-    style: u32,
-}
-
-/// What one frame put in the display list.
-#[derive(Clone, Debug, Default)]
-struct Frame {
-    /// Its quads.
-    quads: Vec<Quad>,
-    /// Its decoration lines.
-    lines: Vec<Line>,
-    /// The rectangle each outer shadow is cast from, as `[x, y, width, height]`.
-    shadows: Vec<[f32; 4]>,
-}
-
-/// The frames a run produced, in order.
-type Log = Rc<RefCell<Vec<Frame>>>;
-
-/// A renderer that records the display list and draws nothing.
-struct Recorder {
-    /// Where the frames go.
-    log: Log,
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
-}
-
-impl Renderer for Recorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, scene: &Scene, _damage: &DamageSet) -> FrameOutcome {
-        self.log.borrow_mut().push(Frame {
-            quads: scene
-                .primitives
-                .quads
-                .iter()
-                .map(|quad| Quad {
-                    fill: quad.fill.id().and_then(|id| match scene.paints.get(id) {
-                        Some(zgui_scene::Paint::Solid(color)) => Some(*color),
-                        _ => None,
-                    }),
-                    bounds: quad.bounds,
-                })
-                .collect(),
-            lines: scene
-                .primitives
-                .decorations
-                .iter()
-                .map(|line| Line {
-                    color: line.color,
-                    bounds: line.bounds,
-                    style: line.style,
-                })
-                .collect(),
-            shadows: scene
-                .primitives
-                .shadows
-                .iter()
-                .map(|shadow| shadow.element_bounds)
-                .collect(),
-        });
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
-    }
-}
-
-/// Mounts a document styled by `css` and returns the frames it drew.
+/// Mounts a document styled by `css` and returns what its window shows once it settles.
 fn frames(
     css: &'static str,
     view: impl FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
-) -> Vec<Frame> {
-    let log: Log = Rc::default();
-    let factory = Rc::clone(&log);
-    let handler = App::new()
-        .with_title("appearance")
-        .with_size(400.0, 300.0)
-        .with_stylesheet(css)
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Recorder {
-                    log: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
-        .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
-        }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
-        .into_handler(view)
-        .expect("the reactive runtime installs");
-    let mut harness = zgui_platform_headless::Harness::new(handler);
+) -> Drawing {
+    let mut harness = support::app_with_text(css, view);
     harness.settle(4);
-    let drawn = log.borrow().clone();
-    assert!(
-        !drawn.is_empty(),
-        "mounting a document drew no frame at all"
-    );
-    drawn
+    support::drawing(&harness.app().windows()[0])
+}
+
+/// The decoration lines of `drawing`, in draw order.
+fn lines(drawing: &Drawing) -> Vec<&Instance> {
+    drawing.of_kind("line").collect()
 }
 
 /// The sheet the opacity cases are styled by.
@@ -222,31 +75,28 @@ fn opacity_row(cx: &mut BuildCx<'_>) -> Box<dyn Anchor> {
 #[test]
 fn a_translucent_box_after_a_filtered_sibling_is_still_drawn() {
     let drawn = frames(OPACITY_CSS, opacity_row);
-    let first = &drawn[0];
+    let quads = drawn.quads();
 
-    let opaque = first
-        .quads
+    let opaque = quads
         .iter()
-        .find(|quad| quad.fill.is_some_and(|fill| fill.alpha() >= 1.0))
-        .copied()
+        .find(|quad| quad.color("fill").is_some_and(|[.., alpha]| alpha >= 1.0))
         .expect("the filtered swatch is missing, so there is nothing to compare against");
-
-    let faded = first
-        .quads
+    let faded = quads
         .iter()
         .find(|quad| {
-            quad.fill
-                .is_some_and(|fill| (fill.alpha() - 0.45).abs() < 1e-3)
+            // The compositor carries the alpha in eight bits.
+            quad.color("fill")
+                .is_some_and(|[.., alpha]| (alpha - 0.45).abs() <= 1.0 / 255.0)
         })
-        .copied()
-        .expect("`opacity: 0.45` put no quad in the display list at all");
+        .unwrap_or_else(|| panic!("`opacity: 0.45` drew no quad at all:\n{drawn}"));
+    let faded = support::world(faded);
     assert_eq!(
-        faded.bounds[2..],
+        faded[2..],
         [40.0, 40.0],
         "the translucent box is drawn at its own size"
     );
     assert!(
-        faded.bounds[0] > opaque.bounds[0],
+        faded[0] > support::world(opaque)[0],
         "it is drawn where the layout put it, beside the sibling rather than under it"
     );
 }
@@ -266,30 +116,28 @@ fn every_line_of_text_inside_a_decorated_box_is_decorated() {
                 .build(cx),
         )
     });
-    let first = &drawn[0];
+    let lines = lines(&drawn);
 
     assert_eq!(
-        first.lines.len(),
+        lines.len(),
         1,
-        "one decorated element and one undecorated one draw exactly one line: {:?}",
-        first.lines
+        "one decorated element and one undecorated one draw exactly one line:\n{drawn}"
     );
-    let line = first.lines[0];
+    let line = lines[0];
     assert_eq!(
-        line.color,
-        [1.0, 0.0, 0.0, 1.0],
+        line.color("color"),
+        Some([1.0, 0.0, 0.0, 1.0]),
         "the line is drawn in `text-decoration-color`, not in the text's own colour"
     );
+    let bounds = support::world(line);
     assert!(
-        line.bounds[2] > 0.0 && line.bounds[3] > 0.0,
-        "a line with no extent is a primitive that draws nothing: {line:?}"
+        bounds[2] > 0.0 && bounds[3] > 0.0,
+        "a line with no extent draws nothing: {line:?}"
     );
     // A strike sits inside the line box it crosses rather than under it, which is what says the
     // line was placed against the text rather than at some fixed offset from the box.
-    // Primitives are recorded in their own space, which the poison test mode moves.
-    let top = line.bounds[1] - zgui_space::spatial::poison::origin();
     assert!(
-        top > 0.0 && top < 24.0,
+        bounds[1] > 0.0 && bounds[1] < 24.0,
         "the strike is not inside the line box it crosses: {line:?}"
     );
 }
@@ -313,11 +161,11 @@ fn a_decoration_reaches_the_text_of_a_descendant_that_declared_nothing() {
                 .build(cx),
         )
     });
-    let first = &drawn[0];
-    assert_eq!(first.lines.len(), 1, "{:?}", first.lines);
+    let lines = lines(&drawn);
+    assert_eq!(lines.len(), 1, "{drawn}");
     assert_eq!(
-        first.lines[0].color,
-        [0.0, 0.0, 1.0, 1.0],
+        lines[0].color("color"),
+        Some([0.0, 0.0, 1.0, 1.0]),
         "the descendant drew the ancestor's colour, which is what propagation means"
     );
 }
@@ -338,27 +186,26 @@ fn a_wave_is_given_a_band_it_can_have_a_shape_in() {
                 .build(cx),
         )
     });
-    let first = &drawn[0];
-    assert_eq!(first.lines.len(), 2, "{:?}", first.lines);
+    let lines = lines(&drawn);
+    assert_eq!(lines.len(), 2, "{drawn}");
 
-    let wavy = first
-        .lines
+    let wavy = lines
         .iter()
-        .find(|line| line.style == zgui_scene::prim::decoration::DecorationStyle::Wavy as u32)
+        .find(|line| line.field("style") == Some("wavy"))
         .expect("`text-decoration: underline wavy` produced no wavy line");
-    let solid = first
-        .lines
+    let solid = lines
         .iter()
-        .find(|line| line.style == zgui_scene::prim::decoration::DecorationStyle::Solid as u32)
+        .find(|line| line.field("style") == Some("solid"))
         .expect("the solid control is missing, so the comparison below proves nothing");
+    let (wavy, solid) = (support::world(wavy), support::world(solid));
 
     assert!(
-        wavy.bounds[3] > solid.bounds[3],
+        wavy[3] > solid[3],
         "a wave needs more height than a stroke or it has no amplitude: wavy {wavy:?} solid \
          {solid:?}"
     );
     assert!(
-        wavy.bounds[3] >= solid.bounds[3] * 3.0,
+        wavy[3] >= solid[3] * 3.0,
         "the band is three strokes tall, which is what the shader's wave and its doubled line are \
          written against: {wavy:?}"
     );
@@ -388,41 +235,48 @@ fn a_nested_inline_box_draws_its_shadow_and_outline_around_its_text() {
                 .build(cx),
         )
     });
-    let first = &drawn[0];
+    let shadows: Vec<[f32; 4]> = drawn
+        .of_kind("shadow")
+        .map(|shadow| {
+            shadow
+                .rect("caster")
+                .unwrap_or_else(|| support::world(shadow))
+        })
+        .collect();
 
     assert!(
-        first
-            .shadows
+        shadows
             .iter()
             .all(|bounds| bounds[2] > 0.0 && bounds[3] > 0.0),
-        "a shadow is cast from a rectangle with no extent: {:?}",
-        first.shadows
+        "a shadow is cast from a rectangle with no extent: {shadows:?}"
     );
-    assert_eq!(first.shadows.len(), 1, "{:?}", first.shadows);
-    let text = first.shadows[0];
+    assert_eq!(shadows.len(), 1, "{drawn}");
+    let text = shadows[0];
     assert!(
         text[0] > 100.0,
         "the shadow is cast from the box's text, past `aa `: {text:?}"
     );
 
-    let outlines: Vec<_> = first
-        .quads
+    let unfilled: Vec<[f32; 4]> = drawn
+        .quads()
+        .into_iter()
+        .filter(|quad| quad.field("fill") == Some("none"))
+        .map(support::world)
+        .collect();
+    let outlines: Vec<_> = unfilled
         .iter()
-        .filter(|quad| quad.fill.is_none() && quad.bounds[2] > 0.0)
-        .filter(|quad| quad.bounds[0] < text[0] && quad.bounds[0] + quad.bounds[2] > text[0])
+        .filter(|quad| quad[2] > 0.0)
+        .filter(|quad| quad[0] < text[0] && quad[0] + quad[2] > text[0])
         .collect();
     assert!(
-        first.quads.iter().all(|quad| !(quad.bounds[0] < 100.0
-            && quad.bounds[0] + quad.bounds[2] <= 104.0
-            && quad.bounds[1] < 64.0
-            && quad.fill.is_none())),
-        "an outline is drawn at the start of the paragraph: {:?}",
-        first.quads
+        unfilled
+            .iter()
+            .all(|quad| !(quad[0] < 100.0 && quad[0] + quad[2] <= 104.0 && quad[1] < 64.0)),
+        "an outline is drawn at the start of the paragraph:\n{drawn}"
     );
     assert_eq!(
         outlines.len(),
         1,
-        "one outline around the box's text: {:?}",
-        first.quads
+        "one outline around the box's text:\n{drawn}"
     );
 }

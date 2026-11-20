@@ -8,15 +8,16 @@
 //!
 //! # Why the tiles, and not the pixels
 //!
-//! A glyph is rasterised once per face, size and glyph index and cached under that key, so two runs
-//! of the same string in the same style read the same tiles in the same order — and two different
-//! strings do not. That makes [`spelling`] an assertion about *which letters* were drawn, which a
-//! photograph cannot be: a picture of a slide saying `Two` and a picture of one saying `One` differ
-//! only in ways a fixture would have to recognise letters to tell apart.
+//! Within one frame, the compositor draws every sprite of a glyph in one style from the same atlas
+//! tile, so two runs of the same string in the same style read the same tiles in the same order —
+//! and two different strings do not. That makes [`spelling`] an assertion about *which letters*
+//! were drawn, which a photograph cannot be: a picture of a slide saying `Two` and a picture of one
+//! saying `One` differ only in ways a fixture would have to recognise letters to tell apart.
 
 use zgui::geom::{Device, DevicePx, Point, Rect};
 
 use crate::desktop::census::Seen;
+use crate::device::frame::Tile;
 use crate::painted::stage::Stage;
 
 /// How far a run of words got towards being on the screen.
@@ -129,7 +130,7 @@ pub fn assert_absent(stage: &Stage, text: &str) {
 }
 
 /// Which letters the last frame drew inside `rect`, left to right, as the tiles they came from.
-pub fn spelling(stage: &Stage, rect: Rect<DevicePx, Device>) -> Vec<(u32, u32)> {
+pub fn spelling(stage: &Stage, rect: Rect<DevicePx, Device>) -> Vec<Tile> {
     stage
         .glyphs_in(rect)
         .into_iter()
@@ -143,10 +144,10 @@ pub fn spelling(stage: &Stage, rect: Rect<DevicePx, Device>) -> Vec<(u32, u32)> 
 /// which is what makes this an assertion that *those letters* landed here, rather than that
 /// something did. The answer is the left edge of the first of them, so two readings a step apart
 /// say how far the thing holding them travelled.
-pub fn found(stage: &Stage, rect: Rect<DevicePx, Device>, word: &[(u32, u32)]) -> Option<f32> {
+pub fn found(stage: &Stage, rect: Rect<DevicePx, Device>, word: &[Tile]) -> Option<f32> {
     assert!(!word.is_empty(), "a reference line that drew no letters");
     let drawn = stage.glyphs_in(rect);
-    let tiles: Vec<(u32, u32)> = drawn.iter().map(|glyph| glyph.tile).collect();
+    let tiles: Vec<Tile> = drawn.iter().map(|glyph| glyph.tile).collect();
     tiles
         .windows(word.len())
         .position(|run| run == word)

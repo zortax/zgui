@@ -37,6 +37,9 @@ zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
 
+[dev-dependencies]
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
+
 [features]
 # The allocation tags `mem-probe` charges each allocation to. A feature of its own, so the timed
 # binaries beside it are built without them.

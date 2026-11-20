@@ -30,6 +30,7 @@ use zgui::{reactive, view};
 use zgui_ui::prelude::*;
 use zgui_ui_tokens::prelude::*;
 
+use crate::device::Pipeline;
 use crate::painted::stage::{SETTLED, Stage};
 
 /// The page every fixture is laid out on: a flat white surface with room around the controls.
@@ -45,10 +46,14 @@ const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-fam
 /// these changes actually paints.
 const MOVED: f32 = 0.01;
 
-/// Opens `view`, or reports the run skipped on a machine with no graphics device.
+/// Opens `view`, drawn through the compositor or through `pipeline`, or reports the run skipped
+/// on a machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        match Stage::open(SHEET, $view) {
+        staged!(Pipeline::Compositor, $view)
+    };
+    ($pipeline:expr, $view:expr) => {
+        match Stage::open_on($pipeline, SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");
@@ -323,7 +328,8 @@ fn a_bound_switch_slides_its_thumb_and_moves_the_signal_it_was_bound_to() {
 #[test]
 fn a_bound_radio_group_marks_the_item_that_was_clicked_and_clears_the_other() {
     let bound = Bound::new();
-    let mut stage = staged!(bound.view());
+    // The dot is a drawing.
+    let mut stage = staged!(Pipeline::Scene, bound.view());
     let monthly = bound.built.node(2);
     let yearly = bound.built.node(3);
     let chosen_before = picture(&stage, monthly);

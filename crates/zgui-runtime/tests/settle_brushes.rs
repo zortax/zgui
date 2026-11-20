@@ -26,17 +26,16 @@ const CSS: &str = ":root { display: block; width: 400px; height: 300px }
 
 /// The grey every glyph in the window is drawn in, ordered down the window and then across it.
 fn drawn_greys(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<u8> {
-    let mut placed: Vec<_> = harness.app().windows()[0]
-        .scene()
-        .primitives
-        .mono_sprites
+    let drawing = support::drawing(&harness.app().windows()[0]);
+    let mut placed: Vec<_> = drawing
+        .glyphs()
         .iter()
-        .map(|sprite| {
-            (
-                sprite.bounds[1].to_bits(),
-                sprite.bounds[0].to_bits(),
-                (sprite.color[0] * 255.0).round() as u8,
-            )
+        .map(|glyph| {
+            let [x, y, ..] = support::world(glyph);
+            let [red, ..] = glyph
+                .color("paint")
+                .expect("a glyph is drawn in a solid colour");
+            (y.to_bits(), x.to_bits(), (red * 255.0).round() as u8)
         })
         .collect();
     placed.sort_unstable();

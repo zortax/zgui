@@ -1,8 +1,8 @@
 //! The bars a scrolling document draws, and what a press on one does.
 //!
 //! Every assertion here is made over a real window: the fragments come out of the tree the frame
-//! composed, and the rectangles they are checked against come out of the *scene* — what was
-//! actually pushed to the display list — rather than out of the arithmetic that produced them. A
+//! composed, and the rectangles they are checked against come out of what the compositor actually
+//! drew rather than out of the arithmetic that produced them. A
 //! bar that is computed correctly and emitted by nothing looks exactly like the fault this is
 //! written against, which was a fragment kind with two consumers and no producer at all.
 
@@ -106,41 +106,41 @@ fn bar(
     first.2
 }
 
-/// Where a quad is drawn on the device, through its own coordinate system.
-fn on_device(scene: &zgui_scene::Scene, quad: &zgui_scene::Quad) -> [f32; 4] {
-    let local = quad.ink();
-    let placed = scene
-        .spatial
-        .resolve_at(quad.transform)
-        .map_or(local, |matrix| {
-            zgui_geom::transformed_bounds(&matrix, local)
-        });
-    [
-        placed.origin.x.0,
-        placed.origin.y.0,
-        placed.size.width.0,
-        placed.size.height.0,
-    ]
+/// Every quad the window shows, as its rectangle on the device and its solid fill, if any.
+fn quads(
+    harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
+) -> Vec<([f32; 4], Option<[f32; 4]>)> {
+    support::drawing(window(harness))
+        .quads()
+        .into_iter()
+        .map(|quad| (support::world(quad), quad.color("fill")))
+        .collect()
 }
 
-/// Whether the scene holds a quad covering exactly `rect`.
+/// Reports whether two colours differ by no more than the compositor's eight-bit precision.
+fn near(left: [f32; 4], right: [f32; 4]) -> bool {
+    left.iter()
+        .zip(right.iter())
+        .all(|(left, right)| (left - right).abs() <= 1.0 / 255.0)
+}
+
+/// Whether the window shows a quad covering exactly `rect`.
 ///
-/// The display list rather than the fragment tree, because a fragment that nothing emits for is the
-/// whole of the fault this file exists for.
+/// The drawing rather than the fragment tree, because a fragment that nothing draws is the whole of
+/// the fault this file exists for.
 fn painted(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
     rect: [f32; 4],
 ) -> bool {
-    let scene = window(harness).scene();
-    scene.primitives.quads.iter().any(|quad| {
-        on_device(scene, quad)
+    quads(harness).iter().any(|(bounds, _)| {
+        bounds
             .iter()
             .zip(rect.iter())
             .all(|(drawn, wanted)| (drawn - wanted).abs() < 0.01)
     })
 }
 
-/// Whether the scene holds a quad that lies wholly inside `rect` and covers part of it.
+/// Whether the window shows a quad that lies wholly inside `rect` and covers part of it.
 ///
 /// The thumb is painted slimmer than the rectangle layout reserved for it, so this is how a test
 /// that is not about its thickness finds it.
@@ -148,13 +148,11 @@ fn painted_within(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
     rect: [f32; 4],
 ) -> bool {
-    let scene = window(harness).scene();
-    scene.primitives.quads.iter().any(|quad| {
-        let [x, y, width, height] = on_device(scene, quad);
-        width > 0.0
-            && height > 0.0
-            && x >= rect[0] - 0.01
-            && y >= rect[1] - 0.01
+    quads(harness).iter().any(|([x, y, width, height], _)| {
+        *width > 0.0
+            && *height > 0.0
+            && *x >= rect[0] - 0.01
+            && *y >= rect[1] - 0.01
             && x + width <= rect[0] + rect[2] + 0.01
             && y + height <= rect[1] + rect[3] + 0.01
     })
@@ -271,11 +269,11 @@ fn a_scrolling_page_places_a_track_and_draws_a_thumb_in_the_gutter_it_reserved()
     // The default paint draws no groove and a slim capsule centred in the thumb's rectangle.
     assert!(
         !painted(&harness, track),
-        "the default track is transparent and pushes nothing"
+        "the default track is transparent and draws nothing"
     );
     assert!(
         painted(&harness, [400.0 - GUTTER / 2.0 - 3.0, 0.0, 6.0, 150.0]),
-        "the thumb reached the display list, six pixels wide down the middle of the gutter"
+        "the thumb is drawn six pixels wide down the middle of the gutter"
     );
 }
 
@@ -293,7 +291,7 @@ fn a_reserved_gutter_with_nothing_to_scroll_has_a_track_and_no_thumb() {
     assert_eq!(found[0].1, ScrollbarPart::Track);
     assert!(
         !painted(&harness, found[0].2),
-        "the default track is transparent and pushes nothing, whether or not anything can move"
+        "the default track is transparent and draws nothing, whether or not anything can move"
     );
 }
 
@@ -307,20 +305,12 @@ fn a_fixed_scrim_and_the_gutter_together_cover_the_whole_window() {
     harness.settle(8);
 
     let track = bar(&harness, ScrollbarPart::Track);
-    // Found by its fill in the display list. The overlay root is also a fixed box, and it paints
+    // Found by its fill in the drawing. The overlay root is also a fixed box, and it paints
     // nothing.
-    let scene = window(&harness).scene();
-    let scrim = scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| {
-            let fill = quad.fill.id().and_then(|id| scene.paints.get(id));
-            matches!(fill, Some(zgui_scene::Paint::Solid(color))
-                if color.components()[0] < 0.01
-                    && (color.components()[2] - 128.0 / 255.0).abs() < 0.01)
-        })
-        .map(|quad| on_device(scene, quad))
+    let scrim = quads(&harness)
+        .into_iter()
+        .find(|(_, fill)| fill.is_some_and(|fill| near(fill, [0.0, 0.0, 128.0 / 255.0, 1.0])))
+        .map(|(bounds, _)| bounds)
         .expect("the fixed scrim was painted");
 
     assert_eq!(
@@ -605,22 +595,15 @@ fn painted_color(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
     rect: [f32; 4],
 ) -> Option<[f32; 4]> {
-    let scene = window(harness).scene();
-    scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| {
-            on_device(scene, quad)
+    quads(harness)
+        .into_iter()
+        .find(|(bounds, _)| {
+            bounds
                 .iter()
                 .zip(rect.iter())
                 .all(|(drawn, wanted)| (drawn - wanted).abs() < 0.01)
         })
-        .and_then(|quad| quad.fill.id().and_then(|id| scene.paints.get(id)))
-        .and_then(|paint| match paint {
-            zgui_scene::Paint::Solid(color) => Some(color.to_premultiplied_srgb()),
-            _ => None,
-        })
+        .and_then(|(_, fill)| fill)
 }
 
 /// Where the default thumb is painted on the scrolling page.
@@ -645,15 +628,17 @@ fn a_scroller_in_a_dark_scheme_paints_the_dark_thumb_on_a_light_platform() {
     let mut harness = page(CSS, false);
     harness.settle(8);
     let light = painted_color(&harness, THUMB).expect("the thumb was painted");
-    assert_eq!(light, [0.0, 0.0, 0.0, 0.35], "the platform's light paint");
+    assert!(
+        near(light, [0.0, 0.0, 0.0, 0.35]),
+        "the platform's light paint: {light:?}"
+    );
 
     let mut harness = page(DARK_CSS, false);
     harness.settle(8);
     let dark = painted_color(&harness, THUMB).expect("the thumb was painted");
-    assert_eq!(
-        dark,
-        [0.5, 0.5, 0.5, 0.5],
-        "translucent white, premultiplied"
+    assert!(
+        near(dark, [0.5, 0.5, 0.5, 0.5]),
+        "translucent white, premultiplied: {dark:?}"
     );
 }
 
@@ -661,5 +646,6 @@ fn a_scroller_in_a_dark_scheme_paints_the_dark_thumb_on_a_light_platform() {
 fn a_custom_property_sets_the_thumb_colour() {
     let mut harness = page(LIME_CSS, false);
     harness.settle(8);
-    assert_eq!(painted_color(&harness, THUMB), Some([0.0, 1.0, 0.0, 1.0]));
+    let lime = painted_color(&harness, THUMB).expect("the thumb was painted");
+    assert!(near(lime, [0.0, 1.0, 0.0, 1.0]), "{lime:?}");
 }

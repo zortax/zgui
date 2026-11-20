@@ -134,7 +134,7 @@ pub mod app;
 pub mod error;
 pub mod prelude;
 
-pub use crate::app::{App, app};
+pub use crate::app::{App, CompositorRendererMaker, app};
 pub use crate::error::Error;
 /// How precisely the default renderer holds a plain group, see [`App::with_group_precision`].
 pub use zgui_render_wgpu::GroupPrecision;

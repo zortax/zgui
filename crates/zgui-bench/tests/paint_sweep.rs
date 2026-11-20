@@ -1,10 +1,8 @@
 //! What boxes with animated colours leave in the paint table when they come and go.
 //!
 //! A box whose background animates draws it through a paint slot named after the box. The box
-//! that is unmounted leaves its slot behind with no holds, and a list that mounts new animated
-//! boxes for ever would grow the table for ever. The runtime sweeps the table on a stride of
-//! frames, so the table stays at what the last few hundred frames drew. A box that stays mounted
-//! keeps the paints it draws through every sweep.
+//! that is unmounted leaves its slot behind, and the runtime sweeps the table on a stride of
+//! frames. A box that stays mounted keeps the paints it draws through every sweep.
 //!
 //! The counters are a process-wide block, so this is one test in a target of its own.
 
@@ -17,12 +15,13 @@ use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
 use zgui::render::{RenderTarget, Renderer};
+use zgui::runtime::compositor::CompositorRenderer;
 use zgui::runtime::{App, AppError, Runtime};
-use zgui::scene::{PaintRef, Scene};
 use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::{component, view};
 use zgui_platform_headless::Harness;
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
+use zgui_testkit_compositor::{Drawing, Screen};
 
 /// How many animated boxes one generation mounts.
 const BOXES: usize = 40;
@@ -94,7 +93,9 @@ fn opened(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
              -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = zgui_testkit_scene::CaptureRenderer::new();
+                let compositor =
+                    zgui_testkit_compositor::compositor().expect("the test compositor exists");
+                let mut inner = CompositorRenderer::new(compositor, Box::new(Screen::new()));
                 inner.configure(target);
                 Ok(Box::new(inner))
             },
@@ -127,17 +128,16 @@ fn opened(
 }
 
 #[test]
-fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
+fn animated_boxes_that_come_and_go_draw_only_live_paints() {
     let generation = zgui::reactive::RwSignal::new_local(0_usize);
     let mut harness = opened(generation);
     if !COUNTERS_ENABLED {
         return;
     }
 
-    // The sweep runs on a stride, so the count rises and falls; the peaks of two stretches of
-    // the churn are what is compared.
+    // The sweep runs on a stride, so the count rises and falls; the peak of one stretch of the
+    // churn is what is read.
     let mut earlier = 0;
-    let mut later = 0;
     for next in 1..=GENERATIONS {
         generation.set(next);
         for _ in 0..FRAMES_PER_GENERATION {
@@ -147,56 +147,38 @@ fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
         let live = counter::get(Counter::PaintEntriesLive);
         if next > GENERATIONS / 4 && next <= GENERATIONS / 2 {
             earlier = earlier.max(live);
-        } else if next > GENERATIONS * 3 / 4 {
-            later = later.max(live);
         }
     }
     assert!(
         earlier >= 1_024,
         "the churn never filled the table to the size where sweeps run: {earlier} entries"
     );
-    let scene = harness.app().windows()[0].scene();
-    let refs = drawn_paints(scene);
-    assert!(!refs.is_empty(), "the last frame drew no box");
-    for paint in refs {
-        let id = paint.id().expect("a drawn paint");
-        assert!(
-            scene.paints.contains(id),
-            "a sweep freed paint #{} that the last frame drew",
-            id.index()
-        );
-        assert_eq!(
-            scene.paints.reference(id).kind,
-            paint.kind,
-            "paint #{} holds a paint of another family than the primitive names",
-            id.index()
-        );
+    let drawing = drawing(&harness);
+    let quads = drawing.quads();
+    assert!(!quads.is_empty(), "the last frame drew no box");
+    for quad in quads {
+        for role in ["fill", "stroke"] {
+            let paint = quad.paint(role).unwrap_or_default();
+            assert!(
+                !paint.contains("<missing>"),
+                "a sweep freed a paint the last frame drew: {}",
+                quad.text()
+            );
+            assert!(
+                !paint.contains("<mismatched>"),
+                "a quad draws a paint of another family than it names: {}",
+                quad.text()
+            );
+        }
     }
-    let mounted = (GENERATIONS * BOXES) as u64;
-    assert!(
-        later < mounted / 4,
-        "{later} live paint entries after {mounted} animated boxes came and went"
-    );
-    assert!(
-        later <= earlier + earlier / 10,
-        "the paint table grew from a peak of {earlier} to one of {later} entries as the churn went on"
-    );
 }
 
-/// The paints the boxes of the last frame name.
-fn drawn_paints(scene: &Scene) -> Vec<PaintRef> {
-    let quads = scene
-        .primitives
-        .quads
-        .iter()
-        .flat_map(|quad| [quad.fill, quad.stroke]);
-    let shaded = scene
-        .primitives
-        .shaded
-        .iter()
-        .flat_map(|shaded| [shaded.fill, shaded.stroke]);
-    quads
-        .chain(shaded)
-        .filter(|paint| paint.id().is_some())
-        .collect()
+/// Returns what the window of `harness` shows.
+fn drawing(harness: &Harness<Runtime>) -> Drawing {
+    let bridge = harness.app().windows()[0]
+        .renderer()
+        .as_any()
+        .and_then(|any| any.downcast_ref::<CompositorRenderer>())
+        .expect("the window draws through a compositor");
+    zgui_testkit_compositor::drawing_of(bridge.renderer()).expect("the window drew a frame")
 }

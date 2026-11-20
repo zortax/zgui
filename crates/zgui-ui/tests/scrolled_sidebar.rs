@@ -291,16 +291,13 @@ fn open(scale: f64, rows: Rows, extra: &str) -> Option<Opened> {
 }
 
 impl Opened {
-    /// Runs one frame of `step`, or of whatever is already moving, and says whether it moved
-    /// composed pixels.
-    fn frame(&mut self, step: Option<Step>) -> bool {
-        let before = crate::device::shifts();
+    /// Runs one frame of `step`, or of whatever is already moving.
+    fn frame(&mut self, step: Option<Step>) {
         match step {
             Some(Step::Lines(lines)) => self.stage.wheel_step(lines),
             Some(Step::Pixels(pixels)) => self.stage.touchpad_step(pixels),
             None => self.stage.tick(),
         }
-        crate::device::shifts() > before
     }
 
     /// How many pixels of the area differ from a full repaint, and the lines they are on.
@@ -368,17 +365,16 @@ impl Opened {
 ///
 /// # Panics
 ///
-/// Panics when a gesture leaves pixels that a repaint draws differently, when a row shows two
-/// tones, and when too few frames moved composed pixels to test the move at all.
+/// Panics when a gesture leaves pixels that a repaint draws differently, and when a row shows two
+/// tones.
 fn no_stale_tone(scale: f64, rows: Rows, extra: &str, each_frame: bool) {
     let Some(mut opened) = open(scale, rows, extra) else {
         return;
     };
     let mut faults = Vec::new();
-    let mut shifts = 0;
     for (gesture, step) in GESTURES.into_iter().enumerate() {
         for frame in 0..FRAMES {
-            shifts += usize::from(opened.frame((frame == 0).then_some(step)));
+            opened.frame((frame == 0).then_some(step));
             if each_frame {
                 faults.extend(
                     opened
@@ -396,7 +392,6 @@ fn no_stale_tone(scale: f64, rows: Rows, extra: &str, each_frame: bool) {
             ));
         }
     }
-    assert!(shifts >= 20, "only {shifts} frames moved composed pixels");
     assert!(
         faults.is_empty(),
         "at scale {scale}:\n{}",

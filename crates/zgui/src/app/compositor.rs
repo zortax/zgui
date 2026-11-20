@@ -50,6 +50,27 @@ pub(crate) fn factory(fonts: Arc<dyn FontRegistry>) -> RendererFactory {
     })
 }
 
+/// Returns the factory of renderers that draw each window through its own `compositor-core`
+/// compositor, sharing `fonts` and rasterising glyphs with swash, onto the renderer `make` returns.
+pub(crate) fn wrapping(
+    fonts: Arc<dyn FontRegistry>,
+    mut make: crate::app::CompositorRendererMaker,
+) -> RendererFactory {
+    let raster = Arc::new(SwashRaster::new());
+    Box::new(move |_surface, target| {
+        let size = [
+            u32::try_from(target.size.width).unwrap_or(1),
+            u32::try_from(target.size.height).unwrap_or(1),
+        ];
+        let mut compositor = CompositorImpl::new();
+        compositor.use_font_registry(Arc::clone(&fonts));
+        compositor.use_glyph_raster(Arc::clone(&raster) as _);
+        let mut window = CompositorRenderer::new(Box::new(compositor), make(size));
+        window.configure(target);
+        Ok(Box::new(window) as Box<dyn Renderer>)
+    })
+}
+
 /// Opens a renderer presenting into `surface` on the shared device, whose path rasteriser is built
 /// with `vello`.
 fn renderer(

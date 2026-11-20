@@ -12,9 +12,11 @@
 //!
 //! # How a frame is asked what it drew
 //!
-//! Each row is filled with a colour no other row uses — the green channel is the row's index — so a
-//! frame's display list can be asked which rows it holds without knowing a single fragment name.
-//! The renderer draws nothing and keeps the quads.
+//! Each row is filled with a colour no other row uses — the green channel is the row's index — so
+//! the output can be asked which rows it shows without knowing a single fragment name. The renderer
+//! draws through a compositor and keeps the quads the output shows after each frame.
+
+mod support;
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -44,7 +46,7 @@ const ROW: f32 = 20.0;
 /// How tall the port is, in CSS pixels. Six rows fit; eighteen do not.
 const PORT: f32 = 120.0;
 
-/// What one frame put in its display list.
+/// What the output showed after one frame.
 #[derive(Debug, Clone)]
 struct Drawn {
     /// Every quad's top, height and green channel, which is what names its row.
@@ -55,7 +57,7 @@ struct Drawn {
 }
 
 impl Drawn {
-    /// The rows this frame drew, by index.
+    /// The rows the output shows, by index.
     fn rows(&self) -> Vec<usize> {
         let mut held: Vec<usize> = self
             .quads
@@ -73,67 +75,78 @@ impl Drawn {
 /// The frames, in the order they were drawn.
 type Log = Rc<RefCell<Vec<Drawn>>>;
 
-/// A renderer that records each frame's quads and draws nothing.
+/// A renderer that draws through a compositor and records the quads the output shows.
 struct Recorder {
     /// Where the frames go.
     log: Log,
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go to plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
+    /// The compositor renderer the frames are drawn with.
+    inner: Box<dyn Renderer>,
+}
+
+impl Recorder {
+    /// Returns what the output shows, or `None` before the first frame.
+    fn shown(&self) -> Option<zgui_testkit_compositor::Drawing> {
+        let bridge = self
+            .inner
+            .as_any()?
+            .downcast_ref::<zgui_runtime::compositor::CompositorRenderer>()?;
+        zgui_testkit_compositor::drawing_of(bridge.renderer())
+    }
 }
 
 impl Renderer for Recorder {
     fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
+        self.inner.capabilities()
     }
 
     fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
+        self.inner.configure(target);
     }
 
     fn target(&self) -> Option<RenderTarget> {
-        self.target
+        self.inner.target()
     }
 
     fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+        let outcome = self.inner.draw(scene, damage);
+        let drawing = self.shown().expect("the compositor drew a frame");
         self.log.borrow_mut().push(Drawn {
-            quads: scene
-                .primitives
-                .quads
+            quads: drawing
+                .quads()
                 .iter()
                 .filter_map(|quad| {
-                    let color = match scene.paints.get(quad.fill.id()?) {
-                        Some(zgui_scene::Paint::Solid(color)) => *color,
-                        _ => return None,
-                    };
-                    let green = (color.components()[1] * 255.0).round() as u8;
-                    Some((quad.bounds[1], quad.bounds[3], green))
+                    let green = (quad.color("fill")?[1] * 255.0).round() as u8;
+                    let [_, top, _, height] = support::world(quad);
+                    Some((top, height, green))
                 })
                 .collect(),
             undamaged: damage.is_empty(),
         });
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
+        outcome
     }
 
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
+    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
+        self.inner.register_external(texture)
     }
 
-    fn release_external(&mut self, _handle: TextureHandle) {}
+    fn release_external(&mut self, handle: TextureHandle) {
+        self.inner.release_external(handle);
+    }
 
     fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
+        self.inner.memory()
     }
 
     fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
+        self.inner.texture_sink()
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        self.inner.as_any_mut()
+    }
+
+    fn as_any(&self) -> Option<&dyn core::any::Any> {
+        self.inner.as_any()
     }
 }
 
@@ -162,13 +175,11 @@ fn listing(log: &Log) -> zgui_platform_headless::Harness<Runtime> {
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
         .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Recorder {
+            move |surface: &Arc<dyn Surface>, target: RenderTarget| {
+                let renderer = Recorder {
                     log: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
+                    inner: support::compositor(surface, target)?,
                 };
-                renderer.configure(target);
                 Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
             },
         ))
@@ -256,10 +267,9 @@ fn covered(top: f32) -> Vec<usize> {
 
 /// A row that scrolls into the port is drawn by the frame that brought it there.
 ///
-/// The port is scrolled one detent at a time, and after every frame the rows the display list holds
-/// are compared against the rows the port's own rectangle now covers. A row wholly inside the port
-/// and absent from the frame is a hole on the screen: the scroll damaged the whole port, so nothing
-/// downstream is going to draw it either.
+/// The port is scrolled one detent at a time, and after every frame the rows the output shows are
+/// compared against the rows the port's own rectangle now covers. A row wholly inside the port and
+/// absent from the output is a hole on the screen.
 #[test]
 fn a_row_scrolled_into_a_port_is_in_the_frame_that_brought_it_in() {
     let log: Log = Rc::new(RefCell::new(Vec::new()));
@@ -297,7 +307,7 @@ fn a_row_scrolled_into_a_port_is_in_the_frame_that_brought_it_in() {
             assert!(
                 missing.is_empty(),
                 "rows {missing:?} lie wholly inside the port with its first row at {top} and the \
-                 frame that scrolled them there drew {drawn:?}"
+                 output after the frame that scrolled them there shows {drawn:?}"
             );
             for row in want {
                 if !mounted.contains(&row) && !arrived.contains(&row) {

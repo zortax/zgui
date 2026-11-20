@@ -1,9 +1,15 @@
 //! One frame of the application, and what the display list said would be in it.
 
+mod composed;
+
+pub use composed::Tile;
+
 use zgui::geom::{Device, DevicePx, Point, Rect, Size};
 use zgui::render::FrameOutcome;
 use zgui::scene::Scene;
-use zgui_render_wgpu::{Pixels, WgpuRenderer};
+use zgui_render_wgpu::WgpuRenderer;
+
+use crate::device::picture::Picture;
 
 /// Which primitive array a drawing arrived in.
 ///
@@ -32,10 +38,6 @@ pub struct Drawing {
     pub kind: Kind,
     /// What it paints, in device pixels, as the display list measured it.
     pub ink: Rect<DevicePx, Device>,
-    /// The clip chain it draws through.
-    pub clip: u32,
-    /// Whether it is filled, and whether it is stroked.
-    pub painted: (bool, bool),
 }
 
 /// One filled rectangle the display list held.
@@ -54,26 +56,27 @@ pub struct Filled {
     pub bounds: Rect<DevicePx, Device>,
 }
 
-/// One glyph the display list held.
+/// One glyph sprite the compositor drew.
 ///
-/// The tile is what makes this an assertion about *which* letters were drawn. A glyph is rasterised
-/// once per face, size and glyph index and cached under that key, so two runs of the same string in
-/// the same style read the same tiles in the same order — and two different strings do not.
-///
-/// The bounds are where the ink *lands*, which for text under a transform is not the rectangle the
-/// display list recorded. See [`placed`].
+/// The bounds are where the ink lands, with the sprite's transform applied.
 #[derive(Clone, Copy, Debug)]
 pub struct Glyph {
     /// Where it lands, in device pixels.
     pub bounds: Rect<DevicePx, Device>,
-    /// Which texture of which pool holds its coverage, and which allocation in it.
-    pub tile: (u32, u32),
+    /// The atlas tile holding its coverage.
+    pub tile: Tile,
 }
 
 /// What one of the application's frames produced.
+///
+/// A frame of zgui's own renderer is read off its display list, which holds vector content, images
+/// and groups but no boxes or text. A frame of the compositor is read off the compositor's
+/// transcript, and its pass counts are zero.
 pub struct Frame {
-    /// The composed target, read back off the device.
-    pub pixels: Pixels,
+    /// Whether the frame drew nothing at all.
+    pub blank: bool,
+    /// The presented target, read back off the device.
+    pub pixels: Picture,
     /// Every primitive only a drawing produces: each vector item, then each colour sprite, then
     /// each mark item.
     pub drawings: Vec<Drawing>,
@@ -85,7 +88,7 @@ pub struct Frame {
     /// Every glyph it held, in painting order.
     pub glyphs: Vec<Glyph>,
     /// The persistent target frames are composed into, which is what a surface shows.
-    pub composed: Pixels,
+    pub composed: Picture,
     /// How many rasterisation passes the frame planned.
     pub passes: usize,
     /// How many vector items the damage cull dropped.
@@ -109,8 +112,6 @@ impl Frame {
                 order,
                 kind: Kind::Vector,
                 ink: item.ink,
-                clip: item.clip.0,
-                painted: (item.fill.is_some(), item.stroke.is_some()),
             })
             .collect();
         // A drawing on the CPU layer route arrives as one colour sprite.
@@ -119,8 +120,6 @@ impl Frame {
                 order,
                 kind: Kind::Colour,
                 ink: placed(scene, sprite.bounds, sprite.transform),
-                clip: sprite.clip,
-                painted: (true, false),
             },
         ));
         // A shape the marks route recognised arrives as one mark item.
@@ -134,8 +133,6 @@ impl Frame {
                     order,
                     kind: Kind::Mark,
                     ink: placed(scene, mark.bounds, mark.transform),
-                    clip: mark.clip,
-                    painted: (true, false),
                 }),
         );
         let mut shapes = drawings.clone();
@@ -149,8 +146,6 @@ impl Frame {
                     order,
                     kind: Kind::Quad,
                     ink: placed(scene, quad.bounds, quad.transform),
-                    clip: quad.clip,
-                    painted: (!quad.fill.is_none(), !quad.stroke.is_none()),
                 }),
         );
         shapes.extend(
@@ -163,8 +158,6 @@ impl Frame {
                     order,
                     kind: Kind::Mask,
                     ink: placed(scene, sprite.bounds, sprite.transform),
-                    clip: sprite.clip,
-                    painted: (true, false),
                 }),
         );
         let quads = scene
@@ -177,38 +170,18 @@ impl Frame {
                 bounds: placed(scene, quad.bounds, quad.transform),
             })
             .collect();
-        // All three sprite arrays, because which one a glyph lands in is the renderer's decision
-        // about coverage and not a property of the text: a fixture that read only the monochrome
-        // ones would see no letters at all on a machine that shapes them subpixel-antialiased.
-        let mut glyphs: Vec<Glyph> = Vec::new();
-        glyphs.extend(scene.primitives.mono_sprites.iter().map(|sprite| Glyph {
-            bounds: placed(scene, sprite.bounds, sprite.transform),
-            tile: (sprite.tile.texture, sprite.tile.tile),
-        }));
-        glyphs.extend(
-            scene
-                .primitives
-                .subpixel_sprites
-                .iter()
-                .map(|sprite| Glyph {
-                    bounds: placed(scene, sprite.bounds, sprite.transform),
-                    tile: (sprite.tile.texture, sprite.tile.tile),
-                }),
-        );
-        glyphs.extend(scene.primitives.color_sprites.iter().map(|sprite| Glyph {
-            bounds: placed(scene, sprite.bounds, sprite.transform),
-            tile: (sprite.tile.texture, sprite.tile.tile),
-        }));
-
         Self {
-            pixels: renderer
-                .read_presented()
-                .expect("these fixtures draw to a texture, which can be read back"),
-            composed: renderer.read_composed(),
+            blank: scene.primitives.is_empty(),
+            pixels: Picture::of_scene(
+                &renderer
+                    .read_presented()
+                    .expect("these fixtures draw to a texture, which can be read back"),
+            ),
+            composed: Picture::of_scene(&renderer.read_composed()),
             drawings,
             shapes,
             quads,
-            glyphs,
+            glyphs: Vec::new(),
             pass_regions: plan
                 .passes
                 .iter()

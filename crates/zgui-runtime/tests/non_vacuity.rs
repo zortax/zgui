@@ -34,7 +34,8 @@ fn the_counters_are_compiled_into_this_build() {
 /// A scrollport with rows in it, one of which can be lit.
 const CSS: &str = "root { display: block; width: 400px; height: 300px; overflow: scroll }
                    .row { display: block; width: 400px; height: 20px; background-color: #202020 }
-                   .lit { background-color: #f0f0f0 }";
+                   .lit { background-color: #f0f0f0 }
+                   .icon { display: block; width: 10px; height: 10px }";
 
 /// How many rows a document has to hold before it reaches past the bottom of the scrollport.
 ///
@@ -47,6 +48,8 @@ const OVERFLOWING: usize = 60;
 const LIT_ROW: usize = 3;
 
 /// A document of `rows` rows, the fourth of which carries `lit`.
+///
+/// Every row holds a label and an icon.
 fn document(
     rows: usize,
     lit: RwSignal<bool>,
@@ -58,7 +61,19 @@ fn document(
             if index == LIT_ROW {
                 row = row.class_toggle(ClassName::new("lit"), move || lit.get());
             }
-            root = root.child(row.child(zgui_elements::text().child(format!("row {index}"))));
+            // The icon is drawn through the scene, which is what bumps the counter of primitives
+            // emitted.
+            let icon = zgui_elements::vector()
+                .class("icon")
+                .view_box(0.0, 0.0, 24.0, 24.0)
+                .paths([
+                    zgui_elements::kurbo::BezPath::from_svg("M0 0 L24 0 L24 24 Z")
+                        .expect("the fixture parses"),
+                ]);
+            root = root.child(
+                row.child(zgui_elements::text().child(format!("row {index}")))
+                    .child(icon),
+            );
         }
         Box::new(root.into_view().build(cx))
     })

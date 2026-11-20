@@ -65,23 +65,20 @@ fn labelled_button() -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
 /// Draws one whole frame the way a window that has just been uncovered does.
 ///
 /// The occlusion pair is the real path to a full redraw: nothing observed what the compositor did
-/// to the surface while it was hidden, so everything is emitted again. That is what makes the
-/// display list afterwards an answer to "what would be on the screen" rather than to "what changed
-/// since the last frame".
+/// to the surface while it was hidden, so everything is emitted again. The drawing afterwards then
+/// shows what the pipeline produces now, rather than what it recorded before the frame.
 fn redraw_whole(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>) {
     harness.deliver_to_first(SurfaceEvent::Occluded(true));
     harness.deliver_to_first(SurfaceEvent::Occluded(false));
     harness.pump();
 }
 
-/// The tints of the glyph sprites in the last frame the window drew.
+/// The colours of the glyph sprites the window shows.
 fn glyphs(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<[f32; 4]> {
-    harness.app().windows()[0]
-        .scene()
-        .primitives
-        .mono_sprites
+    support::drawing(&harness.app().windows()[0])
+        .glyphs()
         .iter()
-        .map(|sprite| sprite.color)
+        .filter_map(|glyph| glyph.color("paint"))
         .collect()
 }
 

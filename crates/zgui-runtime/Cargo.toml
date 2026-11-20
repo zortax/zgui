@@ -79,6 +79,8 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 # A renderer that records instead of drawing, so the whole loop runs with no graphics device.
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+# The compositor a window draws through in the tests, and what its output shows.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [lints]
 workspace = true

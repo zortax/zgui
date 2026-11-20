@@ -125,7 +125,7 @@ fn carets(stage: &Stage, node: NodeId) -> Vec<Rect<DevicePx, Device>> {
 }
 
 /// Which glyphs the last frame drew inside `node`, left to right.
-fn spelling(stage: &Stage, node: NodeId) -> Vec<(u32, u32)> {
+fn spelling(stage: &Stage, node: NodeId) -> Vec<crate::device::frame::Tile> {
     stage
         .glyphs_in(stage.rect_of(node))
         .into_iter()

@@ -63,6 +63,11 @@ impl CompositorRenderer {
         }
     }
 
+    /// Returns the renderer the compositor's frames are drawn with.
+    pub fn renderer(&self) -> &dyn compositor_api::Renderer {
+        &*self.renderer
+    }
+
     /// Returns the output the window draws into.
     pub fn output(&self) -> OutputId {
         self.output

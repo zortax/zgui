@@ -7,24 +7,29 @@
 //!
 //! Every claim below is a **differential against the same document scrolled the same way**, with
 //! one thing changed: whether the renderer says it keeps composed pixels, or whether the document
-//! is one whose port may be moved. A bare assertion that "few primitives were emitted" would be
-//! equally true of a scroll that moved nothing, so the control is always a run in which the number
-//! is large.
-//!
-//! Its own test target because the counters are one process-wide block.
+//! is one whose port may be moved. What is measured is the area the frames of the glide were
+//! damaged over. A bare assertion that "little was damaged" would be equally true of a scroll that
+//! moved nothing, so the control is always a run in which the number is large.
 
 mod support;
 
-use zgui_geom::{Css, CssPx, Point};
-use zgui_platform::SurfaceEvent;
-use zgui_testkit_scene::counters::Recording;
-use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
+use std::cell::Cell;
+use std::rc::Rc;
+use std::sync::Arc;
 
+use zgui_bits::DamageSet;
+use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::Surface;
+use zgui_platform::SurfaceEvent;
 use zgui_platform_headless::Harness;
-use zgui_render::{RenderTarget, Renderer};
+use zgui_render::{
+    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
+    ScrollShift, TextureHandle,
+};
 use zgui_runtime::{App, AppError, Runtime};
+use zgui_scene::Scene;
 use zgui_view::{Anchor, BuildCx};
+use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
 
 /// A list of fixed-height rows inside a scrollport a fraction of their height.
 ///
@@ -49,47 +54,103 @@ const ROW: f32 = 20.0;
 /// How many frames of motion each wheel turn is carried for.
 const FRAMES: usize = 24;
 
-/// What `App::with_renderer` takes.
-type Factory = Box<dyn Fn(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, AppError>>;
+/// The window's area in device pixels, which is what a full-surface damage set costs.
+const SURFACE_AREA: i64 = 400 * 300;
 
-/// A renderer that records the display list and claims to keep the pixels it composed.
-fn shifting(
-    _surface: &Arc<dyn Surface>,
-    target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_scene::CaptureRenderer::new().shifting();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
+/// The area every frame of a window was damaged over, summed, in device pixels.
+type Damaged = Rc<Cell<i64>>;
+
+/// A capture renderer that adds the area of every frame's damage to a sum.
+struct Measured {
+    /// The renderer the frames are drawn with.
+    inner: zgui_testkit_scene::CaptureRenderer,
+    /// The sum.
+    damaged: Damaged,
 }
 
-/// The same renderer without that claim: the control for every measurement here.
-fn plain(_surface: &Arc<dyn Surface>, target: RenderTarget) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
-}
+impl Renderer for Measured {
+    fn capabilities(&self) -> RenderCapabilities {
+        self.inner.capabilities()
+    }
 
-use std::sync::Arc;
+    fn configure(&mut self, target: RenderTarget) {
+        self.inner.configure(target);
+    }
+
+    fn target(&self) -> Option<RenderTarget> {
+        self.inner.target()
+    }
+
+    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+        let area = damage.area().unwrap_or(SURFACE_AREA);
+        self.damaged.set(self.damaged.get() + area);
+        self.inner.draw(scene, damage)
+    }
+
+    fn shifts_composed_pixels(&self) -> bool {
+        self.inner.shifts_composed_pixels()
+    }
+
+    fn shift_composed(&mut self, shift: ScrollShift) {
+        self.inner.shift_composed(shift);
+    }
+
+    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
+        self.inner.register_external(texture)
+    }
+
+    fn release_external(&mut self, handle: TextureHandle) {
+        self.inner.release_external(handle);
+    }
+
+    fn memory(&self) -> MemoryReport {
+        self.inner.memory()
+    }
+
+    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
+        self.inner.texture_sink()
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        Some(&mut self.inner)
+    }
+
+    fn as_any(&self) -> Option<&dyn core::any::Any> {
+        Some(&self.inner)
+    }
+}
 
 /// A window holding one scroll container, with `port_class` on it, `overlay` drawn over it, and
-/// `backing_class` on the box the port is composited over.
+/// `backing_class` on the box the port is composited over, with the sum of its damage.
+///
+/// When `shifts` is set, the renderer claims to keep the pixels it composed.
 fn listing(
     rows: usize,
     port_class: &'static str,
     overlay: bool,
     shifts: bool,
     backing_class: &'static str,
-) -> Harness<Runtime> {
-    let renderer: Factory = if shifts {
-        Box::new(shifting)
-    } else {
-        Box::new(plain)
+) -> (Harness<Runtime>, Damaged) {
+    let damaged = Damaged::default();
+    let sum = Rc::clone(&damaged);
+    let renderer = move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
+        let inner = if shifts {
+            zgui_testkit_scene::CaptureRenderer::new().shifting()
+        } else {
+            zgui_testkit_scene::CaptureRenderer::new()
+        };
+        let mut renderer = Measured {
+            inner,
+            damaged: Rc::clone(&sum),
+        };
+        renderer.configure(target);
+        Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
     };
     let handler = App::new()
         .with_title("scroll-shift")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_renderer(renderer)
+        .with_renderer(Box::new(renderer))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
                 zgui_testkit_scene::MonoShaper::new(),
@@ -112,7 +173,7 @@ fn listing(
             Box::new(root.into_view().build(cx))
         })
         .expect("the reactive runtime installs");
-    Harness::new(handler)
+    (Harness::new(handler), damaged)
 }
 
 /// Turns the wheel over the container and carries the detent to its destination.
@@ -135,8 +196,8 @@ fn wheel(harness: &mut Harness<Runtime>, lines: f32) {
     harness.settle(4);
 }
 
-/// How many primitives a whole wheel turn emitted, and how far the list actually travelled.
-fn turn(rows: usize, port_class: &'static str, overlay: bool, shifts: bool) -> (u64, f32) {
+/// How much area a whole wheel turn damaged, and how far the list actually travelled.
+fn turn(rows: usize, port_class: &'static str, overlay: bool, shifts: bool) -> (i64, f32) {
     backed(rows, port_class, overlay, shifts, "")
 }
 
@@ -147,15 +208,14 @@ fn backed(
     overlay: bool,
     shifts: bool,
     backing_class: &'static str,
-) -> (u64, f32) {
-    let mut harness = listing(rows, port_class, overlay, shifts, backing_class);
+) -> (i64, f32) {
+    let (mut harness, damaged) = listing(rows, port_class, overlay, shifts, backing_class);
     harness.settle(16);
     let before = topmost_row(&harness);
-    let mark = zgui_profile::counter::snapshot();
+    let mark = damaged.get();
     wheel(&mut harness, 3.0);
-    let moved = mark.delta(&zgui_profile::counter::snapshot());
     let travelled = before - topmost_row(&harness);
-    (moved.primitives_emitted, travelled)
+    (damaged.get() - mark, travelled)
 }
 
 /// The top edge of the topmost row, in device pixels.
@@ -191,9 +251,7 @@ fn topmost_row(harness: &Harness<Runtime>) -> f32 {
 }
 
 #[test]
-fn a_shiftable_scroll_emits_the_band_and_not_the_port() {
-    let _recording = Recording::begin();
-
+fn a_shiftable_scroll_damages_the_band_and_not_the_port() {
     let (with_shift, travelled) = turn(200, "", false, true);
     let (without, control_travel) = turn(200, "", false, false);
 
@@ -206,18 +264,15 @@ fn a_shiftable_scroll_emits_the_band_and_not_the_port() {
         "both runs must scroll the same distance or the counts are not comparable: \
          {travelled} against {control_travel}",
     );
-    // The control. Without the claim the frame damages the whole port and emits it, every frame of
-    // the glide — which is the cost this whole phase exists to remove.
+    // The control. Without the claim the frame damages the whole port, every frame of the glide —
+    // which is the cost this whole phase exists to remove.
     assert!(
-        without > 100,
+        without > 400 * 280,
         "the unshifted run is the positive control and has to be expensive: {without}",
     );
-    // Two-thirds rather than half: the port run is a moving target. Complete-chunk replay made
-    // the unshifted port cheaper as well — edge rows replay instead of re-encoding through the
-    // cut-record path — so the band's margin over it narrowed while both runs improved.
     assert!(
         with_shift * 3 < without * 2,
-        "a scroll whose pixels can be moved must emit substantially less than one whose cannot: \
+        "a scroll whose pixels can be moved must damage substantially less than one whose cannot: \
          {with_shift} against {without}",
     );
     assert!(
@@ -231,8 +286,6 @@ fn a_shiftable_scroll_emits_the_band_and_not_the_port() {
 /// plain page is moved, and the same list over a gradient is not.
 #[test]
 fn what_shows_through_the_port_has_to_be_flat() {
-    let _recording = Recording::begin();
-
     let (over_flat, _) = backed(200, "bare", false, true, "");
     let (over_gradient, _) = backed(200, "bare", false, true, "patterned");
 
@@ -246,13 +299,9 @@ fn what_shows_through_the_port_has_to_be_flat() {
 /// And the container's own opaque background is enough on its own, whatever is behind it.
 #[test]
 fn an_opaque_port_needs_nothing_of_what_is_behind_it() {
-    let _recording = Recording::begin();
-
     let (opaque_over_gradient, _) = backed(200, "", false, true, "patterned");
     let (control, _) = backed(200, "", false, false, "patterned");
 
-    // Two-thirds rather than half, for the same reason as the band assertion above: the control
-    // run's port emission fell with complete-chunk replay.
     assert!(
         opaque_over_gradient * 3 < control * 2,
         "an opaque port hides the gradient, so what is behind it cannot reach the composite: \
@@ -262,8 +311,6 @@ fn an_opaque_port_needs_nothing_of_what_is_behind_it() {
 
 #[test]
 fn something_drawn_over_the_port_refuses_the_shift() {
-    let _recording = Recording::begin();
-
     let (clear, _) = turn(200, "", false, true);
     let (overdrawn, _) = turn(200, "", true, true);
 
@@ -282,9 +329,7 @@ fn something_drawn_over_the_port_refuses_the_shift() {
 /// frame that owes it only the band the move uncovered never draws it again.
 #[test]
 fn the_port_moved_is_where_the_list_stands() {
-    let _recording = Recording::begin();
-
-    let mut harness = listing(200, "away", false, true, "");
+    let (mut harness, _) = listing(200, "away", false, true, "");
     harness.settle(16);
     wheel(&mut harness, 3.0);
 

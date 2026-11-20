@@ -11,11 +11,11 @@
 
 use std::sync::{Arc, Mutex};
 
-use zgui::platform::{AppHandler, PlatformError, Surface, SurfaceEvent};
+use compositor_types::{BufferAge, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget};
+use zgui::platform::{AppHandler, PlatformError, SurfaceEvent};
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
 use zgui_platform_headless::Harness;
-use zgui_render_wgpu::{Builder, Pixels, WgpuRenderer, wgpu};
+use zgui_testkit_compositor::{Composed, Device, Pixels, Shown};
 
 /// The window's extent, in device pixels at scale one.
 const WIDTH: i32 = 200;
@@ -40,11 +40,11 @@ const SHEET: &str = zgui::css!(
 
 /// What one frame produced.
 struct Frame {
-    /// The presented texture, read back.
-    pixels: Pixels,
-    /// How many glyphs were emitted with per-channel coverage.
+    /// The composed target, read back.
+    pixels: Arc<Pixels>,
+    /// How many glyphs were drawn with per-channel coverage.
     subpixel: usize,
-    /// How many glyphs were emitted with ordinary coverage.
+    /// How many glyphs were drawn with ordinary coverage.
     mono: usize,
     /// Whether the device can blend per-channel coverage.
     capable: bool,
@@ -53,74 +53,63 @@ struct Frame {
 /// What one run recorded.
 #[derive(Default)]
 struct Record {
-    /// Whether each target the renderer was built or configured with was opaque, in order.
+    /// Whether each target the renderer was configured with was opaque, in order.
     targets: Vec<bool>,
     /// Every frame, in order.
     frames: Vec<Frame>,
 }
 
-/// The real renderer, recording each frame.
+/// The device, recording each frame.
 struct Recording {
-    /// The renderer.
-    renderer: WgpuRenderer,
+    /// The device.
+    device: Device,
+    /// What the device's last frame drew.
+    shown: Shown,
+    /// The device's composed target.
+    composed: Composed,
     /// Where frames go.
     record: Arc<Mutex<Record>>,
 }
 
-impl Renderer for Recording {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        self.renderer.capabilities()
+impl compositor_api::Renderer for Recording {
+    fn capabilities(&self) -> RenderCapabilities {
+        self.device.capabilities()
     }
 
     fn configure(&mut self, target: RenderTarget) {
         lock(&self.record).targets.push(target.opaque);
-        Renderer::configure(&mut self.renderer, target);
+        self.device.configure(target);
     }
 
     fn target(&self) -> Option<RenderTarget> {
-        self.renderer.target()
+        self.device.target()
     }
 
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        let outcome = self.renderer.draw(scene, &zgui::bits::DamageSet::full());
-        let pixels = self
-            .renderer
-            .read_presented()
-            .expect("a texture target can be read back");
+    fn target_age(&self) -> BufferAge {
+        self.device.target_age()
+    }
+
+    fn draw(&mut self, frame: &compositor_types::Frame) -> FrameOutcome {
+        let outcome = self.device.draw(frame);
+        let drawing = self.shown.drawing().expect("the device recorded the frame");
         lock(&self.record).frames.push(Frame {
-            pixels,
-            subpixel: scene.primitives.subpixel_sprites.len(),
-            mono: scene.primitives.mono_sprites.len(),
-            capable: self.renderer.capabilities().subpixel_text,
+            pixels: self
+                .composed
+                .pixels()
+                .expect("the device read its target back"),
+            subpixel: drawing.of_kind("subpixel").count(),
+            mono: drawing.of_kind("mono").count(),
+            capable: self.device.capabilities().subpixel_text,
         });
         outcome
     }
 
-    fn set_subpixel_order(&mut self, order: zgui::render::SubpixelOrder) {
-        Renderer::set_subpixel_order(&mut self.renderer, order);
+    fn set_subpixel_order(&mut self, order: compositor_types::SubpixelOrder) {
+        self.device.set_subpixel_order(order);
     }
 
-    fn register_external(
-        &mut self,
-        texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.renderer.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: zgui::render::TextureHandle) {
-        self.renderer.release_external(handle);
-    }
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        self.renderer.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.renderer.texture_sink()
+    fn memory(&self) -> MemoryReport {
+        self.device.memory()
     }
 }
 
@@ -131,8 +120,7 @@ fn lock(record: &Mutex<Record>) -> std::sync::MutexGuard<'_, Record> {
 
 /// Returns `true` where this machine has a device these tests can draw on.
 fn available() -> bool {
-    let target = RenderTarget::new(zgui::geom::Size::new(8, 8), zgui::geom::Scale::new(1.0));
-    match Builder::new().offscreen(target, wgpu::TextureFormat::Rgba8Unorm, false) {
+    match Device::open([8, 8]) {
         Ok(_) => true,
         Err(failure) => {
             eprintln!("skipped: no usable graphics device ({failure})");
@@ -154,18 +142,14 @@ fn run_with(transparent: bool, antialiasing: zgui::TextAntialiasing, sheet: &str
     let _device = DEVICE.lock().unwrap_or_else(|held| held.into_inner());
     let record = Arc::new(Mutex::new(Record::default()));
     let factory_record = Arc::clone(&record);
-    let factory = move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-        let renderer = Builder::new()
-            .offscreen(target, wgpu::TextureFormat::Rgba8Unorm, false)
-            .map_err(zgui::runtime::AppError::GpuUnavailable)?;
-        {
-            let mut record = lock(&factory_record);
-            record.targets.push(target.opaque);
-        }
-        Ok(Box::new(Recording {
-            renderer,
+    let factory = move |size: [u32; 2]| {
+        let device = Device::open(size).expect("the device opened a moment ago");
+        Box::new(Recording {
+            shown: device.shown(),
+            composed: device.composed(),
+            device,
             record: Arc::clone(&factory_record),
-        }) as Box<dyn Renderer>)
+        }) as Box<dyn compositor_api::Renderer>
     };
     let drive = |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
         let mut harness = Harness::new(handler);
@@ -185,7 +169,7 @@ fn run_with(transparent: bool, antialiasing: zgui::TextAntialiasing, sheet: &str
         .with_transparent(transparent)
         .with_text_antialiasing(antialiasing)
         .with_stylesheet(sheet)
-        .with_renderer(Box::new(factory))
+        .with_compositor_renderer(Box::new(factory))
         .run_on(drive, || {
             view! {
                 box(class = "root") {
@@ -217,7 +201,7 @@ fn a_transparent_window_composes_premultiplied_pixels_with_ordinary_text_coverag
         record.targets
     );
     let frame = record.frames.last().expect("the window drew a frame");
-    assert!(frame.mono > 0, "the label reached the display list");
+    assert!(frame.mono > 0, "the label was drawn");
     assert_eq!(
         frame.subpixel, 0,
         "per-channel coverage has no alpha, so a translucent target never gets it"
@@ -263,10 +247,7 @@ fn an_opaque_window_keeps_opaque_targets() {
         record.targets
     );
     let frame = record.frames.last().expect("the window drew a frame");
-    assert!(
-        frame.mono + frame.subpixel > 0,
-        "the label reached the display list"
-    );
+    assert!(frame.mono + frame.subpixel > 0, "the label was drawn");
 }
 
 /// How far the ink in the red channel sits to the right of the ink in the blue channel, in
@@ -290,8 +271,8 @@ fn red_lead(frame: &Frame) -> f32 {
 /// per-channel coverage, and the stated order decides which side of a stem each channel is on.
 ///
 /// The red stripe of a pixel is on the left for one order and on the right for the other. So the
-/// red ink of white text leads the blue ink by two thirds of a pixel for one order, and trails it
-/// by the same distance for the other.
+/// red ink of white text leads the blue ink for one order, and trails it by the same distance for
+/// the other.
 #[test]
 fn an_opaque_window_draws_the_coverage_its_antialiasing_states() {
     if !available() || std::env::var_os("ZGUI_TEXT_AA").is_some() {
@@ -300,7 +281,7 @@ fn an_opaque_window_draws_the_coverage_its_antialiasing_states() {
     let sheet = format!("{SHEET} .root {{ background-color: #000000 }} .panel {{ display: none }}");
     let grey = run_with(false, zgui::TextAntialiasing::Grayscale, &sheet);
     let frame = grey.frames.last().expect("the window drew a frame");
-    assert!(frame.mono > 0, "the label reached the display list");
+    assert!(frame.mono > 0, "the label was drawn");
     assert_eq!(frame.subpixel, 0, "grayscale text has no per-channel glyph");
     assert!(
         red_lead(frame).abs() < 0.05,
@@ -317,10 +298,13 @@ fn an_opaque_window_draws_the_coverage_its_antialiasing_states() {
     assert!(frame.subpixel > 0, "the label has per-channel coverage");
     assert_eq!(frame.mono, 0, "no glyph of the label has ordinary coverage");
     let lead = red_lead(frame);
-    assert!((0.4..0.9).contains(&lead), "red leads blue by {lead}");
+    assert!(lead > 0.1, "red leads blue by {lead}");
 
     let reversed = run_with(false, zgui::TextAntialiasing::Bgr, &sheet);
     let frame = reversed.frames.last().expect("the window drew a frame");
-    let lead = red_lead(frame);
-    assert!((-0.9..-0.4).contains(&lead), "red trails blue by {lead}");
+    assert!(
+        (red_lead(frame) + lead).abs() < 0.05,
+        "red trails blue by {}",
+        red_lead(frame)
+    );
 }

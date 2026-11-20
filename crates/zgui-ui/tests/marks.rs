@@ -38,6 +38,7 @@ use zgui::view::{AnyView, NodeId, NodeRef};
 use zgui_ui::prelude::*;
 use zgui_ui_tokens::prelude::*;
 
+use crate::device::Pipeline;
 use crate::painted::stage::Stage;
 
 /// The page the fixtures are laid out on.
@@ -57,10 +58,11 @@ const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-fam
 /// this size. The defect this measures is five pixels.
 const SLACK: f32 = 1.5;
 
-/// Opens `view`, or reports the run skipped on a machine with no graphics device.
+/// Opens `view` on zgui's own renderer, which draws the marks, or reports the run skipped on a
+/// machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        match Stage::open(SHEET, $view) {
+        match Stage::open_on(Pipeline::Scene, SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");

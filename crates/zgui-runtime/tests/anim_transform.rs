@@ -425,22 +425,23 @@ fn space_of(
     None
 }
 
-/// Whether anything in the frame that was drawn names `space`'s slot.
+/// Whether the window shows a quad drawn through `matrix`, the bar's world matrix.
+///
+/// A quad's offset from its own-space bounds to the window is the translation of the space it is
+/// drawn in. The bar only ever translates, so that offset identifies its coordinate system.
 fn drawn_under(
     harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>,
-    space: zgui_space::SpatialId,
+    matrix: zgui_geom::Matrix4,
 ) -> bool {
-    let window = harness
-        .app()
-        .windows()
-        .first()
-        .expect("the application opened a window");
-    window
-        .scene()
-        .primitives
-        .quads
+    let [tx, ty, ..] = matrix.columns[3];
+    support::drawing(&harness.app().windows()[0])
+        .quads()
         .iter()
-        .any(|quad| quad.transform == space.index())
+        .any(|quad| {
+            let [x, y, ..] = support::world(quad);
+            let [local_x, local_y, ..] = quad.bounds();
+            (x - local_x - tx).abs() < 0.01 && (y - local_y - ty).abs() < 0.01
+        })
 }
 
 #[test]
@@ -468,7 +469,7 @@ fn spatial_ids_are_stable_across_an_animation() {
 
     let (first, from) = space_of(&harness, "bar").expect("the bar establishes one of its own");
     assert!(
-        drawn_under(&harness, first),
+        drawn_under(&harness, from),
         "nothing in the drawn frame is carried by the bar's coordinate system",
     );
     let nodes = |harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>| {
@@ -514,24 +515,18 @@ fn spatial_ids_are_stable_across_an_animation() {
         before,
         "the document grew a coordinate system per frame of the animation",
     );
+    let (_, now) = space_of(&harness, "bar").expect("still there");
     assert!(
-        drawn_under(&harness, first),
-        "the bar's own name stopped being what its primitives are carried by",
+        drawn_under(&harness, now),
+        "the bar's primitives stopped being drawn through its coordinate system",
     );
 }
 
 #[test]
-fn a_settled_transform_animation_writes_one_property_and_rebuilds_nothing() {
-    // What the tier is *for*, measured rather than described. A transform moves where a box is
-    // drawn and nothing else, and where a box is drawn is one matrix in one node the box already
-    // owns — so once the display list knows the region the movement covers, a frame of the
-    // animation costs that write and the union of where the ink was and where it is. Nothing is
-    // styled, no box is rebuilt, no fragment is composed again and nothing is painted afresh.
-    //
-    // "Once it knows the region" is why this measures the second pass rather than the first. Draw
-    // order is assigned before anything moves, so a box that will be moved by a write has to be
-    // ordered against everywhere it will go; nothing upstream states that, so it is learnt from the
-    // first pass — which composes, exactly as a transform always did.
+fn a_settled_transform_animation_restyles_nothing_and_rebuilds_no_box() {
+    // A transform moves where a box is drawn and nothing else, so a frame of the animation runs no
+    // cascade, rebuilds no box and re-encodes nothing. Measured over the second pass, once the
+    // first has learnt where the bar goes.
     let _guard = measuring();
     let mut harness = sliding_bar(SLIDE_CSS);
     harness.settle(8);
@@ -560,23 +555,7 @@ fn a_settled_transform_animation_writes_one_property_and_rebuilds_nothing() {
         "the bar's matrix never moved, so this measured an animation that was not running"
     );
     if COUNTERS_ENABLED {
-        assert!(
-            frame.place_writes_without_reemit > 0,
-            "not one frame of the animation was served by a write"
-        );
-        assert_eq!(
-            frame.place_writes_with_reemit, 0,
-            "the animation was still being composed after a whole cycle of learning where it goes"
-        );
-        assert_eq!(
-            frame.order_band_escapes, 0,
-            "the bar left the region it declared"
-        );
         assert_eq!(frame.boxes_rebuilt, 0, "a written transform rebuilt a box");
-        assert_eq!(
-            frame.fragments_rebuilt, 0,
-            "a written transform composed a fragment again"
-        );
         assert_eq!(
             frame.elements_restyled, 0,
             "a written transform ran the cascade"

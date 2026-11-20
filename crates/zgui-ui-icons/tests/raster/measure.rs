@@ -50,7 +50,8 @@ pub enum Level {
     Near,
     /// Exactly the second.
     Far,
-    /// Somewhere between the two on every channel, which is what a coverage value looks like.
+    /// Somewhere between the two on every channel where they differ, which is what a coverage
+    /// value looks like.
     Between,
     /// Neither, and not between them either.
     Other,
@@ -65,13 +66,15 @@ pub fn level(pixels: &Pixels, x: i32, y: i32, ink: [u8; 4], background: [u8; 4])
     if found == far {
         return Level::Far;
     }
-    let between = (0..3).all(|channel| {
-        let (low, high) = (
-            near[channel].min(far[channel]),
-            near[channel].max(far[channel]),
-        );
-        found[channel] > low && found[channel] < high
-    });
+    let between = (0..4)
+        .filter(|&channel| near[channel] != far[channel])
+        .all(|channel| {
+            let (low, high) = (
+                near[channel].min(far[channel]),
+                near[channel].max(far[channel]),
+            );
+            found[channel] > low && found[channel] < high
+        });
     if between {
         Level::Between
     } else {

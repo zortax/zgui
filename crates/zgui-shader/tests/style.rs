@@ -12,10 +12,15 @@ extern crate zgui_shader as zgui;
 
 use std::sync::Arc;
 
+use compositor_types::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
+use zgui_runtime::compositor::CompositorRenderer;
 use zgui_runtime::{App, AppError, Runtime};
 use zgui_shader::{NoParams, ShaderEffect, ShaderParams, shader};
+use zgui_testkit_compositor::{Instance, Screen};
 use zgui_view::{BuildCx, IntoView, View};
 
 /// What the smoothing effect draws with.
@@ -54,7 +59,44 @@ static WASH: ShaderEffect<NoParams> = shader! {
     "#,
 };
 
-/// An application whose window records rather than draws.
+/// A screen that reports it runs application shaders.
+#[derive(Debug, Default)]
+struct Shading(Screen);
+
+impl compositor_api::Renderer for Shading {
+    fn capabilities(&self) -> RenderCapabilities {
+        RenderCapabilities {
+            custom_shaders: true,
+            ..self.0.capabilities()
+        }
+    }
+
+    fn configure(&mut self, target: RenderTarget) {
+        self.0.configure(target);
+    }
+
+    fn target(&self) -> Option<RenderTarget> {
+        self.0.target()
+    }
+
+    fn target_age(&self) -> BufferAge {
+        self.0.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        self.0.draw(frame)
+    }
+
+    fn memory(&self) -> MemoryReport {
+        self.0.memory()
+    }
+
+    fn as_any(&self) -> Option<&dyn core::any::Any> {
+        Some(self)
+    }
+}
+
+/// An application whose window draws through a compositor onto a screen that records.
 fn app(css: &str) -> Harness<Runtime> {
     let handler = App::new()
         .with_title("style")
@@ -62,7 +104,10 @@ fn app(css: &str) -> Harness<Runtime> {
         .with_stylesheet(css)
         .with_renderer(Box::new(
             |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = zgui_testkit_scene::CaptureRenderer::new().shading();
+                let compositor =
+                    zgui_testkit_compositor::compositor().expect("the test compositor exists");
+                let mut renderer =
+                    CompositorRenderer::new(compositor, Box::new(Shading::default()));
                 zgui_render::Renderer::configure(&mut renderer, target);
                 Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
             },
@@ -79,13 +124,18 @@ fn app(css: &str) -> Harness<Runtime> {
     Harness::new(handler)
 }
 
-/// The window's shaded rectangles and its ordinary ones.
-fn drawn(app: &mut Harness<Runtime>) -> (Vec<zgui_scene::ShadedQuad>, Vec<zgui_scene::Quad>) {
-    let scene = app.app_mut().windows_mut()[0].scene();
-    (
-        scene.primitives.shaded.clone(),
-        scene.primitives.quads.clone(),
-    )
+/// The window's shaded rectangles from its display list, and the quads its compositor draws.
+fn drawn(app: &mut Harness<Runtime>) -> (Vec<zgui_scene::ShadedQuad>, Vec<Instance>) {
+    let window = &mut app.app_mut().windows_mut()[0];
+    let shaded = window.scene().primitives.shaded.clone();
+    let drawing = window
+        .renderer()
+        .as_any()
+        .and_then(|any| any.downcast_ref::<CompositorRenderer>())
+        .and_then(|bridge| bridge.renderer().as_any()?.downcast_ref::<Shading>())
+        .and_then(|shading| shading.0.drawing())
+        .expect("the window drew a frame through its compositor");
+    (shaded, drawing.quads().into_iter().cloned().collect())
 }
 
 /// A sheet for a card of the given declarations.

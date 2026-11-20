@@ -19,7 +19,7 @@ mod support;
 
 use std::time::Duration;
 
-use zgui_geom::{Css, CssPx, DevicePx, Point, Size};
+use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_platform::SurfaceEvent;
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
@@ -68,6 +68,74 @@ fn cut(window: &zgui_runtime::Window) -> zgui_layout::inline::ellipsis::LineElli
     panic!("no line in the window was cut off at all");
 }
 
+/// The glyph sprites of `drawing` that are drawn at all, which are the ones whose bounds overlap
+/// every rectangle of their clip chain.
+fn shown_glyphs(
+    drawing: &zgui_testkit_compositor::Drawing,
+) -> Vec<&zgui_testkit_compositor::Instance> {
+    drawing
+        .glyphs()
+        .into_iter()
+        .filter(|sprite| {
+            let [x, y, width, height] = support::world(sprite);
+            clip_rects(sprite).iter().all(|[cx, cy, cw, ch]| {
+                x < cx + cw && *cx < x + width && y < cy + ch && *cy < y + height
+            })
+        })
+        .collect()
+}
+
+/// The rectangles of the clip chain of `instance` in window space, outermost first.
+///
+/// # Panics
+///
+/// Panics when a link is drawn through a matrix that is more than a translation.
+fn clip_rects(instance: &zgui_testkit_compositor::Instance) -> Vec<[f32; 4]> {
+    let Some(chain) = instance.field("clip") else {
+        return Vec::new();
+    };
+    let numbers = |list: &str| -> Vec<f32> {
+        list.split(',')
+            .map(|number| {
+                number
+                    .trim()
+                    .parse()
+                    .unwrap_or_else(|_| panic!("`{list}` is not a list of numbers"))
+            })
+            .collect()
+    };
+    let links = chain
+        .strip_prefix('[')
+        .and_then(|rest| rest.strip_suffix(']'))
+        .unwrap_or_else(|| panic!("`{chain}` is not a clip chain"));
+    links
+        .split(" > ")
+        .map(|link| {
+            let inner = link
+                .strip_prefix("rect(")
+                .and_then(|rest| rest.split(')').next())
+                .unwrap_or_else(|| panic!("`{link}` is not a rectangle"));
+            let [x, y, width, height] = numbers(inner)[..] else {
+                panic!("`{link}` is not a rectangle");
+            };
+            let (dx, dy) = match link.split_once(" in=") {
+                None => (0.0, 0.0),
+                Some((_, space)) => {
+                    let offset = space
+                        .strip_prefix("translate[")
+                        .and_then(|rest| rest.strip_suffix(']'))
+                        .unwrap_or_else(|| panic!("`{space}` is not a translation"));
+                    let [dx, dy] = numbers(offset)[..] else {
+                        panic!("`{space}` is not a translation");
+                    };
+                    (dx, dy)
+                }
+            };
+            [x + dx, y + dy, width, height]
+        })
+        .collect()
+}
+
 /// A line too wide for its box is cut on the boundary its clusters put there.
 #[test]
 fn a_window_cuts_a_clipped_line_where_its_clusters_say() {
@@ -99,7 +167,8 @@ fn the_words_that_fit_are_drawn_and_the_mark_stands_after_them() {
 
     let window = &app.app().windows()[0];
     let line = support::first_line_box(window);
-    let sprites = &window.scene().primitives.mono_sprites;
+    let drawing = support::drawing(window);
+    let sprites = shown_glyphs(&drawing);
 
     assert_eq!(
         sprites.len(),
@@ -108,8 +177,8 @@ fn the_words_that_fit_are_drawn_and_the_mark_stands_after_them() {
     );
     for (index, sprite) in sprites.iter().take(KEPT).enumerate() {
         assert_eq!(
-            sprite.ink().origin.x,
-            DevicePx(line.origin.x.0 + index as f32 * ADVANCE),
+            sprite.bounds()[0],
+            line.origin.x.0 + index as f32 * ADVANCE,
             "letter {index} is not at the pen position its own advances put it at"
         );
     }
@@ -118,12 +187,13 @@ fn the_words_that_fit_are_drawn_and_the_mark_stands_after_them() {
         .last()
         .expect("the mark is drawn after the line it marks");
     assert_eq!(
-        mark.ink().origin.x,
-        DevicePx(line.origin.x.0 + KEPT as f32 * ADVANCE),
+        mark.bounds()[0],
+        line.origin.x.0 + KEPT as f32 * ADVANCE,
         "the mark stands where the content was cut"
     );
     assert_ne!(
-        mark.clip, sprites[0].clip,
+        mark.field("clip"),
+        sprites[0].field("clip"),
         "the mark is drawn through the line's untightened clip and the line's own glyphs through \
          the tightened one, so a mark sharing their clip is a twelfth letter rather than a mark"
     );
@@ -146,7 +216,7 @@ fn a_string_mark_is_measured_as_the_string_it_names() {
         "three characters of mark leave room for nine of the twelve"
     );
     assert_eq!(
-        window.scene().primitives.mono_sprites.len(),
+        shown_glyphs(&support::drawing(window)).len(),
         9 + 3,
         "nine letters and a three-character mark"
     );
@@ -183,9 +253,8 @@ fn scrolled_rows_keep_their_words_and_their_marks() {
     });
     app.settle(8);
 
-    // A full repaint before and after, so both counts describe the whole port rather than the
-    // last frame's damage band. Un-occluding damages everything and moves nothing, which is what
-    // makes the second repaint entirely a matter of replays.
+    // A full repaint before and after. Un-occluding damages everything and moves nothing, which
+    // is what makes the second repaint entirely a matter of replays.
     let full_repaint = |app: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>| {
         app.deliver_to_first(SurfaceEvent::Occluded(true));
         app.deliver_to_first(SurfaceEvent::Occluded(false));
@@ -193,7 +262,7 @@ fn scrolled_rows_keep_their_words_and_their_marks() {
     };
     full_repaint(&mut app);
     let rows = 120 / 20;
-    let before = app.app().windows()[0].scene().primitives.mono_sprites.len();
+    let before = shown_glyphs(&support::drawing(&app.app().windows()[0])).len();
     assert_eq!(
         before,
         rows * (KEPT + 1),
@@ -219,7 +288,7 @@ fn scrolled_rows_keep_their_words_and_their_marks() {
     app.settle(8);
 
     full_repaint(&mut app);
-    let after = app.app().windows()[0].scene().primitives.mono_sprites.len();
+    let after = shown_glyphs(&support::drawing(&app.app().windows()[0])).len();
     assert_eq!(
         after, before,
         "a scrolled row lost its words: every replayed line must draw what it drew, moved"
@@ -251,7 +320,7 @@ fn a_line_that_starts_before_its_box_is_cut_at_its_start() {
          content box's start edge"
     );
     assert!(
-        window.scene().primitives.mono_sprites.len() > 1,
+        shown_glyphs(&support::drawing(window)).len() > 1,
         "the words after the cut are still drawn; one sprite is the mark standing alone"
     );
 }

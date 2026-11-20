@@ -1,12 +1,11 @@
 //! The documents the pixels are measured on, and the runs that produce them.
 //!
-//! Four documents, because the questions divide into four: an icon alone on a flat panel, the same
-//! panel with no drawing on it at all, an icon with an opaque box drawn after it, and a turned icon
-//! that takes the general rasteriser.
+//! Three documents, because the questions divide into three: an icon alone on a flat panel, the
+//! same panel with no drawing on it at all, and a turned icon that takes the general rasteriser.
 //!
-//! The panel covers the whole window on purpose. It makes "everything outside the drawing" one flat
-//! colour, which is what lets a scissored repaint be compared to a full one pixel for pixel instead
-//! of only inside the rectangle it promised to redraw.
+//! Everything outside the drawing is one flat colour, which is what lets a scissored repaint be
+//! compared to a full one pixel for pixel instead of only inside the rectangle it promised to
+//! redraw.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -30,18 +29,13 @@ pub const ICON_BOX: f32 = 96.0;
 /// The side of the square the outlines are written in, which is the icon's own view box.
 pub const VIEW_BOX: f32 = 24.0;
 
-/// The panel behind the drawing, which is also every pixel the drawing does not cover.
-pub const PANEL: [u8; 4] = [240, 200, 40, 255];
+/// What the target holds wherever the drawing puts no ink.
+// The panel is a box, and the renderer these fixtures draw through draws no boxes.
+pub const BACKDROP: [u8; 4] = [0, 0, 0, 0];
 
 /// The colour the drawing takes, inherited from the text colour around it and declared nowhere on
 /// the element itself.
 pub const INK: [u8; 4] = [0, 96, 224, 255];
-
-/// The box drawn after the drawing in the layered document.
-pub const LID: [u8; 4] = [0, 0, 0, 255];
-
-/// Where the lid starts, in device pixels from the top of the window.
-pub const LID_TOP: i32 = 64;
 
 /// The centre of the drawing's view box, in device pixels.
 pub fn centre() -> (f64, f64) {
@@ -65,7 +59,6 @@ const SHEET: &str = ":root { background-color: rgb(240, 200, 40); color: rgb(0, 
      .frame { display: flex; flex-direction: column; align-items: flex-start;
               width: 128px; height: 128px; padding: 16px;
               background-color: rgb(240, 200, 40) }
-     .lid { width: 96px; height: 48px; margin-top: -48px; background-color: rgb(0, 0, 0) }
      .turned { transform: rotate(30deg) }";
 
 /// A panel with one icon on it.
@@ -82,17 +75,6 @@ fn Marked() -> impl IntoView {
 #[component]
 fn Bare() -> impl IntoView {
     view! { box(class = "frame") }
-}
-
-/// The same icon with an opaque box drawn after it, covering its lower half.
-#[component]
-fn Layered() -> impl IntoView {
-    view! {
-        box(class = "frame") {
-            Icon(icon = INFO, size = IconSize::Xl)
-            box(class = "lid")
-        }
-    }
 }
 
 /// The icon turned off the axes, which no coverage mask is made for.
@@ -113,14 +95,12 @@ fn buffers(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
     Ok(())
 }
 
-/// Every frame of the four runs.
+/// Every frame of the three runs.
 pub struct Runs {
     /// The panel with an icon on it.
     pub marked: Vec<Recorded>,
     /// The panel with nothing on it.
     pub bare: Vec<Recorded>,
-    /// The icon with a box drawn after it.
-    pub layered: Vec<Recorded>,
     /// The turned icon.
     pub turned: Vec<Recorded>,
 }
@@ -134,7 +114,7 @@ impl Runs {
     }
 }
 
-/// The four runs, performed once however many assertions read them.
+/// The three runs, performed once however many assertions read them.
 ///
 /// `None` when this machine has no graphics device, which every caller says out loud when it skips.
 pub fn runs() -> Option<&'static Runs> {
@@ -147,7 +127,6 @@ pub fn runs() -> Option<&'static Runs> {
         Some(Runs {
             marked: run("marked", || view! { Marked() }),
             bare: run("bare", || view! { Bare() }),
-            layered: run("layered", || view! { Layered() }),
             turned: run("turned", || view! { Turned() }),
         })
     })
@@ -161,7 +140,7 @@ fn run<V: IntoView + 'static>(title: &str, view: impl FnMut() -> V + 'static) ->
         .with_title(title)
         .with_size(SURFACE as f32, SURFACE as f32)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(device::factory(&log, PANEL)))
+        .with_renderer(Box::new(device::factory(&log, BACKDROP)))
         .run_on(buffers, view)
         .expect("the application ran");
     let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
