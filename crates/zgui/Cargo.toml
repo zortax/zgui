@@ -26,7 +26,6 @@ compositor-api.workspace = true
 compositor-core.workspace = true
 compositor-text.workspace = true
 compositor-types.workspace = true
-compositor-vector.workspace = true
 compositor-vello.workspace = true
 compositor-wgpu.workspace = true
 # The tile store, the display list and the damage set: an application that draws through a device

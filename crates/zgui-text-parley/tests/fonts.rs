@@ -278,3 +278,21 @@ fn the_constructors_select_the_two_enumeration_modes() {
         FontSystemOptions::registered_only()
     );
 }
+
+/// The compositor reads a face from the same font file the font system holds, without a copy.
+#[test]
+fn the_compositor_registry_shares_the_font_file_of_each_face() {
+    use compositor_api::FontRegistry;
+    use compositor_types::FontId;
+
+    let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
+    let file = support::face("NotoSans-Regular.ttf");
+    let faces = fonts
+        .register(Arc::clone(&file), None)
+        .expect("the Latin face registers");
+    let registry = zgui_text_parley::CompositorFonts::new(Arc::clone(&fonts));
+
+    let data = registry.get(FontId(faces[0].0)).expect("the face is known");
+    assert!(Arc::ptr_eq(&data.file, &file));
+    assert_eq!(data.bytes().len(), (*file).as_ref().len());
+}

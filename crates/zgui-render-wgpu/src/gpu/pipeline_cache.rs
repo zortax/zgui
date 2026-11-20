@@ -141,8 +141,11 @@ fn path_for(gpu: &Gpu) -> Option<PathBuf> {
     Some(directory()?.join(key))
 }
 
-/// The directory cache blobs are kept in.
-fn directory() -> Option<PathBuf> {
+/// Returns the directory cache blobs are kept in: the one [`DIRECTORY_VARIABLE`] names, then
+/// `zgui/pipelines` under `XDG_CACHE_HOME` or under `~/.cache`.
+///
+/// Returns `None` when the environment names none of them.
+pub fn directory() -> Option<PathBuf> {
     if let Ok(named) = std::env::var(DIRECTORY_VARIABLE) {
         return Some(PathBuf::from(named));
     }

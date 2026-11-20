@@ -6,9 +6,8 @@ use compositor_api::{Compositor, FontRegistry};
 use compositor_core::CompositorImpl;
 use compositor_text::SwashRaster;
 use compositor_types::VectorBackend;
-use compositor_vector::VectorRaster;
 use compositor_vello::VelloOptions;
-use compositor_wgpu::{Gpu, PrePresent, PresentPacing, SharedGraphics};
+use compositor_wgpu::{Gpu, PrePresent, PresentPacing, SharedGraphics, VectorFactory};
 use zgui_platform::{PlatformError, Surface};
 use zgui_render::{RenderTarget, Renderer};
 use zgui_runtime::compositor::CompositorRenderer;
@@ -36,8 +35,13 @@ pub(crate) fn legacy_wanted() -> bool {
 pub(crate) fn factory(fonts: Arc<dyn FontRegistry>) -> RendererFactory {
     let graphics = SharedGraphics::new();
     let raster = Arc::new(SwashRaster::new());
+    // The compiled path pipelines are kept where zgui keeps its other pipelines.
+    let vello = VelloOptions {
+        adapter: None,
+        cache_directory: zgui_render_wgpu::gpu::pipeline_cache::directory(),
+    };
     Box::new(move |surface, target| {
-        let renderer = renderer(&graphics, surface, target)?;
+        let renderer = renderer(&graphics, surface, target, &vello)?;
         let mut compositor = CompositorImpl::new();
         compositor.use_font_registry(Arc::clone(&fonts));
         compositor.use_glyph_raster(Arc::clone(&raster) as _);
@@ -46,11 +50,13 @@ pub(crate) fn factory(fonts: Arc<dyn FontRegistry>) -> RendererFactory {
     })
 }
 
-/// Opens a renderer presenting into `surface` on the shared device.
+/// Opens a renderer presenting into `surface` on the shared device, whose path rasteriser is built
+/// with `vello`.
 fn renderer(
     graphics: &SharedGraphics,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
+    vello: &VelloOptions,
 ) -> Result<Box<dyn compositor_api::Renderer>, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Err(AppError::Platform(PlatformError::Backend(
@@ -75,7 +81,7 @@ fn renderer(
         )
         .map_err(|unavailable| AppError::GpuUnavailable(unavailable_of(unavailable)))?;
     // Without a path rasteriser, paths and glyphs on the path route draw nothing.
-    renderer.set_vector_factory(vectors, VectorBackend::Compute, "vello");
+    renderer.set_vector_factory(vectors(vello.clone()), VectorBackend::Compute, "vello");
     // A platform that paces its own frames also decides when a composed frame is handed over.
     if pacing == PresentPacing::Platform {
         let gate = Arc::clone(surface);
@@ -102,15 +108,11 @@ fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
     })
 }
 
-/// Returns the path rasteriser the device of `gpu` can run, for an output of `size`.
-fn vectors(gpu: &Arc<Gpu>, size: [u32; 2]) -> Box<dyn VectorRaster> {
-    compositor_vello::for_device(
-        gpu.adapter(),
-        gpu.device(),
-        gpu.queue(),
-        size,
-        &VelloOptions::default(),
-    )
+/// Returns the factory of the path rasteriser a device can run, built with `options`.
+fn vectors(options: VelloOptions) -> VectorFactory {
+    Box::new(move |gpu: &Arc<Gpu>, size| {
+        compositor_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
+    })
 }
 
 /// Returns the adapters the compositor's renderer tried, in zgui's vocabulary.

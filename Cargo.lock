@@ -5802,7 +5802,6 @@ dependencies = [
  "compositor-core",
  "compositor-text",
  "compositor-types",
- "compositor-vector",
  "compositor-vello",
  "compositor-wgpu",
  "web-time",

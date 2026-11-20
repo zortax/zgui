@@ -11,18 +11,12 @@ use crate::system::FontSystem;
 
 /// A [`FontSystem`]'s faces as a compositor font registry.
 ///
-/// A face's font id is its face id, so glyph runs name the faces layout shaped them with. The
-/// bytes of each face are copied once, the first time the compositor asks for them.
+/// A face's font id is its face id, so glyph runs name the faces layout shaped them with. A face
+/// shares its font file with the font system, without a copy.
 pub struct CompositorFonts {
     system: Arc<FontSystem>,
-    held: Mutex<Held>,
-}
-
-/// The bytes handed out, and the fonts registered through the registry by content.
-#[derive(Default)]
-struct Held {
-    bytes: FxHashMap<u32, Arc<[u8]>>,
-    by_content: FxHashMap<(u64, usize, u32), FontId>,
+    /// The fonts registered through the registry, by content.
+    by_content: Mutex<FxHashMap<(u64, usize, u32), FontId>>,
 }
 
 impl CompositorFonts {
@@ -30,20 +24,25 @@ impl CompositorFonts {
     pub fn new(system: Arc<FontSystem>) -> Self {
         Self {
             system,
-            held: Mutex::new(Held::default()),
+            by_content: Mutex::new(FxHashMap::default()),
         }
     }
 }
 
 impl compositor_api::FontRegistry for CompositorFonts {
     fn register(&self, data: FontData) -> FontId {
-        let content = (fingerprint(&data.bytes), data.bytes.len(), data.index);
-        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(id) = held.by_content.get(&content) {
+        let content = (fingerprint(data.bytes()), data.bytes().len(), data.index);
+        let mut by_content = self
+            .by_content
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if let Some(id) = by_content.get(&content) {
             return *id;
         }
-        let bytes: zgui_text::FontData = Arc::new(Arc::clone(&data.bytes));
-        let faces = self.system.register(bytes, None).unwrap_or_default();
+        let faces = self
+            .system
+            .register(Arc::clone(&data.file), None)
+            .unwrap_or_default();
         let id = faces
             .iter()
             .copied()
@@ -51,26 +50,19 @@ impl compositor_api::FontRegistry for CompositorFonts {
             .or_else(|| faces.first().copied())
             // A file with no face gets an id no face has, which `get` answers with nothing.
             .map_or(FontId(u32::MAX), |face| FontId(face.0));
-        held.by_content.insert(content, id);
-        held.bytes.entry(id.0).or_insert(data.bytes);
+        by_content.insert(content, id);
         id
     }
 
     fn get(&self, id: FontId) -> Option<FontData> {
-        let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(bytes) = held.bytes.get(&id.0) {
-            let index = self.index_of(FaceId(id.0))?;
-            return Some(FontData {
-                bytes: Arc::clone(bytes),
-                index,
-            });
-        }
-        let (bytes, index) = self.system.locked(|shared| {
+        self.system.locked(|shared| {
             let entry = shared.faces.get(FaceId(id.0))?;
-            Some((Arc::<[u8]>::from(entry.blob.data()), entry.index))
-        })?;
-        held.bytes.insert(id.0, Arc::clone(&bytes));
-        Some(FontData { bytes, index })
+            let (file, _) = entry.blob.clone().into_raw_parts();
+            Some(FontData {
+                file,
+                index: entry.index,
+            })
+        })
     }
 
     fn generation(&self) -> u64 {
