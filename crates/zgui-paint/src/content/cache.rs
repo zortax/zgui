@@ -73,10 +73,6 @@ impl ContentCache {
     pub fn begin_frame(&mut self) {
         self.atlas.begin_frame();
         self.vectors.begin_frame();
-        // What the frame inherited, published before it adds anything. A cache that is supposed to
-        // reach a working set and stay there says so here; one that never stops growing says that
-        // here too, and says it as a count rather than as a byte figure an allocator has smeared.
-        counter::set(Counter::AtlasEntriesLive, self.atlas.len() as u64);
     }
 
     /// Ends a frame.

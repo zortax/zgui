@@ -4,7 +4,7 @@
 //! read right after this window's own commit and its own build. The renderer's named statistics
 //! are running totals, so each frame adds what moved since the last one.
 
-use compositor_api::{CommitReport, Renderer};
+use compositor_api::{CommitReport, Compositor, Renderer};
 use compositor_types::{FrameCounters, FrameOutcome};
 use zgui_paint::SyncReport;
 use zgui_profile::{Counter, counter};
@@ -35,6 +35,20 @@ pub(crate) fn committed(report: &CommitReport, sync: &SyncReport) {
         Counter::GlyphsRasterised,
         u64::from(report.counters.glyphs_rasterised),
     );
+}
+
+/// Sets the live counters of what `compositor` holds: the tiles in its atlas and the bytes of its
+/// chunks.
+///
+/// The atlas tiles are read from the implementation's `content.live_tiles` statistic, and stay
+/// unchanged under a compositor that reports none.
+pub(crate) fn held(compositor: &dyn Compositor) {
+    counter::set(Counter::PaintChunkBytes, compositor.memory().chunk_bytes);
+    compositor.extra_stats(&mut |name, value| {
+        if name == "content.live_tiles" {
+            counter::set(Counter::AtlasEntriesLive, value);
+        }
+    });
 }
 
 /// Adds what a frame the compositor built did to the counters.

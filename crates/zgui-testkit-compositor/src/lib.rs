@@ -23,6 +23,7 @@
 //! assert!(compositor.is_ok() || std::env::var_os("ZGUI_COMPOSITOR").is_some());
 //! ```
 
+#![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
 mod aged;

@@ -401,7 +401,6 @@ impl PaintCache {
     pub fn end_frame(&mut self) {
         let unvisited = self.records.len().saturating_sub(self.seen.len());
         counter::add(Counter::ChunksRetainedUnvisited, unvisited as u64);
-        counter::set(Counter::PaintChunkBytes, self.bytes as u64);
     }
 
     /// Drops the records of fragments that ceased to exist, releasing what they held.

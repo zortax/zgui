@@ -1808,6 +1808,7 @@ impl Window {
             .draw(&mut *self.renderer, self.subpixel_order, interval);
         if let Some(built) = self.compositor.take_built() {
             crate::window::counters::built(&built);
+            crate::window::counters::held(&**self.compositor.compositor());
             self.renderer_totals.drawn(&outcome, &*self.renderer);
             if self.check_damage
                 && let Some(committed) = &self.committed

@@ -445,7 +445,7 @@ counters! {
     /// Fragments the layout tree is holding right now.
     FragmentsLive => fragments_live, Group::Live;
 
-    /// Bytes of compiled per-fragment paintings the paint cache is holding right now.
+    /// Bytes of the chunks the compositor is holding right now.
     PaintChunkBytes => paint_chunk_bytes_live, Group::Live;
 
     /// Chunks the renderer's persistent arenas hold right now.
@@ -458,7 +458,7 @@ counters! {
     /// while the memory it holds is never returned — which is exactly the failure this watches for.
     BoxesLive => boxes_live, Group::Live;
 
-    /// Rasterised entries the texture atlas is holding right now.
+    /// Tiles the compositor's atlas is holding right now.
     AtlasEntriesLive => atlas_entries_live, Group::Live;
 
 

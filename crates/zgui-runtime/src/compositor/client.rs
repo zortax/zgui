@@ -90,6 +90,11 @@ impl Client {
         self.client = client;
     }
 
+    /// Returns the compositor the client draws through.
+    pub(crate) fn compositor(&self) -> std::cell::Ref<'_, Box<dyn compositor_api::Compositor>> {
+        self.compositor.borrow()
+    }
+
     /// Points the output at a new or resized target.
     pub(crate) fn configure(&self, target: RenderTarget) {
         self.compositor
