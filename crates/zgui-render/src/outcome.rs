@@ -33,7 +33,20 @@ pub enum SkipReason {
     /// the first thing the next one does.
     Unconfigured,
     /// Acquiring a surface to present into timed out. Ask for another frame.
+    ///
+    /// The acquisition blocked for as long as the graphics API allows before giving up, so the
+    /// runtime treats a run of these as a surface nobody is consuming and probes at a growing
+    /// distance instead of re-entering the block.
     Timeout,
+    /// The display declined the composed frame at once, because the buffer it would be copied
+    /// into is still on its way to the screen. Ask for another frame.
+    ///
+    /// The refusal costs nothing — no block was entered — and the buffer is free again as soon as
+    /// the flip's completion is read, which is at most one refresh interval away. That is what
+    /// separates it from [`SkipReason::Timeout`]: a decline is a moment, and a timeout is a
+    /// surface that may have stopped being consumed. The work was submitted and the target holds
+    /// it, so the damage retires with the frame.
+    Declined,
     /// Nothing could be taken to compose into, so nothing was recorded.
     ///
     /// A renderer that composes straight into the buffer a display scans out of is handed that
@@ -69,6 +82,13 @@ pub enum SkipReason {
     /// **Do not** ask for another frame: nothing changed, so nothing would change next time
     /// either.
     Undamaged,
+    /// The frame was composed and submitted, and its presentation waits for the platform.
+    ///
+    /// The platform was not ready for another buffer, so the copy to the surface is left for
+    /// [`Renderer::present_held`](crate::Renderer::present_held), which the caller runs when the
+    /// platform says it is ready. The damage retires, because the work was submitted. **Do not** ask
+    /// for another frame: the platform's answer is what comes next.
+    Held,
 }
 
 /// What [`Renderer::draw`](crate::Renderer::draw) did.
@@ -116,7 +136,10 @@ impl FrameOutcome {
             Self::Recovered => true,
             Self::Skipped(reason) => !matches!(
                 reason,
-                SkipReason::Occluded | SkipReason::Undamaged | SkipReason::DeviceUnavailable
+                SkipReason::Occluded
+                    | SkipReason::Undamaged
+                    | SkipReason::Held
+                    | SkipReason::DeviceUnavailable
             ),
         }
     }

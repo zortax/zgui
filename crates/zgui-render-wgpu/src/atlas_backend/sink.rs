@@ -53,7 +53,8 @@ impl AtlasTextures {
     pub fn new(gpu: Arc<Gpu>, layout: wgpu::BindGroupLayout) -> Self {
         // Nearest filtering for the glyph pools, because their tiles are rasterised at the size
         // they are drawn at: filtering would blur a glyph and, at a tile's edge, sample its
-        // neighbour.
+        // neighbour. A tile a transform stretches is weighted from four texels by the sprite
+        // shader, which reads each of them at its centre.
         let sampler = gpu.device().create_sampler(&wgpu::SamplerDescriptor {
             label: Some("zgui.atlas.sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -268,7 +269,7 @@ impl TextureSink for AtlasTextures {
     fn begin_uploads(&mut self) -> Result<(), SinkError> {
         debug_assert!(!self.batching, "atlas upload batches do not nest");
         self.batching = true;
-        self.uploader.begin_frame(&self.gpu);
+        self.uploader.begin_frame();
         Ok(())
     }
 

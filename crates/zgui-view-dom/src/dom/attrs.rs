@@ -32,6 +32,10 @@ impl Dom for DocumentDom {
         self.write_text(node, data);
     }
 
+    fn text_is(&self, node: NodeId, data: &str) -> bool {
+        self.holds_text(node, data)
+    }
+
     fn insert(&self, parent: NodeId, child: NodeId, before: Option<NodeId>) {
         self.link(parent, child, before);
     }
@@ -275,6 +279,23 @@ mod tests {
         let next = dom.create_element(ElementName::new("row"));
         dom.insert(dom.root(next), next, None);
         assert_eq!(dom.parent(next), Some(dom.root(next)));
+    }
+
+    #[test]
+    fn a_text_node_compares_its_text_without_a_batch() {
+        let document = Rc::new(RefCell::new(Document::new()));
+        let dom = DocumentDom::new(Rc::clone(&document));
+        let empty = dom.create_text("");
+        let text = dom.create_text("12");
+        let revision = dom.revision();
+
+        assert!(dom.text_is(empty, ""), "an absent text reads as empty");
+        assert!(dom.text_is(text, "12"));
+        assert!(!dom.text_is(text, "1"));
+        assert_eq!(dom.revision(), revision, "a comparison opens no batch");
+
+        let (stale, row) = stale_row();
+        assert!(!stale.text_is(row, ""), "a node that is gone holds nothing");
     }
 
     #[test]

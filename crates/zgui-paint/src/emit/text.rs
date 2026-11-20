@@ -33,7 +33,7 @@ use zgui_scene::{
     ClipId, ClipLink, ColorSprite, Decoration, MonoSprite, Paint, PaintRef, PaintSlot, Resource,
     Scene, SpatialId, SubpixelSprite, VectorId, VectorItem,
 };
-use zgui_text::{GlyphFormat, RunSurface};
+use zgui_text::{GlyphFormat, RunSurface, RunTransform};
 
 use crate::content::glyphs::OutlineGlyph;
 
@@ -366,7 +366,8 @@ impl TextPlacement {
     /// What the surface does to a run drawn through this placement with `brush`.
     fn surface(&self, scene: &Scene, brush: &RunBrush) -> RunSurface {
         RunSurface {
-            translated_only: self.affine(scene).is_translation(),
+            transform: RunTransform::of(self.affine(scene)),
+            moving: scene.travels(self.transform),
             solid_brush: matches!(brush, RunBrush::Solid),
             scale: self.scale,
         }
@@ -1198,6 +1199,51 @@ mod tests {
                 "a resampled sprite smears the per-channel stripes into coloured fringes: {local:?}"
             );
         }
+    }
+
+    /// A card that opens from 96 % keeps its text in tiles, so no frame of the opening fills
+    /// outlines. A large scale and a turn fill them, and so does a slight scale at rest, where a
+    /// resampled tile shows as soft text.
+    #[test]
+    fn a_run_under_a_slight_scale_draws_tiles_only_while_an_animation_moves_it() {
+        use zgui_geom::Matrix4;
+        use zgui_text::{RasterPath, RunProfile};
+
+        let path = |local: Matrix4, animated: bool| {
+            let (mut scene, space) = under(local);
+            if animated {
+                scene.declare_travel(space, zgui_scene::Travel::over([placement().line]));
+            }
+            let placed = TextPlacement {
+                transform: space,
+                ..placement()
+            };
+            let surface = placed.surface(&scene, &super::RunBrush::Solid);
+            RasterPath::of(&RunProfile {
+                surface,
+                ..RunProfile::BODY_TEXT
+            })
+        };
+        let slight = Matrix4::scale(0.96, 0.96, 1.0);
+        assert_eq!(path(slight, true), RasterPath::Atlas);
+        assert_eq!(
+            path(Matrix4::translation(12.0, 34.0, 0.0).then(&slight), true),
+            RasterPath::Atlas
+        );
+        assert_eq!(path(slight, false), RasterPath::Vector);
+        assert_eq!(
+            path(Matrix4::translation(12.0, 34.0, 0.0), false),
+            RasterPath::Atlas,
+            "a move at rest changes no texel"
+        );
+        assert_eq!(
+            path(Matrix4::scale(2.0, 2.0, 1.0), true),
+            RasterPath::Vector
+        );
+        assert_eq!(
+            path(zgui_geom::Affine2::rotation(0.2).to_matrix4(), true),
+            RasterPath::Vector
+        );
     }
 
     /// A source of one glyph of a chosen format.

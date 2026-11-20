@@ -1,6 +1,6 @@
 //! What the loop should do when it has nothing left to do.
 
-use std::time::Instant;
+use web_time::Instant;
 
 /// What the loop should do before it blocks.
 ///
@@ -16,7 +16,7 @@ use std::time::Instant;
 /// [`IdlePolicy::Block`].
 ///
 /// ```
-/// use std::time::{Duration, Instant};
+/// use web_time::{Duration, Instant};
 /// use zgui_platform::IdlePolicy;
 ///
 /// let now = Instant::now();
@@ -79,7 +79,7 @@ impl IdlePolicy {
 #[cfg(test)]
 mod tests {
     use super::IdlePolicy;
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     #[test]
     fn a_deadline_in_the_past_is_never_installed() {

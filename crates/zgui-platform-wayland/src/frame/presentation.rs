@@ -57,6 +57,11 @@ impl Presentation {
         }
     }
 
+    /// Whether the compositor reports presentation in a clock this process can read.
+    pub const fn reports(&self) -> bool {
+        self.usable && self.global.is_some()
+    }
+
     /// Asks for feedback on the content update `surface` is about to commit.
     ///
     /// Asked per update rather than once, which is what the protocol requires: each answer belongs

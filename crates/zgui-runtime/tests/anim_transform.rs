@@ -587,3 +587,55 @@ fn a_settled_transform_animation_writes_one_property_and_rebuilds_nothing() {
         );
     }
 }
+
+/// A bar that slides on one transition while its colour moves on a longer one.
+const OUTLASTED_CSS: &str = "root { display: block; width: 400px; height: 300px }
+                             .track { display: block; position: relative;
+                                      width: 400px; height: 40px }
+                             .bar { display: block; width: 100px; height: 40px;
+                                    background-color: rgb(0, 0, 0);
+                                    transform: translateX(0px);
+                                    transition: transform 100ms linear,
+                                        background-color 300ms linear }
+                             .bar.on { background-color: rgb(250, 250, 250);
+                                       transform: translateX(200px) }";
+
+#[test]
+fn a_transform_that_ends_before_a_colour_stays_at_its_end() {
+    use zgui_reactive::prelude::*;
+
+    // This case reads no counter, and its transition places the bar. The counters are one set
+    // for the process, so it holds the lock for the cases that count placements.
+    let _guard = measuring();
+    let on = zgui_reactive::RwSignal::new(false);
+    let mut harness = support::app(OUTLASTED_CSS, move |cx: &mut BuildCx<'_>| {
+        let view = zgui_elements::column().class("root").child(
+            zgui_elements::column().class("track").child(
+                zgui_elements::column()
+                    .class("bar")
+                    .class_toggle(zgui_interned::ClassName::new("on"), move || on.get()),
+            ),
+        );
+        Box::new(view.into_view().build(cx))
+    });
+    harness.settle(8);
+    on.set(true);
+    harness.pump();
+    let mut path = Vec::new();
+    for _ in 0..30 {
+        harness.advance(FRAME);
+        harness.pump();
+        path.push(inks(&harness, "bar")[0].0);
+    }
+    let end = *path.last().expect("frames ran");
+    assert_eq!(end, 200, "the bar ends where its style puts it: {path:?}");
+    let arrived = path
+        .iter()
+        .position(|x| *x == end)
+        .expect("the bar arrives");
+    assert!(
+        path[arrived..].iter().all(|x| *x == end),
+        "the bar went back and slid again after its colour ended: {path:?}"
+    );
+    assert!(arrived < 10, "the slide takes its own 100 ms: {path:?}");
+}

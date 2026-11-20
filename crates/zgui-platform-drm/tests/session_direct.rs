@@ -45,64 +45,77 @@
 // read it would fail that test rather than this one.
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "linux")]
 mod support;
 
-use std::env;
-use std::path::PathBuf;
-
-use zgui_platform_drm::Session;
-
-/// The variable libseat reads the backend name out of.
-const BACKEND: &str = "LIBSEAT_BACKEND";
-
-/// A path every user opens and no driver answers a DRM request on.
-const NOT_A_CARD: &str = "/dev/null";
-
-/// Opens a session with the seat out of reach, and reports what it got.
+/// Runs the test where the platform under test exists, and does nothing elsewhere.
 fn main() {
-    // SAFETY: this is the first statement of the process. No thread has been made yet, so nothing
-    // else can read the environment while it is written, and libseat is reached for below, which is
-    // after this returns.
-    unsafe { env::set_var(BACKEND, "noop") };
-
-    // Before the probe below, which would map libseat into this process. See the module
-    // documentation.
-    let mut session = support::while_nothing_opens(Session::open);
-
-    if !support::libseat_is_installed() {
-        eprintln!(
-            "session_direct: this machine has no libseat, so the fallback was asserted over a \
-             machine that has nothing to fall back from and nothing was covered. Install seatd, or \
-             run the suite from `nix develop`, which puts `libseat.so.1` on the library path."
-        );
-        return;
-    }
-
-    println!("session_direct: a session with no seat opens the devices itself");
-    assert!(
-        !session.is_seated(),
-        "no seat could be opened, so no daemon holds the devices and this run takes them itself"
-    );
-
-    println!("session_direct: the direct path takes DRM master, and stops where it cannot");
-    the_direct_path_takes_the_master(&mut session);
-
-    println!("session_direct: 2 checks passed");
+    #[cfg(target_os = "linux")]
+    supported::main();
 }
 
-/// The direct path asks for DRM master on the card it opened, and reports a refusal.
-///
-/// Master is the interlock. A machine where a compositor holds the display refuses it, and the run
-/// stops there — before the console is blanked and before the keyboard is taken away from the
-/// desktop that is using it. So the walk is pointed at a path that opens for any user and answers
-/// no DRM request: what comes back says the master was asked for at all.
-fn the_direct_path_takes_the_master(session: &mut Session) {
-    let refusal = session
-        .card_from(&[PathBuf::from(NOT_A_CARD)])
-        .expect_err("`/dev/null` opens and refuses `SET_MASTER`, so no card comes back from it");
+/// The test, built only where the platform under test exists.
+#[cfg(target_os = "linux")]
+mod supported {
+    use super::support;
 
-    assert!(
-        refusal.to_string().contains("DRM master"),
-        "the refusal says which step this run stopped at, and it reads: {refusal}"
-    );
+    use std::env;
+    use std::path::PathBuf;
+
+    use zgui_platform_drm::Session;
+
+    /// The variable libseat reads the backend name out of.
+    const BACKEND: &str = "LIBSEAT_BACKEND";
+
+    /// A path every user opens and no driver answers a DRM request on.
+    const NOT_A_CARD: &str = "/dev/null";
+
+    /// Opens a session with the seat out of reach, and reports what it got.
+    pub(super) fn main() {
+        // SAFETY: this is the first statement of the process. No thread has been made yet, so nothing
+        // else can read the environment while it is written, and libseat is reached for below, which is
+        // after this returns.
+        unsafe { env::set_var(BACKEND, "noop") };
+
+        // Before the probe below, which would map libseat into this process. See the module
+        // documentation.
+        let mut session = support::while_nothing_opens(Session::open);
+
+        if !support::libseat_is_installed() {
+            eprintln!(
+                "session_direct: this machine has no libseat, so the fallback was asserted over a \
+                 machine that has nothing to fall back from and nothing was covered. Install seatd, or \
+                 run the suite from `nix develop`, which puts `libseat.so.1` on the library path."
+            );
+            return;
+        }
+
+        println!("session_direct: a session with no seat opens the devices itself");
+        assert!(
+            !session.is_seated(),
+            "no seat could be opened, so no daemon holds the devices and this run takes them itself"
+        );
+
+        println!("session_direct: the direct path takes DRM master, and stops where it cannot");
+        the_direct_path_takes_the_master(&mut session);
+
+        println!("session_direct: 2 checks passed");
+    }
+
+    /// The direct path asks for DRM master on the card it opened, and reports a refusal.
+    ///
+    /// Master is the interlock. A machine where a compositor holds the display refuses it, and the run
+    /// stops there — before the console is blanked and before the keyboard is taken away from the
+    /// desktop that is using it. So the walk is pointed at a path that opens for any user and answers
+    /// no DRM request: what comes back says the master was asked for at all.
+    fn the_direct_path_takes_the_master(session: &mut Session) {
+        let refusal = session.card_from(&[PathBuf::from(NOT_A_CARD)]).expect_err(
+            "`/dev/null` opens and refuses `SET_MASTER`, so no card comes back from it",
+        );
+
+        assert!(
+            refusal.to_string().contains("DRM master"),
+            "the refusal says which step this run stopped at, and it reads: {refusal}"
+        );
+    }
 }

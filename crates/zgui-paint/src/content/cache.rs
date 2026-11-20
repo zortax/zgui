@@ -143,9 +143,11 @@ impl ContentCache {
     /// Ends a frame.
     ///
     /// This removes the mask tiles that shapes changing every frame stopped drawing, so a churning
-    /// shape holds at most two tiles and never pushes glyphs out of the atlas. Call it after
-    /// [`ContentCache::flush`], for the reason [`ContentCache::enforce_soft_limit`] gives.
+    /// shape holds at most two tiles and never pushes glyphs out of the atlas. It also drops the
+    /// prefetched glyphs the walk did not ask for. Call it after [`ContentCache::flush`], for the
+    /// reason [`ContentCache::enforce_soft_limit`] gives.
     pub fn end_frame(&mut self) {
+        self.glyphs.drop_prefetched();
         self.vector_masks.end_frame(&mut self.atlas);
         self.vector_layers.end_frame(&mut self.atlas);
     }
@@ -446,6 +448,38 @@ impl ContentCache {
     /// Moves a node's attachment revision, so a paint record kept across frames misses.
     fn note_image_change(&mut self, id: ReplacedId) {
         *self.image_revisions.entry(id).or_insert(0) += 1;
+    }
+
+    /// Rasterises on `pool` the glyphs the next emit walk is expected to ask for, and returns how
+    /// many it rasterised.
+    ///
+    /// Only a cache that holds no glyph does this, once: on the first frame with text of a window,
+    /// and again after [`ContentCache::clear`]. Every other frame asks for few new glyphs, and
+    /// reading every line to find them would cost more than the walk saves. A prediction of fewer
+    /// than 128 misses also stays serial.
+    ///
+    /// The walk takes the answers in place of calls to `raster` and allocates every tile where it
+    /// would have without them, so the atlas holds the same tiles at the same places. Answers the
+    /// walk does not ask for are dropped at [`ContentCache::end_frame`].
+    pub fn prefetch_glyphs(
+        &mut self,
+        store: &LayoutStore,
+        shaped: &dyn ShapedGlyphs,
+        raster: &dyn GlyphRaster,
+        pool: &zgui_layout::tree::parallel::LayoutPool,
+        prediction: crate::content::glyphs::GlyphPrediction,
+    ) -> usize {
+        if store.active_paragraph_count() == 0 || !self.glyphs.take_prefetch_turn() {
+            return 0;
+        }
+        let keys = crate::content::glyphs::prefetch::predict(store, shaped, prediction);
+        if keys.len() < crate::content::glyphs::prefetch::MIN_MISSES {
+            return 0;
+        }
+        let answers = crate::content::glyphs::prefetch::rasterise(keys, raster, pool);
+        let count = answers.len();
+        self.glyphs.prefetch(answers);
+        count
     }
 
     /// Borrows everything one emit walk needs into a source of glyphs and of replaced content.

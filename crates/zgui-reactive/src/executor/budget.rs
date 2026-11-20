@@ -3,8 +3,8 @@
 //! Polling "until nothing is ready" does not terminate when two effects write each other's
 //! sources: each write makes the other ready again, inside a single poll, with no frame
 //! presented and nothing logged. The budget caps how many times one task may be polled within
-//! one flush. A task that reaches the cap is set aside — its waker is kept, so it resumes at the
-//! next flush — and the cycle is reported once.
+//! one flush. A task that reaches the cap is set aside — it goes back in the queue when the flush
+//! ends, so it resumes at the next flush — and the cycle is reported once.
 //!
 //! An ordinary task is polled once or twice per flush, so the cap is never approached by
 //! correct code.

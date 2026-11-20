@@ -46,29 +46,33 @@ include!(concat!(env!("OUT_DIR"), "/uapi.rs"));
 // input headers. See `build.rs`.
 include!(concat!(env!("OUT_DIR"), "/clock.rs"));
 
-// A record is twenty-four bytes, and every read of an event stream walks it in that stride. A
-// record of any other size fails the build here. A test would report it after the build had
-// already succeeded.
+// A record is twenty-four bytes on a 64-bit target and sixteen on a 32-bit one, and every read of
+// an event stream walks it in that stride. A record of any other size fails the build here. A test
+// would report it after the build had already succeeded.
 const _: () = assert!(
-    size_of::<input_event>() == 24,
-    "an input_event is 24 bytes: a 16-byte timeval, two __u16 and one __s32"
+    size_of::<input_event>()
+        == if cfg!(target_pointer_width = "64") {
+            24
+        } else {
+            16
+        },
+    "an input_event is a time, two __u16 and one __s32, and the time is sixteen bytes on a 64-bit \
+     target and eight on a 32-bit one"
 );
 
-// The size above is necessary and not sufficient on a 32-bit target, so the target is refused.
+// A 32-bit build reads the same records, at half the width.
 //
-// There, the C library chooses `struct timeval` against `_TIME_BITS`: eight bytes without it and
-// sixteen with. A build that opted into 64-bit time therefore passes the assertion at twenty-four
-// — while the kernel still delivers records with an eight-byte time to any process that did not
-// also opt into the time64 system calls, so every record read slides by eight bytes and the
-// stream decodes as nonsense with nothing reporting it. Getting this right means agreeing with
-// the C library about which `read` is being called, which is a decision this crate does not make
-// and cannot see. A 32-bit console backend can have it when something can test it.
-#[cfg(target_pointer_width = "32")]
-compile_error!(
-    "zgui-evdev has no 32-bit build: `struct input_event` embeds the C library's `timeval`, whose \
-     width there depends on `_TIME_BITS`, and the size alone cannot tell a correct layout from one \
-     that slides every record by eight bytes"
-);
+// The header picks between `struct timeval` and a pair of `__kernel_ulong_t` on a condition that
+// reads `__USE_TIME_BITS64`. Both branches come out eight bytes on a 32-bit target, and both carry
+// the seconds and the microseconds as thirty-two-bit values — which is what the kernel writes to a
+// 32-bit process, whatever the C library decided `time_t` is. What the C library decided reaches
+// this crate as the *spelling* of the two fields, and `Event::stamp` reads the spelling this
+// target has.
+//
+// musl defines `__USE_TIME_BITS64` on every 32-bit target, so a musl build takes the
+// `__kernel_ulong_t` branch. A 32-bit glibc build that left `_TIME_BITS` alone takes the other
+// one, and `stamp` then fails to compile on a field it cannot find — which reports the case rather
+// than sliding every record by a few bytes.
 
 #[cfg(test)]
 mod tests {
@@ -95,12 +99,16 @@ mod tests {
 
     #[test]
     fn the_generated_structs_are_the_size_the_headers_say() {
-        assert_eq!(size_of::<input_event>(), 24);
+        // Two of these change with the target. `input_event` carries a time whose width follows
+        // the C library's, and `ff_effect` holds a union with a pointer in it.
+        let wide = cfg!(target_pointer_width = "64");
+
+        assert_eq!(size_of::<input_event>(), if wide { 24 } else { 16 });
         assert_eq!(size_of::<input_id>(), 8);
         assert_eq!(size_of::<input_absinfo>(), 24);
         assert_eq!(size_of::<input_mask>(), 16);
         assert_eq!(size_of::<input_keymap_entry>(), 40);
-        assert_eq!(size_of::<ff_effect>(), 48);
+        assert_eq!(size_of::<ff_effect>(), if wide { 48 } else { 44 });
         assert_eq!(size_of::<uinput_setup>(), 92);
         assert_eq!(size_of::<uinput_abs_setup>(), 28);
         assert_eq!(size_of::<uinput_user_dev>(), 1116);
@@ -108,12 +116,26 @@ mod tests {
 
     #[test]
     fn an_event_record_is_laid_out_the_way_a_read_walks_it() {
-        // The offsets are what turn one read into a list of events. `time` first, then the type,
-        // the code and the value packed behind it.
+        // The offsets are what turn one read into a list of events. The time first, then the type,
+        // the code and the value packed behind it. The time is one `timeval` on a 64-bit target
+        // and a pair of `__kernel_ulong_t` on a 32-bit one, so the three behind it sit eight bytes
+        // earlier there.
+        #[cfg(target_pointer_width = "64")]
         assert_eq!(std::mem::offset_of!(input_event, time), 0);
-        assert_eq!(std::mem::offset_of!(input_event, type_), 16);
-        assert_eq!(std::mem::offset_of!(input_event, code), 18);
-        assert_eq!(std::mem::offset_of!(input_event, value), 20);
+        #[cfg(not(target_pointer_width = "64"))]
+        {
+            assert_eq!(std::mem::offset_of!(input_event, __sec), 0);
+            assert_eq!(std::mem::offset_of!(input_event, __usec), 4);
+        }
+
+        let time = if cfg!(target_pointer_width = "64") {
+            16
+        } else {
+            8
+        };
+        assert_eq!(std::mem::offset_of!(input_event, type_), time);
+        assert_eq!(std::mem::offset_of!(input_event, code), time + 2);
+        assert_eq!(std::mem::offset_of!(input_event, value), time + 4);
     }
 
     #[test]

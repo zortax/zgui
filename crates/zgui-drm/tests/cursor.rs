@@ -4,6 +4,8 @@
 //! and none of the three needs DRM master, so this file asserts under a running compositor.
 //! Putting an image on a cursor plane is a modeset, and that lives in `cursor_commit.rs`.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use zgui_drm::device::Interface;

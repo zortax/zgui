@@ -108,23 +108,64 @@ fn rect_coverage(point: vec2<f32>, bounds: Bounds, radii: Radii, shape: f32) -> 
     return saturate(0.5 - quad_sdf(point, bounds, radii, shape));
 }
 
+// Whether a point lies outside an upright box.
+fn outside_bounds(point: vec2<f32>, b: Bounds) -> bool {
+    return point.x < b.x || point.y < b.y || point.x > b.x + b.w || point.y > b.y + b.h;
+}
+
 // Coverage of a device pixel by a whole clip chain. Every pipeline that draws into the composed
 // target applies exactly this function, so one clip means one thing whatever draws through it.
+//
+// Each field is read where it is used, through the array. Some drivers load all fields of a copy
+// of the whole record before the first branch, so every fragment then pays for the kept part and
+// for both rounded tests, also when the chain has none of them.
 fn clip_coverage(point: vec2<f32>, clip_id: u32) -> f32 {
-    let clip = clips[clip_id];
     // The intersection rectangle is a hard edge: it is an axis-aligned box in device space, and
     // antialiasing it would bleed content one pixel outside a scrollport.
-    let aabb = clip.aabb;
-    if point.x < aabb.x || point.y < aabb.y
-        || point.x > aabb.x + aabb.w || point.y > aabb.y + aabb.h {
+    if outside_bounds(point, clip_aabb(clip_id)) {
         return 0.0;
     }
-    var coverage = 1.0;
-    if clip.count > 0u {
-        coverage *= rect_coverage(point, clip.first.rect, clip.first.radii, clip.first.shape);
+    // The kept links are tested in their own system, which only translates: the point moves
+    // back by that translation.
+    var first = point;
+    var second = point;
+    let space = clip_space(clip_id);
+    if space != NO_SPACE {
+        let kept = point - load_spatial(space)[3].xy;
+        if outside_bounds(kept, clip_kept_aabb(clip_id)) {
+            return 0.0;
+        }
+        let tests = clip_kept_tests(clip_id);
+        first = select(point, kept, (tests & 1u) != 0u);
+        second = select(point, kept, (tests & 2u) != 0u);
     }
-    if clip.count > 1u {
-        coverage *= rect_coverage(point, clip.second.rect, clip.second.radii, clip.second.shape);
+    let count = clip_count(clip_id);
+    var coverage = 1.0;
+    if count > 0u {
+        let test = clip_rounded(clip_id, 0u);
+        coverage *= rect_coverage(first, test.rect, test.radii, test.shape);
+    }
+    if count > 1u {
+        let test = clip_rounded(clip_id, 1u);
+        coverage *= rect_coverage(second, test.rect, test.radii, test.shape);
+    }
+    return coverage;
+}
+
+// Coverage by a clip's rounded tests alone, for a caller that has already tested the box.
+//
+// `count` is the clip's own, carried from wherever it was read. Zero means the clip is a box and
+// nothing else, which is nearly every clip in a document, and then this reads no table at all.
+// A clip measured in a system of its own is not for this function: the kept part needs the table.
+fn clip_rounded_coverage(point: vec2<f32>, clip_id: u32, count: u32) -> f32 {
+    if count == 0u {
+        return 1.0;
+    }
+    let first = clip_rounded(clip_id, 0u);
+    var coverage = rect_coverage(point, first.rect, first.radii, first.shape);
+    if count > 1u {
+        let second = clip_rounded(clip_id, 1u);
+        coverage *= rect_coverage(point, second.rect, second.radii, second.shape);
     }
     return coverage;
 }

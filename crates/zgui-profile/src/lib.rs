@@ -46,6 +46,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod alloc_tag;
 pub mod counter;
 pub mod latency;
 pub mod phase;

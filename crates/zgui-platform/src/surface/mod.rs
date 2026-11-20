@@ -8,6 +8,8 @@ mod gpu;
 mod icon;
 mod id;
 mod role;
+mod serial;
+mod subpixel;
 mod text_input;
 mod timing;
 mod watchdog;
@@ -17,19 +19,22 @@ pub use crate::surface::chrome::{
     CursorStyle, DecorationSource, Decorations, FullscreenMode, ResizeEdge, WindowLevel,
 };
 pub use crate::surface::drag::DragEvent;
-pub use crate::surface::event::SurfaceEvent;
+pub use crate::surface::event::{CloseReason, SurfaceEvent};
 pub use crate::surface::gpu::GpuSurface;
 pub use crate::surface::icon::{BadIcon, WindowIcon};
 pub use crate::surface::id::SurfaceId;
 pub use crate::surface::role::{
-    Anchor, Constrain, KeyboardInteractivity, Layer, LayerPlacement, PopupPlacement, SurfaceRole,
+    Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
+    PopupPlacement, SurfaceRole,
 };
+pub use crate::surface::serial::InputSerial;
+pub use crate::surface::subpixel::SubpixelLayout;
 pub use crate::surface::text_input::{NativeTextInput, TextInput, TextInputPurpose};
-pub use crate::surface::timing::{PresentPacing, PresentationTiming};
+pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming};
 pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 
 use crate::error::Unsupported;
 use crate::theme::ColorScheme;
@@ -62,6 +67,13 @@ pub trait Surface: Send + Sync + 'static {
     /// How many physical pixels there are to a CSS pixel on this surface.
     fn scale_factor(&self) -> f64;
 
+    /// How the colour stripes of the display under this surface are arranged.
+    ///
+    /// Read once a frame. A backend asks for a redraw when the answer changes.
+    fn subpixel_layout(&self) -> SubpixelLayout {
+        SubpixelLayout::Unknown
+    }
+
     /// How many frames per second this surface is presented at, in thousandths.
     ///
     /// Absent when the platform does not say, in which case a deadline should be computed against
@@ -84,6 +96,17 @@ pub trait Surface: Send + Sync + 'static {
         PresentPacing::Display
     }
 
+    /// Whether a frame may be presented in a buffer larger than the frame.
+    ///
+    /// A backend that answers `true` shows only the top-left part of each buffer, at the extent of
+    /// the frame it presents. The renderer can then keep its swap chain at a coarser extent and
+    /// rebuild it less often while the window is resized. Rebuilding a swap chain waits for the
+    /// graphics device to go idle, so a drag that rebuilds it on every frame pays that wait on
+    /// every frame.
+    fn crops_buffers(&self) -> bool {
+        false
+    }
+
     /// When this surface's frames reach the screen, as far as the platform knows.
     ///
     /// Absent means the platform reports no timing at all, and a caller falls back to
@@ -91,6 +114,13 @@ pub trait Surface: Send + Sync + 'static {
     /// rather than a borrow of whatever the backend keeps.
     fn presentation_timing(&self) -> Option<PresentationTiming> {
         None
+    }
+
+    /// Whether the platform sends [`SurfaceEvent::Presented`] for this surface.
+    ///
+    /// Without it, a caller counts the first frame handed to the surface as shown.
+    fn reports_presentation(&self) -> bool {
+        false
     }
 
     /// Asks for a different content size, and reports the size actually taken.
@@ -116,6 +146,27 @@ pub trait Surface: Send + Sync + 'static {
     /// Called between finishing the drawing and presenting it. On a compositor that uses it this
     /// is what keeps frame pacing honest; where it means nothing it costs nothing.
     fn pre_present_notify(&self);
+
+    /// Whether a frame that has just been composed may be presented now.
+    ///
+    /// Asked by the renderer after the frame's work is submitted and before it is handed to the
+    /// surface. `false` means the platform is not ready for another buffer: the renderer keeps the
+    /// composed frame, and the platform delivers [`SurfaceEvent::PresentReady`] when it is ready.
+    /// The default is always ready.
+    fn present_now(&self) -> bool {
+        true
+    }
+
+    /// Tells the platform the frame of `size` at `scale` is about to be presented.
+    ///
+    /// The same moment as [`Surface::pre_present_notify`], with the extent the buffer was drawn
+    /// at. A platform that declares buffer metadata with each commit reads it from here, because
+    /// the surface can already be at a newer extent than the frame. The default ignores the
+    /// extent.
+    fn pre_present_frame(&self, size: Size<i32, Device>, scale: f64) {
+        let _ = (size, scale);
+        self.pre_present_notify();
+    }
 
     /// Tells the platform the redraw just delivered was refused without running.
     ///
@@ -209,6 +260,15 @@ pub trait Surface: Send + Sync + 'static {
     /// behaviour focus-stealing prevention exists to stop.
     fn focus(&self) {}
 
+    /// The token of the latest press the user made on this surface's seat.
+    ///
+    /// A request that the desktop grants only against a press quotes it: a pop-up's grab, read in
+    /// the handler of the press that opens the pop-up. `None` before the first press, and on a
+    /// desktop that needs no token.
+    fn input_serial(&self) -> Option<InputSerial> {
+        None
+    }
+
     /// Asks the desktop to draw attention to this surface, or stops asking.
     ///
     /// What that looks like is the desktop's business — a bouncing icon, a flashing task-bar
@@ -243,10 +303,46 @@ pub trait Surface: Send + Sync + 'static {
     /// Sets what the pointer looks like over this surface.
     fn set_cursor(&self, cursor: CursorStyle);
 
+    /// Changes where a shell layer sits and what it claims, for a surface that is one.
+    ///
+    /// The change is shown with the next frame: the platform sends it together with that frame,
+    /// so the new placement and the content drawn for it reach the screen at once. Every field the
+    /// patch leaves absent stays as it is. A surface that is not a shell layer answers with
+    /// [`Unsupported`], and so does a platform that has none.
+    fn set_layer_placement(&self, patch: &LayerPatch) -> Result<(), Unsupported> {
+        let _ = patch;
+        Err(Unsupported)
+    }
+
     /// Makes the surface transparent to the pointer, so presses reach whatever is behind it.
     fn set_pointer_passthrough(&self, passthrough: bool) -> Result<(), Unsupported> {
         let _ = passthrough;
         Err(Unsupported)
+    }
+
+    /// Sets the part of the surface that takes pointer and touch input, in CSS pixels.
+    ///
+    /// Input on the rest of the surface reaches whatever is behind it. `None` makes the whole
+    /// surface take input, and an empty set of rectangles makes none of it take input. The
+    /// rectangles are in the surface's own coordinates and may overlap. A platform rounds each
+    /// edge outwards to the pixels it measures in, so a rectangle never takes less than it covers.
+    ///
+    /// The change is shown with the next frame, together with the content drawn for it. A platform
+    /// that cannot do this answers with [`Unsupported`]; see
+    /// [`PlatformCapabilities::input_regions`](crate::PlatformCapabilities::input_regions).
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        let _ = region;
+        Err(Unsupported)
+    }
+
+    /// Tells the platform which part of the surface is opaque, in CSS pixels.
+    ///
+    /// A hint, and nothing else: a compositor skips drawing what is behind an opaque part. `None`
+    /// and an empty set of rectangles both say nothing is opaque. A platform rounds each edge
+    /// inwards, so a rectangle never claims a pixel it only partly covers. The change is shown
+    /// with the next frame. Where it means nothing it costs nothing.
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        let _ = region;
     }
 
     /// Tells the platform where text is being typed and what kind, or that none is.

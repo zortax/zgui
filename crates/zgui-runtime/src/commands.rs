@@ -58,6 +58,10 @@ pub struct WindowSpec {
     /// exists, so the handle it answered with is the one the window has to be filled into. A
     /// specification made without one is given a handle when it opens.
     pub(crate) handle: Option<crate::windows::WindowHandle>,
+    /// Whether the window stays hidden after its first frame, until the application shows it.
+    pub(crate) hidden: bool,
+    /// The window a pop-up is placed against, resolved to its surface when the pop-up opens.
+    pub(crate) popup_parent: Option<WindowToken>,
 }
 
 impl WindowSpec {
@@ -69,12 +73,26 @@ impl WindowSpec {
             view,
             close: Rc::new(RefCell::new(CloseCallbacks::default())),
             handle: None,
+            hidden: false,
+            popup_parent: None,
         }
+    }
+
+    /// The same, staying hidden until the application shows it.
+    pub fn with_hidden(mut self, hidden: bool) -> Self {
+        self.hidden = hidden;
+        self
     }
 
     /// The same, asking `close` before a close the user asked for is carried out.
     pub fn with_close_callbacks(mut self, close: Rc<RefCell<CloseCallbacks>>) -> Self {
         self.close = close;
+        self
+    }
+
+    /// The same, as a pop-up placed against the window `parent`.
+    pub(crate) fn with_popup_parent(mut self, parent: Option<WindowToken>) -> Self {
+        self.popup_parent = parent;
         self
     }
 
@@ -160,6 +178,12 @@ pub(crate) enum WindowCommand {
     },
     /// Close a window, without asking what it thinks about that.
     Close(WindowToken),
+    /// Give every focus grab the surfaces of its windows.
+    SyncGrabs,
+    /// Ask the desktop to lock the session.
+    Lock(Rc<crate::lock::LockEntry>),
+    /// Unlock the session and close the lock windows.
+    Unlock(Rc<crate::lock::LockEntry>),
     /// Stop the application.
     Quit,
 }
@@ -196,6 +220,10 @@ struct Inner {
     status: FxHashMap<WindowToken, WindowStatus>,
     /// How to wake the loop, once there is a loop to wake.
     platform: Option<Arc<dyn Waker>>,
+    /// Every focus grab that exists.
+    grabs: Vec<Rc<crate::grab::GrabEntry>>,
+    /// The session lock, from the request until it is over.
+    lock: Option<Rc<crate::lock::LockEntry>>,
 }
 
 impl WindowCommands {
@@ -239,6 +267,66 @@ impl WindowCommands {
             .borrow_mut()
             .queue
             .push_back(WindowCommand::Close(token));
+        self.ping();
+    }
+
+    /// Asks for every focus grab to be given the surfaces of its windows.
+    pub(crate) fn sync_grabs(&self) {
+        let mut inner = self.inner.borrow_mut();
+        // One is enough: the sync reads every grab as it is when the queue is drained.
+        if inner
+            .queue
+            .iter()
+            .any(|command| matches!(command, WindowCommand::SyncGrabs))
+        {
+            return;
+        }
+        inner.queue.push_back(WindowCommand::SyncGrabs);
+        drop(inner);
+        self.ping();
+    }
+
+    /// Records a focus grab, so that the runtime gives it its surfaces.
+    pub(crate) fn register_grab(&self, grab: Rc<crate::grab::GrabEntry>) {
+        self.inner.borrow_mut().grabs.push(grab);
+        self.sync_grabs();
+    }
+
+    /// Every focus grab that exists, as a snapshot.
+    pub(crate) fn grabs(&self) -> Vec<Rc<crate::grab::GrabEntry>> {
+        self.inner.borrow().grabs.clone()
+    }
+
+    /// Forgets the focus grabs that `keep` refuses.
+    pub(crate) fn retain_grabs(&self, keep: impl FnMut(&Rc<crate::grab::GrabEntry>) -> bool) {
+        self.inner.borrow_mut().grabs.retain(keep);
+    }
+
+    /// The session lock that is asked for or held.
+    pub(crate) fn session_lock(&self) -> Option<Rc<crate::lock::LockEntry>> {
+        self.inner
+            .borrow()
+            .lock
+            .as_ref()
+            .filter(|lock| lock.is_live())
+            .map(Rc::clone)
+    }
+
+    /// Records a session lock and asks for it on the next turn.
+    pub(crate) fn request_lock(&self, lock: Rc<crate::lock::LockEntry>) {
+        let mut inner = self.inner.borrow_mut();
+        inner.lock = Some(Rc::clone(&lock));
+        inner.queue.push_back(WindowCommand::Lock(lock));
+        drop(inner);
+        self.ping();
+    }
+
+    /// Asks for the session to be unlocked on the next turn.
+    pub(crate) fn request_unlock(&self, lock: Rc<crate::lock::LockEntry>) {
+        self.inner
+            .borrow_mut()
+            .queue
+            .push_back(WindowCommand::Unlock(lock));
         self.ping();
     }
 

@@ -67,6 +67,26 @@ pub struct Connector {
     pub encoder: Option<u32>,
     /// The kernel's connection status, as `enum drm_connector_status`.
     connection: u32,
+    /// The kernel's subpixel order of the display, as `enum subpixel_order`.
+    subpixel: u32,
+}
+
+/// How the colour stripes of a display are arranged, as the kernel states it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum Subpixel {
+    /// The kernel does not know. Most displays state no order.
+    Unknown,
+    /// Red, green, blue, from left to right.
+    HorizontalRgb,
+    /// Blue, green, red, from left to right.
+    HorizontalBgr,
+    /// Red, green, blue, from top to bottom.
+    VerticalRgb,
+    /// Blue, green, red, from top to bottom.
+    VerticalBgr,
+    /// The display has no stripes.
+    None,
 }
 
 impl Connector {
@@ -84,6 +104,22 @@ impl Connector {
     /// `disconnected`.
     pub fn is_connected(&self) -> bool {
         self.connection == 1
+    }
+
+    /// Returns how the colour stripes of the display are arranged.
+    ///
+    /// The numbers are `enum subpixel_order` in `drm_connector.h`, which starts at zero for
+    /// unknown. The uapi has no defines for them. The `DRM_MODE_SUBPIXEL_*` values of libdrm
+    /// start at one and are a different numbering.
+    pub fn subpixel(&self) -> Subpixel {
+        match self.subpixel {
+            1 => Subpixel::HorizontalRgb,
+            2 => Subpixel::HorizontalBgr,
+            3 => Subpixel::VerticalRgb,
+            4 => Subpixel::VerticalBgr,
+            5 => Subpixel::None,
+            _ => Subpixel::Unknown,
+        }
     }
 
     /// Returns the mode the display prefers, or the first it offers.
@@ -188,8 +224,36 @@ impl Device {
                     modes: modes.into_iter().map(|raw| Mode { raw }).collect(),
                     encoder: (filled.encoder_id != 0).then_some(filled.encoder_id),
                     connection: filled.connection,
+                    subpixel: filled.subpixel,
                 }))
             },
         )
+    }
+
+    /// Returns `true` where a display is plugged into this card.
+    ///
+    /// A machine with two cards can have the screen on either one, and a card with nothing plugged
+    /// in lights nothing however well it draws. So a caller choosing between cards asks this.
+    ///
+    /// A card this answers `false` for can still be the right one to draw with. The question is
+    /// what the card *displays*, and a machine that renders on one card and scans out on another
+    /// asks it only of the second.
+    ///
+    /// Reading a connector needs no DRM master, so this can be asked before a card is taken.
+    ///
+    /// A connector that cannot be read is skipped. A connector can go away between the two
+    /// requests, for example when a dock is unplugged, and the other connectors still answer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Ioctl`](crate::Error::Ioctl) when the kernel refuses the list of
+    /// connectors, and [`Error::Unusable`](crate::Error::Unusable) when the counts kept moving.
+    pub fn has_a_display(&self) -> Result<bool> {
+        Ok(self
+            .resources()?
+            .connectors
+            .into_iter()
+            .filter_map(|id| self.connector(id).ok())
+            .any(|connector| connector.is_connected()))
     }
 }

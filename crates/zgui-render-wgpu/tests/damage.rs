@@ -393,6 +393,71 @@ fn a_backdrop_with_a_small_or_zero_blur_is_redrawn_without_a_seam() {
     }
 }
 
+/// A page, three rectangles, an opaque panel over them, and a translucent rectangle at `x` on the
+/// panel.
+fn covered(x: f32) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let solid = |scene: &mut Scene, bounds: (f32, f32, f32, f32), color: zgui_color::Color| {
+        let paint = scene.paints.add(zgui_scene::Paint::Solid(color));
+        scene.push_quad(Quad::filled(
+            rect(bounds.0, bounds.1, bounds.2, bounds.3),
+            paint,
+        ));
+    };
+    solid(
+        &mut scene,
+        (0.0, 0.0, SIDE as f32, SIDE as f32),
+        opaque(255, 255, 255),
+    );
+    solid(&mut scene, (10.0, 10.0, 60.0, 30.0), opaque(200, 30, 30));
+    solid(&mut scene, (40.0, 30.0, 60.0, 50.0), opaque(30, 160, 30));
+    solid(&mut scene, (20.0, 70.0, 80.0, 40.0), opaque(240, 200, 20));
+    solid(&mut scene, (16.0, 16.0, 96.0, 96.0), opaque(20, 40, 160));
+    solid(
+        &mut scene,
+        (x, 48.0, 20.0, 20.0),
+        zgui_color::Color::srgb_u8(255, 255, 255, 128),
+    );
+    scene.finish(&DamageSet::full());
+    scene
+}
+
+#[test]
+fn a_rectangle_under_an_opaque_fill_is_redrawn_to_the_frame_drawn_whole() {
+    // The replay of a damage rectangle starts at the latest opaque fill that covers it. The fill
+    // here is the fifth quad, so the erasure and four quads are left out, and the translucent
+    // rectangle blends with the fill alone.
+    let Some((mut tracked, mut whole_surface)) = support::renderer_pair() else {
+        return;
+    };
+    let mut covers = Vec::new();
+    covered(30.0).opaque_covers(&mut covers);
+    assert!(
+        covers.iter().any(|cover| cover.at == 4),
+        "the fixture's panel is not an opaque cover: {covers:?}"
+    );
+
+    present(&mut tracked, &covered(30.0));
+    for step in 1..6 {
+        let (was, is) = (30.0 + 6.0 * (step - 1) as f32, 30.0 + 6.0 * step as f32);
+        let mut damage: DamageSet = DamageSet::new();
+        damage.absorb(whole(rect(was, 48.0, 20.0, 20.0)));
+        damage.absorb(whole(rect(is, 48.0, 20.0, 20.0)));
+        let outcome = tracked.draw(&covered(is), &damage);
+        assert!(outcome.retires_damage(), "{outcome:?}");
+        let damaged = tracked
+            .read_presented()
+            .expect("a stand-in surface can be read back");
+        let full = present(&mut whole_surface, &covered(is));
+        assert_eq!(
+            damaged.max_difference(&full),
+            0,
+            "step {step}: the rectangle under the fill differs from the frame drawn whole"
+        );
+    }
+}
+
 #[test]
 fn nothing_outside_a_damage_rectangle_is_touched() {
     // The mechanism, rather than the outcome: a frame whose damage names one corner has to leave
@@ -488,6 +553,131 @@ fn a_group_inside_a_damage_rectangle_is_composited_from_what_the_rectangle_holds
     );
 }
 
+/// Lines and rectangles stacked in the top left, the same stack turned in the bottom right, and a
+/// blurred group whose content sits on both sides of the top-left rectangle's edge.
+///
+/// Each layer of a stack alternates kind, and the top layer of each is a rectangle `tint` colours.
+fn culled_corners(tint: [u8; 3]) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let white = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
+    let grey = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(90, 90, 90)));
+    let tinted = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(tint[0], tint[1], tint[2])));
+    scene.push_quad(Quad::filled(
+        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+        white,
+    ));
+    // A turn of 0.3 rad about the centre of the bottom-right stack.
+    let (sin, cos) = 0.3f32.sin_cos();
+    let owner = zgui_scene::PropertyOwner::new(9).expect("a handle is never the empty word");
+    let turn = zgui_geom::Matrix4::from_columns([
+        [cos, sin, 0.0, 0.0],
+        [-sin, cos, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [96.0, 96.0, 0.0, 1.0],
+    ]);
+    let viewport = scene.spatial.viewport();
+    let turned = scene.spatial.space_of(
+        viewport,
+        owner,
+        zgui_scene::OwnSpace::of(Some(turn), None, false),
+    );
+    // The turned stack starts with a line, so no layer of it shares a batch with the other stack.
+    for (origin, space, layers) in [((8.0, 8.0), None, 5), ((-16.0, -16.0), Some(turned), 6)] {
+        for layer in 0..layers {
+            let top = layer + 1 == layers;
+            let at = rect(
+                origin.0,
+                origin.1 + 3.0 * layer as f32,
+                32.0,
+                if top { 12.0 } else { 8.0 },
+            );
+            if (layer + layers) % 2 == 0 {
+                let mut line = zgui_scene::Decoration::new(
+                    at,
+                    2.0,
+                    opaque(200, 30, 30),
+                    zgui_scene::prim::DecorationStyle::Solid,
+                );
+                if let Some(space) = space {
+                    line.transform = space.index();
+                }
+                scene.push_decoration(line);
+            } else {
+                let paint = if top { tinted } else { grey };
+                let mut quad = Quad::filled(at, paint);
+                if let Some(space) = space {
+                    quad = quad.transformed(space);
+                }
+                scene.push_quad(quad);
+            }
+        }
+    }
+    // The group's line lies past the top-left rectangle, and its blur reaches into it.
+    let boundary = GroupBoundary::start(
+        rect(0.0, 48.0, 64.0, 24.0),
+        1.0,
+        zgui_scene::peniko::BlendMode::default(),
+        [Filter::Blur(3.0)].into_iter().collect(),
+    );
+    scene.push_group(boundary.clone());
+    scene.push_quad(Quad::filled(rect(4.0, 52.0, 16.0, 8.0), tinted));
+    scene.push_decoration(zgui_scene::Decoration::new(
+        rect(44.0, 52.0, 12.0, 6.0),
+        2.0,
+        opaque(30, 30, 200),
+        zgui_scene::prim::DecorationStyle::Solid,
+    ));
+    scene.push_group(boundary.end());
+    scene.finish(&DamageSet::full());
+    scene
+}
+
+#[test]
+fn a_frame_with_batches_left_out_of_a_rectangle_is_the_frame_drawn_whole() {
+    // With several rectangles, a batch that writes nothing inside one is not drawn into it. The
+    // picture is the one property that must not notice.
+    let Some((mut split, mut once)) = support::renderer_pair() else {
+        return;
+    };
+    present(&mut split, &culled_corners([40, 160, 40]));
+    let after = culled_corners([160, 40, 160]);
+
+    let mut corners: DamageSet = DamageSet::new();
+    corners.absorb(Rect::new(Point::new(0, 0), Size::new(42, 80)));
+    corners.absorb(Rect::new(Point::new(68, 68), Size::new(56, 56)));
+    assert_eq!(corners.len(), 2, "two disjoint rectangles");
+
+    let culled = {
+        let _turn = zgui_profile::counter::exclusive();
+        let before = zgui_profile::counter::get(zgui_profile::Counter::BatchesCulled);
+        let outcome = split.draw(&after, &corners);
+        assert!(outcome.retires_damage(), "{outcome:?}");
+        zgui_profile::counter::get(zgui_profile::Counter::BatchesCulled) - before
+    };
+    let in_corners = split
+        .read_presented()
+        .expect("a stand-in surface can be read back");
+    let whole_frame = present(&mut once, &after);
+    assert_eq!(
+        in_corners.max_difference(&whole_frame),
+        0,
+        "the corners redrawn with batches left out are the frame drawn whole"
+    );
+    if zgui_profile::COUNTERS_ENABLED {
+        assert!(
+            culled > 0,
+            "the fixture must leave batches out of a rectangle"
+        );
+    }
+}
+
 #[test]
 fn a_group_inside_a_filtered_group_is_composited_over_all_of_what_the_filter_reads() {
     // A composite lands in whatever is beneath the group, and what may be written there is that
@@ -546,51 +736,120 @@ fn a_group_inside_a_filtered_group_is_composited_over_all_of_what_the_filter_rea
     );
 }
 
+/// A white surface of `side` pixels with a red square near its origin, the same at every size.
+fn resize_scene(side: i32) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(side, side));
+    let white = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
+    let red = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(200, 40, 40)));
+    scene.push_quad(Quad::filled(
+        rect(0.0, 0.0, side as f32, side as f32),
+        white,
+    ));
+    scene.push_quad(Quad::filled(rect(8.0, 8.0, 40.0, 40.0), red));
+    scene.finish(&DamageSet::full());
+    scene
+}
+
+/// The bands a surface grown from `from` to `to` pixels square exposes.
+fn exposed(from: i32, to: i32) -> DamageSet {
+    let mut bands: DamageSet = DamageSet::new();
+    bands.absorb(Rect::new(Point::new(from, 0), Size::new(to - from, to)));
+    bands.absorb(Rect::new(Point::new(0, from), Size::new(from, to - from)));
+    bands
+}
+
 #[test]
-fn a_target_that_was_thrown_away_is_redrawn_whole_however_small_the_next_damage_set_is() {
-    // The composed target is what makes redrawing part of a frame legal, so a resize that crosses
-    // a size class and reallocates it leaves nothing for the next frame to rely on. Widening that
-    // frame's damage to the whole surface is the mechanism; without it every pixel outside the
-    // damage set is whatever an uninitialised texture holds.
+fn a_reallocated_target_keeps_its_picture() {
+    // A resize that crosses a size class reallocates the composed target. The new target receives
+    // the old picture, so the frame after it owes only the bands the new extent exposes: a full
+    // redraw there makes every resize step cost the whole document.
     let Some(mut renderer) = plain_renderer() else {
         return;
     };
-    let scene = |side: i32| {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(side, side));
-        let white = scene
-            .paints
-            .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
-        let red = scene
-            .paints
-            .add(zgui_scene::Paint::Solid(opaque(200, 40, 40)));
-        scene.push_quad(Quad::filled(
-            rect(0.0, 0.0, side as f32, side as f32),
-            white,
-        ));
-        scene.push_quad(Quad::filled(rect(8.0, 8.0, 40.0, 40.0), red));
-        scene.finish(&DamageSet::full());
-        scene
-    };
-    present(&mut renderer, &scene(SIDE));
+    present(&mut renderer, &resize_scene(SIDE));
 
-    // 128 and 300 are in different size classes, so the target is thrown away rather than reused.
+    // 128 and 300 are in different size classes, so the target is allocated again.
     renderer.configure(RenderTarget::new(Size::new(300, 300), Scale::new(1.0)));
-    let mut corner: DamageSet = DamageSet::new();
-    corner.absorb(Rect::new(Point::new(0, 0), Size::new(16, 16)));
-    let outcome = renderer.draw(&scene(300), &corner);
+    assert!(
+        renderer.composed_survives_configure(),
+        "a reallocation alone must not cost the picture"
+    );
+    let bands = exposed(SIDE, 300);
+    let outcome = renderer.draw(&resize_scene(300), &bands);
     assert_eq!(
         outcome.stats().map(|stats| stats.damage_px),
-        Some(300 * 300),
-        "the frame after a reallocation redraws all of the surface, not its damage set"
+        Some(300 * 300 - SIDE as u64 * SIDE as u64),
+        "the frame after a reallocation redraws the exposed bands only"
     );
     let after_resize = renderer.read_composed();
-
-    renderer.draw(&scene(300), &DamageSet::full());
+    renderer.draw(&resize_scene(300), &DamageSet::full());
     assert_eq!(
         after_resize.max_difference(&renderer.read_composed()),
         0,
         "and what it left behind is the frame drawn whole"
+    );
+}
+
+#[test]
+fn a_target_reallocated_twice_before_a_draw_keeps_the_picture_drawn_last() {
+    // The first replacement was never drawn into, so the picture is in the texture before it.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    present(&mut renderer, &resize_scene(SIDE));
+    renderer.configure(RenderTarget::new(Size::new(300, 300), Scale::new(1.0)));
+    renderer.configure(RenderTarget::new(Size::new(600, 600), Scale::new(1.0)));
+    renderer.draw(&resize_scene(600), &exposed(SIDE, 600));
+    let after_resize = renderer.read_composed();
+    renderer.draw(&resize_scene(600), &DamageSet::full());
+    assert_eq!(
+        after_resize.max_difference(&renderer.read_composed()),
+        0,
+        "the picture drawn last reached the newest target"
+    );
+}
+
+#[test]
+fn a_shrink_that_frees_the_allocation_keeps_the_picture() {
+    // 600 to 100 pixels frees most of the allocation. The shrink exposes nothing, so the frame
+    // after it has no damage and still has to carry the picture over.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    renderer.configure(RenderTarget::new(Size::new(600, 600), Scale::new(1.0)));
+    present(&mut renderer, &resize_scene(600));
+    renderer.configure(RenderTarget::new(Size::new(100, 100), Scale::new(1.0)));
+    renderer.draw(&resize_scene(100), &DamageSet::new());
+    let after_resize = renderer.read_composed();
+    renderer.draw(&resize_scene(100), &DamageSet::full());
+    assert_eq!(
+        after_resize.max_difference(&renderer.read_composed()),
+        0,
+        "the shrunk target holds the frame drawn whole"
+    );
+}
+
+#[test]
+fn a_scale_change_redraws_the_whole_surface_however_small_the_next_damage_set_is() {
+    // A new scale changes what every composed pixel means, so nothing in the target survives it.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    present(&mut renderer, &resize_scene(SIDE));
+    renderer.configure(RenderTarget::new(Size::new(SIDE, SIDE), Scale::new(2.0)));
+    assert!(!renderer.composed_survives_configure());
+    let mut corner: DamageSet = DamageSet::new();
+    corner.absorb(Rect::new(Point::new(0, 0), Size::new(16, 16)));
+    let outcome = renderer.draw(&resize_scene(SIDE), &corner);
+    assert_eq!(
+        outcome.stats().map(|stats| stats.damage_px),
+        Some(SIDE as u64 * SIDE as u64),
+        "the frame after a scale change redraws all of the surface, not its damage set"
     );
 }
 
@@ -802,4 +1061,91 @@ fn a_backdrop_is_drawn_where_its_coordinate_system_now_is() {
             "shifted by {shift}: the backdrop under the system differs from the backdrop drawn there"
         );
     }
+}
+
+/// The vertical bands `rects` touch, merged the way whatever copies a frame out wants them.
+///
+/// Worked out here from the rectangles the frame reported rather than by calling the renderer's
+/// own helper, so the two answers are checked against each other.
+fn bands(rects: &[Rect<i32, Device>]) -> Vec<core::ops::Range<u32>> {
+    let mut spans: Vec<core::ops::Range<u32>> = rects
+        .iter()
+        .filter(|rect| rect.size.height > 0)
+        .map(|rect| {
+            let top = rect.origin.y.max(0) as u32;
+            top..rect.origin.y.saturating_add(rect.size.height).max(0) as u32
+        })
+        .collect();
+    spans.sort_unstable_by_key(|band| band.start);
+    let mut merged: Vec<core::ops::Range<u32>> = Vec::new();
+    for span in spans {
+        match merged.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            _ => merged.push(span),
+        }
+    }
+    merged
+}
+
+#[test]
+fn a_frame_says_which_rectangles_and_rows_it_drew() {
+    // Nothing else in this crate reads the answer, so nothing else fails when it is empty. A
+    // console copies exactly these rectangles onto the buffer its display scans out of, and a
+    // frame that reports none is copied nowhere: the display then holds whatever its buffer was
+    // allocated with, which is black. That is a defect no pixel assertion in this file can see,
+    // because the frame itself is drawn correctly either way.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let surface = Rect::new(Point::new(0, 0), Size::new(SIDE, SIDE));
+
+    let items = base();
+    present(&mut renderer, &build(&items));
+    assert_eq!(
+        renderer.composed_rects(),
+        [surface],
+        "a frame drawn against the whole surface drew the whole surface"
+    );
+    assert_eq!(
+        renderer.composed_rows(),
+        bands(&[surface]),
+        "and its rows are the whole of it"
+    );
+
+    // One rectangle changes colour, so the damage is that rectangle and nothing like the surface.
+    let mut recoloured = items.clone();
+    recoloured[2].color = [10, 220, 10];
+    let damage = damage_between(&items, &recoloured);
+    let outcome = renderer.draw(&build(&recoloured), &damage);
+    assert!(outcome.retires_damage(), "{outcome:?}");
+
+    let reported = renderer.composed_rects().to_vec();
+    assert!(
+        !reported.is_empty(),
+        "a damaged frame has to say what it drew, and this one said nothing"
+    );
+    let covered: i64 = reported
+        .iter()
+        .map(|rect| i64::from(rect.size.width) * i64::from(rect.size.height))
+        .sum();
+    assert!(
+        covered < i64::from(SIDE) * i64::from(SIDE),
+        "this frame redrew one rectangle, so its report has to be smaller than the surface: \
+         {reported:?}"
+    );
+    // The ink that changed has to be inside what the frame says it drew, or whatever copies the
+    // frame out leaves part of the change behind on the screen.
+    let changed = Point::new(
+        recoloured[2].bounds.0 as i32 + recoloured[2].bounds.2 as i32 / 2,
+        recoloured[2].bounds.1 as i32 + recoloured[2].bounds.3 as i32 / 2,
+    );
+    assert!(
+        reported.iter().any(|rect| rect.contains(changed)),
+        "the rectangle that changed at {changed:?} is outside the report: {reported:?}"
+    );
+    assert_eq!(
+        renderer.composed_rows(),
+        bands(&reported),
+        "the rows and the rectangles have to be the same answer"
+    );
 }

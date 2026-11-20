@@ -32,7 +32,9 @@ zgui-console = { path = "../zgui-console", version = "0.1.0", optional = true }
 # Android lab exercises shipped component controls and theme tokens.
 zgui-ui = { path = "../zgui-ui", version = "0.1.0" }
 zgui-ui-tokens = { path = "../zgui-ui-tokens", version = "0.1.0" }
-zgui-devtools = { path = "../zgui-devtools", version = "0.1.0" }
+# Without its `counters` feature, because a dev-dependency is linked into every example: a release
+# example then measures the inert path an application ships.
+zgui-devtools = { path = "../zgui-devtools", version = "0.1.0", default-features = false }
 # Temporary, for diagnosing the console backend. The rule above holds for every other example: an
 # application names the umbrella crate and nothing else. `tty` is the exception because the console
 # it runs on has standard error pointed at the screen, so a log has to reach a file before anything
@@ -104,6 +106,10 @@ path = "../../examples/csd.rs"
 [[example]]
 name = "images"
 path = "../../examples/images.rs"
+
+[[example]]
+name = "layer_shell"
+path = "../../examples/layer_shell.rs"
 
 # The console example, which runs on the kernel's display interface rather than on a desktop. It
 # names `run_drm`, so it does not compile without the backend that defines it. `required-features`

@@ -70,7 +70,39 @@ impl Document {
     /// Two windows are two documents, and giving them distinct identities is what stops a node name
     /// from one ever resolving inside the other.
     pub fn with_id(document: DocumentId) -> Self {
-        let store = Box::into_raw(Box::new(DocumentStore::new(document)));
+        Self::over(DocumentStore::new(document))
+    }
+
+    /// An empty document identified as `document`, taking the identity over from the document
+    /// `succession` came from.
+    ///
+    /// A process can address only [`DOCUMENT_COUNT`](zgui_arena::DOCUMENT_COUNT) documents at once,
+    /// so a document that is gone gives its identity to a later one. A node key of the old
+    /// document never resolves in this one, because each slot starts past the last counter the
+    /// old document issued for it.
+    ///
+    /// Answers [`None`] when the old document used up the counters of the slot the document node
+    /// occupies. The identity is then spent.
+    ///
+    /// ```
+    /// use zgui_dom::{Document, DocumentId};
+    ///
+    /// let old = Document::with_id(DocumentId::FIRST);
+    /// let stale = old.store().key_of(old.document_index());
+    /// let succession = old.store().succession();
+    /// drop(old);
+    ///
+    /// let new = Document::succeeding(DocumentId::FIRST, &succession).expect("counters remain");
+    /// assert_eq!(new.store().index_of(stale), None);
+    /// ```
+    pub fn succeeding(document: DocumentId, succession: &crate::Succession) -> Option<Self> {
+        succession.next_generation(0)?;
+        Some(Self::over(DocumentStore::succeeding(document, succession)))
+    }
+
+    /// A document over `store`, with its document node at slot zero.
+    fn over(store: DocumentStore) -> Self {
+        let store = Box::into_raw(Box::new(store));
         let mut built = Self {
             store,
             root: Cell::new(OptIndex::NONE),
@@ -389,6 +421,87 @@ mod tests {
         assert_eq!(document.len(), 1);
         assert_eq!(document.document_node().kind(), NodeKind::Document);
         assert!(document.root().is_none());
+    }
+
+    #[test]
+    fn a_successor_reuses_the_identity_and_resolves_no_key_of_the_old_document() {
+        let id = crate::DocumentId::new(3).expect("in range");
+        let mut old = Document::with_id(id);
+        let root = old.append(
+            old.document_index(),
+            NodeKind::Element,
+            ElementName::new("root"),
+        );
+        let child = old.append(root, NodeKind::Element, ElementName::new("box"));
+        let stale: Vec<_> = [old.document_index(), root, child]
+            .into_iter()
+            .map(|index| old.store().key_of(index))
+            .collect();
+        let succession = old.store().succession();
+        drop(old);
+
+        let mut new = Document::succeeding(id, &succession).expect("counters remain");
+        assert_eq!(new.store().document(), id);
+        assert_eq!(new.len(), 1, "the successor starts empty");
+        let root = new.append(
+            new.document_index(),
+            NodeKind::Element,
+            ElementName::new("root"),
+        );
+        let child = new.append(root, NodeKind::Element, ElementName::new("box"));
+        let fresh: Vec<_> = [new.document_index(), root, child]
+            .into_iter()
+            .map(|index| new.store().key_of(index))
+            .collect();
+        for (stale, fresh) in stale.iter().zip(&fresh) {
+            assert_eq!(stale.index(), fresh.index(), "the slots are used again");
+            assert_eq!(new.store().index_of(*stale), None, "{stale:?} resolves");
+            assert!(new.store().index_of(*fresh).is_some());
+        }
+    }
+
+    #[test]
+    fn a_successor_skips_the_slots_its_predecessor_retired() {
+        use zgui_arena::{ChunkArena, DomainId, Generation};
+
+        // Slot one runs through every counter, so the succession retires it.
+        let mut arena = ChunkArena::new(DomainId::FIRST);
+        arena.insert(0_u32);
+        let mut key = arena.insert(1);
+        while key.generation() != Generation::LAST {
+            arena.remove(key);
+            arena.recycle();
+            key = arena.insert(1);
+        }
+        let succession = arena.succession();
+        assert_eq!(succession.next_generation(1), None);
+
+        let mut document =
+            Document::succeeding(crate::DocumentId::FIRST, &succession).expect("slot zero is free");
+        let root = document.append(
+            document.document_index(),
+            NodeKind::Element,
+            ElementName::new("root"),
+        );
+        assert_eq!(root.get(), 2, "the retired slot is skipped");
+        let key = document.store().key_of(root);
+        assert_eq!(document.store().index_of(key), Some(root));
+        let retired = document.store().key_of(crate::NodeIndex::new(1));
+        assert_eq!(document.store().index_of(retired), None);
+    }
+
+    #[test]
+    fn a_successor_is_refused_once_the_document_node_slot_is_spent() {
+        use zgui_arena::{ChunkArena, DomainId, Generation};
+
+        let mut arena = ChunkArena::new(DomainId::FIRST);
+        let mut key = arena.insert(0_u32);
+        while key.generation() != Generation::LAST {
+            arena.remove(key);
+            arena.recycle();
+            key = arena.insert(0);
+        }
+        assert!(Document::succeeding(crate::DocumentId::FIRST, &arena.succession()).is_none());
     }
 
     #[test]

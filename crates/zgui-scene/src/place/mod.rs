@@ -100,6 +100,24 @@ impl Scene {
         self.travel.of(node)
     }
 
+    /// Whether an animation moves `node` or a coordinate system above it.
+    ///
+    /// A coordinate system has a region declared for as long as an animation moves it, so a
+    /// declaration on the chain from `node` to the root is what says so.
+    pub fn travels(&self, node: SpatialId) -> bool {
+        if self.travel.is_empty() {
+            return false;
+        }
+        let mut next = Some(node);
+        while let Some(current) = next {
+            if self.travel.of(current).is_some() {
+                return true;
+            }
+            next = self.spatial.get(current).and_then(|held| held.parent);
+        }
+        false
+    }
+
     /// Widens what `node` declared so that it admits where `local` would put the subtree.
     ///
     /// What a caller does with a refusal. The box has to be composed again this frame either way,

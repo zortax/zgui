@@ -113,7 +113,8 @@ pub fn cross_maintenance(harness: &mut Harness<Runtime>) {
 /// The first line fragment in the window's layout, with the box it belongs to.
 ///
 /// Read out of the fragment tree rather than assumed, because *where layout said* is the thing a
-/// glyph assertion is testing against: a constant would be asserting the test's arithmetic.
+/// glyph assertion is testing against: a constant would be asserting the test's arithmetic. In the
+/// line's own space, which is the space its primitives are pushed in.
 pub fn first_line_box(
     window: &zgui_runtime::Window,
 ) -> zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device> {
@@ -132,6 +133,38 @@ pub fn first_line_box(
         }
     }
     panic!("the document produced no line fragment at all");
+}
+
+/// [`first_line_box`] in device pixels, through the line's anchor: where a pointer aims at it.
+pub fn first_line_on_device(
+    window: &zgui_runtime::Window,
+) -> zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device> {
+    *lines_on_device(window)
+        .first()
+        .expect("the document produced no line fragment at all")
+}
+
+/// [`line_boxes`] in device pixels, through each line's anchor.
+pub fn lines_on_device(
+    window: &zgui_runtime::Window,
+) -> Vec<zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>> {
+    let layout = window.layout().borrow();
+    let placements = window.placements();
+    let mut found = Vec::new();
+    for key in layout.keys() {
+        for frag in layout.fragments_of_box(key) {
+            let Some(fragment) = layout.fragment(*frag) else {
+                continue;
+            };
+            if matches!(
+                fragment.kind,
+                zgui_layout::fragment::FragmentKind::Line { .. }
+            ) {
+                found.push(fragment.on_device(fragment.border_box, &placements));
+            }
+        }
+    }
+    found
 }
 
 /// A renderer that records the display list instead of drawing it.

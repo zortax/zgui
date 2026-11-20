@@ -1,7 +1,16 @@
 //! Noticing that the device died.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, OnceLock};
+
+/// What is told when the device is lost.
+struct Watcher(Box<dyn Fn() + Send + Sync>);
+
+impl core::fmt::Debug for Watcher {
+    fn fmt(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        formatter.write_str("Watcher")
+    }
+}
 
 /// The flag a device-lost callback sets, and the counter of validation failures beside it.
 ///
@@ -14,6 +23,8 @@ pub struct DeviceLoss {
     lost: AtomicBool,
     /// How many times acquisition has failed validation in a row.
     consecutive_validation_failures: AtomicU32,
+    /// What is told the first time the device is reported lost.
+    watcher: OnceLock<Watcher>,
 }
 
 impl DeviceLoss {
@@ -30,8 +41,21 @@ impl DeviceLoss {
 
     /// Records that the device was lost, with the driver's reason.
     pub fn report(&self, reason: wgpu::DeviceLostReason, message: &str) {
-        self.lost.store(true, Ordering::Release);
+        let already = self.lost.swap(true, Ordering::AcqRel);
         tracing::error!(?reason, message, "the graphics device was lost");
+        if !already && let Some(watcher) = self.watcher.get() {
+            (watcher.0)();
+        }
+    }
+
+    /// Asks to be told the first time the device is reported lost.
+    ///
+    /// For an owner that has to act on a loss at once and cannot wait for a frame to notice it:
+    /// a browser opens the replacement device through a promise, which no frame can wait for.
+    /// `told` runs inside the driver's callback, so it may only start work that runs later. The
+    /// first watcher is kept and a second one is ignored.
+    pub fn watch(&self, told: impl Fn() + Send + Sync + 'static) {
+        let _ = self.watcher.set(Watcher(Box::new(told)));
     }
 
     /// Returns a closure that records a loss here, for a device-lost callback that a host owns.

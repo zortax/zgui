@@ -2,7 +2,9 @@
 
 use zgui_geom::{Css, CssPx, Edges, Rect};
 
+use crate::monitor::MonitorTarget;
 use crate::surface::id::SurfaceId;
+use crate::surface::serial::InputSerial;
 
 /// What a surface is to the desktop.
 ///
@@ -20,8 +22,16 @@ pub enum SurfaceRole {
     Toplevel,
     /// A surface placed against a rectangle of another surface, and dismissed with it.
     Popup(PopupPlacement),
-    /// A part of the desktop shell: a wallpaper, a dock, a notification, a lock screen.
+    /// A part of the desktop shell: a wallpaper, a dock, a notification.
     Layer(LayerPlacement),
+    /// The lock screen on one output, while the application holds the session lock.
+    ///
+    /// The desktop sizes it to cover the whole output, and it takes the keyboard. Only an
+    /// application that asked for the lock with
+    /// [`PlatformCx::lock_session`](crate::PlatformCx::lock_session) can make one, and it makes
+    /// one for each output. The surface cannot be hidden. It closes with
+    /// [`CloseReason::OutputGone`](crate::CloseReason::OutputGone) when its output goes away.
+    Lock(MonitorTarget),
 }
 
 /// Where a pop-up sits relative to the surface that owns it.
@@ -30,6 +40,9 @@ pub enum SurfaceRole {
 /// a rectangle on the parent, a corner of that rectangle the pop-up is anchored to, and the corner
 /// of the pop-up that meets it. What happens when the result would leave the screen is
 /// [`Constrain`]'s.
+///
+/// The parent is an ordinary window, another pop-up or a shell layer. A pop-up on a shell layer is
+/// how a bar opens a menu that extends past the bar's own edges.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PopupPlacement {
     /// The surface the pop-up belongs to and is measured against.
@@ -42,15 +55,20 @@ pub struct PopupPlacement {
     pub gravity: Anchor,
     /// What to do when the pop-up would not fit.
     pub constrain: Constrain,
-    /// Whether the pop-up takes the pointer and keyboard until it is dismissed.
+    /// The press that lets the pop-up take the pointer and the keyboard until it is dismissed.
     ///
-    /// A menu does; a tooltip does not. A grab is only granted against a press the user made, so a
-    /// pop-up asking for one without a preceding press is dismissed by the desktop immediately.
-    pub grab: bool,
+    /// A menu takes them; a tooltip does not, and has `None`. A desktop grants the grab only
+    /// against a press the user made, so the serial comes from the handler of the press that opens
+    /// the pop-up. A grab that quotes anything else makes the desktop dismiss the pop-up at once.
+    /// A grabbing pop-up closes with [`CloseReason::Dismissed`](crate::CloseReason::Dismissed)
+    /// when the user presses outside it.
+    pub grab: Option<InputSerial>,
 }
 
 impl PopupPlacement {
-    /// A grabbing pop-up under `anchor_rect`, aligned to its left, sliding to stay on screen.
+    /// A pop-up under `anchor_rect`, aligned to its left, sliding to stay on screen.
+    ///
+    /// It takes no grab. Add one with [`PopupPlacement::with_grab`].
     pub fn below(parent: SurfaceId, anchor_rect: Rect<CssPx, Css>) -> Self {
         Self {
             parent,
@@ -58,8 +76,14 @@ impl PopupPlacement {
             anchor: Anchor::BottomLeft,
             gravity: Anchor::BottomRight,
             constrain: Constrain::SLIDE,
-            grab: true,
+            grab: None,
         }
+    }
+
+    /// The same placement, taking the pointer and the keyboard against the press `serial`.
+    pub fn with_grab(mut self, serial: InputSerial) -> Self {
+        self.grab = Some(serial);
+        self
     }
 }
 
@@ -129,7 +153,20 @@ impl Constrain {
 }
 
 /// Where a shell layer sits and how much of the screen it claims.
+///
+/// ```
+/// use zgui_geom::{CssPx, Edges};
+/// use zgui_platform::{ExclusiveZone, Layer, LayerPlacement};
+///
+/// // A bar across the top of the screen that keeps windows out of its 34 pixels.
+/// let bar = LayerPlacement::new(Layer::Top)
+///     .with_anchors(Edges::new(true, true, false, true))
+///     .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(34.0)))
+///     .with_namespace("bar");
+/// assert_eq!(bar.namespace.as_deref(), Some("bar"));
+/// ```
 #[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
 pub struct LayerPlacement {
     /// Which layer of the desktop it belongs to.
     pub layer: Layer,
@@ -140,16 +177,191 @@ pub struct LayerPlacement {
     pub anchors: Edges<bool>,
     /// How far in from each anchored edge it sits.
     pub margin: Edges<CssPx>,
-    /// How much room to reserve for it, so that ordinary windows do not open underneath.
-    ///
-    /// Absent lets the desktop take the surface's own extent along its anchored edge, which is what
-    /// a dock wants. Zero reserves nothing, which is what an overlay wants.
-    pub exclusive_zone: Option<CssPx>,
+    /// How the surface and the room other shell surfaces reserve affect each other.
+    pub exclusive_zone: ExclusiveZone,
     /// Whether the surface takes the keyboard.
     pub keyboard: KeyboardInteractivity,
-    /// The output to place it on, named as [`MonitorInfo::name`](crate::MonitorInfo::name)
-    /// reports it. Absent lets the desktop choose.
-    pub monitor: Option<String>,
+    /// The output to place it on. Absent lets the desktop choose.
+    ///
+    /// A backend refuses the surface when no connected output matches, because a bar that opens
+    /// on another screen is a second bar on that screen.
+    pub monitor: Option<MonitorTarget>,
+    /// What the surface is for, in a word the desktop's rules can match, such as `bar` or
+    /// `notifications`.
+    ///
+    /// Absent uses the application identifier. The desktop reads it once, when the surface is
+    /// made.
+    pub namespace: Option<String>,
+}
+
+impl LayerPlacement {
+    /// A surface on `layer`, anchored to no edge, that avoids the room other surfaces reserve.
+    pub fn new(layer: Layer) -> Self {
+        Self {
+            layer,
+            ..Self::default()
+        }
+    }
+
+    /// The same placement fastened to `anchors`.
+    pub fn with_anchors(mut self, anchors: Edges<bool>) -> Self {
+        self.anchors = anchors;
+        self
+    }
+
+    /// The same placement, `margin` in from each anchored edge.
+    pub fn with_margin(mut self, margin: Edges<CssPx>) -> Self {
+        self.margin = margin;
+        self
+    }
+
+    /// The same placement with `zone` as its exclusive zone.
+    pub fn with_exclusive_zone(mut self, zone: ExclusiveZone) -> Self {
+        self.exclusive_zone = zone;
+        self
+    }
+
+    /// The same placement, taking the keyboard as `keyboard` says.
+    pub fn with_keyboard(mut self, keyboard: KeyboardInteractivity) -> Self {
+        self.keyboard = keyboard;
+        self
+    }
+
+    /// The same placement on `monitor`: a [`MonitorId`](crate::MonitorId) or an output name.
+    pub fn with_monitor(mut self, monitor: impl Into<MonitorTarget>) -> Self {
+        self.monitor = Some(monitor.into());
+        self
+    }
+
+    /// The same placement under `namespace`.
+    pub fn with_namespace(mut self, namespace: impl Into<String>) -> Self {
+        self.namespace = Some(namespace.into());
+        self
+    }
+}
+
+/// How a shell layer and the room other shell surfaces reserve affect each other.
+///
+/// A bar reserves a strip along its edge so that windows and other layers do not cover it. Every
+/// other layer either moves to stay out of the strips the others reserve, or ignores them.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub enum ExclusiveZone {
+    /// Reserve nothing, and stay out of the room other surfaces reserve.
+    ///
+    /// What a pop-over below a bar wants: it opens below the bar, not under it.
+    #[default]
+    Avoid,
+    /// Reserve this much room along the anchored edge, measured from that edge.
+    ///
+    /// What a bar or a dock wants. The room is reserved only when the surface is anchored to one
+    /// edge, or to one edge and the two edges beside it.
+    Reserve(CssPx),
+    /// Reserve nothing, and extend under the room other surfaces reserve.
+    ///
+    /// What a wallpaper, a full-screen overlay or a lock screen wants.
+    Ignore,
+}
+
+/// The parts of a [`LayerPlacement`] that can change after the surface is made.
+///
+/// Each field is a change when present and is left as it is when absent. The output and the
+/// namespace are fixed when the surface is made, so they are not here.
+///
+/// ```
+/// use zgui_geom::{CssPx, Edges};
+/// use zgui_platform::{ExclusiveZone, LayerPatch, LayerPlacement};
+///
+/// let mut placement = LayerPlacement::default();
+/// LayerPatch::new()
+///     .with_exclusive_zone(ExclusiveZone::Reserve(CssPx(40.0)))
+///     .apply_to(&mut placement);
+/// assert_eq!(placement.exclusive_zone, ExclusiveZone::Reserve(CssPx(40.0)));
+/// assert_eq!(placement.anchors, Edges::default(), "an absent field changes nothing");
+/// ```
+#[derive(Clone, Debug, Default, PartialEq)]
+#[non_exhaustive]
+pub struct LayerPatch {
+    /// A new layer.
+    pub layer: Option<Layer>,
+    /// New edges to fasten the surface to.
+    pub anchors: Option<Edges<bool>>,
+    /// New margins.
+    pub margin: Option<Edges<CssPx>>,
+    /// A new exclusive zone.
+    pub exclusive_zone: Option<ExclusiveZone>,
+    /// A new keyboard interactivity.
+    pub keyboard: Option<KeyboardInteractivity>,
+}
+
+impl LayerPatch {
+    /// A patch that changes nothing.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// The same patch, moving the surface to `layer`.
+    pub fn with_layer(mut self, layer: Layer) -> Self {
+        self.layer = Some(layer);
+        self
+    }
+
+    /// The same patch, fastening the surface to `anchors`.
+    pub fn with_anchors(mut self, anchors: Edges<bool>) -> Self {
+        self.anchors = Some(anchors);
+        self
+    }
+
+    /// The same patch, with `margin` in from each anchored edge.
+    pub fn with_margin(mut self, margin: Edges<CssPx>) -> Self {
+        self.margin = Some(margin);
+        self
+    }
+
+    /// The same patch, with `zone` as the exclusive zone.
+    pub fn with_exclusive_zone(mut self, zone: ExclusiveZone) -> Self {
+        self.exclusive_zone = Some(zone);
+        self
+    }
+
+    /// The same patch, taking the keyboard as `keyboard` says.
+    pub fn with_keyboard(mut self, keyboard: KeyboardInteractivity) -> Self {
+        self.keyboard = Some(keyboard);
+        self
+    }
+
+    /// Whether the patch changes nothing.
+    pub fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
+
+    /// Writes every present field into `placement`.
+    pub fn apply_to(&self, placement: &mut LayerPlacement) {
+        if let Some(layer) = self.layer {
+            placement.layer = layer;
+        }
+        if let Some(anchors) = self.anchors {
+            placement.anchors = anchors;
+        }
+        if let Some(margin) = self.margin {
+            placement.margin = margin;
+        }
+        if let Some(zone) = self.exclusive_zone {
+            placement.exclusive_zone = zone;
+        }
+        if let Some(keyboard) = self.keyboard {
+            placement.keyboard = keyboard;
+        }
+    }
+
+    /// Adds the changes of `later` to this patch. A field present in both takes the later value.
+    pub fn merge(&mut self, later: &Self) {
+        self.layer = later.layer.or(self.layer);
+        self.anchors = later.anchors.or(self.anchors);
+        self.margin = later.margin.or(self.margin);
+        self.exclusive_zone = later.exclusive_zone.or(self.exclusive_zone);
+        self.keyboard = later.keyboard.or(self.keyboard);
+    }
 }
 
 /// Which layer of the desktop a shell surface belongs to.
@@ -185,9 +397,12 @@ pub enum KeyboardInteractivity {
 
 #[cfg(test)]
 mod tests {
-    use super::{Anchor, Constrain, KeyboardInteractivity, Layer, PopupPlacement, SurfaceRole};
+    use super::{
+        Anchor, Constrain, ExclusiveZone, KeyboardInteractivity, Layer, LayerPatch, LayerPlacement,
+        PopupPlacement, SurfaceRole,
+    };
     use crate::surface::id::SurfaceId;
-    use zgui_geom::{CssPx, Point, Rect, Size};
+    use zgui_geom::{CssPx, Edges, Point, Rect, Size};
 
     #[test]
     fn a_surface_that_names_no_role_is_an_ordinary_window() {
@@ -204,7 +419,9 @@ mod tests {
         assert_eq!(placement.anchor, Anchor::BottomLeft);
         assert_eq!(placement.gravity, Anchor::BottomRight);
         assert_eq!(placement.constrain, Constrain::SLIDE);
-        assert!(placement.grab);
+        assert_eq!(placement.grab, None);
+        let menu = placement.with_grab(crate::InputSerial::new(12));
+        assert_eq!(menu.grab, Some(crate::InputSerial::new(12)));
     }
 
     #[test]
@@ -227,5 +444,41 @@ mod tests {
         const { assert!(!Constrain::NONE.slide) };
         assert_eq!(Constrain::default(), Constrain::NONE);
         const { assert!(Constrain::ANY.slide && Constrain::ANY.flip && Constrain::ANY.resize) };
+    }
+
+    #[test]
+    fn a_layer_avoids_the_room_others_reserve_unless_it_asks() {
+        // A pop-over that ignored the bar's zone would open under the bar.
+        assert_eq!(ExclusiveZone::default(), ExclusiveZone::Avoid);
+        assert_eq!(
+            LayerPlacement::default().exclusive_zone,
+            ExclusiveZone::Avoid
+        );
+    }
+
+    #[test]
+    fn a_patch_changes_only_what_it_names() {
+        let mut placement = LayerPlacement::new(Layer::Overlay)
+            .with_anchors(Edges::new(true, false, false, false))
+            .with_namespace("popover");
+        LayerPatch::new()
+            .with_keyboard(KeyboardInteractivity::OnDemand)
+            .apply_to(&mut placement);
+        assert_eq!(placement.keyboard, KeyboardInteractivity::OnDemand);
+        assert_eq!(placement.layer, Layer::Overlay);
+        assert_eq!(placement.anchors, Edges::new(true, false, false, false));
+        assert_eq!(placement.namespace.as_deref(), Some("popover"));
+    }
+
+    #[test]
+    fn a_later_patch_wins_where_both_name_a_field() {
+        let mut first = LayerPatch::new()
+            .with_layer(Layer::Top)
+            .with_exclusive_zone(ExclusiveZone::Ignore);
+        first.merge(&LayerPatch::new().with_layer(Layer::Overlay));
+        assert_eq!(first.layer, Some(Layer::Overlay));
+        assert_eq!(first.exclusive_zone, Some(ExclusiveZone::Ignore));
+        assert!(!first.is_empty());
+        assert!(LayerPatch::new().is_empty());
     }
 }

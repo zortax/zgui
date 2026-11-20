@@ -15,7 +15,7 @@ pub mod blink;
 pub mod place;
 
 use std::hash::{Hash, Hasher};
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_color::Color;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
@@ -29,7 +29,7 @@ pub use crate::caret::place::Located;
 ///
 /// One CSS pixel, and never less than one device pixel: a caret rounded to nothing is a field with
 /// no insertion point at all, which is the defect this whole module exists to remove.
-fn caret_width(scale: f32) -> f32 {
+pub(crate) fn caret_width(scale: f32) -> f32 {
     scale.round().max(1.0)
 }
 
@@ -252,12 +252,17 @@ impl Carets {
         self.blink.next_flip(now)
     }
 
+    /// The rectangles the installed plan draws, in device pixels of the frame that drew them.
+    pub fn drawn(&self) -> &[Rect<DevicePx, Device>] {
+        &self.drawn
+    }
+
     /// Replaces the plan, and reports every rectangle whose pixels have to be redrawn.
     ///
-    /// Both the rectangles the last frame drew and the ones this frame will: a caret that moved
-    /// leaves its old pixels behind, and a caret that has gone dark leaves all of them behind.
-    /// Returning them rather than damaging from here keeps this a value: the caller owns the damage
-    /// set and is the only thing that may write it.
+    /// Both the rectangles the last frame drew and the ones this frame will, in that order: a caret
+    /// that moved leaves its old pixels behind, and a caret that has gone dark leaves all of them
+    /// behind. Returning them rather than damaging from here keeps this a value: the caller owns
+    /// the damage set and is the only thing that may write it.
     pub fn install(
         &mut self,
         plan: Plan,

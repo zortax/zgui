@@ -7,9 +7,11 @@
 //! walk drains them as a side effect of doing its own work.
 
 use style::invalidation::element::restyle_hints::RestyleHint;
+use style::selector_parser::PseudoElement;
 use style::traversal_flags::TraversalFlags;
 use zgui_bits::Dirty;
 use zgui_dom::dirty::{propagate, walk};
+use zgui_dom::side::paint_key::PaintStyleHeld;
 use zgui_dom::{Document, NodeIndex, NodeKey};
 use zgui_profile::{Counter, counter};
 use zgui_text_style::TextPaint;
@@ -71,7 +73,21 @@ impl StyleEngine {
     /// Returns what the pass did: how many elements it styled, how many of those it matched
     /// against the rule set rather than merely cascading again, and how many were given an
     /// obligation as a result.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `pool` is wider than [`zgui_css::MAX_STYLE_THREADS`]. The engine keeps a fixed
+    /// number of per-worker slots, and a wider pool would index past them only when a worker past
+    /// the last slot takes a job. The check makes that failure the same on every machine.
     pub fn restyle(&mut self, document: &mut Document, pool: Option<&StylePool>) -> Restyle {
+        if let Some(pool) = pool {
+            assert!(
+                pool.width() <= zgui_css::MAX_STYLE_THREADS,
+                "a style pool of {} workers is wider than the {} the engine supports",
+                pool.width(),
+                zgui_css::MAX_STYLE_THREADS
+            );
+        }
         self.text_paint_updates.clear();
         self.refreshed_animations.clear();
         if !self.needs_restyle(document) {
@@ -85,6 +101,7 @@ impl StyleEngine {
         // A changed sheet set leaves the held chains naming rules no element matches any more.
         if self.deps.is_disabled() {
             self.refs.clear();
+            self.shared.clear();
         } else {
             self.refs.trim();
         }
@@ -115,6 +132,8 @@ impl StyleEngine {
                         animations: self.animations.shared(),
                         now: self.animations.now(),
                         refs: &self.refs,
+                        shared: &self.shared,
+                        settling: self.animations.settling(),
                     },
                     TraversalFlags::AnimationOnly,
                 );
@@ -139,6 +158,8 @@ impl StyleEngine {
                         animations: self.animations.shared(),
                         now: self.animations.now(),
                         refs: &self.refs,
+                        shared: &self.shared,
+                        settling: None,
                     },
                     TraversalFlags::empty(),
                 );
@@ -176,6 +197,17 @@ impl StyleEngine {
 
         // The keys of elements the document no longer holds, which nothing else would ever drop.
         self.texts.retire(document.store());
+        self.unit_readers.retire(document.store());
+        // The styles no element holds any more.
+        self.shared.sweep();
+        // A crossing is serviced by the cascade this restyle ran. An element still out of the
+        // document keeps its entry until a restyle reaches it.
+        let waiting: Vec<_> = self
+            .animation_waiting
+            .iter()
+            .filter_map(|key| document.store().index_of(*key))
+            .collect();
+        self.animations.keep_settling(&waiting);
 
         // Retire what the traversal consumed. Every other phase's walk retires its own bits as a
         // side effect of doing its work; this pair's does not exist, because the engine owns the
@@ -211,14 +243,16 @@ impl StyleEngine {
             // between the traversal and here has no style to translate, and its readers are
             // dropped with its columns.
             zgui_dom::side::readers::set_own(document.store_mut(), record.index, record.readers);
+            self.unit_readers.file(record.node, record.viewport_units);
             let Some(style) = document.node(record.index).primary_style() else {
                 continue;
             };
             // Read before the translation replaces it: the comparison the translation makes is the
             // same one this needs, and doing it twice would be two answers to one question.
             let held = document.store().columns().paint_key.get(record.node);
-            let previous_text = held.map(|key| key.inherited_text);
-            let previous_pseudos = held.map(|key| [key.pseudo_before, key.pseudo_after]);
+            let previous_text =
+                held.map(|held| crate::damage::paint_key::inherited_text(&held.style));
+            let previous_pseudos = held.map(PaintStyleHeld::pseudo_identities);
 
             // The same number the key carries, by the same route: an identity computed two ways is
             // two identities, and every restyled element would report a colour it did not change.
@@ -232,7 +266,15 @@ impl StyleEngine {
                 document.node(record.index).after_style(),
             ];
 
-            translate(document.store_mut(), &mut self.texts, record, &style, sink);
+            // The engine's own pseudo-element styles, whether or not they generate a box: the
+            // same ones the record's identities were taken from.
+            let node = document.node(record.index);
+            let pseudos = [
+                node.pseudo_style(&PseudoElement::Before),
+                node.pseudo_style(&PseudoElement::After),
+            ];
+            let held = PaintStyleHeld::new(style.clone(), pseudos);
+            translate(document.store_mut(), &mut self.texts, record, held, sink);
 
             if previous_text != Some(now) {
                 self.text_paint_updates.push(TextPaintUpdate {
@@ -347,6 +389,51 @@ mod tests {
             Viewport::new(CssPx(800.0), CssPx(600.0)),
         );
         (document, engine)
+    }
+
+    #[test]
+    fn the_shared_styles_give_back_what_no_element_holds_any_more() {
+        let (mut document, mut engine) = engine();
+        // One rule per round, so each round's element cascades from a chain of its own and the
+        // table keeps one more style.
+        const ROUNDS: usize = 600;
+        let sheet: String = (0..ROUNDS)
+            .map(|round| format!(".k{round} {{ width: {round}px }}\n"))
+            .collect();
+        engine.add_sheet(&document, SheetOrigin::Author, SheetSource::Text(&sheet));
+        let root = document.root_index().expect("the root element");
+
+        let mut ever_held = 0;
+        for round in 0..ROUNDS {
+            let row = document
+                .edit(&EverythingMatters, |batch| {
+                    let row = batch.create_element(ElementName::new("box"));
+                    batch.set_classes(row, &[ClassName::new(&format!("k{round}"))]);
+                    batch.insert_before(root, row, None);
+                    row
+                })
+                .expect("an unpoisoned document");
+            engine.restyle(&mut document, None);
+            ever_held = ever_held.max(engine.shared.len());
+
+            document
+                .edit(&EverythingMatters, |batch| batch.remove(row))
+                .expect("an unpoisoned document");
+            zgui_dom::arena::end_frame(&mut document);
+        }
+        engine.restyle(&mut document, None);
+
+        // The control: the table did keep the styles, so a sweep that gave back nothing would end
+        // holding one per round.
+        assert!(
+            ever_held > 1,
+            "the table never kept a style, so the bound below measures nothing"
+        );
+        let held = engine.shared.len();
+        assert!(
+            held < ROUNDS / 2,
+            "{held} styles kept for a document of two elements: the sweep is not keeping up"
+        );
     }
 
     #[test]

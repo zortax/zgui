@@ -57,7 +57,7 @@ fn a_line_holding_a_painted_span_is_flagged_and_inks_the_span() {
     let content_box = store
         .fragment(store.fragments_of_box(para)[0])
         .expect("live")
-        .content_box;
+        .content_box();
     let part = zgui_layout::inline::slices::device_rect(content_box, &resolution.slices[0]);
     assert!(
         line.local_ink.contains_rect(part),
@@ -69,7 +69,8 @@ fn a_line_holding_a_painted_span_is_flagged_and_inks_the_span() {
         "the padding reaches past the plain line's ink"
     );
     assert_ne!(
-        line.content_hash, 0,
+        store.fragment_extra(line).content_hash,
+        0,
         "the part's place is in the fingerprint"
     );
 }
@@ -79,7 +80,7 @@ fn padding_alone_paints_nothing_and_leaves_the_line_unflagged() {
     let (store, fixture) = laid("padding: 0 4px; color: blue");
     let line = first_line(&store, &fixture);
     assert!(!line.flags.contains(FragmentFlags::INLINE_EFFECTS));
-    assert_eq!(line.content_hash, 0);
+    assert_eq!(store.fragment_extra(line).content_hash, 0);
 }
 
 #[test]

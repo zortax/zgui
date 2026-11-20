@@ -214,19 +214,41 @@ jobs:
             --exclude zgui-xkb
 
   cross:
-    # Type-checks for Windows and macOS. It does not link or run anything. It catches Linux-only
+    # Type-checks for Windows, macOS and wasm32. It does not link or run anything. It catches Linux-only
     # imports, ungated dependencies and bounds that only one platform satisfies.
-    name: Check Windows and macOS
+    name: Check Windows, macOS and the browser
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Add targets
-        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin
+        run: rustup target add x86_64-pc-windows-msvc aarch64-apple-darwin wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Check Windows
         run: cargo check --workspace --target x86_64-pc-windows-msvc
       - name: Check macOS
         run: cargo check --workspace --target aarch64-apple-darwin
+      # A browser build links the framework and the component library. The desktop backends, the
+      # console stack and the tools are native only.
+      - name: Check the browser target
+        run: cargo check --target wasm32-unknown-unknown -p zgui -p zgui-ui
+
+  web:
+    # Builds an example for a browser: compile for wasm32, generate the bindings, write the page.
+    # It does not open a browser. It catches a bindings generator that no longer matches the
+    # lock file, and a link failure the type check of the cross job cannot see.
+    name: Browser build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      - name: Install the bindings generator the lock file pins
+        run: |
+          version=$(grep -A1 '^name = "wasm-bindgen"$' Cargo.lock | sed -n 's/^version = "\(.*\)"$/\1/p')
+          cargo install wasm-bindgen-cli --version "$version" --locked
+      - name: Build the hello example
+        run: cargo xtask web build hello --dev
+      - name: Test the translation that needs no browser
+        run: cargo test -p zgui-platform-web
 
   llvmpipe:
     # Runs the tests on a software Vulkan driver. Disabled: a debug build of the workspace fills

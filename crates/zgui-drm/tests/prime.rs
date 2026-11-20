@@ -9,6 +9,8 @@
 //! A device that opens. Exporting and importing take no DRM master, so this runs under a
 //! compositor and on any card the user may open.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::os::fd::AsFd;

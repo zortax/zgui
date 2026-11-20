@@ -29,6 +29,18 @@ pub fn is_scroll_container(style: &ComputedStyle) -> bool {
     scrolls(box_.overflow_x) || scrolls(box_.overflow_y)
 }
 
+/// Whether only code scrolls a box: it clips an axis with `overflow: hidden`, and no axis is
+/// `auto` or `scroll`.
+///
+/// CSS lets a script scroll such a box, and a person cannot. A text field is the common case: the
+/// framework scrolls it to keep the caret in view. The box becomes a scroll frame only while its
+/// offset is away from the origin, so the many boxes that clip and never scroll cost nothing.
+pub fn scrolls_by_code_only(style: &ComputedStyle) -> bool {
+    let box_ = style.get_box();
+    !is_scroll_container(style)
+        && (box_.overflow_x == OverflowValue::Hidden || box_.overflow_y == OverflowValue::Hidden)
+}
+
 /// Whether one axis's value makes a box scrollable.
 fn scrolls(value: OverflowValue) -> bool {
     matches!(value, OverflowValue::Auto | OverflowValue::Scroll)
@@ -81,6 +93,30 @@ pub fn region_of(store: &LayoutStore, key: BoxKey) -> Option<ScrollRegion> {
     if !is_scroll_container(&node.style) {
         return None;
     }
+    read_region(store, key)
+}
+
+/// The region code can scroll one box in: [`region_of`], and also a box that
+/// [only code scrolls](scrolls_by_code_only).
+///
+/// A box only code scrolls has neither axis marked as one a person may scroll, so its
+/// [hand limit](ScrollRegion::hand_limit) is zero.
+pub fn code_region_of(store: &LayoutStore, key: BoxKey) -> Option<ScrollRegion> {
+    let node = store.get(key)?;
+    if !is_scroll_container(&node.style) && !scrolls_by_code_only(&node.style) {
+        return None;
+    }
+    read_region(store, key)
+}
+
+/// [`code_region_of`] for an element, through its first box.
+pub fn code_region_of_element(store: &LayoutStore, element: NodeKey) -> Option<ScrollRegion> {
+    code_region_of(store, *store.boxes_of(element).first()?)
+}
+
+/// The region one box scrolls, read from its resolved layout.
+fn read_region(store: &LayoutStore, key: BoxKey) -> Option<ScrollRegion> {
+    let node = store.get(key)?;
     let layout = store.layout_of(key)?;
     let scrollport = layout.content_box();
     let box_ = node.style.get_box();
@@ -175,7 +211,7 @@ impl ScrollOffsets {
         element: NodeKey,
         offset: Point<DevicePx, Device>,
     ) -> Point<DevicePx, Device> {
-        let limit = region_of_element(store, element)
+        let limit = code_region_of_element(store, element)
             .map(|region| region.limit())
             .unwrap_or(Point::new(DevicePx(0.0), DevicePx(0.0)));
         let clamped = Point::new(

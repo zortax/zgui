@@ -262,3 +262,15 @@ fn the_headless_backend_reports_a_timestamp_that_only_a_test_can_move() {
         Duration::from_secs(5)
     );
 }
+
+#[test]
+fn a_backend_that_says_nothing_about_focus_grabs_makes_none() {
+    // The defaults are a desktop that cannot limit focus. Setting and destroying a grab that was
+    // never made does nothing.
+    let platform = Headless::new();
+    let cx: &dyn PlatformCx = &platform;
+    assert!(!cx.capabilities().focus_grab);
+    assert_eq!(cx.create_focus_grab(), None);
+    cx.set_focus_grab(crate::FocusGrabId::new(1), &[SurfaceId::new(1)]);
+    cx.destroy_focus_grab(crate::FocusGrabId::new(1));
+}
