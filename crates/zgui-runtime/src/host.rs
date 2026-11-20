@@ -590,6 +590,19 @@ impl ViewHost for RuntimeHost {
         )
     }
 
+    fn is_rtl(&self, node: NodeId) -> bool {
+        let Some(key) = self.key_of(node) else {
+            return false;
+        };
+        let document = self.document.borrow();
+        let Some(index) = document.store().index_of(key) else {
+            return false;
+        };
+        document.node(index).primary_style().is_some_and(|style| {
+            style.get_inherited_box().direction == zgui_css::values::text::Direction::Rtl
+        })
+    }
+
     fn scale(&self) -> f32 {
         self.scale.get()
     }
