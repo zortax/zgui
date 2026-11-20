@@ -338,6 +338,12 @@ pub trait SurfaceRenderer: 'static {
         wgpu::TextureFormat::Rgba8Unorm
     }
 
+    /// Usages the texture needs beyond those zgui always gives it, for example `COPY_SRC` to read
+    /// it back or `STORAGE_BINDING` to write it from a compute pass.
+    fn usage(&self) -> wgpu::TextureUsages {
+        wgpu::TextureUsages::empty()
+    }
+
     /// What the content's natural size is, for an element CSS leaves `auto`.
     fn intrinsic(&self) -> SurfaceIntrinsic {
         SurfaceIntrinsic::default()
@@ -852,7 +858,8 @@ impl WgpuSurfaces {
                         format: producer.format(),
                         usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                             | wgpu::TextureUsages::TEXTURE_BINDING
-                            | wgpu::TextureUsages::COPY_DST,
+                            | wgpu::TextureUsages::COPY_DST
+                            | producer.usage(),
                         view_formats: &[],
                     }));
                     *drawn = false;
