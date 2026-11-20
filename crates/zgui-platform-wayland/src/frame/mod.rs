@@ -2,7 +2,8 @@
 //!
 //! Four questions, one per module, and they are separable because each is answered from a
 //! different source. [`pace`] decides whether a redraw is delivered, from what the surface owes
-//! the compositor. [`visibility`] decides whether the surface is worth drawing at all, from what
+//! the compositor, and [`ahead`] decides whether it may run before the compositor is ready, from
+//! what the surface's frames cost. [`visibility`] decides whether the surface is worth drawing at all, from what
 //! the compositor said about repainting it. [`timing`] says when frames actually reached the
 //! screen, from the presentation feedback. [`Watchdog`] bounds how long any of it may wait, and
 //! is the contract's own: a display controller owes the same report and can lose it the same way.
@@ -12,11 +13,13 @@
 //!
 //! Everything else is exercised against a clock a test moves rather than against a compositor.
 
+pub mod ahead;
 pub mod pace;
 pub mod presentation;
 pub mod timing;
 pub mod visibility;
 
+pub use crate::frame::ahead::Ahead;
 pub use crate::frame::pace::Pacer;
 pub use crate::frame::presentation::Presentation;
 pub use crate::frame::timing::Timing;

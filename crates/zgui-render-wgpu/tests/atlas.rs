@@ -228,6 +228,52 @@ fn a_coverage_tile_is_tinted_by_the_colour_it_is_drawn_with() {
     }
 }
 
+/// One row of a black coverage sprite drawn `width` wide over white, from a tile whose columns
+/// alternate between full coverage and none.
+fn striped_row(renderer: &mut zgui_render_wgpu::WgpuRenderer, key: u64, width: i32) -> Vec<u8> {
+    let stripes: Vec<u8> = (0..TILE * TILE)
+        .map(|index| if index % TILE % 2 == 0 { 255 } else { 0 })
+        .collect();
+    let tile = upload(renderer, key, TextureKind::Mono, stripes);
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let white = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
+    scene.push_quad(Quad::filled(
+        rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+        white,
+    ));
+    scene.push_mono_sprite(MonoSprite::new(
+        rect(0.0, 0.0, width as f32, TILE as f32),
+        tile,
+        opaque(0, 0, 0),
+    ));
+    scene.finish(&DamageSet::full());
+    let pixels = present(renderer, &scene);
+    (0..width).map(|x| pixels.rgba(x, TILE / 2)[0]).collect()
+}
+
+#[test]
+fn a_stretched_coverage_tile_is_weighted_between_its_texels() {
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    // At the size of the tile every pixel reads one texel, so each is black or white.
+    let exact = striped_row(&mut renderer, 1, TILE);
+    assert!(
+        exact.iter().all(|value| *value == 0 || *value == 255),
+        "{exact:?}"
+    );
+    // Stretched by a quarter, a pixel lies between two texels. The nearest texel alone would
+    // draw some stripes two pixels wide and others one.
+    let stretched = striped_row(&mut renderer, 2, TILE + TILE / 4);
+    assert!(
+        stretched.iter().any(|value| (64..192).contains(value)),
+        "no pixel is weighted between a stripe and a gap: {stretched:?}"
+    );
+}
+
 #[test]
 fn a_sprite_whose_texture_was_never_uploaded_draws_nothing_rather_than_a_strangers_pixels() {
     let Some(mut renderer) = plain_renderer() else {

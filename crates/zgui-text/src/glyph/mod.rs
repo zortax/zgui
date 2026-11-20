@@ -19,5 +19,9 @@ pub use crate::glyph::outline::{GlyphOutline, OutlineKey};
 pub use crate::glyph::owned::ShapedRunOwned;
 pub use crate::glyph::pen::PenPosition;
 pub use crate::glyph::raster::{GlyphRaster, NoRaster};
-pub use crate::glyph::route::{ATLAS_MAX_SIZE, RasterPath, RunProfile, RunSurface};
-pub use crate::glyph::run::{SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun};
+pub use crate::glyph::route::{
+    ATLAS_MAX_SIZE, ATLAS_MAX_STRETCH, RasterPath, RunProfile, RunSurface, RunTransform,
+};
+pub use crate::glyph::run::{
+    SUBPIXEL_MAX_SIZE, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun,
+};

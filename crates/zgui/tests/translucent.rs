@@ -5,6 +5,9 @@
 //! half-transparent background keeps half its alpha, and text has ordinary coverage, because
 //! per-channel coverage writes no alpha at all. The same document in an opaque window is the
 //! control that shows the target follows the window's attributes.
+//!
+//! The opaque window also shows that its text antialiasing setting decides the coverage of its
+//! text and the side of a stem each colour channel is on.
 
 use std::sync::{Arc, Mutex};
 
@@ -43,6 +46,8 @@ struct Frame {
     subpixel: usize,
     /// How many glyphs were emitted with ordinary coverage.
     mono: usize,
+    /// Whether the device can blend per-channel coverage.
+    capable: bool,
 }
 
 /// What one run recorded.
@@ -90,8 +95,13 @@ impl Renderer for Recording {
             pixels,
             subpixel: scene.primitives.subpixel_sprites.len(),
             mono: scene.primitives.mono_sprites.len(),
+            capable: self.renderer.capabilities().subpixel_text,
         });
         outcome
+    }
+
+    fn set_subpixel_order(&mut self, order: zgui::render::SubpixelOrder) {
+        Renderer::set_subpixel_order(&mut self.renderer, order);
     }
 
     fn register_external(
@@ -136,6 +146,11 @@ static DEVICE: Mutex<()> = Mutex::new(());
 
 /// Runs the document in a window that is transparent or not, and returns what it recorded.
 fn run(transparent: bool) -> Record {
+    run_with(transparent, zgui::TextAntialiasing::Auto, SHEET)
+}
+
+/// Runs the document with a stated text antialiasing, and returns what it recorded.
+fn run_with(transparent: bool, antialiasing: zgui::TextAntialiasing, sheet: &str) -> Record {
     let _device = DEVICE.lock().unwrap_or_else(|held| held.into_inner());
     let record = Arc::new(Mutex::new(Record::default()));
     let factory_record = Arc::clone(&record);
@@ -168,7 +183,8 @@ fn run(transparent: bool) -> Record {
         .with_title("translucent")
         .with_size(WIDTH as f32, HEIGHT as f32)
         .with_transparent(transparent)
-        .with_stylesheet(SHEET)
+        .with_text_antialiasing(antialiasing)
+        .with_stylesheet(sheet)
         .with_renderer(Box::new(factory))
         .run_on(drive, || {
             view! {
@@ -251,4 +267,60 @@ fn an_opaque_window_keeps_opaque_targets() {
         frame.mono + frame.subpixel > 0,
         "the label reached the display list"
     );
+}
+
+/// How far the ink in the red channel sits to the right of the ink in the blue channel, in
+/// pixels, over the label of a frame drawn on a black page.
+fn red_lead(frame: &Frame) -> f32 {
+    let centre = |channel: usize| {
+        let (mut weight, mut moment) = (0.0, 0.0);
+        for y in 0..HEIGHT {
+            for x in 0..WIDTH {
+                let ink = f32::from(frame.pixels.rgba(x, y)[channel]);
+                weight += ink;
+                moment += ink * x as f32;
+            }
+        }
+        moment / weight
+    };
+    centre(0) - centre(2)
+}
+
+/// The stated antialiasing decides the coverage of an opaque window on a device that can blend
+/// per-channel coverage, and the stated order decides which side of a stem each channel is on.
+///
+/// The red stripe of a pixel is on the left for one order and on the right for the other. So the
+/// red ink of white text leads the blue ink by two thirds of a pixel for one order, and trails it
+/// by the same distance for the other.
+#[test]
+fn an_opaque_window_draws_the_coverage_its_antialiasing_states() {
+    if !available() || std::env::var_os("ZGUI_TEXT_AA").is_some() {
+        return;
+    }
+    let sheet = format!("{SHEET} .root {{ background-color: #000000 }} .panel {{ display: none }}");
+    let grey = run_with(false, zgui::TextAntialiasing::Grayscale, &sheet);
+    let frame = grey.frames.last().expect("the window drew a frame");
+    assert!(frame.mono > 0, "the label reached the display list");
+    assert_eq!(frame.subpixel, 0, "grayscale text has no per-channel glyph");
+    assert!(
+        red_lead(frame).abs() < 0.05,
+        "one coverage for each pixel tints nothing: {}",
+        red_lead(frame)
+    );
+
+    let striped = run_with(false, zgui::TextAntialiasing::Rgb, &sheet);
+    let frame = striped.frames.last().expect("the window drew a frame");
+    if !frame.capable {
+        eprintln!("skipped: the device draws no per-channel coverage");
+        return;
+    }
+    assert!(frame.subpixel > 0, "the label has per-channel coverage");
+    assert_eq!(frame.mono, 0, "no glyph of the label has ordinary coverage");
+    let lead = red_lead(frame);
+    assert!((0.4..0.9).contains(&lead), "red leads blue by {lead}");
+
+    let reversed = run_with(false, zgui::TextAntialiasing::Bgr, &sheet);
+    let frame = reversed.frames.last().expect("the window drew a frame");
+    let lead = red_lead(frame);
+    assert!((-0.9..-0.4).contains(&lead), "red trails blue by {lead}");
 }

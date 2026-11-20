@@ -47,6 +47,9 @@ pub(crate) struct Forest {
     len: usize,
 }
 
+/// The entries of one coordinate system, on their way into its tree.
+type Staged = Vec<(FragKey, Rect<DevicePx, Device>)>;
+
 impl Forest {
     /// How many entries are held.
     pub(crate) fn len(&self) -> usize {
@@ -88,7 +91,37 @@ impl Forest {
         self.len = 0;
     }
 
+    /// Replaces everything with `entries`, in one pass over each coordinate system.
+    pub(crate) fn fill(
+        &mut self,
+        entries: impl IntoIterator<Item = (FragKey, Option<SpatialId>, Rect<DevicePx, Device>)>,
+    ) {
+        self.clear();
+        let mut spaces: Vec<(Option<SpatialId>, Staged)> = Vec::new();
+        let mut last = 0;
+        for (frag, space, bounds) in entries {
+            if spaces.get(last).is_none_or(|(held, _)| *held != space) {
+                last = spaces
+                    .iter()
+                    .position(|(held, _)| *held == space)
+                    .unwrap_or_else(|| {
+                        spaces.push((space, Vec::new()));
+                        spaces.len() - 1
+                    });
+            }
+            spaces[last].1.push((frag, bounds));
+            self.len += 1;
+        }
+        let Self { trees, homes, .. } = self;
+        for (space, staged) in spaces {
+            let mut tree = RTree::for_space(space);
+            tree.fill(staged, homes);
+            trees.push((space, tree));
+        }
+    }
+
     /// Adds one entry to the tree for its space.
+    #[cfg(test)]
     pub(crate) fn insert(
         &mut self,
         frag: FragKey,

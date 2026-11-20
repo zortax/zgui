@@ -15,8 +15,16 @@ use crate::gpu::loss::DeviceLoss;
 /// drivers. Nothing here is required: a missing feature changes which primitives are emitted, and
 /// a device that refuses to open because it lacks one would be a device that renders nothing at
 /// all rather than one that renders slightly worse text.
+///
+/// Timestamp queries are asked for only when [pass timing](crate::gpu::timing) was asked for, so
+/// the default device keeps its default feature set.
 fn optional_features() -> wgpu::Features {
-    wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::PIPELINE_CACHE
+    let features = wgpu::Features::DUAL_SOURCE_BLENDING | wgpu::Features::PIPELINE_CACHE;
+    if crate::gpu::timing::requested() {
+        features | wgpu::Features::TIMESTAMP_QUERY
+    } else {
+        features
+    }
 }
 
 /// The smallest memory block the allocator reserves on a device.
@@ -36,6 +44,58 @@ const MAX_MEMORY_BLOCK: u64 = 256 << 20;
 fn memory_hints() -> wgpu::MemoryHints {
     wgpu::MemoryHints::Manual {
         suballocated_device_memory_block_size: MIN_MEMORY_BLOCK..MAX_MEMORY_BLOCK,
+    }
+}
+
+/// `extensions`, with the one a swap chain of this crate's own names damage with, where one is
+/// wanted and `adapter` has it.
+///
+/// `VK_KHR_incremental_present` is a device extension, so it is enabled when the device is made,
+/// and only where [`ENV`](crate::target::native::ENV) asks for native swap chains. Without it a
+/// native chain still copies only what an image owes, and reports every present as whole.
+fn with_presenter(adapter: &wgpu::Adapter, extensions: &[&'static CStr]) -> Vec<&'static CStr> {
+    #[cfg(vulkan_hal)]
+    {
+        let mut extensions = extensions.to_vec();
+        let name = crate::target::native::INCREMENTAL_PRESENT;
+        if crate::target::native::wanted()
+            && !extensions.contains(&name)
+            && extensions::granted_by(adapter, &[name])
+        {
+            extensions.push(name);
+        }
+        extensions
+    }
+    #[cfg(not(vulkan_hal))]
+    {
+        let _ = adapter;
+        extensions.to_vec()
+    }
+}
+
+/// What a device on `adapter` is asked for.
+///
+/// Derived once and read by every path that opens a device. The hal path creates the device
+/// itself, so a feature set or a limit set of its own would give a device capabilities the
+/// ordinary path never grants, with nothing anywhere to report the difference.
+fn descriptor(adapter: &wgpu::Adapter) -> wgpu::DeviceDescriptor<'static> {
+    let limits = if adapter.get_info().backend == wgpu::Backend::Gl {
+        // Clamped to the adapter's own values, because the downlevel set asks for compute
+        // limits a GL 3.3 context reports zero for. `request_device` refuses a limit set as a
+        // whole, so asking for one number the adapter cannot meet costs the device — and with
+        // it the coverage rasteriser, which is the very thing such a context is for.
+        wgpu::Limits::downlevel_defaults()
+            .using_resolution(adapter.limits())
+            .or_worse_values_from(&adapter.limits())
+    } else {
+        adapter.limits()
+    };
+    wgpu::DeviceDescriptor {
+        label: Some("zgui.device"),
+        required_features: optional_features() & adapter.features(),
+        required_limits: limits,
+        memory_hints: memory_hints(),
+        ..Default::default()
     }
 }
 
@@ -69,7 +129,9 @@ impl Gpu {
     /// Opens a device on `adapter`, or says why it could not.
     ///
     /// A GL adapter is asked for the downlevel limit set rather than its own, because its own is
-    /// routinely more than a device created from it will grant.
+    /// routinely more than a device created from it will grant. The set is then clamped to what
+    /// the adapter reports, because the downlevel set names compute limits and a GL 3.3 context
+    /// has no compute to name them for.
     ///
     /// # Errors
     ///
@@ -84,9 +146,9 @@ impl Gpu {
     /// unchanged in every respect.
     ///
     /// Which names an exported image needs is the console backend's constant to state, and nothing
-    /// here counts them. wgpu-hal 29.0.4 enables `VK_KHR_external_memory_fd` and
-    /// `VK_EXT_external_memory_dma_buf` on any physical device that has them, so such a list adds
-    /// fewer names than it holds.
+    /// here counts them. wgpu-hal 30.0.2 enables `VK_KHR_external_memory_fd`,
+    /// `VK_EXT_external_memory_dma_buf` and `VK_EXT_image_drm_format_modifier` on any physical
+    /// device that has them, so such a list adds fewer names than it holds.
     ///
     /// The list is all-or-nothing. Where the adapter is Vulkan and its physical device has every
     /// name, the device is created through wgpu's hal with all of them enabled. Everything else —
@@ -107,23 +169,9 @@ impl Gpu {
         adapter: wgpu::Adapter,
         extensions: &[&'static CStr],
     ) -> Result<Self, String> {
-        let info = adapter.get_info();
-        let limits = if info.backend == wgpu::Backend::Gl {
-            wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits())
-        } else {
-            adapter.limits()
-        };
-        // Derived once and read by both paths. The hal path creates the device itself, so a
-        // feature set or a limit set of its own would give a device capabilities the ordinary path
-        // never grants, with nothing anywhere to report the difference.
-        let descriptor = wgpu::DeviceDescriptor {
-            label: Some("zgui.device"),
-            required_features: optional_features() & adapter.features(),
-            required_limits: limits,
-            memory_hints: memory_hints(),
-            ..Default::default()
-        };
-        let (device, queue, extensions) = match extensions::open(&adapter, extensions, &descriptor)
+        let descriptor = descriptor(&adapter);
+        let extensions = with_presenter(&adapter, extensions);
+        let (device, queue, extensions) = match extensions::open(&adapter, &extensions, &descriptor)
         {
             Some(opened) => opened,
             None => {
@@ -133,18 +181,59 @@ impl Gpu {
                 (device, queue, Vec::new())
             }
         };
+        Ok(Self::opened(instance, adapter, device, queue, extensions))
+    }
 
-        // Registered outside the match, so that a device from either arm has it. A device opened
-        // through the hal reports a loss the same way, and one with no watcher would go on drawing
-        // into a dead device with nothing to notice it. No test would see an arm that lost this:
-        // the suite injects a loss through `DeviceLoss::report`, because a real one cannot be
-        // provoked.
+    /// Opens a device on `adapter` and does not block the thread while the request resolves.
+    ///
+    /// A browser resolves a device request only after the caller returns to its event loop, so a
+    /// browser build awaits this function where a native build calls [`Gpu::open`]. The device
+    /// has the features and limits [`Gpu::open`] asks for. No Vulkan device extension is enabled.
+    ///
+    /// `subpixel_text` says whether text may be drawn with per-channel coverage, which needs to
+    /// know that the display has three stripes for each pixel and which way they run. A page
+    /// cannot ask, so its caller decides: without it the device does not get dual-source
+    /// blending, and text has one coverage for each pixel.
+    ///
+    /// # Errors
+    ///
+    /// Returns the message `request_device` refused with.
+    pub async fn open_async(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        subpixel_text: bool,
+    ) -> Result<Self, String> {
+        let mut descriptor = descriptor(&adapter);
+        if !subpixel_text {
+            descriptor
+                .required_features
+                .remove(wgpu::Features::DUAL_SOURCE_BLENDING);
+        }
+        let (device, queue) = adapter
+            .request_device(&descriptor)
+            .await
+            .map_err(|error| error.to_string())?;
+        Ok(Self::opened(instance, adapter, device, queue, Vec::new()))
+    }
+
+    /// The handle for a device this crate opened, with its loss watcher installed.
+    fn opened(
+        instance: wgpu::Instance,
+        adapter: wgpu::Adapter,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        extensions: Vec<&'static CStr>,
+    ) -> Self {
+        // Registered here, so that a device from every path has it. A device opened through the
+        // hal reports a loss the same way, and one with no watcher would go on drawing into a dead
+        // device with nothing to notice it. No test would see a path that lost this: the suite
+        // injects a loss through `DeviceLoss::report`, because a real one cannot be provoked.
         let loss = Arc::new(DeviceLoss::new());
         let watcher = Arc::clone(&loss);
         device.set_device_lost_callback(move |reason, message| watcher.report(reason, &message));
 
         let capabilities = probe(&adapter, &device);
-        Ok(Self {
+        Self {
             instance,
             adapter,
             device,
@@ -153,7 +242,7 @@ impl Gpu {
             extensions,
             loss,
             adopted: false,
-        })
+        }
     }
 
     /// Adopts a device that a host opened, with its queue, adapter and instance.
@@ -269,6 +358,18 @@ impl Gpu {
         adapter::describe(&self.adapter.get_info())
     }
 
+    /// Lets the device retire what it has finished, so mapped staging memory comes back.
+    ///
+    /// The call is made after acquisition. What the compositor handed back is a buffer that
+    /// nothing in flight still reads, so the device has usually caught up there. On the GL backend
+    /// of one old driver, the same poll at the start of a frame blocked for 20 ms.
+    ///
+    /// `Queue::submit` also lets the device retire finished work, so a frame that acquires nothing
+    /// still gets its staging memory back.
+    pub fn reclaim(&self) {
+        let _ = self.device.poll(wgpu::PollType::Poll);
+    }
+
     /// Blocks until everything submitted has finished.
     pub fn wait(&self) {
         let _ = self.device.poll(wgpu::PollType::wait_indefinitely());
@@ -283,11 +384,33 @@ fn probe(adapter: &wgpu::Adapter, device: &wgpu::Device) -> RenderCapabilities {
     let downlevel = adapter.get_downlevel_capabilities();
     let features = device.features();
     let limits = device.limits();
+    let subpixel_text = features.contains(wgpu::Features::DUAL_SOURCE_BLENDING);
+    // Said once, because there is otherwise no way to tell from outside which of the two a
+    // device settled on. A window still draws one coverage for each pixel where its display or
+    // its text antialiasing setting asks for that, and for every run above the size limit.
+    tracing::info!(
+        target: "zgui::render",
+        "the device {} text with one coverage value per display subpixel",
+        if subpixel_text {
+            "can draw"
+        } else {
+            "cannot draw"
+        }
+    );
     RenderCapabilities {
-        subpixel_text: features.contains(wgpu::Features::DUAL_SOURCE_BLENDING),
+        subpixel_text,
         vector_compute: downlevel
             .flags
             .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS)
+            // The path renderer's shaders unpack two half floats out of one word, and naga
+            // refuses `unpack2x16float` without this. A software Vulkan device is where it is
+            // absent — those instructions need native half-float support there and nowhere else,
+            // which wgpu-hal knows and reports here. Asking is what keeps the fallback a fallback:
+            // the path renderer panics on a shader it cannot compile rather than answering with an
+            // error, and a panic unwinds past the branch that would have caught it.
+            && downlevel
+                .flags
+                .contains(wgpu::DownlevelFlags::SHADER_F16_IN_F32)
             && adapter
                 .get_texture_format_features(wgpu::TextureFormat::Rgba8Unorm)
                 .allowed_usages

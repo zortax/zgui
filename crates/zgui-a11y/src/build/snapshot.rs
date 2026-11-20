@@ -37,6 +37,9 @@ pub struct Snapshots {
     by_space: HashMap<SpatialId, BTreeSet<NodeKey>>,
     /// Which coordinate systems each held node is filed under, so it can be taken out again.
     spaces_of: HashMap<NodeKey, Vec<SpatialId>>,
+    /// Where on the page the box of each held node starts, in CSS pixels. Its children are
+    /// measured from there, so a node whose origin moves owes its children a new measurement.
+    origins: HashMap<NodeKey, Option<(f64, f64)>>,
     /// Which held nodes name which other node, kept the other way round.
     ///
     /// A relation is written by the node that declares it and resolved by the consumer against the
@@ -85,6 +88,19 @@ impl Snapshots {
             self.nodes.insert(node, projected.clone());
         }
         changed
+    }
+
+    /// Records where on the page the box of held `node` starts, answering whether that moved since
+    /// it was last recorded. A node recorded for the first time has not moved.
+    ///
+    /// Nothing is recorded for a node the consumer is not holding.
+    pub fn place(&mut self, node: NodeKey, origin: Option<(f64, f64)>) -> bool {
+        if !self.nodes.contains_key(&node) {
+            self.origins.remove(&node);
+            return false;
+        }
+        let before = self.origins.insert(node, origin);
+        before.is_some_and(|before| before != origin)
     }
 
     /// Whether the consumer is holding a node for `node`.
@@ -168,6 +184,7 @@ impl Snapshots {
     pub fn forget(&mut self, node: NodeKey) {
         self.unindex(node);
         self.unfile(node);
+        self.origins.remove(&node);
         self.nodes.remove(&node);
     }
 
@@ -184,6 +201,7 @@ impl Snapshots {
     /// Forgets everything, so the next update has to be a whole tree.
     pub fn clear(&mut self) {
         self.nodes.clear();
+        self.origins.clear();
         self.referrers.clear();
         self.by_space.clear();
         self.spaces_of.clear();

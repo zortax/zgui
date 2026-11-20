@@ -349,6 +349,63 @@ fn a_custom_property_change_recascades_its_readers_only() {
     }
 }
 
+/// A restyle of many elements of one rule chain under equal parents cascades the first of them.
+#[test]
+fn cells_that_cascade_alike_run_one_cascade() {
+    let _guard = measuring();
+    let (mut harness, rows) = themed(200, 6, "cell { color: var(--accent, rgb(1, 1, 1)) }");
+
+    counter::reset();
+    let root = harness.root;
+    set_custom(&mut harness, root, "accent", "rgb(0, 9, 0)");
+    harness.frame();
+    let frame = counter::snapshot();
+
+    assert_eq!(color(&harness, first_cell(&harness, rows[199])), (0, 9, 0));
+    if COUNTERS_ENABLED {
+        assert_eq!(frame.cascade_memo_misses, 1, "the first cell cascades");
+        assert_eq!(
+            frame.cascade_memo_hits, 1_199,
+            "the other cells take its result"
+        );
+        assert_eq!(
+            frame.cascade_memo_skips, 0,
+            "the root runs the matching path"
+        );
+    }
+}
+
+/// Rows that differ in a reset property only leave their cells one cascade.
+#[test]
+fn parents_that_differ_in_reset_properties_leave_their_cells_one_cascade() {
+    let _guard = measuring();
+    let mut harness = Harness::new();
+    harness.add_author(
+        ".even { background-color: rgb(1, 0, 0) }
+         .odd { background-color: rgb(2, 0, 0) }
+         cell { color: var(--accent, rgb(1, 1, 1)) }",
+    );
+    let column = harness.append(harness.root, "column");
+    for index in 0..100 {
+        let row = harness.append(column, "row");
+        harness.set_classes(row, &[if index % 2 == 0 { "even" } else { "odd" }]);
+        harness.append(row, "cell");
+    }
+    harness.frame();
+    harness.retire_all();
+
+    counter::reset();
+    let root = harness.root;
+    set_custom(&mut harness, root, "accent", "rgb(0, 9, 0)");
+    harness.frame();
+    let frame = counter::snapshot();
+
+    if COUNTERS_ENABLED {
+        assert_eq!(frame.cascade_memo_misses, 1);
+        assert_eq!(frame.cascade_memo_hits, 99);
+    }
+}
+
 /// A custom property nothing reads cascades the element it was set on and nothing else.
 #[test]
 fn an_unread_custom_property_cascades_one_element() {
@@ -771,5 +828,45 @@ fn only_a_property_the_keyframes_read_computes_them_again() {
     if COUNTERS_ENABLED {
         assert_eq!(unread.keyframes_refreshed, 0);
         assert_eq!(read.keyframes_refreshed, 1);
+    }
+}
+
+#[test]
+fn a_resize_restyles_only_the_viewport_unit_readers() {
+    let _guard = measuring();
+    let (mut harness, rows) = list(500);
+    harness.add_author(".sized { width: 10vw }");
+    harness.set_classes(rows[100], &["sized"]);
+    harness.set_classes(rows[400], &["sized"]);
+    harness.frame();
+    harness.retire_all();
+
+    // The control: two readers cascade again and nothing else does.
+    counter::reset();
+    let epoch = harness.resize(1000.0, 800.0);
+    harness.frame();
+    let read = counter::snapshot();
+    assert_eq!(epoch.units_probed, 2);
+    assert_eq!(epoch.units_invalidated, 2);
+
+    // The same document after both readers stopped reading: the outgoing device still answered a
+    // viewport-unit question, and the resize restyles nothing.
+    harness.set_classes(rows[100], &[]);
+    harness.set_classes(rows[400], &[]);
+    harness.frame();
+    harness.retire_all();
+    counter::reset();
+    let epoch = harness.resize(900.0, 800.0);
+    let pass = harness.frame();
+    let unread = counter::snapshot();
+    assert!(epoch.viewport_units);
+    assert_eq!(epoch.units_probed, 0);
+    assert!(!pass.traversed);
+
+    if COUNTERS_ENABLED {
+        assert_eq!(read.elements_restyled + read.elements_recascaded, 2);
+        assert_eq!(unread.elements_restyled, 0);
+        assert_eq!(unread.elements_recascaded, 0);
+        assert_eq!(unread.elements_traversed, 0);
     }
 }

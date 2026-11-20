@@ -34,12 +34,12 @@ pub enum AppError {
     #[error("the application stylesheet was rejected: {0}")]
     Stylesheet(String),
 
-    /// Every document identity has been handed out.
+    /// Every document identity is in use.
     ///
-    /// One is minted per window opened and none is ever reused, because a node handle carries the
-    /// document it belongs to and a reused identity would let a stale handle resolve inside an
-    /// unrelated later window. Four thousand opens in one process is the ceiling that buys that,
-    /// and reaching it is reported rather than allowed to alias.
+    /// Each window has a document identity, and a process has
+    /// [`DOCUMENT_COUNT`](zgui_view::DOCUMENT_COUNT) of them. A closed window gives its identity
+    /// back once its document is dropped. This error means that many windows are open, or that
+    /// something outside the closed windows still holds their documents.
     #[error("this process has opened every window it can name")]
     DocumentsExhausted,
 }

@@ -1,11 +1,13 @@
 //! Where a composed frame is copied to.
 
-use zgui_geom::{Device, Size};
+use zgui_geom::{Device, Rect, Size};
 
 use crate::gpu::device::Gpu;
 use crate::gpu::formats::{self, Formats};
 use crate::gpu::surface::ConfiguredSurface;
 use crate::target::acquire::Acquisition;
+use crate::target::debt::Debt;
+use crate::target::native::NativeImage;
 
 /// A texture a frame can be copied into, and the answer that produced it.
 pub struct Presented {
@@ -15,6 +17,8 @@ pub struct Presented {
     pub surface_texture: Option<wgpu::SurfaceTexture>,
     /// The view to copy into, when there is one.
     pub view: Option<wgpu::TextureView>,
+    /// The image of a swap chain this crate made, when one was acquired from it.
+    pub(crate) native: Option<NativeImage>,
 }
 
 /// What a frame is presented to.
@@ -34,10 +38,64 @@ pub enum Presentation {
     /// A texture, standing in for a surface that cannot be created.
     Offscreen(Offscreen),
     /// Textures a caller owns, one of which it chooses before each frame.
-    Supplied(Supplied),
+    Supplied(Box<Supplied>),
 }
 
 impl Presentation {
+    /// Records rectangles a frame wrote into the composed target. See [`Supplied::note_written`].
+    pub fn note_written(&mut self, rects: &[Rect<i32, Device>]) {
+        match self {
+            Self::Supplied(supplied) => supplied.note_written(rects),
+            Self::Surface(surface) => {
+                if let Some(native) = surface.native() {
+                    native.note_written(rects);
+                }
+            }
+            Self::Offscreen(_) => {}
+        }
+    }
+
+    /// Whether the texture a frame is copied into keeps what it held, so that a copy of only what
+    /// it owes is enough.
+    pub fn keeps_contents(&self) -> bool {
+        match self {
+            Self::Supplied(_) => true,
+            Self::Surface(surface) => surface.is_native(),
+            Self::Offscreen(_) => false,
+        }
+    }
+
+    /// Takes what the image at `slot` of a swap chain this crate made owes, inside a frame of
+    /// `frame` pixels. `None` where there is no such swap chain.
+    pub(crate) fn take_owed_native(
+        &mut self,
+        slot: usize,
+        frame: Size<i32, Device>,
+    ) -> Option<Vec<Rect<i32, Device>>> {
+        match self {
+            Self::Surface(surface) => surface.native().map(|native| native.take_owed(slot, frame)),
+            Self::Offscreen(_) | Self::Supplied(_) => None,
+        }
+    }
+
+    /// Presents the image at `slot` of a swap chain this crate made, which changed `damage` since
+    /// the frame presented before it.
+    ///
+    /// Answers what the present said, and how many pixels it named as changed.
+    pub(crate) fn present_native(
+        &mut self,
+        slot: usize,
+        frame: Size<i32, Device>,
+        damage: &[Rect<i32, Device>],
+    ) -> (Acquisition, u64) {
+        match self {
+            Self::Surface(surface) => surface.native().map_or((Acquisition::Lost, 0), |native| {
+                native.present(slot, frame, damage)
+            }),
+            Self::Offscreen(_) | Self::Supplied(_) => (Acquisition::Lost, 0),
+        }
+    }
+
     /// The formats everything is drawn in.
     pub fn formats(&self) -> Formats {
         match self {
@@ -95,6 +153,15 @@ impl Presentation {
         }
     }
 
+    /// Lets a surface's swap chain be larger than its frames, see
+    /// [`ConfiguredSurface::set_crop`](crate::gpu::surface::ConfiguredSurface::set_crop). Textures
+    /// are always at the extent of their frames.
+    pub fn set_crop(&mut self, crop: bool) {
+        if let Self::Surface(surface) = self {
+            surface.set_crop(crop);
+        }
+    }
+
     /// Rebuilds a surface's swap chain if one is owed.
     pub fn apply_pending(&mut self, gpu: &Gpu) {
         match self {
@@ -107,9 +174,21 @@ impl Presentation {
     }
 
     /// Asks for something to copy this frame into.
-    pub fn acquire(&self) -> Presented {
+    pub fn acquire(&mut self) -> Presented {
         match self {
             Self::Surface(surface) => {
+                if let Some(native) = surface.native() {
+                    let (acquisition, image) = native.acquire();
+                    let view = image
+                        .as_ref()
+                        .map(|image| surface.present_view(&image.texture));
+                    return Presented {
+                        acquisition,
+                        surface_texture: None,
+                        view,
+                        native: image,
+                    };
+                }
                 let acquired = surface.surface().get_current_texture();
                 let acquisition = Acquisition::classify(&acquired);
                 let surface_texture = match acquired {
@@ -124,12 +203,14 @@ impl Presentation {
                     acquisition,
                     surface_texture,
                     view,
+                    native: None,
                 }
             }
             Self::Offscreen(offscreen) => Presented {
                 acquisition: Acquisition::Success,
                 surface_texture: None,
                 view: Some(offscreen.view()),
+                native: None,
             },
             // The caller already chose which texture this is, so there is nothing to ask for and
             // nothing to hand back afterwards: whoever owns the textures presents them.
@@ -137,6 +218,7 @@ impl Presentation {
                 acquisition: Acquisition::Success,
                 surface_texture: None,
                 view: Some(supplied.view()),
+                native: None,
             },
         }
     }
@@ -283,6 +365,15 @@ pub struct Supplied {
     size: Size<i32, Device>,
     /// The formats derived from them.
     formats: Formats,
+    /// What each texture still owes the composed target.
+    debt: Debt,
+    /// Whether the caller reads each texture out and throws it away rather than rotating them.
+    ///
+    /// A display that composites its own frames hands out staging buffers: it copies exactly what
+    /// a frame wrote onto a buffer of its own and never reads one again. There is nothing for such
+    /// a texture to owe, and a debt would be pixels sent for nobody. Set by whoever supplied them,
+    /// because only it knows what it does with them afterwards.
+    consumed: bool,
     /// Whether the renderer was configured for an extent these textures do not have.
     ///
     /// The renderer cannot reallocate a supplied set, so this is a state a frame has to stop in
@@ -304,6 +395,8 @@ impl Supplied {
         }
         let first = textures.first()?;
         let size = Size::new(first.width() as i32, first.height() as i32);
+        // Every texture holds nothing, so every one of them owes all of it.
+        let debt = Debt::new(textures.len());
         // Derived from the textures themselves. The texture already answers its format, and a
         // second statement of it beside them is a way for the two to disagree.
         //
@@ -321,6 +414,11 @@ impl Supplied {
             "an encoded supplied texture with nothing to cancel the encode: {formats:?}"
         );
         Some(Self {
+            debt,
+            // Rotated until whoever supplied them says otherwise, which is the safe direction: a
+            // set wrongly called consumed shows a stale rectangle, and one wrongly called rotated
+            // sends pixels nobody needed.
+            consumed: false,
             textures,
             selected: 0,
             size,
@@ -462,7 +560,33 @@ impl Supplied {
         !self.diverged
     }
 
-    /// Returns which texture the next frame is copied into.
+    /// Records rectangles a frame wrote into the composed target.
+    ///
+    /// Called when the frame is composed, and not when it is copied out. A frame can be composed
+    /// and never copied: the platform held it, or no texture was free. What it wrote is then owed
+    /// with the next copy, whichever frame makes it.
+    pub fn note_written(&mut self, rects: &[Rect<i32, Device>]) {
+        self.debt.note_written(rects);
+    }
+
+    /// Takes the rectangles the copy into `slot` has to cover, clipped to the textures.
+    ///
+    /// A rotated texture is owed everything written since it was last copied into. A consumed one
+    /// is owed everything written since the last copy into any of them, because the caller
+    /// composites what it was handed onto a buffer of its own.
+    pub fn take_owed(&mut self, slot: usize) -> Vec<Rect<i32, Device>> {
+        self.debt.take(slot, self.size, self.consumed)
+    }
+
+    /// Records that the caller reads each texture out and throws it away.
+    ///
+    /// The `consumed` flag. A caller that composites what it is handed onto a buffer of its
+    /// own says so here, and every frame then carries its own rectangles and no debt.
+    pub fn is_consumed(&mut self, consumed: bool) {
+        self.consumed = consumed;
+    }
+
+    /// Which texture the next frame is copied into.
     pub fn selected(&self) -> usize {
         self.selected
     }

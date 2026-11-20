@@ -13,6 +13,7 @@ include.workspace = true
 
 # L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
+web-time.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
@@ -23,6 +24,9 @@ tracing-subscriber.workspace = true
 # whenever debug assertions are on, so this is what a release-mode test harness switches on to be
 # able to read them.
 counters = []
+# Keeps a per-thread allocation tag that the frame's stage marks and a few hot sites set, for a
+# tagging allocator to read. Without it every tag call compiles to nothing.
+alloc-tags = []
 
 [lints]
 workspace = true

@@ -62,10 +62,13 @@ fn a_height_resize_of_a_scrolling_document_replays_its_rows() {
     let mut recording = Recording::begin();
     let mut harness = window();
 
-    // The control: building the document encodes every row, which is what makes the ceiling at
-    // the bottom mean "the resize re-encoded almost nothing" rather than "nothing was measured".
+    // The control: building the document encodes every row the window shows, which is what makes
+    // the ceiling at the bottom mean "the resize re-encoded almost nothing" rather than "nothing
+    // was measured". It is built at the height the measured step grows to, so the rows that step
+    // brings into view were encoded here: a row that was never on the surface is encoded the first
+    // time a resize shows it, and that is not the cost this test pins.
     let built = recording.measure(|| {
-        harness.deliver_to_first(SurfaceEvent::Resized(tall(300.0)));
+        harness.deliver_to_first(SurfaceEvent::Resized(tall(360.0)));
         harness.settle(64);
     });
 

@@ -70,7 +70,7 @@ use zgui::reactive::LocalStorage;
 #[derive(Copy, Clone)]
 pub struct Virtualize {
     /// The window, recomputed whenever the scroll position or the row count changes.
-    window: Signal<VirtualWindow, LocalStorage>,
+    window: Memo<VirtualWindow>,
 }
 
 impl Virtualize {
@@ -95,7 +95,7 @@ impl Virtualize {
             // A list torn down while its scroll position still moves can find the count or the
             // row height gone before the observation. Every input is read so that a gone one
             // answers with an empty window.
-            window: Signal::derive_local(move || {
+            window: Memo::new(move |_| {
                 let (Some(position), Some(count), Some(size)) =
                     (scroll.try_get(), rows.try_get(), row_size.try_get())
                 else {
@@ -196,6 +196,52 @@ mod tests {
         assert_eq!(moved.first, 98, "a hundred rows down, less the overscan");
         assert_eq!(moved.count, 25);
         assert_eq!(moved.lead, 1_960.0);
+    }
+
+    #[test]
+    fn an_offset_inside_the_same_row_wakes_no_reader_of_the_window() {
+        let window = Window::open();
+        let port = window
+            .dom
+            .create_element(zgui::view::ElementName::new("scroll"));
+        window.dom.insert(window.root, port, None);
+
+        let handle = window.scope.with(NodeRef::new);
+        let rows = window.scope.with(|| RwSignal::new_local(10_000_usize));
+        let seen = window
+            .scope
+            .with(|| Virtualize::new(handle, rows.into(), 20.0, 2));
+        handle.bind(port, &window.dom_handle, &window.host_handle);
+        window.frame();
+
+        let reads = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counted = std::rc::Rc::clone(&reads);
+        let _reader = window.scope.with(|| {
+            zgui::reactive::RenderEffect::new(move |_| {
+                let _ = seen.window();
+                counted.set(counted.get() + 1);
+            })
+        });
+        window.dom.deliver(
+            port,
+            ObservedValue::ScrollPosition(scrolled(2_000.0, 400.0, 200_000.0)),
+        );
+        window.frame();
+        let before = reads.get();
+
+        window.dom.deliver(
+            port,
+            ObservedValue::ScrollPosition(scrolled(2_001.0, 400.0, 200_000.0)),
+        );
+        window.frame();
+        assert_eq!(reads.get(), before, "the same rows are the same window");
+
+        window.dom.deliver(
+            port,
+            ObservedValue::ScrollPosition(scrolled(3_000.0, 400.0, 200_000.0)),
+        );
+        window.frame();
+        assert!(reads.get() > before, "other rows wake the reader");
     }
 
     #[test]

@@ -122,6 +122,10 @@ impl Surface for WinitSurface {
         self.scale()
     }
 
+    fn subpixel_layout(&self) -> zgui_platform::SubpixelLayout {
+        crate::subpixel::layout()
+    }
+
     fn refresh_rate_millihertz(&self) -> Option<u32> {
         self.window
             .current_monitor()

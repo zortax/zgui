@@ -35,6 +35,23 @@ pub fn of(world: &World<'_>, node: NodeKey) -> Vec<NodeId> {
     children
 }
 
+/// The element children of `node`, in document order: the nodes measured from its origin.
+pub fn element_keys(world: &World<'_>, node: NodeKey) -> Vec<NodeKey> {
+    let store = world.document.store();
+    let Some(index) = store.index_of(node) else {
+        return Vec::new();
+    };
+    let mut children = Vec::new();
+    let mut next = store.core(index).first_child();
+    while let Some(child) = next {
+        if matches!(store.core(child).kind(), NodeKind::Element) {
+            children.push(store.key_of(child));
+        }
+        next = store.core(child).next_sibling();
+    }
+    children
+}
+
 /// The parent `node` hangs below in the projected tree, if it has one.
 ///
 /// Used to widen a rebuild: a node whose projection changed may have changed its parent's child

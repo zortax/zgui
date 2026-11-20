@@ -125,10 +125,9 @@ fn top_of(
     let layout = window.layout().borrow();
     let box_ = layout.boxes_of(key)[0];
     let frag = layout.fragments_of_box(box_)[0];
-    layout
-        .fragment(frag)
-        .expect("a live fragment")
-        .border_box
+    let fragment = layout.fragment(frag).expect("a live fragment");
+    fragment
+        .on_device(fragment.border_box, &window.placements())
         .origin
         .y
         .0

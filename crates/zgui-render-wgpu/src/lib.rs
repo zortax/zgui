@@ -64,17 +64,20 @@ pub mod target;
 /// format or creating a surface uses the same version of it that the renderer does.
 pub use wgpu;
 
-pub use crate::bind::globals::SubpixelOrder;
 pub use crate::effect::{
     EffectProgram, Effects, ParamsField, ParamsLayout, check_params as check_effect, declare,
 };
+#[cfg(target_arch = "wasm32")]
+pub use crate::gpu::canvas::Canvas;
 pub use crate::gpu::device::Gpu;
 pub use crate::gpu::formats::{Formats, SrgbTier};
 pub use crate::gpu::surface::PresentPacing;
+pub use crate::gpu::timing::{GpuTiming, TimedWork};
 pub use crate::renderer::WgpuRenderer;
 pub use crate::renderer::builder::Builder;
 pub use crate::renderer::readback::Pixels;
 pub use crate::renderer::shared::SharedGraphics;
 pub use crate::target::acquire::{Acquisition, SurfaceAction};
-pub use crate::target::group_pool::GroupPool;
+pub use crate::target::group_pool::{GroupPool, GroupPrecision};
 pub use crate::target::scale::TargetScale;
+pub use zgui_render::SubpixelOrder;

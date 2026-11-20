@@ -5,10 +5,12 @@ pub mod popup;
 pub mod toplevel;
 pub mod xdg;
 
+use smithay_client_toolkit::session_lock::SessionLockSurface;
 use smithay_client_toolkit::shell::WaylandSurface as _;
 use smithay_client_toolkit::shell::wlr_layer::LayerSurface;
 use wayland_client::protocol::wl_surface::WlSurface;
 
+use crate::lock::LockSurface;
 pub use crate::surface::role::xdg::popup::Popup;
 pub use crate::surface::role::xdg::toplevel::Toplevel;
 
@@ -24,8 +26,10 @@ pub enum Role {
     Toplevel(Box<Toplevel>),
     /// A surface placed against a rectangle of another, dismissed with it.
     Popup(Box<Popup>),
-    /// A part of the desktop shell: a panel, a wallpaper, a lock screen.
+    /// A part of the desktop shell: a panel, a wallpaper, a notification.
     Layer(Box<LayerSurface>),
+    /// The lock screen on one output.
+    Lock(Box<LockSurface>),
 }
 
 impl Role {
@@ -35,6 +39,7 @@ impl Role {
             Self::Toplevel(window) => window.wl_surface(),
             Self::Popup(popup) => popup.wl_surface(),
             Self::Layer(layer) => layer.wl_surface(),
+            Self::Lock(lock) => lock.surface().wl_surface(),
         }
     }
 
@@ -61,7 +66,7 @@ impl Role {
         match self {
             Self::Toplevel(window) => Some(window.xdg_surface()),
             Self::Popup(popup) => Some(popup.xdg_surface()),
-            Self::Layer(_) => None,
+            Self::Layer(_) | Self::Lock(_) => None,
         }
     }
 
@@ -70,8 +75,9 @@ impl Role {
         match self {
             Self::Toplevel(window) => window.ack(serial),
             Self::Popup(popup) => popup.ack(serial),
-            // The toolkit's layer surface acknowledges its own.
-            Self::Layer(_) => {}
+            // A layer surface acknowledges in its own dispatch, and the toolkit's lock surface
+            // acknowledges its own.
+            Self::Layer(_) | Self::Lock(_) => {}
         }
     }
 
@@ -79,6 +85,14 @@ impl Role {
     pub fn layer(&self) -> Option<&LayerSurface> {
         match self {
             Self::Layer(layer) => Some(layer),
+            _ => None,
+        }
+    }
+
+    /// The lock surface, when this is one.
+    pub fn lock(&self) -> Option<&SessionLockSurface> {
+        match self {
+            Self::Lock(lock) => Some(lock.surface()),
             _ => None,
         }
     }

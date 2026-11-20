@@ -3,12 +3,15 @@
 //! | Module | Contents |
 //! |---|---|
 //! | `animation` | the second descent an animation that cannot repaint is serviced by |
+//! | `memo` | elements a restyle cascades together, and what keeps their results apart |
 //! | `custom_reader` | a custom property change reaching a custom element that names no `var()` |
 //! | `negation` | a complex selector inside `:not()` as its ancestor and attribute move |
 //! | `moved` | an element that moved between its animation mark and the restyle |
 //! | `scope` | the marks a restyle never turns into engine work |
 //! | `settling` | where a transition leaves the element's own style once it has finished |
+//! | `sharing` | equal cascade results under different parents taking one style's groups |
 //! | `fill` | what a finished animation that fills forwards holds through a later restyle |
+//! | `hidden` | a subtree hidden with `display: none` while its animations run |
 //! | `keyframe_vars` | keyframe values that read a custom property, as the property moves |
 //! | `damage` | what each damage level the engine produces makes the frame owe |
 //! | `pass` | the shape of one pass: what it collects, how wide it runs, what it retires |
@@ -26,8 +29,12 @@ mod custom_reader;
 mod damage;
 #[path = "restyle/fill.rs"]
 mod fill;
+#[path = "restyle/hidden.rs"]
+mod hidden;
 #[path = "restyle/keyframe_vars.rs"]
 mod keyframe_vars;
+#[path = "restyle/memo.rs"]
+mod memo;
 #[path = "restyle/moved.rs"]
 mod moved;
 #[path = "restyle/negation.rs"]
@@ -38,6 +45,8 @@ mod pass;
 mod scope;
 #[path = "restyle/settling.rs"]
 mod settling;
+#[path = "restyle/sharing.rs"]
+mod sharing;
 #[path = "restyle/throughput.rs"]
 mod throughput;
 #[path = "restyle/zero.rs"]

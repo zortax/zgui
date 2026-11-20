@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use zgui_geom::CssPx;
+use zgui_profile::alloc_tag::{self, Tag};
 use zgui_text::{
     BreakRequest, BrokenParagraph, ParagraphContent, ParagraphShaper, ShapedParagraph,
     ShapedRunOwned, StrutMetrics,
@@ -12,7 +13,8 @@ use zgui_text_style::TextStyle;
 use crate::direction::Controls;
 use crate::shape::brush::SlotBrush;
 use crate::shape::engine::ShapedLayout;
-use crate::shape::line::{LineRequest, ResolvedLineMetrics};
+use crate::shape::frozen::Frozen;
+use crate::shape::line::{LineRequest, LineSettings, ResolvedLineMetrics};
 use crate::shape::strut::StrutCache;
 use crate::shape::{breaking, build};
 use crate::system::FontSystem;
@@ -47,6 +49,8 @@ pub struct Shaper {
     struts: StrutCache,
     /// How the base direction is forced.
     controls: Controls,
+    /// Whether a paragraph that breaks one way only is held in the frozen form.
+    freeze: bool,
 }
 
 impl Shaper {
@@ -70,7 +74,21 @@ impl Shaper {
             scratch: parley::LayoutContext::new(),
             struts: StrutCache::default(),
             controls,
+            freeze: true,
         }
+    }
+
+    /// The same shaper, holding a paragraph that breaks one way only in the frozen form or not.
+    ///
+    /// On by default. A paragraph that can break one way only keeps its glyphs and clusters in a
+    /// compact form and drops the engine's layout; it paints, places a caret and hit-tests the
+    /// same either way. Such a paragraph has runs that may not wrap and all go left to right, no
+    /// inline box, at most `u16::MAX` bytes of text and a first cluster that is not a space. Off
+    /// keeps every paragraph in the engine's layout, which [`ShapedLayout::layout`] reads.
+    #[must_use]
+    pub fn freezing(mut self, freeze: bool) -> Self {
+        self.freeze = freeze;
+        self
     }
 
     /// The system this shaper draws faces from.
@@ -112,9 +130,21 @@ impl Shaper {
     /// assert!(shaper.shape_line("", &request).is_empty());
     /// ```
     pub fn shape_line(&mut self, text: &str, request: &LineRequest<'_>) -> Vec<ShapedRunOwned> {
+        self.shape_line_with(text, request, &LineSettings::NONE)
+    }
+
+    /// Shapes one line as [`shape_line`](Self::shape_line) does, with OpenType features and
+    /// variable-axis coordinates on top of the request.
+    pub fn shape_line_with(
+        &mut self,
+        text: &str,
+        request: &LineRequest<'_>,
+        settings: &LineSettings<'_>,
+    ) -> Vec<ShapedRunOwned> {
         crate::shape::line::shape(
             text,
             request,
+            settings,
             &self.fonts,
             &mut self.context,
             &mut self.scratch,
@@ -127,7 +157,19 @@ impl Shaper {
     /// so cell geometry taken from these metrics and glyphs taken from that call agree. `None` when
     /// the request matches no face at all.
     pub fn line_metrics(&self, request: &LineRequest<'_>) -> Option<ResolvedLineMetrics> {
-        let style = crate::shape::line::text_style(request);
+        self.line_metrics_with(request, &LineSettings::NONE)
+    }
+
+    /// The face one request resolves to with `settings` on top, and what its line is measured by.
+    ///
+    /// The counterpart of [`shape_line_with`](Self::shape_line_with), as
+    /// [`line_metrics`](Self::line_metrics) is of [`shape_line`](Self::shape_line).
+    pub fn line_metrics_with(
+        &self,
+        request: &LineRequest<'_>,
+        settings: &LineSettings<'_>,
+    ) -> Option<ResolvedLineMetrics> {
+        let style = crate::shape::line::text_style(request, settings);
         let size = CssPx(request.size_device_px);
         let (face, metrics) = self
             .fonts
@@ -159,7 +201,7 @@ impl ParagraphShaper for Shaper {
         // The font system is shared and synchronised; the context clones the collection under
         // its lock; the scratch and the strut cache start empty and warm up on the fork's
         // thread. Nothing shaped depends on which shaper shaped it.
-        Some(Self::with_controls(Arc::clone(&self.fonts), self.controls))
+        Some(Self::with_controls(Arc::clone(&self.fonts), self.controls).freezing(self.freeze))
     }
 
     fn shape_keyed(
@@ -171,14 +213,17 @@ impl ParagraphShaper for Shaper {
             Some(run) => self.strut(&run.style),
             None => self.strut(&TextStyle::initial()),
         };
-        build::shape(
-            key,
-            content,
-            strut,
-            self.controls,
-            &mut self.context,
-            &mut self.scratch,
-        )
+        alloc_tag::scope(Tag::Shaping, || {
+            build::shape(
+                key,
+                content,
+                strut,
+                self.controls,
+                self.freeze,
+                &mut self.context,
+                &mut self.scratch,
+            )
+        })
     }
 
     fn break_lines(
@@ -186,7 +231,18 @@ impl ParagraphShaper for Shaper {
         shaped: &mut ShapedParagraph<Self::Engine>,
         request: &BreakRequest<'_>,
     ) -> BrokenParagraph {
-        breaking::break_lines(shaped, request)
+        if shaped.engine.is_frozen() && !Frozen::answers(request) {
+            alloc_tag::scope(Tag::Shaping, || {
+                build::thaw(
+                    shaped,
+                    request,
+                    self.controls,
+                    &mut self.context,
+                    &mut self.scratch,
+                );
+            });
+        }
+        alloc_tag::scope(Tag::Break, || breaking::break_lines(shaped, request))
     }
 
     fn strut(&mut self, style: &TextStyle) -> StrutMetrics {
@@ -211,6 +267,10 @@ impl ParagraphShaper for Shaper {
     ) {
         crate::shape::clusters::visit_clusters(&shaped.engine, line, visit);
     }
+
+    fn engine_bytes(&self, shaped: &ShapedParagraph<Self::Engine>) -> usize {
+        shaped.engine.heap_bytes()
+    }
 }
 
 impl core::fmt::Debug for Shaper {
@@ -218,6 +278,7 @@ impl core::fmt::Debug for Shaper {
         formatter
             .debug_struct("Shaper")
             .field("controls", &self.controls)
+            .field("freeze", &self.freeze)
             .finish_non_exhaustive()
     }
 }

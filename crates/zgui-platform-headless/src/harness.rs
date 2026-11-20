@@ -11,8 +11,12 @@
 //! happening. Without the report, a timer fires no frame. Without the clearing, the deadline is
 //! reported reached again on the next turn and on every turn after it, and the loop spins while
 //! running no frames at all.
+//!
+//! A deadline can also ask for no frame at all. A parked application wakes once after its last
+//! frame to trim its resources, and draws nothing then. The harness counts that resume apart from
+//! the ones that ask for a frame: each frame allows one of each.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use zgui_platform::{AppHandler, Clock, IdlePolicy, PlatformCx, SurfaceEvent, SurfaceId};
 
@@ -51,6 +55,8 @@ pub struct Harness<A: AppHandler> {
     policy: IdlePolicy,
     /// How many deadlines have been reported reached.
     resumes: u64,
+    /// How many of those asked for no redraw.
+    idle_resumes: u64,
     /// What the surfaces had asked for in total when the counts were last reset.
     ///
     /// The redraw count is a difference rather than a tally, so that it counts every call that
@@ -81,6 +87,7 @@ impl<A: AppHandler> Harness<A> {
             app,
             policy: IdlePolicy::Block,
             resumes: 0,
+            idle_resumes: 0,
             redraw_baseline: 0,
             frames: 0,
             clock_held: false,
@@ -164,6 +171,14 @@ impl<A: AppHandler> Harness<A> {
     /// How many times an installed deadline has been reported reached.
     pub fn resumes(&self) -> u64 {
         self.resumes
+    }
+
+    /// How many of those resumes asked for no redraw.
+    ///
+    /// An application that trims its resources at a deadline after its last frame draws nothing
+    /// then. That resume is one of these.
+    pub fn idle_resumes(&self) -> u64 {
+        self.idle_resumes
     }
 
     /// Delivers one event to one surface, exactly as the platform would.
@@ -383,28 +398,34 @@ impl<A: AppHandler> Harness<A> {
     /// Sets the loop's own counts back to zero, leaving the park itself alone.
     pub fn reset_counts(&mut self) {
         self.resumes = 0;
+        self.idle_resumes = 0;
         self.redraw_baseline = self.total_redraws();
         self.frames = 0;
     }
 
     /// Asserts that the loop is parking rather than spinning.
     ///
-    /// One resume per frame, plus the one that has been reported but whose frame has not run yet,
-    /// is the whole budget. Anything above it means deadlines are being reported reached without
+    /// The budget is one resume that asks for a frame per frame, and one resume that asks for none
+    /// per frame, each plus the one that has been reported but whose frame has not run yet. A
+    /// resume that asks for no frame is the wake a parked application takes once after its last
+    /// frame. Anything above the budget means deadlines are being reported reached without
     /// producing the frames they exist to produce — a loop that looks idle, ignores its own
     /// timers, and burns a core.
     ///
     /// # Panics
     ///
-    /// Panics when more deadlines have been reported reached than frames have run, plus one.
+    /// Panics when either kind of resume outnumbers the frames that have run, plus one.
     pub fn assert_park_invariant(&self) {
+        let drawing = self.resumes - self.idle_resumes;
         assert!(
-            self.resumes <= self.frames + 1,
-            "the loop reported {} expired deadlines against {} frames. A deadline reported reached \
-             that produces no frame is not a stall: it is a busy loop running no frames at all, \
-             and this ratio is the only thing that separates it from a correct park.",
+            drawing <= self.frames + 1 && self.idle_resumes <= self.frames + 1,
+            "the loop reported {} expired deadlines against {} frames, {} of them asking for no \
+             frame. A deadline reported reached that produces no frame is not a stall: it is a \
+             busy loop running no frames at all, and this ratio is the only thing that separates \
+             it from a correct park.",
             self.resumes,
-            self.frames
+            self.frames,
+            self.idle_resumes
         );
     }
 
@@ -440,11 +461,16 @@ impl<A: AppHandler> Harness<A> {
             return;
         }
         self.resumes += 1;
+        let redraws = self.total_redraws();
         // Cleared *before* the application is told, so a handler that installs a fresh deadline
         // from inside the callback is not overwritten by the clearing that follows it.
         self.policy = IdlePolicy::Block;
         self.app.deadline_reached(&self.platform);
         self.park();
+        // The park counts too: it answers a deadline that has passed with a redraw.
+        if self.total_redraws() == redraws {
+            self.idle_resumes += 1;
+        }
     }
 
     /// Asks the application how to park, and installs the answer.
@@ -483,7 +509,7 @@ mod tests {
     #[derive(Default)]
     struct Delayed {
         /// When it wants to be woken, if it does.
-        deadline: Option<std::time::Instant>,
+        deadline: Option<web_time::Instant>,
         /// How many frames it has drawn.
         frames: u32,
         /// How many times it was told a deadline was reached.
@@ -584,13 +610,112 @@ mod tests {
         harness.assert_park_invariant();
     }
 
+    /// How often [`Trims`] redraws.
+    const PERIOD: Duration = Duration::from_secs(5);
+
+    /// How long after a frame [`Trims`] trims its resources.
+    const TRIM: Duration = Duration::from_secs(2);
+
+    /// An application that redraws on a timer and trims its resources once after each frame.
+    #[derive(Default)]
+    struct Trims {
+        /// When the next timed frame is due.
+        timer: Option<web_time::Instant>,
+        /// When the trim after the last frame is due.
+        trim: Option<web_time::Instant>,
+        /// How many frames it has drawn.
+        frames: u32,
+        /// How many times it trimmed.
+        trims: u32,
+    }
+
+    impl Trims {
+        /// Services every deadline that has passed by `now`.
+        fn service(&mut self, cx: &dyn PlatformCx, now: web_time::Instant) {
+            if self.timer.is_some_and(|at| at <= now) {
+                self.timer = None;
+                for surface in cx.surfaces() {
+                    surface.request_redraw();
+                }
+            }
+            if self.trim.is_some_and(|at| at <= now) {
+                self.trim = None;
+                self.trims += 1;
+            }
+        }
+    }
+
+    impl AppHandler for Trims {
+        fn surfaces_available(&mut self, cx: &dyn PlatformCx) {
+            cx.create_surface(&SurfaceAttributes::new("trims"))
+                .expect("headless surfaces are always creatable");
+            self.timer = Some(cx.clock().now() + PERIOD);
+        }
+
+        fn surface_event(&mut self, cx: &dyn PlatformCx, _id: SurfaceId, event: SurfaceEvent) {
+            if matches!(event, SurfaceEvent::RedrawRequested) {
+                let now = cx.clock().now();
+                self.frames += 1;
+                self.timer = Some(now + PERIOD);
+                self.trim = Some(now + TRIM);
+            }
+        }
+
+        fn wake(&mut self, _cx: &dyn PlatformCx, _reason: WakeReason) {}
+
+        fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
+            let now = cx.clock().now();
+            self.service(cx, now);
+            [self.timer, self.trim]
+                .into_iter()
+                .flatten()
+                .min()
+                .map_or(IdlePolicy::Block, |at| IdlePolicy::until(at, now))
+        }
+
+        fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
+            self.service(cx, cx.clock().now());
+        }
+    }
+
+    #[test]
+    fn a_trim_after_every_frame_stays_inside_the_park_budget() {
+        let mut harness = Harness::new(Trims::default());
+        harness.pump();
+        for _ in 0..10 {
+            harness.run_for(PERIOD, Duration::from_secs(1));
+        }
+        harness.run_for(TRIM, Duration::from_secs(1));
+        assert_eq!(harness.app().frames, 10);
+        assert_eq!(harness.app().trims, 10);
+        assert_eq!(
+            harness.idle_resumes(),
+            10,
+            "every trim is a resume that asks for no frame"
+        );
+        assert_eq!(harness.resumes(), 20);
+        harness.assert_park_invariant();
+    }
+
+    #[test]
+    fn a_long_step_across_a_trim_and_a_timer_stays_inside_the_park_budget() {
+        let mut harness = Harness::new(Trims::default());
+        harness.pump();
+        for _ in 0..10 {
+            harness.advance(PERIOD * 3);
+            harness.settle(4);
+        }
+        assert_eq!(harness.app().frames, 10);
+        harness.assert_park_invariant();
+    }
+
     #[test]
     #[should_panic(expected = "expired deadlines against")]
     fn the_park_invariant_fails_on_a_loop_that_never_draws() {
         // The positive control. Without it, `resumes <= frames + 1` is an assertion nobody has ever
         // seen fail — and an assertion nobody has seen fail is an assertion nobody has checked.
         struct NeverDraws {
-            deadline: Option<std::time::Instant>,
+            deadline: Option<web_time::Instant>,
         }
 
         impl AppHandler for NeverDraws {

@@ -13,6 +13,7 @@ include.workspace = true
 
 # L1 — contracts. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
+web-time.workspace = true
 bytemuck.workspace = true
 kurbo.workspace = true
 peniko.workspace = true

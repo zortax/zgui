@@ -29,8 +29,8 @@ pub(crate) struct BoxLayout {
     /// See [`ProbeMemo`](crate::inline::measure::ProbeMemo). Dropped with the cache: a box marked
     /// dirty may have new content, and the memo is only ever trusted within one pass anyway.
     pub(crate) probe_memo: Option<Box<crate::inline::measure::ProbeMemo>>,
-    /// Whether a size probe over this box's lines is on [`LayoutStore::probed`].
-    pub(crate) probed: bool,
+    /// Whether this box is on [`LayoutStore::noted`].
+    pub(crate) noted: bool,
     /// What the engine recorded about this box's absolutely positioned children, so that one of
     /// them can be placed again without the box running its own algorithm.
     pub(crate) absolute: Option<Box<cephal::tree::AbsoluteContext>>,
@@ -112,6 +112,9 @@ pub(crate) struct BoxLayout {
     pub(crate) atomic: Option<Box<crate::inline::atomic::AtomicAnswers>>,
     /// The fragments this box produced.
     pub(crate) fragments: FragList,
+    /// The range of hit-order keys this box's subtree spans, see
+    /// [`LayoutStore::subtree_order`](crate::LayoutStore::subtree_order).
+    pub(crate) subtree_order: SubtreeOrder,
     /// Which axes of an `overflow: auto` box were decided to scroll.
     ///
     /// Kept between frames so that the next layout starts from the previous answer instead of
@@ -120,6 +123,25 @@ pub(crate) struct BoxLayout {
     pub(crate) auto_scroll: (bool, bool),
     /// The gutter this box keeps reserved while it is locked, if it is.
     pub(crate) scroll_lock: Option<(bool, bool)>,
+}
+
+/// The range of hit-order keys one box's subtree spans, as `(first, last)`.
+///
+/// Held per box, beside the box's fragments: every piece of a box spans the same range. Empty,
+/// `(MAX, 0)`, until the fragment pass or the hit index folds it, and again when the box loses
+/// its last fragment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct SubtreeOrder(pub(crate) (u64, u64));
+
+impl SubtreeOrder {
+    /// The range of a subtree with no indexed fragment, which folds away.
+    pub(crate) const EMPTY: Self = Self((u64::MAX, 0));
+}
+
+impl Default for SubtreeOrder {
+    fn default() -> Self {
+        Self::EMPTY
+    }
 }
 
 impl BoxLayout {
@@ -161,6 +183,37 @@ impl BoxLayout {
     /// measured has changed, and for those the intrinsic answer is exactly as stale as the rest.
     pub(crate) fn forget_cached_sizes(&mut self) {
         self.cache.clear();
+    }
+
+    /// An estimate of the heap bytes this box's layout state holds, one level deep.
+    ///
+    /// Counts the boxed records and the capacity of the vectors directly inside them. Content that
+    /// is shared through an `Arc`, and the engine's own cache records, are left out.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        use core::mem::size_of;
+        let probe = self.probe_memo.as_deref().map_or(0, |memo| {
+            size_of::<crate::inline::measure::ProbeMemo>() + memo.heap_bytes()
+        });
+        let absolute = self
+            .absolute
+            .as_ref()
+            .map_or(0, |_| size_of::<cephal::tree::AbsoluteContext>());
+        let inline = self.inline.as_deref().map_or(0, |inline| {
+            size_of::<InlineResolution>() + inline.heap_bytes()
+        });
+        let flattened = self.flattened.as_deref().map_or(0, |flattened| {
+            size_of::<Flattened>() + flattened.heap_bytes()
+        });
+        let atomic = self
+            .atomic
+            .as_ref()
+            .map_or(0, |_| size_of::<crate::inline::atomic::AtomicAnswers>());
+        let fragments = if self.fragments.spilled() {
+            self.fragments.capacity() * size_of::<crate::fragment::FragKey>()
+        } else {
+            0
+        };
+        probe + absolute + inline + flattened + atomic + fragments
     }
 
     /// Whether this box is holding no answer about its own size.
@@ -215,6 +268,20 @@ impl BoxLayout {
 }
 
 impl LayoutStore {
+    /// The sum of `BoxLayout::heap_bytes` over every box, for a memory report.
+    #[doc(hidden)]
+    pub fn layout_heap_bytes(&self) -> usize {
+        self.keys()
+            .into_iter()
+            .filter_map(|key| self.state(key))
+            .map(BoxLayout::heap_bytes)
+            .sum()
+    }
+
+    /// The size of one box's layout state record, for a memory report.
+    #[doc(hidden)]
+    pub const BOX_LAYOUT_SIZE: usize = core::mem::size_of::<BoxLayout>();
+
     /// What one box measured on one axis, if it is still holding the answer.
     pub(crate) fn intrinsic(&self, key: BoxKey, axis: Axis) -> Option<IntrinsicSizes> {
         self.state(key)?.intrinsic[axis.index()]

@@ -24,7 +24,7 @@ use zgui_platform::{DragEvent, SurfaceId};
 pub struct Drag {
     /// The session, while one is over a window.
     session: Option<Session>,
-    /// Where a completed read leaves its answer.
+    /// Where the current session's read leaves its answer.
     read: Arc<Mutex<Option<Vec<PathBuf>>>>,
 }
 
@@ -46,7 +46,9 @@ struct Session {
 impl Drag {
     /// Records a drag arriving over `surface`.
     pub fn entered(&mut self, surface: SurfaceId, offer: DragOffer, at: Point<CssPx, Css>) {
-        *self.read.lock().unwrap_or_else(|held| held.into_inner()) = None;
+        // A previous drag's read can still finish. Each session gets its own mailbox, so that
+        // read cannot supply paths to this drag.
+        self.read = Arc::default();
         self.session = Some(Session {
             surface,
             offer,
@@ -76,8 +78,15 @@ impl Drag {
             .then_some((session.surface, DragEvent::Moved { position: at }))
     }
 
-    /// Records the drag leaving without a drop.
+    /// Records the drag leaving.
+    ///
+    /// A dropped drag also leaves. Its session stays until its read finishes.
     pub fn left(&mut self) -> Option<(SurfaceId, DragEvent)> {
+        // A drop is followed by wl_data_device.leave. The read of a dropped session may still
+        // run, so keep the session.
+        if self.session.as_ref().is_some_and(|session| session.dropped) {
+            return None;
+        }
         let session = self.session.take()?;
         session
             .announced
@@ -146,32 +155,43 @@ impl Drag {
 ///
 /// The format is one address per line with comment lines, and only `file` addresses are paths at
 /// all — a drag of a web address carries something no file system can open, and turning it into a
-/// path would produce a name nothing can read rather than nothing.
+/// path would produce a name nothing can read rather than nothing. An address with a host other
+/// than `localhost` names a file on another machine, so it is dropped too.
+///
+/// Read as bytes, because a Unix file name is bytes and need not be UTF-8.
 pub fn paths(bytes: &[u8]) -> Vec<PathBuf> {
-    String::from_utf8_lossy(bytes)
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'))
-        .filter_map(|line| line.strip_prefix("file://"))
-        .map(|address| PathBuf::from(unescape(address)))
+    use std::os::unix::ffi::OsStringExt;
+    bytes
+        .split(|byte| *byte == b'\n')
+        .map(<[u8]>::trim_ascii)
+        .filter(|line| !line.is_empty() && !line.starts_with(b"#"))
+        .filter_map(|line| line.strip_prefix(b"file://"))
+        .filter_map(|address| {
+            let path = address.strip_prefix(b"localhost").unwrap_or(address);
+            if !path.starts_with(b"/") {
+                return None;
+            }
+            let bytes = unescape(path);
+            (!bytes.contains(&0)).then(|| PathBuf::from(std::ffi::OsString::from_vec(bytes)))
+        })
         .collect()
 }
 
 /// One address with its percent escapes resolved.
-fn unescape(address: &str) -> String {
-    let mut out = String::with_capacity(address.len());
-    let bytes = address.as_bytes();
+fn unescape(bytes: &[u8]) -> Vec<u8> {
+    let digit = |byte: u8| (byte as char).to_digit(16).map(|value| value as u8);
+    let mut out = Vec::with_capacity(bytes.len());
     let mut index = 0;
     while index < bytes.len() {
-        if bytes[index] == b'%' && index + 2 < bytes.len() {
-            let pair = &address[index + 1..index + 3];
-            if let Ok(byte) = u8::from_str_radix(pair, 16) {
-                out.push(byte as char);
-                index += 3;
-                continue;
-            }
+        if bytes[index] == b'%'
+            && index + 2 < bytes.len()
+            && let (Some(high), Some(low)) = (digit(bytes[index + 1]), digit(bytes[index + 2]))
+        {
+            out.push(high * 16 + low);
+            index += 3;
+            continue;
         }
-        out.push(bytes[index] as char);
+        out.push(bytes[index]);
         index += 1;
     }
     out
@@ -180,7 +200,49 @@ fn unescape(address: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::paths;
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
     use std::path::PathBuf;
+
+    #[test]
+    fn a_utf8_name_survives_its_escapes() {
+        assert_eq!(
+            paths("file:///tmp/flight%20%C3%BC.ulg\nfile://localhost/tmp/日本.ulg\n".as_bytes()),
+            vec![
+                PathBuf::from("/tmp/flight ü.ulg"),
+                PathBuf::from("/tmp/日本.ulg")
+            ]
+        );
+    }
+
+    #[test]
+    fn a_name_that_is_not_utf8_keeps_its_bytes() {
+        let name = |bytes: &[u8]| PathBuf::from(OsStr::from_bytes(bytes));
+        assert_eq!(paths(b"file:///tmp/%FF.ulg"), vec![name(b"/tmp/\xFF.ulg")]);
+        assert_eq!(paths(b"file:///tmp/\xFE.ulg"), vec![name(b"/tmp/\xFE.ulg")]);
+    }
+
+    #[test]
+    fn a_split_character_after_a_percent_is_kept() {
+        assert_eq!(
+            paths("file:///tmp/%aé.ulg".as_bytes()),
+            vec![PathBuf::from("/tmp/%aé.ulg")]
+        );
+        assert_eq!(
+            paths("file:///tmp/%é.ulg".as_bytes()),
+            vec![PathBuf::from("/tmp/%é.ulg")]
+        );
+    }
+
+    #[test]
+    fn a_file_on_another_host_is_dropped() {
+        assert!(paths(b"file://remote/tmp/log.ulg\nfile://localhostfoo/tmp/log.ulg").is_empty());
+    }
+
+    #[test]
+    fn a_name_with_an_escaped_nul_is_dropped() {
+        assert!(paths(b"file:///tmp/bad%00.ulg").is_empty());
+    }
 
     #[test]
     fn a_list_with_nothing_on_it_names_no_files() {

@@ -28,16 +28,18 @@
 use zgui_bits::Dirty;
 use zgui_dom::Document;
 use zgui_dom::dirty::propagate;
+use zgui_dom::side::AnimOverride;
 use zgui_profile::{Counter, counter};
 use zgui_style::ElementAnimation;
 
+use crate::frame::placer::Placer;
 use crate::tier::Tier;
 
 /// What the frame did with an element's interpolated placement.
 ///
 /// Answered by the caller, because the caller is what holds the previous frame's table and the
-/// coordinate systems the boxes established. Read on the placement path and ignored on the other
-/// two.
+/// coordinate systems the boxes established. Read on the placement path, and on the cheap path
+/// for a box that has to be composed again. The cascade path ignores it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Placed {
     /// The interpolation arrived back where the standing fragments were already composed.
@@ -60,20 +62,41 @@ pub enum Placed {
 }
 
 /// Applies one element's animations and reports which path it took.
-pub fn element(document: &mut Document, animation: &ElementAnimation, placed: Placed) -> Tier {
+///
+/// `place` is offered a moved colour before the repaint is marked for it, and is told when an
+/// override is dropped. See [`Placer::recolor`].
+pub fn element(
+    document: &mut Document,
+    animation: &ElementAnimation,
+    placed: Placed,
+    place: &mut dyn Placer,
+) -> Tier {
     let tier = Tier::of(animation.properties);
     match tier {
         Tier::Cheap => {
             let mut bits = Dirty::empty();
             // `REHIT` alongside `REPAINT` because the fragment pass is entered on either, and it is
             // the pass that turns an obligation into a damaged rectangle. Owed only when the value
-            // actually moved: a held final value is already on the screen.
-            if write_override(document, animation) {
+            // actually moved: a held final value is already on the screen. A colour written into
+            // the slots the box's painting names owes neither.
+            if write_override(document, animation, place)
+                && !place.recolor(animation.node, &animation.values)
+            {
                 bits |= Dirty::REPAINT | Dirty::REHIT;
             }
-            // `ANIMATING` because nothing else will ask for the frame after this one.
+            // A transition that moved the box ended while a colour goes on: its end value is still
+            // a placement, and a box that could not be moved by a written coordinate system is
+            // composed again, as on the placement path.
+            if placed == Placed::Recomposed {
+                bits |= Dirty::REFRAGMENT | Dirty::REHIT;
+            }
+            // `ANIMATING` because nothing else will ask for the frame after this one. An element
+            // whose values hold still until a later moment owes no frame before it, and the caller
+            // wakes the loop at that moment instead.
             if animation.advancing {
-                bits |= Dirty::ANIMATING;
+                if animation.hold.is_none() {
+                    bits |= Dirty::ANIMATING;
+                }
                 counter::bump(Counter::TierBTransitions);
             }
             if !bits.is_empty() {
@@ -84,8 +107,12 @@ pub fn element(document: &mut Document, animation: &ElementAnimation, placed: Pl
             let mut bits = Dirty::empty();
             // A placement animation may be fading as well as moving, and the two values are written
             // into two different places: this one into the node's own paint column, exactly as the
-            // cheap path writes it.
-            if write_override(document, animation) {
+            // cheap path writes it, and offered to the slots the box owns in the same way. A box
+            // moved by a written coordinate system replays its chunk, so a slot nobody rewrites
+            // keeps the colour of the frame the chunk was encoded in.
+            if write_override(document, animation, place)
+                && !place.recolor(animation.node, &animation.values)
+            {
                 bits |= Dirty::REPAINT | Dirty::REHIT;
             }
             // `REFRAGMENT` is what makes the fragment pass descend to this element at all, and
@@ -113,7 +140,9 @@ pub fn element(document: &mut Document, animation: &ElementAnimation, placed: Pl
         Tier::Cascade => {
             // The element is about to be styled again, so anything left in its column would be
             // composed over a style that already carries the animated value.
-            clear_override(document, animation);
+            if let Some(was) = clear_override(document, animation) {
+                place.uncolored(animation.node, &was);
+            }
             // `RECASCADE` is what makes the restyle descend to it at all: the engine's own hint
             // lives in the element's data, and a traversal with no obligation of ours leading to
             // the element never looks at it. Five hundred animations marked with the hint alone
@@ -139,15 +168,24 @@ pub fn element(document: &mut Document, animation: &ElementAnimation, placed: Pl
 
 /// Puts one element's interpolated values in the one place they are private to it.
 ///
-/// Returns whether what is stored changed, which is what the repaint obligation is owed on.
-fn write_override(document: &mut Document, animation: &ElementAnimation) -> bool {
+/// Returns whether what is stored changed, which is what the repaint obligation is owed on. An
+/// override that empties is dropped, and `place` is told so.
+fn write_override(
+    document: &mut Document,
+    animation: &ElementAnimation,
+    place: &mut dyn Placer,
+) -> bool {
     let slot = document
         .store_mut()
         .columns_mut()
         .anim
         .get_mut(animation.node);
     if animation.values.is_empty() {
-        return slot.take().is_some();
+        let Some(was) = slot.take() else {
+            return false;
+        };
+        place.uncolored(animation.node, &was);
+        return true;
     }
     match slot {
         Some(held) if **held == animation.values => false,
@@ -162,13 +200,15 @@ fn write_override(document: &mut Document, animation: &ElementAnimation) -> bool
     }
 }
 
-/// Drops one element's override, if it had one.
-fn clear_override(document: &mut Document, animation: &ElementAnimation) {
-    document
-        .store_mut()
-        .columns_mut()
-        .anim
-        .clear(animation.node);
+/// Drops one element's override, and returns it if it had one.
+fn clear_override(
+    document: &mut Document,
+    animation: &ElementAnimation,
+) -> Option<Box<AnimOverride>> {
+    let column = &mut document.store_mut().columns_mut().anim;
+    let was = column.get(animation.node).cloned().flatten();
+    column.clear(animation.node);
+    was
 }
 
 /// Marks one element's obligations, if it is still in the document.
@@ -185,6 +225,7 @@ mod tests {
     use zgui_style::{AnimatedProperties, ElementAnimation};
 
     use super::{Placed, element};
+    use crate::frame::placer::Recomposing;
     use crate::tier::Tier;
 
     /// A document with one element in it, and that element's slot.
@@ -214,9 +255,11 @@ mod tests {
                 },
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
+            &mut Recomposing,
         );
         assert_eq!(tier, Tier::Cheap);
         assert_eq!(
@@ -249,9 +292,11 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
+            &mut Recomposing,
         );
         assert_eq!(tier, Tier::Cascade);
         let dirty = document.store().core(index).dirty();
@@ -274,9 +319,11 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Recomposed,
+            &mut Recomposing,
         );
         assert_eq!(tier, Tier::Place);
         let dirty = document.store().core(index).dirty();
@@ -308,9 +355,11 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Written,
+            &mut Recomposing,
         );
         assert_eq!(tier, Tier::Place);
         let dirty = document.store().core(index).dirty().own();
@@ -341,9 +390,11 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: false,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
+            &mut Recomposing,
         );
         assert!(document.store().core(index).dirty().own().is_empty());
     }
@@ -366,9 +417,11 @@ mod tests {
                 },
                 placement: None,
                 advancing: true,
+                hold: None,
                 crossed: false,
             },
             Placed::Recomposed,
+            &mut Recomposing,
         );
         assert_eq!(tier, Tier::Place);
         assert_eq!(
@@ -404,9 +457,10 @@ mod tests {
             },
             placement: None,
             advancing: false,
+            hold: None,
             crossed: false,
         };
-        element(&mut document, &held, Placed::Held);
+        element(&mut document, &held, Placed::Held, &mut Recomposing);
         assert_eq!(
             document
                 .store()
@@ -444,9 +498,10 @@ mod tests {
             },
             placement: None,
             advancing: false,
+            hold: None,
             crossed: false,
         };
-        element(&mut document, &held, Placed::Held);
+        element(&mut document, &held, Placed::Held, &mut Recomposing);
         let root = document.document_index();
         zgui_dom::dirty::walk::walk(
             document.store_mut(),
@@ -454,7 +509,7 @@ mod tests {
             zgui_bits::Dirty::all(),
             &mut |_store, _node| {},
         );
-        element(&mut document, &held, Placed::Held);
+        element(&mut document, &held, Placed::Held, &mut Recomposing);
         assert!(
             document.store().core(index).dirty().own().is_empty(),
             "a value that did not change asked to be drawn again"
@@ -474,9 +529,11 @@ mod tests {
                 values: AnimOverride::new(),
                 placement: None,
                 advancing: false,
+                hold: None,
                 crossed: false,
             },
             Placed::Held,
+            &mut Recomposing,
         );
         let dirty = document.store().core(index).dirty();
         assert!(!dirty.own().contains(zgui_bits::Dirty::RECASCADE));
@@ -500,9 +557,10 @@ mod tests {
             },
             placement: None,
             advancing: true,
+            hold: None,
             crossed: false,
         };
-        element(&mut document, &fading, Placed::Held);
+        element(&mut document, &fading, Placed::Held, &mut Recomposing);
         element(
             &mut document,
             &ElementAnimation {
@@ -510,6 +568,7 @@ mod tests {
                 ..fading
             },
             Placed::Held,
+            &mut Recomposing,
         );
         assert!(
             document

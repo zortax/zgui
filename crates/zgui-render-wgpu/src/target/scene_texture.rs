@@ -9,8 +9,12 @@ use crate::gpu::device::Gpu;
 /// An interactive resize delivers one new size per frame, and reallocating an exact-size target
 /// per event is a multi-megabyte allocate-and-free on the frame path during the one interaction
 /// where the budget is tightest. Rounding up to a class means growth during a drag costs a handful
-/// of allocations rather than one per frame, and shrinking costs none at all.
+/// of allocations rather than one per frame. A shrink keeps the allocation until it holds more than
+/// [`SHRINK_SLACK`] times the area the surface needs.
 pub const SIZE_CLASS: i32 = 256;
+
+/// How many times the area a surface needs an allocation may hold before a shrink frees it.
+pub const SHRINK_SLACK: i64 = 2;
 
 /// The extent an axis of `length` pixels is allocated at.
 pub fn size_class(length: i32) -> i32 {
@@ -39,6 +43,17 @@ pub struct SceneTexture {
     format: wgpu::TextureFormat,
     /// The sub-rectangle the surface currently occupies. The slack around it is never read.
     used: Rect<i32, Device>,
+    /// The texture this one replaced, until its picture is copied into this one.
+    carried: Option<Carried>,
+}
+
+/// A replaced texture, and the part of it that holds the last frame drawn.
+#[derive(Debug)]
+struct Carried {
+    /// The replaced texture.
+    texture: wgpu::Texture,
+    /// The part of it the last frame drew into.
+    held: Rect<i32, Device>,
 }
 
 impl SceneTexture {
@@ -82,21 +97,78 @@ impl SceneTexture {
             view,
             format,
             used: Rect::new(Point::new(0, 0), size.non_negative()),
+            carried: None,
         }
     }
 
-    /// Points the target at a surface of `size`, reallocating only when the size class changes.
+    /// Points the target at a surface of `size`, reallocating only when the surface does not fit
+    /// or the allocation holds more than [`SHRINK_SLACK`] times the area it needs.
     ///
-    /// Returns whether the texture was reallocated, which is what tells the caller that nothing in
-    /// it survives and the next frame has to redraw all of it.
+    /// Returns whether the texture was reallocated, which tells the caller to bind the new one.
+    /// The picture survives a reallocation: the replaced texture is kept until
+    /// [`SceneTexture::carry`] copies it into the new one, so the next frame only owes what the new
+    /// extent exposes.
     pub fn resize(&mut self, gpu: &Gpu, size: Size<i32, Device>) -> bool {
         let wanted: Size<i32, Device> = Size::new(size_class(size.width), size_class(size.height));
-        if wanted == self.allocated() {
+        let allocated = self.allocated();
+        let fits = size.width <= allocated.width && size.height <= allocated.height;
+        let area = |extent: Size<i32, Device>| extent.width as i64 * extent.height as i64;
+        if fits && area(allocated) <= SHRINK_SLACK * area(wanted) {
             self.used = Rect::new(Point::new(0, 0), size.non_negative());
             return false;
         }
-        *self = Self::new(gpu, size, self.format);
+        let replaced = std::mem::replace(self, Self::new(gpu, size, self.format));
+        // Two reallocations before a draw: the first replacement was never drawn into, so the
+        // picture is still in the texture the first one replaced.
+        self.carried = Some(replaced.carried.unwrap_or(Carried {
+            texture: replaced.texture,
+            held: replaced.used,
+        }));
         true
+    }
+
+    /// Copies the picture of the replaced texture into this one, and releases the replaced one.
+    ///
+    /// Recorded first in a frame's encoder, before a scroll shift and before any pass, because each
+    /// of them reads or writes the pixels this copies. Returns the rectangle copied, or `None` when
+    /// nothing was carried.
+    pub fn carry(&mut self, encoder: &mut wgpu::CommandEncoder) -> Option<Rect<i32, Device>> {
+        let carried = self.carried.take()?;
+        let held = carried
+            .held
+            .intersection(Rect::new(Point::new(0, 0), self.allocated()))?;
+        encoder.copy_texture_to_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &carried.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::Extent3d {
+                width: held.size.width as u32,
+                height: held.size.height as u32,
+                depth_or_array_layers: 1,
+            },
+        );
+        Some(held)
+    }
+
+    /// Whether a replaced texture waits for [`SceneTexture::carry`].
+    ///
+    /// Until then this texture holds no picture, so a frame with no damage still has to run.
+    pub fn carrying(&self) -> bool {
+        self.carried.is_some()
+    }
+
+    /// Releases the replaced texture without copying it, for a frame that redraws every pixel.
+    pub fn drop_carried(&mut self) {
+        self.carried = None;
     }
 
     /// The extent actually allocated, which is at least the surface's.

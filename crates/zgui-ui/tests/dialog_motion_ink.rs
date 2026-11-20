@@ -6,8 +6,8 @@
 //! vector drawings — a select's chevron, an alert's triangle — did the opposite, there while the
 //! animation ran and gone the frame it settled; and the scrim vanished for good when the window was
 //! resized under an open dialog. What was under them: while the surface's transform is animating,
-//! its text is promoted to outline glyphs, and the vector pipeline resolved residual clips and the
-//! draw order in a different coordinate space from every other primitive
+//! its text can be promoted to outline glyphs, and the vector pipeline resolved residual clips and
+//! the draw order in a different coordinate space from every other primitive
 //! (`zgui-render-vector-vello`'s residual placement, and [`VectorItem::local_ink`]); and an element
 //! whose finished animation the engine dropped on an unrelated recascade painted from the first
 //! keyframe that cascade had captured, because nothing re-settled its style
@@ -168,6 +168,29 @@ fn the_words_are_inked_while_the_dialog_is_arriving() {
     // asserted through the gallery probe instead.
     for words in ["Rename project", "Cancel", "Rename"] {
         assert_inked(&stage, words, "mid-flight");
+    }
+}
+
+/// The words are inked while the dialog arrives from a scale too small for cached glyph tiles.
+///
+/// The default entrance starts at 95 %, and text under so slight a scale is drawn from the tiles
+/// of the glyph atlas. From 20 % the text is filled from its outlines while the scale is small,
+/// which is the path the report was about.
+#[test]
+fn the_words_are_inked_while_the_dialog_arrives_from_a_small_scale() {
+    let sheet = format!("{SHEET}\n:root {{ --zui-surface-enter-scale: 0.2 }}");
+    let Some(mut stage) = Stage::open(&sheet, rename_dialog) else {
+        eprintln!("skipped: no usable graphics device");
+        return;
+    };
+    stage.wait(SETTLED);
+    let at = aim(&stage, "Open dialog");
+    stage.click(at);
+    // Early in the entrance, while the scale is far below the least a tile is drawn at.
+    stage.wait_quietly(Duration::from_millis(40));
+    stage.capture("dialog-small-scale");
+    for words in ["Rename project", "Cancel", "Rename"] {
+        assert_inked(&stage, words, "early in a small-scale entrance");
     }
 }
 

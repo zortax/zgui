@@ -144,3 +144,55 @@ pub(crate) fn click_over(extent: (u32, u32), at: (u32, u32)) -> bool {
     });
     true
 }
+
+/// Clicks at each point of `points` in turn, `between` apart, on a thread of its own.
+///
+/// The same device as [`click_over`]. A property about a pop-up needs two clicks: one that opens
+/// it, and one outside it that dismisses it.
+pub(crate) fn clicks_over(extent: (u32, u32), points: Vec<(u32, u32)>, between: Duration) -> bool {
+    let Ok(conn) = Connection::connect_to_env() else {
+        return false;
+    };
+    let Ok((globals, mut queue)) = registry_queue_init::<Silent>(&conn) else {
+        return false;
+    };
+    let qh = queue.handle();
+    let Ok(manager) = globals.bind::<ZwlrVirtualPointerManagerV1, _, _>(&qh, 1..=2, ()) else {
+        return false;
+    };
+    let seat = globals.bind::<WlSeat, _, _>(&qh, 1..=9, ()).ok();
+
+    std::thread::spawn(move || {
+        let _conn = conn;
+        let pointer = manager.create_virtual_pointer(seat.as_ref(), &qh, ());
+        let mut state = Silent;
+        let mut clock = 0;
+        let mut step = |run: &mut dyn FnMut(&ZwlrVirtualPointerV1, u32)| {
+            clock += 16;
+            run(&pointer, clock);
+            pointer.frame();
+            let _ = queue.roundtrip(&mut state);
+            std::thread::sleep(Duration::from_millis(60));
+        };
+        for at in points {
+            step(&mut |pointer, time| {
+                pointer.motion_absolute(time, at.0, at.1, extent.0, extent.1);
+            });
+            step(&mut |pointer, time| {
+                pointer.motion_absolute(time, at.0 + 1, at.1 + 1, extent.0, extent.1);
+            });
+            step(&mut |pointer, time| {
+                pointer.button(time, BTN_LEFT, ButtonState::Pressed);
+            });
+            step(&mut |pointer, time| {
+                pointer.button(time, BTN_LEFT, ButtonState::Released);
+            });
+            std::thread::sleep(between);
+        }
+        loop {
+            let _ = queue.roundtrip(&mut state);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+    true
+}

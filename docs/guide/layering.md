@@ -84,7 +84,8 @@ architecture. `stylo` and its satellites are named by `zgui-css`, `zgui-dom` and
 nothing else. `cephal` is named by `zgui-layout`. `parley` and its satellites by `zgui-text-parley`.
 `vello` by `zgui-render-vector-vello`. `wgpu` by the three graphics crates and the windowing
 backend. `winit` by `zgui-platform-winit`. The Wayland protocol, its toolkit and the loop it is
-read on by `zgui-platform-wayland`. `reactive_graph` by `zgui-reactive`.
+read on by `zgui-platform-wayland`. The browser's interfaces by `zgui-platform-web`.
+`reactive_graph` by `zgui-reactive`.
 
 The consequence is that replacing, patching or dropping any one of them is a change to a named set
 of manifests that can be counted before the work starts.

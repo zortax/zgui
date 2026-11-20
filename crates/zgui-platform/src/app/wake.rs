@@ -4,6 +4,7 @@ use accesskit::ActionRequest;
 
 use crate::app::event::AppEvent;
 use crate::clipboard::{ClipboardData, ClipboardError, ClipboardSerial};
+use crate::grab::FocusGrabId;
 use crate::surface::SurfaceId;
 
 /// Why the loop was woken by something that is not a surface event.
@@ -56,8 +57,27 @@ pub enum WakeReason {
     ColorSchemeChanged,
     /// The desktop asked something of the application as a whole.
     App(AppEvent),
-    /// The desktop finished changing the state of a surface, such as taking it out of full
-    /// screen, after the last resize the change made.
+    /// An output was connected or disconnected, or what is known about one changed.
+    ///
+    /// [`PlatformCx::monitors`](crate::PlatformCx::monitors) gives the new list. A backend sends
+    /// this once for a batch of changes the desktop announced together.
+    MonitorsChanged,
+    /// The desktop cleared a focus grab, because the user pressed outside its surfaces or for a
+    /// reason of its own.
+    ///
+    /// The grab has no surfaces after this. It stays until it is destroyed.
+    FocusGrabCleared(FocusGrabId),
+    /// The desktop confirmed the session lock this application asked for.
+    ///
+    /// Everything except the lock surfaces is hidden from here on, until the application unlocks.
+    SessionLocked,
+    /// The desktop refused the session lock or ended it.
+    ///
+    /// The lock is gone. The application destroys its lock surfaces, and may ask for a new lock.
+    SessionLockFinished,
+    /// The desktop changed the maximised or full-screen state of a surface.
+    ///
+    /// The change can come with no resize, or after the last resize of the change.
     SurfaceStateChanged(SurfaceId),
 }
 
@@ -94,6 +114,7 @@ mod tests {
     fn a_global_reason_names_no_surface_at_all() {
         assert!(WakeReason::DeviceLost.surfaces().is_empty());
         assert!(WakeReason::ColorSchemeChanged.surfaces().is_empty());
+        assert!(WakeReason::MonitorsChanged.surfaces().is_empty());
         // Opening a window names no surface because the surface does not exist yet.
         assert!(WakeReason::AppWork.surfaces().is_empty());
     }

@@ -1,5 +1,6 @@
 //! A bounded set of pairwise disjoint damage rectangles.
 
+mod coalesce;
 mod merge;
 mod override_env;
 #[cfg(test)]
@@ -7,6 +8,7 @@ mod tests;
 
 use zgui_geom::{Device, Rect};
 
+pub use crate::damage_set::coalesce::COALESCE_WASTE_SHARE;
 pub use crate::damage_set::override_env::full_damage_forced;
 
 /// How many disjoint rectangles a damage set holds before it starts merging to stay inside itself.
@@ -70,6 +72,8 @@ pub struct DamageSet<const N: usize = MAX_DAMAGE> {
     len: usize,
     /// Set when the whole surface must be redrawn.
     full: bool,
+    /// The region every absorbed rectangle is cut to, when the owner knows one.
+    bound: Option<Rect<i32, Device>>,
 }
 
 impl<const N: usize> DamageSet<N> {
@@ -87,6 +91,32 @@ impl<const N: usize> DamageSet<N> {
             rects: [Rect::ZERO; N],
             len: 0,
             full: false,
+            bound: None,
+        }
+    }
+
+    /// Cuts every rectangle absorbed from now on to `bound`, or stops cutting with `None`.
+    ///
+    /// The bound is the surface, or the union of the surfaces a frame has been drawn at since the
+    /// last drawn frame. Nothing outside it can be redrawn, and a layout pass over a long document
+    /// damages every row it moved: without the bound, each of those rectangles is merged into the
+    /// set, and [`DamageSet::clip_to`] discards the result afterwards.
+    ///
+    /// The rectangles already held stay as they are.
+    pub const fn set_bound(&mut self, bound: Option<Rect<i32, Device>>) {
+        self.bound = bound;
+    }
+
+    /// The region absorbed rectangles are cut to, if any.
+    pub const fn bound(&self) -> Option<Rect<i32, Device>> {
+        self.bound
+    }
+
+    /// `rect` cut to the bound, or `None` when nothing of it is inside.
+    fn bounded(&self, rect: Rect<i32, Device>) -> Option<Rect<i32, Device>> {
+        match self.bound {
+            Some(bound) => rect.intersection(bound),
+            None => Some(rect),
         }
     }
 
@@ -189,7 +219,13 @@ impl<const N: usize> DamageSet<N> {
     /// optimisation of the merge loop: it is the case a scroll produces thousands of times per
     /// frame, once for every piece of a list that moved inside a scrollport already damaged whole.
     pub fn absorb(&mut self, rect: Rect<i32, Device>) {
-        if self.full || rect.is_empty() || self.contains(rect) {
+        if self.full || rect.is_empty() {
+            return;
+        }
+        let Some(rect) = self.bounded(rect) else {
+            return;
+        };
+        if self.contains(rect) {
             return;
         }
         // The held rectangles that overlap it closely enough to be one region with it.
@@ -197,14 +233,14 @@ impl<const N: usize> DamageSet<N> {
         while let Some(index) = self
             .rects()
             .iter()
-            .position(|held| held.intersects(rect) && merge::worth_merging(*held, rect))
+            .position(|held| merge::meets(*held, rect) && merge::worth_merging(*held, rect))
         {
             let held = self.rects[index];
             self.remove(index);
-            rect = held.union(rect);
+            rect = merge::join(held, rect);
         }
         // The common case, answered without carving anything: it meets nothing held.
-        if !self.rects().iter().any(|held| held.intersects(rect)) {
+        if !self.rects().iter().any(|held| merge::meets(*held, rect)) {
             self.push(rect);
             return;
         }
@@ -217,7 +253,7 @@ impl<const N: usize> DamageSet<N> {
             Some(pieces) => {
                 for piece in pieces {
                     // A merge made room for an earlier piece may have grown over this one.
-                    if self.rects().iter().any(|held| held.intersects(piece)) {
+                    if self.rects().iter().any(|held| merge::meets(*held, piece)) {
                         self.absorb_whole(piece);
                     } else {
                         self.push(piece);
@@ -238,14 +274,20 @@ impl<const N: usize> DamageSet<N> {
     /// merge is transitively closed: `A ∪ B` can meet a third rectangle that lay between them and
     /// touched neither.
     pub fn absorb_whole(&mut self, rect: Rect<i32, Device>) {
-        if self.full || rect.is_empty() || self.contains(rect) {
+        if self.full || rect.is_empty() {
+            return;
+        }
+        let Some(rect) = self.bounded(rect) else {
+            return;
+        };
+        if self.contains(rect) {
             return;
         }
         let mut merged = rect;
         let mut index = 0;
         while index < self.len {
-            if self.rects[index].intersects(merged) {
-                merged = merged.union(self.rects[index]);
+            if merge::meets(self.rects[index], merged) {
+                merged = merge::join(merged, self.rects[index]);
                 self.remove(index);
                 // The union grew, so a rectangle already passed over may now meet it.
                 index = 0;
@@ -254,6 +296,43 @@ impl<const N: usize> DamageSet<N> {
             }
         }
         self.push(merged);
+    }
+
+    /// Merges groups of rectangles that lie close together into their bounds, and returns whether
+    /// it merged any.
+    ///
+    /// Each rectangle is one replay of the frame's batch stream, so a frame with several
+    /// rectangles close together pays for passes that one rectangle would save. A group merges
+    /// when its bounds add at most [`COALESCE_WASTE_SHARE`] of the pixels it covers. The group
+    /// that adds the fewest pixels merges first, and the merge repeats until no group is within
+    /// the share. A rectangle far from the others stays apart.
+    ///
+    /// The set stays disjoint and still covers every pixel it covered. A full set and a set of
+    /// fewer than two rectangles stay as they are.
+    pub fn coalesce_dense(&mut self) -> bool {
+        if self.full || self.len < 2 {
+            return false;
+        }
+        let mut covered = [0i64; N];
+        for (index, rect) in self.rects().iter().enumerate() {
+            covered[index] = merge::area(*rect);
+        }
+        let mut merged = false;
+        while let Some(group) = coalesce::cheapest_group(self.rects(), &covered) {
+            let mut kept = 0;
+            for index in 0..self.len {
+                if !group.taken[index] {
+                    self.rects[kept] = self.rects[index];
+                    covered[kept] = covered[index];
+                    kept += 1;
+                }
+            }
+            self.rects[kept] = group.bounds;
+            covered[kept] = group.covered;
+            self.len = kept + 1;
+            merged = true;
+        }
+        merged
     }
 
     /// Absorbs every rectangle of `other`, and becomes full if `other` is.
@@ -287,7 +366,7 @@ impl<const N: usize> DamageSet<N> {
         if self.full {
             return !rect.is_empty();
         }
-        self.rects().iter().any(|held| held.intersects(rect))
+        self.rects().iter().any(|held| merge::meets(*held, rect))
     }
 
     /// The smallest rectangle containing the whole set, or `None` when it is empty or full.
@@ -328,13 +407,13 @@ impl<const N: usize> DamageSet<N> {
             return;
         }
 
-        let (left, right) = merge::least_wasted_pair(&self.rects[..self.len], rect);
-        if right == self.len {
-            let union = self.rects[left].union(rect);
+        let (left, right) = merge::least_wasted_pair(&self.rects, rect);
+        if right == N {
+            let union = merge::join(self.rects[left], rect);
             self.remove(left);
             self.absorb_whole(union);
         } else {
-            let union = self.rects[left].union(self.rects[right]);
+            let union = merge::join(self.rects[left], self.rects[right]);
             self.remove(right);
             self.remove(left);
             self.push(rect);

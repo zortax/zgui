@@ -9,7 +9,7 @@
 //! Only the ratio of resumes to frames separates the second from a correct park, which is why
 //! [`Park::assert_invariant`] exists and why every scripted run is checked against it.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_platform::IdlePolicy;
 use zgui_profile::{Counter, counter};
@@ -160,7 +160,7 @@ impl Park {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     use zgui_platform::IdlePolicy;
 

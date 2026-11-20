@@ -109,4 +109,14 @@ pub trait ParagraphShaper {
         line: u16,
         visit: &mut dyn FnMut(crate::cluster::ClusterRun<'_>),
     );
+
+    /// An estimate of the heap bytes that the engine's shaped form of `shaped` holds.
+    ///
+    /// For a memory report. The default is zero, for an engine that makes no estimate. An estimate
+    /// must depend on the shaped content and its current break only, so that equal paragraphs
+    /// report equal bytes.
+    fn engine_bytes(&self, shaped: &ShapedParagraph<Self::Engine>) -> usize {
+        let _ = shaped;
+        0
+    }
 }

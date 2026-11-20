@@ -206,7 +206,8 @@ fn ink_of_subject(harness: &zgui_platform_headless::Harness<Runtime>) -> Rect<i3
             let Some(fragment) = layout.fragment(*frag) else {
                 continue;
             };
-            let rect = zgui_layout::fragment::diff::pixels(fragment.ink);
+            let rect =
+                zgui_layout::fragment::diff::pixels(fragment.device_ink(&window.placements()));
             held = Some(match held {
                 Some(union) => union.union(rect),
                 None => rect,

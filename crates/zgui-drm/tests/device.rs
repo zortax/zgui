@@ -10,6 +10,8 @@
 //! mask indexes the resource list, and a connected connector reports a mode with an extent and a
 //! rate.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::path::{Path, PathBuf};
@@ -203,6 +205,40 @@ fn every_connector_names_encoders_that_reach_a_crtc_in_the_list() {
             }
         }
     }
+}
+
+#[test]
+fn a_card_says_whether_a_display_is_plugged_into_it() {
+    let test = "a_card_says_whether_a_display_is_plugged_into_it";
+    let Some(device) = support::device(test, Interface::Preferred) else {
+        return;
+    };
+
+    // The same walk, made by hand. A session picking between the cards on a machine asks the one
+    // question instead, and a machine whose screen hangs off the second card is lit or left dark
+    // by that answer, so the two are held to the same result here.
+    let resources = device.resources().expect("the device enumerates");
+    let connected = resources
+        .connectors
+        .iter()
+        .filter(|id| {
+            device
+                .connector(**id)
+                .expect("a listed connector is readable")
+                .is_connected()
+        })
+        .count();
+
+    let answer = device
+        .has_a_display()
+        .expect("a device that enumerates answers what is plugged into it");
+
+    assert_eq!(
+        answer,
+        connected != 0,
+        "{} has {connected} connectors with something plugged in",
+        device.path().display()
+    );
 }
 
 #[test]

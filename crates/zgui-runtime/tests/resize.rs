@@ -419,3 +419,29 @@ fn a_drag_edge_with_nothing_owed_asks_for_nothing() {
     assert_eq!(harness.settle(8), 0, "a drag edge alone bought a frame");
     harness.shut_down();
 }
+
+#[test]
+fn a_box_sized_in_viewport_units_follows_every_resize() {
+    // A viewport unit resolves at computed-value time, so only a recascade of the element that
+    // reads it moves the box. Two resizes in a row prove the reader stays filed after the first.
+    let mut harness = support::app(
+        "root { display: block; width: 50vw; height: 25vh }",
+        |cx: &mut BuildCx<'_>| {
+            Box::new(zgui_elements::column().class("root").into_view().build(cx))
+        },
+    );
+    let surface = only_surface(&harness);
+    harness.settle(8);
+
+    for width in [1000.0, 640.0] {
+        harness.advance(Duration::from_millis(100));
+        harness.deliver(surface, SurfaceEvent::Resized(wide(width)));
+        harness.settle(8);
+        assert_eq!(
+            laid_out(&harness),
+            Size::new(DevicePx(width / 2.0), DevicePx(150.0)),
+            "the root box kept the size its viewport units resolved to before the resize"
+        );
+    }
+    harness.shut_down();
+}
