@@ -31,15 +31,6 @@ pub enum ImageError {
     },
 }
 
-/// One level of detail below an image's own resolution.
-#[derive(Clone, Debug)]
-pub struct MipLevel {
-    /// The level's extent: half the previous one's, rounded down, never below one.
-    pub size: Size<u32, Device>,
-    /// The level's texels, in the same format as the image's own.
-    pub texels: std::sync::Arc<Vec<u8>>,
-}
-
 /// The handle namespace of images a loader shares between nodes.
 ///
 /// Set on a loader's counter and never on a node's packed name, so the two vocabularies cannot

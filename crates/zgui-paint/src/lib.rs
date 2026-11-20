@@ -62,7 +62,7 @@ pub mod sync;
 pub mod walk;
 
 pub use crate::content::{
-    ContentCache, Drawing, FrameContent, ImageError, MipLevel, NoVectors, TileOwner, VectorCache,
+    ContentCache, Drawing, FrameContent, ImageError, NoVectors, TileOwner, VectorCache,
     VectorSource, Vectors,
 };
 pub use crate::damage::accumulate::{Expansion, expand, vacated};

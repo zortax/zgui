@@ -1769,25 +1769,14 @@ impl Window {
         // result: the bytes did not move, the geometry did not move, and the pixels are plausible.
         self.scene.check_spatial_dependencies();
         mark("p.upload");
-        match self.content.flush(&mut crate::window::unsent::Unsent) {
-            // Every queued write reached the device, so a shared attachment's tile can stand in
-            // for its host texels from here on: the cache gives its copies back, and the loader
-            // gives back its own for every tile the cache vouches is resident. Small pictures
-            // keep theirs — the constant says why.
-            Ok(_) => {
-                self.content
-                    .settle_uploaded(crate::images::RETAIN_SMALL_BYTES);
-                let content = &self.content;
-                self.images
-                    .release_uploaded(|handle| content.image_tile_resident(handle));
-            }
-            // A refused upload is not a reason to drop the frame: what did reach the device still
-            // draws, and the tiles that did not stay queued for the next one — and every host
-            // copy is kept, which is the safe direction.
-            Err(error) => {
-                tracing::warn!(target: "zgui::paint", %error, "an atlas upload was refused");
-            }
-        }
+        // A shared attachment the frame served stands in for its host texels from here on: the
+        // cache gives its copies back, and the loader gives back its own for every attachment the
+        // cache vouches is served. Small pictures keep theirs — the constant says why.
+        self.content
+            .settle_uploaded(crate::images::RETAIN_SMALL_BYTES);
+        let content = &self.content;
+        self.images
+            .release_uploaded(|handle| content.image_tile_resident(handle));
         // Uploaded pictures whose tiles this frame found gone — evicted, or lost with the device
         // — have no host copy to re-upload from; the loader decodes them again from their
         // sources, and the completion's wake brings the frame that shows them.

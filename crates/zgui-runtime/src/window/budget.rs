@@ -1,9 +1,8 @@
 //! Which of a window's fields are budgeted caches, and what the frame does about them.
 //!
 //! The registry is a visitor rather than a list, and this is why: the caches are fields of the
-//! window and each of them needs a different second half of the window to do its part — the atlas
-//! needs the renderer's texture sink, the shaping cache needs the layout store, the target pool is
-//! only reachable through the renderer. Visiting them one at a time is what lets each borrow what
+//! window and each of them needs a different second half of the window to do its part — the
+//! shaping cache needs the layout store, the target pool is only reachable through the renderer. Visiting them one at a time is what lets each borrow what
 //! it needs for exactly as long as it is being visited, without any of them being moved out of the
 //! window to be budgeted.
 //!
@@ -11,8 +10,8 @@
 //! visited here is covered by them without anyone remembering to go and add it to a test.
 
 use crate::budget::caches::{
-    DecodedImagesBudget, DeviceMemoryBudget, GlyphAtlasBudget, PaintChunksBudget,
-    ParagraphShapingBudget, RenderTargetsBudget, VectorLayersBudget, VectorResourcesBudget,
+    DecodedImagesBudget, DeviceMemoryBudget, PaintChunksBudget, ParagraphShapingBudget,
+    RenderTargetsBudget, VectorLayersBudget, VectorResourcesBudget,
 };
 use crate::budget::manager::{self, Budgeted, CacheRegistry};
 use crate::budget::report::{BudgetReport, CacheId};
@@ -22,8 +21,8 @@ use crate::window::Window;
 impl CacheRegistry for Window {
     fn for_each(&mut self, visit: &mut dyn FnMut(&mut dyn Budgeted)) {
         let embed_memory = self.embed.memory();
-        // First, before the atlas: its forget releases atlas and table holds, which has to happen
-        // while the caches those holds are in still resolve them.
+        // First: its forget releases table holds, which has to happen while the tables those holds
+        // are in still resolve them.
         let chunk_bytes = self.budgets.limits().paint_chunk_bytes;
         visit(&mut PaintChunksBudget::new(
             &mut self.painter,
@@ -32,7 +31,6 @@ impl CacheRegistry for Window {
             chunk_bytes,
             self.budgets.tracked(CacheId::PaintChunks),
         ));
-        // Before the atlas, whose forget clears the layers with everything else in it.
         let size = self.surface.size();
         let layer_bytes = crate::budget::caches::layers::layer_limit(
             size.width.0.max(0.0) as u32,
@@ -42,10 +40,6 @@ impl CacheRegistry for Window {
             &mut self.content,
             layer_bytes,
             self.budgets.tracked(CacheId::VectorLayers),
-        ));
-        visit(&mut GlyphAtlasBudget::new(
-            &mut self.content,
-            self.budgets.tracked(CacheId::GlyphAtlas),
         ));
         let decoded_bytes = self.budgets.limits().decoded_image_bytes;
         visit(&mut DecodedImagesBudget::new(

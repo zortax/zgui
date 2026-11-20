@@ -12,7 +12,7 @@ use crate::budget::tests::{at, line, uniform};
 /// for a hundred, and the expensive one has to go first.
 #[test]
 fn the_coldest_cache_goes_before_the_cheapest_one_to_rebuild() {
-    let hot_and_cheap = CacheId::GlyphAtlas;
+    let hot_and_cheap = CacheId::DecodedImages;
     let cold_and_dear = CacheId::ParagraphShaping;
 
     let lines = CacheId::ALL.map(|id| match id {

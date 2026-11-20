@@ -21,7 +21,7 @@ pub mod shader;
 pub mod vectors;
 
 pub use crate::content::cache::{ContentCache, FrameContent, TileOwner};
-pub use crate::content::images::{ImageError, MipLevel};
+pub use crate::content::images::ImageError;
 pub use crate::content::vectors::{
     AnalyticOnly, CachedMarks, Drawing, MarksOnly, NoVectorMasks, NoVectors,
     Placement as VectorPlacement, VectorCache, VectorMaskSource, VectorSource, Vectors,

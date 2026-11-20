@@ -34,7 +34,6 @@ mod select;
 mod sheets;
 mod surface_focus;
 pub mod text_aa;
-mod unsent;
 mod value;
 
 use std::cell::{Cell, RefCell};
@@ -72,20 +71,6 @@ pub(crate) const STARVE_BACKOFF_CAP: Duration = Duration::from_secs(16);
 pub const MAINTENANCE_DELAY: Duration = Duration::from_secs(2);
 use crate::timer::Timers;
 use crate::wake::FrameGate;
-
-/// How much texture memory a window's rasterised content may hold before cold content is freed.
-///
-/// Sixty-four mebibytes: several times what a text-heavy document's glyphs cost at any ordinary
-/// scale, and well under what the atlas could grow to if nothing bounded it. It is a level the
-/// cache returns *below* between frames rather than a ceiling an allocation is refused at, so a
-/// single frame that needs more than this gets it and the excess comes back out of the cold
-/// generations afterwards — a document is never made to drop content it is drawing.
-///
-/// Stated here rather than left unset because eviction that nothing bounds has no criterion: an
-/// unbounded cache never frees, and a cache freeing to no stated level frees for no reason. A
-/// window that wants a different number sets it through
-/// [`ContentCache::set_soft_bytes`](zgui_paint::ContentCache::set_soft_bytes).
-pub const ATLAS_SOFT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// What a window should be when it is opened.
 #[derive(Clone, Debug, Default)]
@@ -749,7 +734,7 @@ impl Window {
             verify_replays: zgui_layout::invariants::enabled(),
             compositor_omissions_noted: false,
             check_spatial_dependencies: zgui_scene::invariant::enabled(),
-            content: ContentCache::new(atlas_limits.with_soft_bytes(ATLAS_SOFT_BYTES)),
+            content: ContentCache::new(atlas_limits),
             replaced_surfaces,
             images,
             embed: Box::new(crate::embed::NoEmbeds),

@@ -2,9 +2,7 @@
 //!
 //! Two of the registered caches are budgeted in entries and one — decoded images — in bytes, and
 //! the numbers are stated here rather than at their use so that the derivation is in one place
-//! and can be argued with. The glyph atlas's level is
-//! [`ATLAS_SOFT_BYTES`](crate::window::ATLAS_SOFT_BYTES) and belongs beside the window that
-//! installs it; the remaining caches state no level at all — see their adapters for why.
+//! and can be argued with. The remaining caches state no level at all — see their adapters for why.
 //!
 //! # Where the numbers come from
 //!

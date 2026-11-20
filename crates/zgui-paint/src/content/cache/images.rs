@@ -9,7 +9,7 @@ use zgui_geom::{Device, Size};
 use zgui_scene::ExternalTextureId;
 
 use crate::content::cache::{ContentCache, FrameContent};
-use crate::content::images::{Content, ImageError, MipLevel, shared_key};
+use crate::content::images::{Content, ImageError, shared_key};
 use crate::emit::record::ImageKey;
 use crate::emit::replaced::Source;
 use crate::walk::order::ReplacedSource;
@@ -110,22 +110,19 @@ impl ContentCache {
     /// As [`set_image_shared`](ContentCache::set_image_shared), with the image's own extent.
     ///
     /// `natural` is the source's extent, which the texels may be a decode-for-display downscale
-    /// of, and is what `object-fit: none` draws at. The compositor builds the levels of detail an
-    /// image drawn smaller than its texels is sampled from, so `mips` is not read.
+    /// of, and is what `object-fit: none` draws at.
     ///
     /// # Errors
     ///
     /// [`ImageError::WrongByteCount`] when the buffer does not match the extent.
-    pub fn set_image_shared_mipped(
+    pub fn set_image_shared_natural(
         &mut self,
         id: ReplacedId,
         handle: u64,
         size: Size<u32, Device>,
         natural: Size<u32, Device>,
         texels: std::sync::Arc<Vec<u8>>,
-        mips: Vec<MipLevel>,
     ) -> Result<(), ImageError> {
-        drop(mips);
         let content = Content::shared(handle, size, natural, texels)?;
         self.attach(id, content);
         Ok(())

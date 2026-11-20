@@ -20,9 +20,8 @@ pub fn layer_limit(width: u32, height: u32) -> u64 {
 
 /// The window's CPU vector layers, as the budget sees them.
 ///
-/// Separate from the glyph atlas, because a layer is large and its level follows the surface: a few
-/// zoomed drawings can hold more texels than every glyph on the page. The atlas reports its figures
-/// without them, so the registry counts them once.
+/// A layer is large and its level follows the surface: a few zoomed drawings can hold more texels
+/// than every glyph on the page.
 ///
 /// Eviction removes the layers the frame did not draw, coldest first. The compositor keeps the
 /// image of a removed layer while a chunk draws it, and the next frame that encodes its fragment
@@ -78,8 +77,8 @@ impl Budgeted for VectorLayersBudget<'_> {
         self.content.evict_layers(units)
     }
 
-    /// Removes every layer the frame did not draw.
+    /// Removes every layer, and forgets the vector route caches beside them.
     fn forget(&mut self) {
-        self.content.evict_layers(u64::MAX);
+        self.content.clear();
     }
 }

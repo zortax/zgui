@@ -133,34 +133,6 @@ type Class = u32;
 /// demand over the last step decodes at the source's own long edge, capped by the decode limit.
 const LADDER: [Class; 6] = [64, 128, 256, 512, 1024, 2048];
 
-/// The long edge above which a variant gets a texture of its own, with levels of detail.
-///
-/// Below it, a variant shares an atlas page and its shrink stays within the band bilinear
-/// filtering handles well, because the decode was sized by the box. Above it, the tile would
-/// dominate a shared page anyway, and a page cannot carry levels of detail — so the variant is
-/// cached standalone and its mip chain is what keeps a further shrink alias-free.
-const STANDALONE_LONG_EDGE: u32 = 512;
-
-/// One finished decode: the texels, and their levels of detail when the variant is large.
-struct DecodedVariant {
-    /// The texels at the variant's own size.
-    decoded: zgui_image::Decoded,
-    /// Levels of detail below them; empty for a variant small enough to share an atlas page.
-    mips: Vec<zgui_image::Decoded>,
-}
-
-impl DecodedVariant {
-    /// How many decoded bytes this holds, levels included.
-    fn held_bytes(&self) -> u64 {
-        self.decoded.texels.len() as u64
-            + self
-                .mips
-                .iter()
-                .map(|level| level.texels.len() as u64)
-                .sum::<u64>()
-    }
-}
-
 /// Texels below this threshold keep their host copy after the tile is resident.
 ///
 /// A small picture costs almost nothing to hold and a visible blink to re-decode after a lost
@@ -172,7 +144,7 @@ enum VariantState {
     /// The decode is in flight.
     Pending,
     /// Decoded, held, and attachable.
-    Ready(DecodedVariant),
+    Ready(zgui_image::Decoded),
     /// Decoded, uploaded, and the host copy given back; the tile alone serves it.
     ///
     /// The steady state of a large picture. A frame that finds the tile gone reports it, and
@@ -197,7 +169,7 @@ impl Variant {
     /// How many decoded bytes this variant holds.
     fn held_bytes(&self) -> u64 {
         match &self.state {
-            VariantState::Ready(decoded) => decoded.held_bytes(),
+            VariantState::Ready(decoded) => decoded.texels.len() as u64,
             _ => 0,
         }
     }
@@ -310,7 +282,7 @@ enum Arrival {
     /// A header probe's answer.
     Probe(Result<Size<u32, Device>, zgui_image::DecodeError>),
     /// One variant's decode.
-    Variant(Class, Result<DecodedVariant, zgui_image::DecodeError>),
+    Variant(Class, Result<zgui_image::Decoded, zgui_image::DecodeError>),
 }
 
 /// The `src` writes the attribute hook heard, waiting for the settle that applies them.
@@ -577,22 +549,13 @@ impl ImageLoader {
                 let id = ReplacedId::new(node);
                 match &variant.state {
                     VariantState::Ready(ready) => {
-                        let mips = ready
-                            .mips
-                            .iter()
-                            .map(|level| zgui_paint::MipLevel {
-                                size: level.size,
-                                texels: Arc::clone(&level.texels),
-                            })
-                            .collect();
                         if content
-                            .set_image_shared_mipped(
+                            .set_image_shared_natural(
                                 id,
                                 variant.handle,
-                                ready.decoded.size,
-                                entry.intrinsic.unwrap_or(ready.decoded.size),
-                                Arc::clone(&ready.decoded.texels),
-                                mips,
+                                ready.size,
+                                entry.intrinsic.unwrap_or(ready.size),
+                                Arc::clone(&ready.texels),
                             )
                             .is_err()
                         {
@@ -638,7 +601,7 @@ impl ImageLoader {
                 let VariantState::Ready(ready) = &variant.state else {
                     continue;
                 };
-                let size = ready.decoded.size;
+                let size = ready.size;
                 variant.state = VariantState::Uploaded { size };
                 freed += held;
             }
@@ -879,10 +842,7 @@ impl ImageLoader {
             class,
             Variant {
                 handle: self.next_handle,
-                state: VariantState::Ready(DecodedVariant {
-                    decoded: decoded.clone(),
-                    mips: Vec::new(),
-                }),
+                state: VariantState::Ready(decoded.clone()),
             },
         );
         self.clock += 1;
@@ -1061,18 +1021,7 @@ fn kick_probe(key: SourceKey, completed: DecodeQueue) {
 }
 
 /// Starts one decode off the frame thread, landing its result in `completed`.
-///
-/// A variant whose long edge lands over [`STANDALONE_LONG_EDGE`] gets its levels of detail built
-/// on the same worker, so the frame thread never runs the filter.
 fn kick_decode(key: SourceKey, class: Class, completed: DecodeQueue, limits: zgui_image::Limits) {
-    let with_levels = |decoded: zgui_image::Decoded| {
-        let mips = if decoded.size.width.max(decoded.size.height) > STANDALONE_LONG_EDGE {
-            zgui_image::mip_chain(&decoded)
-        } else {
-            Vec::new()
-        };
-        DecodedVariant { decoded, mips }
-    };
     if let SourceKey::Path(src) = &key
         && let Some(loader) = source_loader()
     {
@@ -1082,14 +1031,10 @@ fn kick_decode(key: SourceKey, class: Class, completed: DecodeQueue, limits: zgu
                 Ok(loaded) if loaded.width == 0 || loaded.height == 0 => {
                     Err(zgui_image::DecodeError::Empty)
                 }
-                Ok(loaded) => {
-                    let decoded = zgui_image::Decoded {
-                        size: Size::new(loaded.width, loaded.height),
-                        texels: Arc::new(loaded.texels),
-                    };
-                    // The levels of detail are the one part still filtered here.
-                    Ok(zgui_reactive::blocking(move || with_levels(decoded)).await)
-                }
+                Ok(loaded) => Ok(zgui_image::Decoded {
+                    size: Size::new(loaded.width, loaded.height),
+                    texels: Arc::new(loaded.texels),
+                }),
                 Err(reason) => Err(unloaded(reason)),
             };
             completed
@@ -1101,14 +1046,12 @@ fn kick_decode(key: SourceKey, class: Class, completed: DecodeQueue, limits: zgu
     let work = match &key {
         SourceKey::Path(path) => {
             let path = PathBuf::from(path);
-            zgui_reactive::blocking(move || {
-                zgui_image::decode_file_scaled(&path, class, limits).map(with_levels)
-            })
+            zgui_reactive::blocking(move || zgui_image::decode_file_scaled(&path, class, limits))
         }
         SourceKey::Bytes(url) => {
             let bytes = zgui_image::bytes_for_url(url);
             zgui_reactive::blocking(move || match bytes {
-                Some(bytes) => zgui_image::decode_scaled(&bytes, class, limits).map(with_levels),
+                Some(bytes) => zgui_image::decode_scaled(&bytes, class, limits),
                 None => Err(dropped_handle()),
             })
         }
@@ -1137,12 +1080,9 @@ mod tests {
     fn ready(long: u32) -> Variant {
         Variant {
             handle: u64::from(long),
-            state: VariantState::Ready(DecodedVariant {
-                decoded: zgui_image::Decoded {
-                    size: Size::new(long, 1),
-                    texels: Arc::new(vec![0; (long * 4) as usize]),
-                },
-                mips: Vec::new(),
+            state: VariantState::Ready(zgui_image::Decoded {
+                size: Size::new(long, 1),
+                texels: Arc::new(vec![0; (long * 4) as usize]),
             }),
         }
     }

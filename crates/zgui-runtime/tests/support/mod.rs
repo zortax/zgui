@@ -7,6 +7,8 @@
 
 #![allow(dead_code, unreachable_pub)]
 
+pub mod churn;
+
 use std::sync::Arc;
 
 use compositor_api::{Compositor, Renderer};
