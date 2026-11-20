@@ -15,76 +15,111 @@
 //! healthy compositor answers every one, so a run that abandoned any either drew ahead of the
 //! answers or never asked.
 
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
 #[path = "support/mod.rs"]
 mod support;
 
-use std::sync::atomic::Ordering;
-
-use zgui_platform::PlatformError;
-use zgui_platform_wayland::WaylandApp;
-
-/// How many frames the application is given before it asks the loop to finish.
-///
-/// More than one, because one frame proves only that a surface was mapped. The second is the one
-/// that had to arrive through a callback the compositor sent.
-const FRAMES: u64 = 8;
-
+/// Runs the test where the platform under test exists, and does nothing elsewhere.
 fn main() {
-    const PROPERTY: &str = "every redraw ends in a commit, and every commit is answered";
+    #[cfg(any(
+        target_os = "linux",
+        target_os = "dragonfly",
+        target_os = "freebsd",
+        target_os = "netbsd",
+        target_os = "openbsd"
+    ))]
+    supported::main();
+}
 
-    support::tracing();
-    support::watchdog(PROPERTY);
+/// The test, built only where the platform under test exists.
+#[cfg(any(
+    target_os = "linux",
+    target_os = "dragonfly",
+    target_os = "freebsd",
+    target_os = "netbsd",
+    target_os = "openbsd"
+))]
+mod supported {
+    use super::support;
 
-    let handler = support::StopAfter {
-        inner: match support::application("frame chain") {
-            Ok(runtime) => runtime,
-            Err(error) => {
-                support::skipped(PROPERTY, &format!("the runtime would not install: {error}"));
-                return;
-            }
-        },
-        frames: FRAMES,
-        sustained: true,
-    };
+    use std::sync::atomic::Ordering;
 
-    let mut app = match WaylandApp::new(handler) {
-        Ok(app) => app,
-        Err(PlatformError::Backend(reason)) => {
-            support::skipped(PROPERTY, &format!("no compositor to run on: {reason}"));
+    use zgui_platform::PlatformError;
+    use zgui_platform_wayland::WaylandApp;
+
+    /// How many frames the application is given before it asks the loop to finish.
+    ///
+    /// More than one, because one frame proves only that a surface was mapped. The second is the one
+    /// that had to arrive through a callback the compositor sent.
+    const FRAMES: u64 = 8;
+
+    pub(super) fn main() {
+        const PROPERTY: &str = "every redraw ends in a commit, and every commit is answered";
+
+        if !support::require_nested(PROPERTY) {
             return;
         }
-        Err(other) => panic!("the compositor refused the application: {other}"),
-    };
 
-    if let Err(error) = app.run() {
-        panic!("the loop stopped: {error}");
-    }
+        support::tracing();
+        support::watchdog(PROPERTY);
 
-    if support::NO_DEVICE.load(Ordering::Relaxed) {
-        support::skipped(
-            PROPERTY,
-            "this machine has no graphics device to draw through",
+        let handler = support::StopAfter {
+            inner: match support::application("frame chain") {
+                Ok(runtime) => runtime,
+                Err(error) => {
+                    support::skipped(PROPERTY, &format!("the runtime would not install: {error}"));
+                    return;
+                }
+            },
+            frames: FRAMES,
+            sustained: true,
+        };
+
+        let mut app = match WaylandApp::new(handler) {
+            Ok(app) => app,
+            Err(PlatformError::Backend(reason)) => {
+                support::skipped(PROPERTY, &format!("no compositor to run on: {reason}"));
+                return;
+            }
+            Err(other) => panic!("the compositor refused the application: {other}"),
+        };
+
+        if let Err(error) = app.run() {
+            panic!("the loop stopped: {error}");
+        }
+
+        if support::NO_DEVICE.load(Ordering::Relaxed) {
+            support::skipped(
+                PROPERTY,
+                "this machine has no graphics device to draw through",
+            );
+            return;
+        }
+
+        let frames = support::FRAMES.load(Ordering::Relaxed);
+        assert!(
+            frames >= FRAMES,
+            "the loop finished after {frames} frames of {FRAMES}: the chain ended early"
         );
-        return;
+
+        let turns = app.turns();
+        assert!(
+            turns < frames * 200,
+            "{turns} turns for {frames} frames: the loop is spinning rather than waiting"
+        );
+
+        support::passed(
+            PROPERTY,
+            &format!(
+                "{frames} frames over {turns} turns, {} deadlines",
+                app.park().resumes()
+            ),
+        );
     }
-
-    let frames = support::FRAMES.load(Ordering::Relaxed);
-    assert!(
-        frames >= FRAMES,
-        "the loop finished after {frames} frames of {FRAMES}: the chain ended early"
-    );
-
-    let turns = app.turns();
-    assert!(
-        turns < frames * 200,
-        "{turns} turns for {frames} frames: the loop is spinning rather than waiting"
-    );
-
-    support::passed(
-        PROPERTY,
-        &format!(
-            "{frames} frames over {turns} turns, {} deadlines",
-            app.park().resumes()
-        ),
-    );
 }

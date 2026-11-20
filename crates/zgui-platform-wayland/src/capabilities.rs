@@ -12,6 +12,7 @@ use zgui_platform::{ClipboardFormat, DecorationSource, PlatformCapabilities};
 pub fn of(offered: Offered) -> PlatformCapabilities {
     let mut capabilities = PlatformCapabilities::none();
     capabilities.native_popup_surfaces = true;
+    capabilities.window_controls = true;
     capabilities.layer_surfaces = offered.layer_shell;
     // Receiving a drop is the data device's, so it arrives with the clipboard. What arrives is
     // always paths: a drag of anything else carries something no file system can open, and this
@@ -39,6 +40,10 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     capabilities.absolute_window_position = false;
     // Stacking is what the layer shell is for; an ordinary window cannot ask.
     capabilities.window_levels = false;
+    // An input region is core protocol, on every surface of every role.
+    capabilities.input_regions = true;
+    capabilities.focus_grab = offered.focus_grab;
+    capabilities.session_lock = offered.session_lock;
     capabilities.decorations = if offered.server_decorations {
         DecorationSource::Platform
     } else {
@@ -79,6 +84,10 @@ pub struct Offered {
     pub text_input: bool,
     /// A settings portal that answers the light-or-dark question.
     pub color_scheme: bool,
+    /// `hyprland_focus_grab_manager_v1`.
+    pub focus_grab: bool,
+    /// `ext_session_lock_manager_v1`.
+    pub session_lock: bool,
 }
 
 #[cfg(test)]
@@ -130,9 +139,35 @@ mod tests {
             primary_selection: true,
             text_input: true,
             color_scheme: true,
+            focus_grab: true,
+            session_lock: true,
         });
         assert!(!everything.absolute_window_position);
         assert!(!everything.window_levels);
+    }
+
+    #[test]
+    fn a_focus_grab_is_offered_only_where_the_compositor_has_the_global() {
+        assert!(!of(Offered::default()).focus_grab);
+        assert!(
+            of(Offered {
+                focus_grab: true,
+                ..Offered::default()
+            })
+            .focus_grab
+        );
+    }
+
+    #[test]
+    fn a_session_lock_is_offered_only_where_the_compositor_has_the_global() {
+        assert!(!of(Offered::default()).session_lock);
+        assert!(
+            of(Offered {
+                session_lock: true,
+                ..Offered::default()
+            })
+            .session_lock
+        );
     }
 
     #[test]

@@ -12,17 +12,15 @@ use crate::stylo::element::damage::classify::same::same;
 
 /// What the difference between two styles costs, given that nothing laid out from has moved.
 ///
-/// Finding no difference at all is not "nothing changed": the engine calls the hook this feeds only
-/// after deciding something layout-affecting did, so it means the property responsible is one this
-/// classification does not name, and the widest answer is the only safe reading of that.
-pub(super) fn cost(old: &ComputedValues, new: &ComputedValues) -> Cost {
+/// `None` when no property this module names moved.
+pub(super) fn cost(old: &ComputedValues, new: &ComputedValues) -> Option<Cost> {
     if !covers(old, new) {
-        return Cost::Ink;
+        return Some(Cost::Ink);
     }
     if !colours(old, new) {
-        return Cost::Repaint;
+        return Some(Cost::Repaint);
     }
-    Cost::Layout
+    None
 }
 
 /// Whether the shape of the area the element covers agrees.

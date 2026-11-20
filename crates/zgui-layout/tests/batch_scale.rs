@@ -13,7 +13,7 @@
 //! distributes and the shipped bench documents lack. The 256-box distribution floor in
 //! `tree/executor.rs` was set from this probe's output.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_arena::DocumentId;
 use zgui_css::StyleDraft;

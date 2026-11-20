@@ -386,3 +386,38 @@ fn a_banded_request_gives_each_line_its_own_width() {
         "banding changed nothing about how the paragraph broke"
     );
 }
+
+/// The engine's byte estimate grows with the lines a break makes, and equal paragraphs broken at
+/// equal widths report equal bytes.
+#[test]
+fn the_byte_estimate_follows_the_break_and_is_deterministic() {
+    let _guard = counting();
+    let estimate = |width: f32| {
+        let (_fonts, mut shaper) = support::shaper(Controls::Mark);
+        let fixture = Fixture::new(PROSE, Direction::LeftToRight);
+        let content = fixture.content();
+        let mut shaped = shaper.shape(&content);
+        let unbroken = shaper.engine_bytes(&shaped);
+        let broken = shaper.break_lines(
+            &mut shaped,
+            &BreakRequest::new(&content, Some(CssPx(width))),
+        );
+        (
+            unbroken,
+            shaper.engine_bytes(&shaped),
+            broken.geometry.lines.len(),
+        )
+    };
+    let (unbroken, wide, wide_lines) = estimate(400.0);
+    let (_, narrow, narrow_lines) = estimate(120.0);
+    assert!(
+        wide > unbroken,
+        "the lines hold the glyphs: {unbroken} -> {wide}"
+    );
+    assert!(narrow_lines > wide_lines);
+    assert!(
+        narrow > wide,
+        "more lines hold more records: {wide} -> {narrow}"
+    );
+    assert_eq!(estimate(400.0).1, wide);
+}

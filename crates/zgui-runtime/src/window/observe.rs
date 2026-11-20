@@ -55,7 +55,11 @@ impl Window {
             // The handlers' wakes are answered by this flush, as the frame's own flush answers
             // the ones before it.
             self.gate.requests_serviced();
-            owed |= zgui_reactive::flush().needs_another_frame;
+            owed |= zgui_profile::alloc_tag::scope(
+                zgui_profile::alloc_tag::Tag::ReactiveRun,
+                zgui_reactive::flush,
+            )
+            .needs_another_frame;
             self.restyle_and_relayout_after_delivery();
         }
         // The last pass delivered and laid out again. Whether that moved anything watched is a

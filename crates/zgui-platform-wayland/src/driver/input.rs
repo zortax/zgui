@@ -24,7 +24,7 @@ use zgui_platform::{SurfaceEvent, SurfaceId};
 use zgui_vocab::{KeyState, PointerAction};
 
 use crate::driver::WaylandState;
-use crate::input::keyboard::{self, modifiers};
+use crate::input::keyboard::{self, locks, modifiers};
 use crate::input::pointer::{axis, button};
 use crate::input::seat::Adopted;
 
@@ -120,6 +120,7 @@ impl SeatHandler for WaylandState {
                     keyboard.release();
                 }
                 self.seat.held = zgui_vocab::Modifiers::NONE;
+                self.seat.locks = zgui_vocab::Modifiers::NONE;
                 self.close_ime();
                 self.blur();
             }
@@ -168,6 +169,14 @@ impl KeyboardHandler for WaylandState {
         // would type characters nobody pressed into whatever has just been focused.
         let id = self.identify(surface);
         self.focus_moved(id);
+        // The surface that gains the keyboard learns the state as this seat last knew it. The
+        // compositor follows the enter with the current state, which is reported when it differs.
+        if let Some(id) = id {
+            self.report(
+                id,
+                SurfaceEvent::ModifiersChanged(self.seat.held | self.seat.locks),
+            );
+        }
     }
 
     fn leave(
@@ -231,16 +240,17 @@ impl KeyboardHandler for WaylandState {
         _layout: u32,
     ) {
         self.observed(serial);
-        let held = modifiers(held);
-        if self.seat.held == held {
+        let (locks, held) = (locks(held), modifiers(held));
+        if self.seat.held == held && self.seat.locks == locks {
             return;
         }
         self.seat.held = held;
+        self.seat.locks = locks;
         // Reported even without a key event, because a modifier can be pressed or released while
         // the surface is not focused, and a set recovered only from key events is then wrong until
-        // the next press.
+        // the next press. The locks ride with this event alone.
         if let Some(id) = self.seat.keyboard_focus {
-            self.report(id, SurfaceEvent::ModifiersChanged(held));
+            self.report(id, SurfaceEvent::ModifiersChanged(held | locks));
         }
     }
 

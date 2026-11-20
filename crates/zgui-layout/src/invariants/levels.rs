@@ -79,6 +79,23 @@ pub fn check(store: &LayoutStore, hit: &HitIndex) -> Vec<Violation> {
         check_fragments(store, hit, key, &mut out);
     }
     check_root(store, root, &mut out);
+    // The damage expansion walks the registry on every frame, so an entry that is listed twice or
+    // names a removed fragment makes every later frame slower.
+    let mut listed = std::collections::BTreeSet::new();
+    for frag in store.read_extents() {
+        if !listed.insert(*frag) {
+            out.push(Violation::new(format!(
+                "the read-extent registry lists fragment {} more than once",
+                frag.index()
+            )));
+        }
+        if store.fragment(*frag).is_none() {
+            out.push(Violation::new(format!(
+                "the read-extent registry lists fragment {}, which no longer exists",
+                frag.index()
+            )));
+        }
+    }
     // A fragment that ceased to exist and left its entry behind answers hits for ever, at the place
     // the deleted content used to be and in front of whatever now occupies it. Nothing else notices:
     // the index stays internally consistent, and the fragment tree has no idea it is being named.

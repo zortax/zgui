@@ -127,8 +127,8 @@ fn custom_box(window: &zgui_runtime::Window) -> (f32, f32) {
         let fragment = layout.fragments_of_box(key).first().expect("a fragment");
         let fragment = layout.fragment(*fragment).expect("a fragment");
         return (
-            fragment.content_box.origin.x.0,
-            fragment.content_box.origin.y.0,
+            fragment.content_box().origin.x.0,
+            fragment.content_box().origin.y.0,
         );
     }
     panic!("the custom element laid out");

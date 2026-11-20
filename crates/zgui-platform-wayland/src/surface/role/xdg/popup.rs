@@ -7,7 +7,7 @@ use wayland_protocols::xdg::shell::client::xdg_popup::{self, XdgPopup};
 use wayland_protocols::xdg::shell::client::xdg_positioner::XdgPositioner;
 use wayland_protocols::xdg::shell::client::xdg_surface::XdgSurface;
 use zgui_geom::{Css, CssPx, Size};
-use zgui_platform::{PopupPlacement, SurfaceEvent, SurfaceId};
+use zgui_platform::{CloseReason, PopupPlacement, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
 use crate::surface::role::popup as placement;
@@ -45,21 +45,20 @@ pub struct Popup {
 impl Popup {
     /// Makes a pop-up out of `wl`, placed against `parent`.
     ///
-    /// # Errors
-    ///
-    /// Returns nothing when the positioner cannot be made, which means the shell is gone.
+    /// A pop-up on a shell layer has no `parent` here. The layer adopts it before the first
+    /// commit; see [`Popup::xdg_popup`].
     pub fn new(
         shell: &XdgShell,
         qh: &QueueHandle<WaylandState>,
         wl: WlSurface,
         id: SurfaceId,
-        parent: &XdgSurface,
+        parent: Option<&XdgSurface>,
         placed: &Placed<'_>,
     ) -> Self {
         let positioner = shell.base().create_positioner(qh, ());
         placement::describe(&positioner, placed.place, placed.parent, placed.size);
         let xdg = shell.base().get_xdg_surface(&wl, qh, id);
-        let popup = xdg.get_popup(Some(parent), &positioner, qh, id);
+        let popup = xdg.get_popup(parent, &positioner, qh, id);
         positioner.destroy();
         Self { wl, xdg, popup }
     }
@@ -72,6 +71,11 @@ impl Popup {
     /// The shell object a configure arrives on.
     pub const fn xdg_surface(&self) -> &XdgSurface {
         &self.xdg
+    }
+
+    /// The pop-up role, for a shell layer to adopt as its child.
+    pub const fn xdg_popup(&self) -> &XdgPopup {
+        &self.popup
     }
 
     /// Acknowledges a configure.
@@ -134,9 +138,11 @@ impl Dispatch<XdgPopup, SurfaceId> for WaylandState {
             xdg_popup::Event::Configure { width, height, .. } => {
                 state.stash_popup(*id, (width, height));
             }
-            // The compositor dismissed it — a click outside a menu, the parent losing focus. There
+            // The compositor dismissed it — a press outside a menu, the parent losing focus. There
             // is no way back for this surface; the application closes it and makes another.
-            xdg_popup::Event::PopupDone => state.report(*id, SurfaceEvent::Destroyed),
+            xdg_popup::Event::PopupDone => {
+                state.report(*id, SurfaceEvent::Closed(CloseReason::Dismissed));
+            }
             _ => {}
         }
     }

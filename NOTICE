@@ -71,6 +71,16 @@ The syscall-note exception states that a user program reaching kernel services t
 interface these headers describe is normal use of the kernel and is outside the reach of the
 kernel's own licence. The generated bindings are that use and nothing more.
 
+## Vendored protocol descriptions
+
+The Wayland protocol description below is copied unchanged from its project and is read at build
+time by the crate it sits in, which generates its client code from it. It keeps the copyright
+notice and the licence it ships with.
+
+| File | Origin | Licence |
+|---|---|---|
+| `crates/zgui-platform-wayland/src/grab/hyprland-focus-grab-v1.xml` | hyprland-protocols, Copyright © 2024 outfoxxed | BSD-3-Clause |
+
 ## Bundled fonts
 
 The font files below are used only by `zgui-text-parley`'s test suite, which runs with system font

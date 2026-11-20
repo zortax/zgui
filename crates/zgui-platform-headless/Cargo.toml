@@ -17,6 +17,7 @@ include.workspace = true
 # test moves, the input is a script, and the surface is a buffer — which is what makes the frame
 # loop's parking behaviour assertable at all.
 [dependencies]
+web-time.workspace = true
 accesskit.workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }

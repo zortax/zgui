@@ -12,7 +12,7 @@
 //! source, and every tile that the shape does not meet finds its raster again.
 
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_atlas::{Atlas, AtlasKey, AtlasTile, TextureKind};

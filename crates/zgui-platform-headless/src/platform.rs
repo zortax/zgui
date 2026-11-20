@@ -5,8 +5,9 @@ use std::sync::{Arc, Mutex};
 
 use zgui_geom::{DevicePx, Size};
 use zgui_platform::{
-    Clipboard, Clock, ColorScheme, MonitorInfo, PlatformCapabilities, PlatformCx, PlatformError,
-    ScrollSettings, Surface, SurfaceAttributes, SurfaceId, VirtualClock, WakeReason, Waker,
+    Clipboard, Clock, ColorScheme, FocusGrabId, MonitorInfo, PlatformCapabilities, PlatformCx,
+    PlatformError, ScrollSettings, Surface, SurfaceAttributes, SurfaceId, VirtualClock, WakeReason,
+    Waker,
 };
 
 use crate::clipboard::MemoryClipboard;
@@ -20,6 +21,17 @@ const DEFAULT_SIZE: Size<DevicePx, zgui_geom::Device> = Size::new(DevicePx(640.0
 ///
 /// Held by a [`Harness`](crate::Harness), which is what drives an application against it. It is
 /// also usable on its own by anything that wants the contract's answers without a loop.
+///
+/// # Surface roles
+///
+/// Every [`SurfaceRole`](zgui_platform::SurfaceRole) makes an offscreen surface, whatever the
+/// declared capabilities say, so a pop-up, a shell layer and a lock window are testable here. A
+/// pop-up whose parent does not exist is refused with [`PlatformError::NoSuchSurface`]. A shell
+/// layer that names an output the platform does not report is refused with
+/// [`PlatformError::SurfaceCreation`]. A shell layer anchored to two opposite edges is as long as
+/// its output on that axis, less its margins, and a lock window is as large as its output. The
+/// placement is recorded: [`OffscreenSurface::role`], [`OffscreenSurface::layer_placement`] and
+/// [`OffscreenSurface::popup_placement`] read it back.
 pub struct Headless {
     /// The clock, which only moves when it is told to.
     clock: Arc<VirtualClock>,
@@ -34,13 +46,32 @@ pub struct Headless {
     /// The next surface number, never reused.
     next_surface: AtomicU64,
     /// The outputs this platform reports.
-    monitors: Vec<MonitorInfo>,
+    monitors: Mutex<Vec<MonitorInfo>>,
     /// The desktop's light or dark preference, when one has been declared.
     color_scheme: Mutex<Option<ColorScheme>>,
     /// What this platform says a scroll from its devices means.
     scroll: Mutex<ScrollSettings>,
     /// Whether the loop has been asked to finish.
     exiting: AtomicBool,
+    /// Every focus grab that exists, with the surfaces it limits focus to.
+    grabs: Mutex<Vec<(FocusGrabId, Vec<SurfaceId>)>>,
+    /// The next focus grab number, never reused.
+    next_grab: AtomicU64,
+    /// Where the session lock is, as the application and a test moved it.
+    lock: Mutex<SessionLockState>,
+}
+
+/// Where the session lock of a [`Headless`] platform is.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum SessionLockState {
+    /// No lock was asked for, or the last one ended.
+    #[default]
+    Unlocked,
+    /// The application asked for a lock and the test has not answered.
+    Requested,
+    /// The test confirmed the lock with [`Headless::confirm_lock`].
+    Locked,
 }
 
 impl Default for Headless {
@@ -57,17 +88,24 @@ impl Headless {
         // A read started through the loop is answered through the loop, which needs the waker the
         // platform hands out.
         clipboard.attach_waker(Arc::clone(&waker) as Arc<dyn Waker>);
+        // The platform stands in for a desktop, whose windows can be minimised, maximised and
+        // closed. An application under test then draws the title bar it draws on a desktop.
+        let mut capabilities = PlatformCapabilities::none();
+        capabilities.window_controls = true;
         Self {
             clock: Arc::new(VirtualClock::new()),
             clipboard,
-            capabilities: PlatformCapabilities::none(),
+            capabilities,
             waker,
             surfaces: Mutex::new(Vec::new()),
             next_surface: AtomicU64::new(1),
-            monitors: Vec::new(),
+            monitors: Mutex::new(Vec::new()),
             color_scheme: Mutex::new(None),
             scroll: Mutex::new(ScrollSettings::desktop()),
             exiting: AtomicBool::new(false),
+            grabs: Mutex::new(Vec::new()),
+            next_grab: AtomicU64::new(1),
+            lock: Mutex::new(SessionLockState::Unlocked),
         }
     }
 
@@ -82,9 +120,16 @@ impl Headless {
     }
 
     /// The same platform reporting `monitors`.
-    pub fn with_monitors(mut self, monitors: Vec<MonitorInfo>) -> Self {
-        self.monitors = monitors;
+    pub fn with_monitors(self, monitors: Vec<MonitorInfo>) -> Self {
+        *self.monitors.lock().expect("the outputs are not poisoned") = monitors;
         self
+    }
+
+    /// Replaces the outputs this platform reports, as a hotplug would, and wakes the loop with
+    /// [`WakeReason::MonitorsChanged`].
+    pub fn set_monitors(&self, monitors: Vec<MonitorInfo>) {
+        *self.monitors.lock().expect("the outputs are not poisoned") = monitors;
+        self.waker.wake(WakeReason::MonitorsChanged);
     }
 
     /// The same platform declaring what a scroll from its devices means.
@@ -140,6 +185,73 @@ impl Headless {
             .collect()
     }
 
+    /// The surfaces focus grab `grab` limits focus to, while it exists.
+    pub fn focus_grab(&self, grab: FocusGrabId) -> Option<Vec<SurfaceId>> {
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .iter()
+            .find(|(held, _)| *held == grab)
+            .map(|(_, surfaces)| surfaces.clone())
+    }
+
+    /// Every focus grab that exists, oldest first.
+    pub fn focus_grabs(&self) -> Vec<FocusGrabId> {
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .iter()
+            .map(|(grab, _)| *grab)
+            .collect()
+    }
+
+    /// Clears focus grab `grab`, as a desktop does when the user presses outside its surfaces,
+    /// and wakes the loop with [`WakeReason::FocusGrabCleared`].
+    pub fn clear_focus_grab(&self, grab: FocusGrabId) {
+        let cleared = {
+            let mut grabs = self.grabs.lock().expect("the grabs are not poisoned");
+            grabs
+                .iter_mut()
+                .find(|(held, surfaces)| *held == grab && !surfaces.is_empty())
+                .map(|(_, surfaces)| surfaces.clear())
+                .is_some()
+        };
+        if cleared {
+            self.waker.wake(WakeReason::FocusGrabCleared(grab));
+        }
+    }
+
+    /// Where the session lock is.
+    pub fn session_lock(&self) -> SessionLockState {
+        *self.lock.lock().expect("the lock state is not poisoned")
+    }
+
+    /// Confirms the lock the application asked for, as a desktop does once it hides everything
+    /// else, and wakes the loop with [`WakeReason::SessionLocked`].
+    ///
+    /// Does nothing unless a lock was asked for.
+    pub fn confirm_lock(&self) {
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock == SessionLockState::Requested {
+            *lock = SessionLockState::Locked;
+            drop(lock);
+            self.waker.wake(WakeReason::SessionLocked);
+        }
+    }
+
+    /// Refuses or ends the lock, as a desktop does, and wakes the loop with
+    /// [`WakeReason::SessionLockFinished`].
+    ///
+    /// Does nothing while no lock is asked for or held.
+    pub fn finish_lock(&self) {
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock != SessionLockState::Unlocked {
+            *lock = SessionLockState::Unlocked;
+            drop(lock);
+            self.waker.wake(WakeReason::SessionLockFinished);
+        }
+    }
+
     /// Takes every wake delivered since the last call.
     pub fn drain_wakes(&self) -> Vec<WakeReason> {
         self.waker.drain()
@@ -156,9 +268,10 @@ impl PlatformCx for Headless {
         &self,
         attributes: &SurfaceAttributes,
     ) -> Result<Arc<dyn Surface>, PlatformError> {
-        let size = attributes.size.map_or(DEFAULT_SIZE, |size| {
-            Size::new(DevicePx(size.width.0), DevicePx(size.height.0))
-        });
+        let monitors = self.monitors();
+        let size = crate::role::extent(attributes, &monitors, DEFAULT_SIZE, |parent| {
+            self.offscreen(parent).is_some()
+        })?;
         let id = SurfaceId::new(self.next_surface.fetch_add(1, Ordering::Relaxed));
         let surface = Arc::new(OffscreenSurface::new(id, size));
         surface.set_title(attributes.title.as_str());
@@ -190,11 +303,75 @@ impl PlatformCx for Headless {
     }
 
     fn monitors(&self) -> Vec<MonitorInfo> {
-        self.monitors.clone()
+        self.monitors
+            .lock()
+            .expect("the outputs are not poisoned")
+            .clone()
     }
 
     fn primary_monitor(&self) -> Option<MonitorInfo> {
-        self.monitors.first().cloned()
+        self.monitors
+            .lock()
+            .expect("the outputs are not poisoned")
+            .first()
+            .cloned()
+    }
+
+    fn create_focus_grab(&self) -> Option<FocusGrabId> {
+        if !self.capabilities.focus_grab {
+            return None;
+        }
+        let grab = FocusGrabId::new(self.next_grab.fetch_add(1, Ordering::Relaxed));
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .push((grab, Vec::new()));
+        Some(grab)
+    }
+
+    fn set_focus_grab(&self, grab: FocusGrabId, surfaces: &[SurfaceId]) {
+        let existing: Vec<SurfaceId> = surfaces
+            .iter()
+            .copied()
+            .filter(|surface| self.offscreen(*surface).is_some())
+            .collect();
+        if let Some((_, held)) = self
+            .grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .iter_mut()
+            .find(|(held, _)| *held == grab)
+        {
+            *held = existing;
+        }
+    }
+
+    fn destroy_focus_grab(&self, grab: FocusGrabId) {
+        self.grabs
+            .lock()
+            .expect("the grabs are not poisoned")
+            .retain(|(held, _)| *held != grab);
+    }
+
+    fn lock_session(&self) -> Result<(), PlatformError> {
+        if !self.capabilities.session_lock {
+            return Err(zgui_platform::Unsupported.into());
+        }
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock != SessionLockState::Unlocked {
+            return Err(PlatformError::Backend(
+                "this application holds a session lock already".to_owned(),
+            ));
+        }
+        *lock = SessionLockState::Requested;
+        Ok(())
+    }
+
+    fn unlock_session(&self) {
+        let mut lock = self.lock.lock().expect("the lock state is not poisoned");
+        if *lock == SessionLockState::Locked {
+            *lock = SessionLockState::Unlocked;
+        }
     }
 
     fn color_scheme(&self) -> Option<ColorScheme> {
@@ -259,6 +436,56 @@ mod tests {
     }
 
     #[test]
+    fn a_shell_layer_and_its_pop_up_are_plain_surfaces_whose_placement_is_recorded() {
+        use zgui_geom::{Edges, Point, Rect};
+        use zgui_platform::{Layer, LayerPatch, LayerPlacement, PopupPlacement, SurfaceRole};
+
+        let platform = Headless::new();
+        let bar = LayerPlacement::new(Layer::Top).with_anchors(Edges::new(true, true, false, true));
+        let mut attributes =
+            SurfaceAttributes::new("bar").with_size(Size::new(CssPx(0.0), CssPx(34.0)));
+        attributes.role = SurfaceRole::Layer(bar.clone());
+        let surface = platform
+            .create_surface(&attributes)
+            .expect("a plain surface");
+        assert_eq!(
+            surface.size().width.0,
+            640.0,
+            "stretched across the default extent"
+        );
+
+        surface
+            .set_layer_placement(&LayerPatch::new().with_layer(Layer::Overlay))
+            .expect("a layer takes a patch");
+        let offscreen = platform.offscreen(surface.id()).expect("the same surface");
+        let placed = offscreen.layer_placement().expect("a layer");
+        assert_eq!(placed.layer, Layer::Overlay);
+        assert_eq!(placed.anchors, bar.anchors);
+        assert_eq!(offscreen.popup_placement(), None);
+
+        let rect = Rect::new(
+            Point::new(CssPx(4.0), CssPx(0.0)),
+            Size::new(CssPx(20.0), CssPx(34.0)),
+        );
+        let mut menu = SurfaceAttributes::new("menu");
+        menu.role = SurfaceRole::Popup(PopupPlacement::below(surface.id(), rect));
+        let popup = platform.create_surface(&menu).expect("the parent exists");
+        let placed = platform
+            .offscreen(popup.id())
+            .and_then(|popup| popup.popup_placement())
+            .expect("a pop-up");
+        assert_eq!(placed.parent, surface.id());
+        assert_eq!(placed.anchor_rect, rect);
+        assert!(popup.set_layer_placement(&LayerPatch::new()).is_err());
+
+        platform.destroy_surface(surface.id());
+        assert!(
+            platform.create_surface(&menu).is_err(),
+            "a pop-up of a surface that is gone is refused"
+        );
+    }
+
+    #[test]
     fn every_surface_gets_its_own_identity() {
         let platform = Headless::new();
         let first = platform
@@ -269,5 +496,43 @@ mod tests {
             .expect("creatable");
         assert_ne!(first.id(), second.id());
         assert_eq!(platform.surfaces().len(), 2);
+    }
+
+    #[test]
+    fn a_session_lock_is_asked_for_confirmed_and_unlocked() {
+        use super::SessionLockState;
+        use zgui_platform::{PlatformCapabilities, WakeReason};
+
+        let platform = Headless::new();
+        assert!(platform.lock_session().is_err(), "no capability, no lock");
+
+        let mut capabilities = PlatformCapabilities::none();
+        capabilities.session_lock = true;
+        let platform = Headless::new().with_capabilities(capabilities);
+        platform.lock_session().expect("the lock is asked for");
+        assert_eq!(platform.session_lock(), SessionLockState::Requested);
+        assert!(platform.lock_session().is_err(), "one lock at a time");
+
+        platform.unlock_session();
+        assert_eq!(
+            platform.session_lock(),
+            SessionLockState::Requested,
+            "an unconfirmed lock cannot be unlocked"
+        );
+        platform.confirm_lock();
+        assert!(matches!(
+            platform.drain_wakes()[..],
+            [WakeReason::SessionLocked]
+        ));
+        platform.unlock_session();
+        assert_eq!(platform.session_lock(), SessionLockState::Unlocked);
+
+        platform.lock_session().expect("a new lock after an unlock");
+        platform.finish_lock();
+        assert_eq!(platform.session_lock(), SessionLockState::Unlocked);
+        assert!(matches!(
+            platform.drain_wakes()[..],
+            [WakeReason::SessionLockFinished]
+        ));
     }
 }

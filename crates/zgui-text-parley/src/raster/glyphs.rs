@@ -32,6 +32,13 @@ const COLOR_SOURCES: [Source; 3] = [
     Source::Outline,
 ];
 
+/// How far the outline moves along x for the red, the green and the blue coverage, in pixels.
+///
+/// The red stripe is a third of a pixel to the left of the centre of its pixel. The outline moves
+/// to the right by that distance, so the centre of the pixel reads the coverage at the red stripe.
+/// The blue stripe is the mirror of that.
+const STRIPE_OFFSETS: [f32; 3] = [1.0 / 3.0, 0.0, -1.0 / 3.0];
+
 /// Rasterises glyphs from the faces one font system holds.
 ///
 /// Hinted, and capable of subpixel coverage and of the face's own colour glyphs. Which of those a
@@ -73,14 +80,11 @@ impl Rasteriser {
     }
 }
 
-impl GlyphRaster for Rasteriser {
-    fn raster(&self, key: &GlyphKey) -> Option<GlyphImage> {
+impl Rasteriser {
+    /// Rasterises one glyph through `context`.
+    fn raster_with(&self, context: &mut ScaleContext, key: &GlyphKey) -> Option<GlyphImage> {
         let (blob, index) = self.faces.get(&self.fonts, key.face)?;
         let font = FontRef::from_index(blob.data(), index as usize)?;
-        let mut context = self
-            .scale
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let coords = self.fonts.variation_coords(key.instance);
         let mut scaler = context
             .builder_with_id(font, identity(key.face, index, key.instance))
@@ -90,6 +94,28 @@ impl GlyphRaster for Rasteriser {
             .build();
         let image = renderer(key).render(&mut scaler, key.glyph)?;
         Some(convert(&image))
+    }
+}
+
+impl GlyphRaster for Rasteriser {
+    fn raster(&self, key: &GlyphKey) -> Option<GlyphImage> {
+        let mut context = self
+            .scale
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.raster_with(&mut context, key)
+    }
+
+    /// Rasterises the batch through a context of its own, so batches on other threads do not wait
+    /// for the shared one.
+    ///
+    /// The context lives for the batch only. A batch sorted by face and size prepares each face's
+    /// hinting state once.
+    fn raster_many(&self, keys: &[GlyphKey]) -> Vec<Option<GlyphImage>> {
+        let mut context = ScaleContext::new();
+        keys.iter()
+            .map(|key| self.raster_with(&mut context, key))
+            .collect()
     }
 
     fn outline(&self, key: &OutlineKey) -> Option<GlyphOutline> {
@@ -128,7 +154,7 @@ fn renderer(key: &GlyphKey) -> Render<'static> {
     };
     let mut render = Render::new(sources);
     render.format(match key.style {
-        RasterStyle::Subpixel => Format::Subpixel,
+        RasterStyle::Subpixel => Format::CustomSubpixel(STRIPE_OFFSETS),
         RasterStyle::Grayscale | RasterStyle::Color => Format::Alpha,
     });
     // Positioning is in fractions of a pixel and the key carries the phase, so the same glyph at

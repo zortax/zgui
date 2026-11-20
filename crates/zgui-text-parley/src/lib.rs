@@ -91,8 +91,13 @@ pub use crate::direction::{Controls, LEFT_TO_RIGHT_MARK, RIGHT_TO_LEFT_MARK};
 pub use crate::font::{ColorSupport, script_of};
 pub use crate::metrics::{BASE_SIZE, MONOSPACE_BASE_SIZE};
 pub use crate::raster::Rasteriser;
-pub use crate::shape::{LineRequest, ResolvedLineMetrics, ShapedLayout, Shaper, SlotBrush};
+pub use crate::shape::{
+    LineRequest, LineSettings, ResolvedLineMetrics, ShapedLayout, Shaper, SlotBrush,
+};
 pub use crate::system::{Enumeration, FontSystem, FontSystemOptions};
+/// What a [`LineSettings`] is written in: one OpenType feature, one variable-axis coordinate,
+/// and the packing of a four-character tag.
+pub use zgui_text_style::{FontFeature, FontVariation, tag};
 
 /// A script, as a fallback list is keyed on it.
 ///

@@ -23,7 +23,8 @@ pub fn bounds_of(store: &LayoutStore, node: NodeKey) -> Rect<DevicePx, Device> {
     union(store, store.fragments_of(node).iter().copied())
 }
 
-/// The ink of every piece one element was painted as, unioned with everything below them.
+/// The ink of every piece one element was painted as, unioned with everything below them, in the
+/// pieces' anchor space. [`device_ink_of`] gives it in device pixels.
 ///
 /// This is what has to be redrawn when the element goes away, and it is deliberately the *subtree*
 /// ink: a removed panel takes its children's pixels with it.
@@ -36,6 +37,26 @@ pub fn ink_of(store: &LayoutStore, node: NodeKey) -> Rect<DevicePx, Device> {
         held = Some(match held {
             Some(union) => union.union(fragment.subtree_ink),
             None => fragment.subtree_ink,
+        });
+    }
+    held.unwrap_or(Rect::ZERO)
+}
+
+/// [`ink_of`] in device pixels, each piece put on the device through its anchor.
+pub fn device_ink_of(
+    store: &LayoutStore,
+    node: NodeKey,
+    placements: &zgui_scene::Placements,
+) -> Rect<DevicePx, Device> {
+    let mut held: Option<Rect<DevicePx, Device>> = None;
+    for frag in store.fragments_of(node) {
+        let Some(fragment) = store.fragment(*frag) else {
+            continue;
+        };
+        let ink = fragment.device_subtree_ink(placements);
+        held = Some(match held {
+            Some(union) => union.union(ink),
+            None => ink,
         });
     }
     held.unwrap_or(Rect::ZERO)

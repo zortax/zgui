@@ -35,6 +35,7 @@ use zgui_dom::Document;
 use zgui_geom::{Device, Size};
 use zgui_layout::LayoutStore;
 use zgui_layout::fragment::diff::pixels;
+use zgui_scene::Placements;
 
 use crate::damage::ink::read_extent_of;
 
@@ -62,28 +63,31 @@ pub const FULL_DAMAGE_SHARE: f64 = 0.5;
 
 /// Grows `damage` to cover everything read by a composite whose read region it already touches.
 ///
-/// Runs to a fixpoint, because a grown rectangle can reach a second group's source region; the
-/// number of passes is bounded by the number of registered fragments, since each pass can absorb at
-/// most one source no earlier pass reached. On exhaustion the whole surface is damaged, which is
-/// correct and, at that point, cheaper than continuing.
+/// Runs to a fixpoint, because a grown rectangle can reach a second group's source region. Each
+/// pass that grows absorbs at least one source no earlier pass reached, so the registered fragments
+/// bound the passes that grow, and one more pass finds the fixpoint. On exhaustion the whole surface
+/// is damaged, which is correct and, at that point, cheaper than continuing.
 ///
 /// After this the damage set is frozen: the emit walk consults it and never adds to it.
 ///
 /// `scale` is the frame's own device scale, and it is the same one the emit walk is given: the two
 /// readers of a read extent have to convert the filter chain identically or the region the
 /// expansion adds and the region the cull tests are different rectangles.
+/// `placements` puts each read extent on the device, where the damage is measured.
 pub fn expand(
     store: &LayoutStore,
     damage: &mut DamageSet,
     surface: Size<i32, Device>,
     scale: f32,
+    placements: &Placements,
 ) -> Expansion {
     let registry = store.read_extents();
     let mut report = Expansion::default();
     if registry.is_empty() || damage.is_full() {
         return report;
     }
-    let bound = registry.len();
+    // The passes that can grow, and the pass that finds nothing left to absorb.
+    let bound = registry.len() + 1;
     let area = f64::from(surface.width.max(0)) * f64::from(surface.height.max(0));
     for pass in 1..=bound {
         report.passes = pass;
@@ -92,7 +96,10 @@ pub fn expand(
             let Some(extent) = read_extent_of(store, *frag, scale) else {
                 continue;
             };
-            let source = pixels(extent.source);
+            let Some(fragment) = store.fragment(*frag) else {
+                continue;
+            };
+            let source = pixels(fragment.on_device(extent.source, placements));
             if !damage.intersects(source) || contains(damage, source) {
                 continue;
             }
@@ -150,12 +157,19 @@ fn contains(damage: &DamageSet, rect: zgui_geom::Rect<i32, Device>) -> bool {
 ///
 /// It takes the roots rather than borrowing them, which is what makes it the consumer: a second
 /// reader would find the list already emptied and absorb nothing, silently.
-pub fn vacated(document: &mut Document, store: &LayoutStore, damage: &mut DamageSet) -> usize {
+///
+/// `placements` puts the removed pieces' ink on the device, where the damage is measured.
+pub fn vacated(
+    document: &mut Document,
+    store: &LayoutStore,
+    damage: &mut DamageSet,
+    placements: &Placements,
+) -> usize {
     let removed = document.take_removed();
     let mut absorbed = 0;
     for index in removed {
         let node = document.store().key_of(index);
-        let ink = zgui_layout::fragment::index::ink_of(store, node);
+        let ink = zgui_layout::fragment::index::device_ink_of(store, node, placements);
         if ink.is_empty() {
             continue;
         }

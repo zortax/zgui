@@ -37,11 +37,11 @@ fn assert_disjoint<const N: usize>(set: &DamageSet<N>) {
 }
 
 /// A small, deterministic generator, so a ten-thousand-step run is reproducible and cheap.
-struct Xorshift(u64);
+pub(super) struct Xorshift(pub(super) u64);
 
 impl Xorshift {
     /// The next value in the sequence.
-    fn next(&mut self) -> u64 {
+    pub(super) fn next(&mut self) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -49,7 +49,7 @@ impl Xorshift {
     }
 
     /// A value below `limit`.
-    fn below(&mut self, limit: i32) -> i32 {
+    pub(super) fn below(&mut self, limit: i32) -> i32 {
         (self.next() % limit as u64) as i32
     }
 }
@@ -320,4 +320,132 @@ fn a_rectangle_spanning_two_held_ones_is_still_merged_in() {
 fn a_full_set_contains_everything_and_an_empty_one_contains_nothing_it_has_not_been_given() {
     assert!(DamageSet::<4>::full().contains(rect(0, 0, 1, 1)));
     assert!(!DamageSet::<4>::new().contains(rect(0, 0, 1, 1)));
+}
+
+#[test]
+fn a_bounded_set_cuts_what_it_absorbs_to_the_bound() {
+    let mut set: DamageSet<4> = DamageSet::new();
+    set.set_bound(Some(rect(0, 0, 100, 100)));
+    set.absorb(rect(50, 50, 100, 100));
+    assert_eq!(set.rects(), &[rect(50, 50, 50, 50)]);
+}
+
+#[test]
+fn a_bounded_set_ignores_what_lies_outside_the_bound() {
+    // A long document damages every row it moved, nearly all of them far below the window.
+    let mut set: DamageSet<4> = DamageSet::new();
+    set.set_bound(Some(rect(0, 0, 100, 100)));
+    for row in 0..1000 {
+        set.absorb(rect(0, 200 + row * 20, 100, 20));
+    }
+    set.absorb_whole(rect(0, 5000, 100, 20));
+    assert!(set.is_empty());
+}
+
+proptest! {
+    /// Coalescing keeps the set disjoint, covers everything it covered, and adds at most the
+    /// allowed share of pixels.
+    #[test]
+    fn coalescing_stays_disjoint_covers_everything_and_keeps_to_the_share(
+        inputs in prop::collection::vec(any_rect(), 0..24),
+    ) {
+        let mut set = DamageSet::<4>::new();
+        for input in inputs {
+            set.absorb(input);
+        }
+        let before = covered(&set);
+        let area = set.area().expect("not full");
+        set.coalesce_dense();
+        assert_disjoint(&set);
+        prop_assert!(before.is_subset(&covered(&set)));
+        let allowed = area as f64 * (1.0 + super::COALESCE_WASTE_SHARE);
+        prop_assert!(set.area().expect("not full") as f64 <= allowed);
+    }
+}
+
+#[test]
+fn coalescing_merges_dense_panels_into_their_bounds() {
+    let mut set = DamageSet::<6>::new();
+    for top in [0, 110, 220] {
+        set.absorb(rect(0, top, 900, 100));
+    }
+    let bounds = set.bounds();
+    assert!(set.coalesce_dense());
+    assert_eq!(set.rects(), &[rect(0, 0, 900, 320)]);
+    assert_eq!(set.bounds(), bounds);
+}
+
+#[test]
+fn coalescing_merges_two_adjacent_rectangles() {
+    // One pass less pays for the gap between them, even with only two.
+    let mut set = DamageSet::<6>::new();
+    set.absorb(rect(0, 0, 10, 10));
+    set.absorb(rect(11, 0, 10, 10));
+    assert!(set.coalesce_dense());
+    assert_eq!(set.rects(), &[rect(0, 0, 21, 10)]);
+}
+
+#[test]
+fn coalescing_keeps_sparse_cursors_apart() {
+    let mut set = DamageSet::<6>::new();
+    for left in [0, 400, 800] {
+        set.absorb(rect(left, 0, 1, 10));
+    }
+    let before = set;
+    assert!(!set.coalesce_dense());
+    assert_eq!(set, before);
+}
+
+#[test]
+fn coalescing_merges_a_dense_group_and_keeps_a_far_rectangle_apart() {
+    // Three animated panels, and a caret blinking far from them.
+    let mut set = DamageSet::<6>::new();
+    for left in [0, 105, 210] {
+        set.absorb(rect(left, 0, 100, 80));
+    }
+    set.absorb(rect(600, 500, 2, 16));
+    assert!(set.coalesce_dense());
+    assert_eq!(set.len(), 2);
+    assert!(set.rects().contains(&rect(0, 0, 310, 80)));
+    assert!(set.rects().contains(&rect(600, 500, 2, 16)));
+}
+
+#[test]
+fn coalescing_counts_what_an_earlier_merge_added() {
+    // The two squares merge. Measured against the area of that merge, the strip below would merge
+    // too. The three rectangles cover 440 px and their bounds add 232 px, which is more than the
+    // share, so the strip stays apart.
+    let mut set = DamageSet::<6>::new();
+    set.absorb(rect(0, 0, 10, 10));
+    set.absorb(rect(14, 0, 10, 10));
+    set.absorb(rect(0, 18, 24, 10));
+    assert!(set.coalesce_dense());
+    assert_eq!(set.len(), 2);
+    assert!(set.rects().contains(&rect(0, 0, 24, 10)));
+    assert!(set.rects().contains(&rect(0, 18, 24, 10)));
+}
+
+#[test]
+fn coalescing_leaves_full_empty_and_single_sets_alone() {
+    let mut full = DamageSet::<6>::full();
+    assert!(!full.coalesce_dense());
+    assert!(full.is_full());
+    let mut empty = DamageSet::<6>::new();
+    assert!(!empty.coalesce_dense());
+    assert!(empty.is_empty());
+    let mut single = DamageSet::<6>::new();
+    single.absorb(rect(0, 0, 10, 10));
+    assert!(!single.coalesce_dense());
+    assert_eq!(single.rects(), &[rect(0, 0, 10, 10)]);
+}
+
+#[test]
+fn coalescing_keeps_the_bound() {
+    let mut set = DamageSet::<6>::new();
+    set.set_bound(Some(rect(0, 0, 100, 100)));
+    set.absorb(rect(0, 0, 40, 40));
+    set.absorb(rect(44, 0, 40, 40));
+    assert!(set.coalesce_dense());
+    assert_eq!(set.bound(), Some(rect(0, 0, 100, 100)));
+    assert_eq!(set.rects(), &[rect(0, 0, 84, 40)]);
 }

@@ -10,7 +10,7 @@
 //! lines the component library writes, so one session's output reads as one sequence.
 
 use std::cell::Cell;
-use std::time::{SystemTime, UNIX_EPOCH};
+use web_time::{SystemTime, UNIX_EPOCH};
 
 use zgui_dom::NodeKey;
 

@@ -13,7 +13,7 @@ pub mod code;
 pub mod key;
 pub mod modifiers;
 
-pub use crate::input::keyboard::modifiers::modifiers;
+pub use crate::input::keyboard::modifiers::{locks, modifiers};
 
 use smithay_client_toolkit::seat::keyboard::KeyEvent as WaylandKey;
 use zgui_vocab::{KeyEvent, KeyLocation};

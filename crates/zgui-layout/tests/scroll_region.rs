@@ -4,7 +4,7 @@ mod support;
 
 use std::path::PathBuf;
 
-use support::{Element, Fixture, lay_out, measurer, relayout};
+use support::{Element, Fixture, Frame, lay_out, measurer, relayout};
 use zgui_layout::LayoutStore;
 use zgui_layout::scroll_region::gutter;
 use zgui_testkit_scene::dump::{TreeDump, golden};
@@ -29,19 +29,21 @@ fn golden_path(name: &str) -> PathBuf {
 }
 
 /// Every fragment's rectangle, in painting order, as text.
-fn fragment_rects(store: &LayoutStore) -> String {
+fn fragment_rects(store: &LayoutStore, frame: &Frame) -> String {
+    let placements = zgui_scene::Placements::of(&frame.spatial);
     let mut out = String::new();
     let root = store.root().expect("a root");
     for key in zgui_layout::fragment::stacking::paint_order(store, root) {
         for frag in store.fragments_of_box(key) {
             let fragment = store.fragment(*frag).expect("live");
+            let border = fragment.on_device(fragment.border_box, &placements);
             out.push_str(&format!(
                 "{:?} at=({}, {}) size=({} x {})\n",
                 fragment.kind,
-                fragment.border_box.origin.x.0,
-                fragment.border_box.origin.y.0,
-                fragment.border_box.size.width.0,
-                fragment.border_box.size.height.0,
+                border.origin.x.0,
+                border.origin.y.0,
+                border.size.width.0,
+                border.size.height.0,
             ));
         }
     }
@@ -119,7 +121,7 @@ fn scroll_lock_gutter() {
     let mut store = scrolling.box_tree();
     let mut content = measurer();
     let mut frame = lay_out(&mut store, &mut content, 400.0, 300.0);
-    let before = fragment_rects(&store);
+    let before = fragment_rects(&store, &frame);
     golden::assert_tree(
         &golden_path("scroll-lock-gutter"),
         &Rendering(before.clone()),
@@ -141,7 +143,7 @@ fn scroll_lock_gutter() {
     relayout(&mut frame, &mut locked_store, &mut content, 400.0, 300.0);
 
     assert_eq!(
-        fragment_rects(&locked_store),
+        fragment_rects(&locked_store, &frame),
         before,
         "locking the page must not move a single fragment"
     );
@@ -152,15 +154,15 @@ fn unlocking_gives_the_gutter_back() {
     let scrolling = page("auto");
     let mut store = scrolling.box_tree();
     let mut content = measurer();
-    lay_out(&mut store, &mut content, 400.0, 300.0);
+    let frame = lay_out(&mut store, &mut content, 400.0, 300.0);
     let root = store.root().expect("a root");
-    let scrolling_width = fragment_rects(&store);
+    let scrolling_width = fragment_rects(&store, &frame);
 
     gutter::lock(&mut store, root);
     gutter::unlock(&mut store, root);
     assert!(!gutter::is_locked(&store, root));
-    lay_out(&mut store, &mut content, 400.0, 300.0);
-    assert_eq!(fragment_rects(&store), scrolling_width);
+    let frame = lay_out(&mut store, &mut content, 400.0, 300.0);
+    assert_eq!(fragment_rects(&store, &frame), scrolling_width);
 }
 
 #[test]
@@ -211,10 +213,10 @@ fn a_padded_bordered_scroller_puts_its_bar_against_the_border() {
         own.border_box.right().0 - 1.0,
         "the track touches the border"
     );
-    assert_eq!(track.top(), own.padding_box.top());
-    assert_eq!(track.bottom(), own.padding_box.bottom());
+    assert_eq!(track.top(), own.padding_box().top());
+    assert_eq!(track.bottom(), own.padding_box().bottom());
     assert!(
-        (track.left().0 - (own.content_box.right().0 + 16.0)).abs() < 1e-3,
+        (track.left().0 - (own.content_box().right().0 + 16.0)).abs() < 1e-3,
         "the right padding stays between the content and the bar"
     );
     assert_eq!(thumb.left(), track.left());
