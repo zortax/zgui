@@ -35,10 +35,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use compositor_wgpu::{Pixels, wgpu};
 use zgui_drm::Device;
 use zgui_drm::commit::{Commit, DamageClip};
 use zgui_platform::{PlatformError, SurfaceId};
-use zgui_render_wgpu::{Pixels, wgpu};
 
 use crate::cursor::Cursor;
 use crate::scanout::Scanout;

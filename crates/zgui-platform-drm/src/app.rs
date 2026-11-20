@@ -167,6 +167,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use compositor_wgpu::Gpu;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::io::Errno;
 use tracing::{info, warn};
@@ -175,7 +176,6 @@ use zgui_drm::commit::{self, Commit};
 use zgui_platform::{
     AppHandler, Clock, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, Waker,
 };
-use zgui_render_wgpu::Gpu;
 
 use crate::clipboard::ConsoleClipboard;
 use crate::clock::SystemClock;

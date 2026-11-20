@@ -72,6 +72,7 @@ use std::fmt;
 use std::os::fd::{AsFd, OwnedFd};
 use std::time::{Duration, Instant};
 
+use compositor_wgpu::{Gpu, Pixels, wgpu};
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
 use zgui_drm::commit::{Commit, DamageClip, Pipe, waits_for_a_fence};
@@ -80,7 +81,6 @@ use zgui_drm::framebuffer::Framebuffer;
 use zgui_drm::resources::Mode;
 use zgui_drm::{Device, Event};
 use zgui_platform::{PlatformError, Watchdog, refresh_interval};
-use zgui_render_wgpu::{Gpu, Pixels, wgpu};
 
 use crate::cursor::Cursor;
 use crate::import::{Handover, Imported, Plane, Unsupported};

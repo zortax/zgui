@@ -15,12 +15,9 @@ publish = false
 # console stack. An application that runs on a console names this crate beside `zgui`.
 [target.'cfg(target_os = "linux")'.dependencies]
 zgui = { path = "../zgui", version = "0.1.0" }
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
-zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-drm = { path = "../zgui-platform-drm", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 # The window renderer's contract, and the device renderer and path rasteriser a display is drawn
 # with.

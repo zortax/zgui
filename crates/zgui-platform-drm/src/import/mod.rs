@@ -75,8 +75,8 @@ use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use ash::{ext, khr, vk};
+use compositor_wgpu::{Gpu, wgpu};
 use zgui_drm::format::Modifier;
-use zgui_render_wgpu::{Gpu, wgpu};
 
 pub use crate::import::barrier::Handover;
 pub use crate::import::image::Plane;
@@ -88,7 +88,7 @@ use crate::scanout::FORMAT;
 /// The Vulkan device extensions an exported image needs, and what each one is for.
 ///
 /// A device extension can be enabled only while the device is created, so a program that wants
-/// this path states these before it opens one — `SharedGraphics::with_extensions` is where they
+/// this path states these before it opens one — `SharedGraphics::with_backends_and_extensions` is where they
 /// go. A device without them opens and draws exactly as it always did, and [`Imported::create`]
 /// answers [`Unsupported::Extension`] naming the one that is absent.
 ///
@@ -238,9 +238,10 @@ impl Imported {
     /// ```no_run
     /// use zgui_drm::format::Modifier;
     /// use zgui_platform_drm::{EXTENSIONS, Imported};
-    /// use zgui_render_wgpu::SharedGraphics;
+    /// use compositor_wgpu::{SharedGraphics, wgpu};
     ///
-    /// let graphics = SharedGraphics::with_extensions(EXTENSIONS.to_vec());
+    /// let graphics =
+    ///     SharedGraphics::with_backends_and_extensions(wgpu::Backends::VULKAN, EXTENSIONS.to_vec());
     /// let gpu = graphics.open_gpu().expect("a graphics device");
     ///
     /// // What the display plane published, as a scanout reads it back from the card.
@@ -556,7 +557,7 @@ mod tests {
 
     use super::{HAL_USAGE, IMAGE_FEATURES, IMAGE_USAGE, USAGE, VK_FORMAT};
     use crate::scanout::FORMAT;
-    use zgui_render_wgpu::wgpu;
+    use compositor_wgpu::wgpu;
 
     #[test]
     fn the_usage_a_supplied_presentation_requires_is_the_usage_the_image_is_created_with() {

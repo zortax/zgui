@@ -68,9 +68,9 @@ zgui-xkb = { path = "../zgui-xkb", version = "0.1.0" }
 # `Gpu`, the device and queue every path here draws through, and `Pixels`, which a readback answers
 # with: it carries the bytes and says which channel order they are in, and a scanout picks its
 # fourcc from that. `FORMAT` is the other end of the same agreement — the texture a frame is
-# composed into — and it is a wgpu format because the readback is. A backend at this layer may name
-# this one, and what draws through it lives in `zgui`.
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+# composed into — and it is a wgpu format because the readback is. The compositor's wgpu renderer
+# draws through the same device, and what draws through it lives in `zgui-console`.
+compositor-wgpu.workspace = true
 
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 # The stand-in display a context test hands out. This backend's own surface holds a device open,
@@ -78,14 +78,11 @@ zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
 # the headless backend's surface instead. `zgui-platform-winit` names the same crate for the same
 # reason.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
-# The scanout test draws one solid rectangle through the real renderer and puts it on a real
-# display. The renderer contract, the scene it draws, the colour and the damage set are all things
-# a caller builds and states, and every one of them is at this layer or below, so the test reaches
-# across no seam the crate itself may not.
-zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
-zgui-color = { path = "../zgui-color", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# The scanout test draws one solid rectangle through the reference compositor and the compositor's
+# wgpu renderer, and puts it on a real display.
+compositor-api.workspace = true
+compositor-core.workspace = true
+compositor-types.workspace = true
 
 # Each of the two session binaries owns its process. Both choose libseat's backend by writing
 # `LIBSEAT_BACKEND` in their first statement, and writing an environment variable while another

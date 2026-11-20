@@ -202,7 +202,7 @@ mod tests {
     use super::{SYNC_FD, exportable};
     use crate::import::{EXTENSIONS, vulkan};
     use ash::vk;
-    use zgui_render_wgpu::SharedGraphics;
+    use compositor_wgpu::{SharedGraphics, wgpu};
 
     #[test]
     fn the_handle_type_asked_for_is_the_kernels_own_rather_than_the_drivers() {
@@ -219,7 +219,10 @@ mod tests {
         // asserted, because a driver that exports no sync file is an ordinary machine. So this
         // checks that the question is answered at all, and reports which answer came back.
         let test = "this_machine_says_whether_it_exports_a_sync_file";
-        let graphics = SharedGraphics::with_extensions(EXTENSIONS.to_vec());
+        let graphics = SharedGraphics::with_backends_and_extensions(
+            wgpu::Backends::VULKAN,
+            EXTENSIONS.to_vec(),
+        );
         let Ok(gpu) = graphics.open_gpu() else {
             eprintln!("{test}: no usable graphics device, so nothing was asserted");
             return;

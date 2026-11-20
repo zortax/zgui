@@ -19,17 +19,19 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use zgui_bits::DamageSet;
-use zgui_color::Color;
+use compositor_api::{Compositor, OutputConfig, Renderer};
+use compositor_core::CompositorImpl;
+use compositor_types::{
+    Anchor, BorderStyle, BufferAge, Built, ChunkFlags, ChunkKey, ChunkProps, ClipRef, Frame,
+    FrameClock, FrameRequest, Matrix4, OrderEntry, OrderNode, PaintRef, Quad, RenderTarget,
+    SpaceRef, TransformNode,
+};
+use compositor_wgpu::{Builder, Pixels, wgpu};
 use zgui_drm::commit;
 use zgui_drm::device::Interface;
 use zgui_drm::{Device, Event};
-use zgui_geom::{Device as DeviceSpace, DevicePx, Point, Rect, Scale, Size};
 use zgui_platform_drm::cursor::Cursor;
 use zgui_platform_drm::{Output, Scanout};
-use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{Builder, Pixels, wgpu};
-use zgui_scene::{Paint, Quad, Scene};
 
 /// How long a flip is waited for before the wait is called a failure.
 ///
@@ -103,34 +105,82 @@ fn master(test: &str) -> Option<Device> {
 /// and carries whatever channel order the renderer's own surface format gives it. That is the half
 /// of the format decision no unit test can see.
 fn frame(test: &str, width: u32, height: u32) -> Option<Pixels> {
-    let size: Size<i32, DeviceSpace> = Size::new(width as i32, height as i32);
-    let target = RenderTarget::new(size, Scale::new(1.0));
     let mut renderer =
-        match Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false) {
+        match Builder::new().offscreen([width, height], wgpu::TextureFormat::Bgra8Unorm) {
             Ok(renderer) => renderer,
             Err(failure) => {
                 eprintln!("{test}: no usable graphics device, so nothing was asserted: {failure}");
                 return None;
             }
         };
+    let target = RenderTarget {
+        size: [width, height],
+        scale: 1.0,
+        opaque: true,
+    };
+    renderer.configure(target);
 
-    let mut scene = Scene::new();
-    scene.begin_frame(size);
+    let mut compositor = CompositorImpl::new();
+    let (client, _ids) = compositor.register_client();
+    let output = compositor.create_output(OutputConfig {
+        size: target.size,
+        scale: target.scale,
+        opaque: target.opaque,
+    });
+    let mut tx = compositor.transaction(client);
+    let space = tx.create_transform(TransformNode {
+        parent: None,
+        local: Matrix4::IDENTITY,
+        scroll: None,
+        anchor: Anchor::Scrolls,
+    });
+    let root = tx.create_order(OrderNode::default());
+    tx.set_root(output, Some(root));
+    let key = ChunkKey {
+        owner: 1,
+        part: 0,
+        _pad: 0,
+    };
+    let mut chunk = tx.record(
+        key,
+        ChunkProps {
+            space,
+            clip: None,
+            flags: ChunkFlags::default(),
+        },
+    );
     // A colour nothing else on a console produces, so a person watching can tell this frame from
     // whatever the terminal left behind.
-    let paint = scene
-        .paints
-        .add(Paint::Solid(Color::srgb_u8(0, 120, 200, 255)));
-    scene.push_quad(Quad::filled(
-        Rect::new(
-            Point::new(DevicePx(0.0), DevicePx(0.0)),
-            Size::new(DevicePx(width as f32), DevicePx(height as f32)),
-        ),
-        paint,
-    ));
-    scene.finish(&DamageSet::full());
+    chunk.quad(Quad {
+        bounds: [0.0, 0.0, width as f32, height as f32],
+        radii: [0.0; 8],
+        shapes: compositor_types::ROUND,
+        border: [0.0; 4],
+        fill: PaintRef::color([0, 120, 200, 255]),
+        stroke: PaintRef::NONE,
+        paint_origin: [0.0; 2],
+        clip: ClipRef::INHERIT,
+        space: SpaceRef::INHERIT,
+        style: BorderStyle::SOLID,
+        _pad: [0; 3],
+    });
+    tx.splice(root, 0, 0, &[OrderEntry::Chunk(key)]);
+    compositor.commit(tx).expect("one quad commits");
 
-    let outcome = renderer.draw(&scene, &DamageSet::full());
+    let caps = renderer.capabilities();
+    let request = FrameRequest {
+        caps: &caps,
+        age: BufferAge::Unknown,
+        clock: FrameClock::default(),
+        subpixel: None,
+    };
+    let mut built = Frame::default();
+    assert_eq!(
+        compositor.build_frame(output, &request, &mut built),
+        Built::Frame,
+        "a first frame is built"
+    );
+    let outcome = renderer.draw(&built);
     assert!(
         outcome.stats().is_some(),
         "a frame composed into a texture always reaches it, and this one reported {outcome:?}"

@@ -21,8 +21,9 @@ impl Client {
     ///
     /// - If no image could be acquired, the frame is skipped for the presenter's reason, and no
     ///   frame is built.
-    /// - If nothing changed, the frame is `Skipped(Undamaged)`, and the acquired image is given
-    ///   back to the presenter.
+    /// - If nothing changed, the acquired image is given back to the presenter, and the outcome is
+    ///   the renderer's `present_held`: a picture that waited for the platform, or one a display
+    ///   draws the pointer into, is presented, and otherwise the frame is `Skipped(Undamaged)`.
     /// - Otherwise the frame is drawn, and its outcome is reported to the compositor.
     ///
     /// The counters of a frame that was built are kept for [`Client::take_built`].
@@ -58,7 +59,7 @@ impl Client {
             if let (Some((image, _)), Some(presenter)) = (acquired, renderer.presenter()) {
                 presenter.release(image);
             }
-            return FrameOutcome::Skipped(SkipReason::Undamaged);
+            return renderer.present_held();
         }
         self.built = Some(self.compositor.borrow().counters().frame);
 
