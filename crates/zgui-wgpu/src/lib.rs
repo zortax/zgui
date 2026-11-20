@@ -568,6 +568,8 @@ pub struct WgpuSurfaces {
     device: Option<usize>,
     /// The device generation handed out in [`GpuShare`]s.
     generation: u64,
+    /// Slots no element is drawn from any more, removed at the next sync.
+    retired: Vec<Slot>,
 }
 
 impl WgpuSurfaces {
@@ -578,6 +580,7 @@ impl WgpuSurfaces {
             scanned_at: None,
             device: None,
             generation: 0,
+            retired: Vec::new(),
         }
     }
 }
@@ -591,6 +594,16 @@ impl Default for WgpuSurfaces {
 impl EmbedHost for WgpuSurfaces {
     fn sync(&mut self, cx: &mut EmbedSyncCx<'_>) -> EmbedSyncReport {
         let mut report = EmbedSyncReport::default();
+
+        // A chunk recorded before the last frame's paint may still draw a retired slot, and the
+        // compositor refuses to remove a slot a chunk names. That paint recorded the elements
+        // again, so nothing names these any more.
+        let client = cx.transaction.client();
+        for slot in self.retired.drain(..) {
+            if slot.client == client {
+                cx.transaction.remove(slot.id);
+            }
+        }
 
         // The door to the device. A renderer with no door — capture, headless — leaves the host
         // doing bookkeeping only: elements bind and claim intrinsics so layout is truthful, and
@@ -642,7 +655,7 @@ impl EmbedHost for WgpuSurfaces {
         }
 
         for (&node, binding) in &mut self.bindings {
-            let outcome = Self::sync_one(node, binding, cx, share.as_ref());
+            let outcome = Self::sync_one(node, binding, cx, share.as_ref(), &mut self.retired);
             report.animating |= outcome;
         }
         report
@@ -832,7 +845,7 @@ impl WgpuSurfaces {
         cx.content.remove_image(id);
         cx.intrinsics.remove(id);
         if let Some(slot) = binding.slot {
-            release(cx, slot);
+            retire(cx, slot, &mut self.retired);
         }
         match &binding.producer {
             Producer::Handle(state) => {
@@ -856,6 +869,7 @@ impl WgpuSurfaces {
         binding: &mut Binding,
         cx: &mut EmbedSyncCx<'_>,
         share: Option<&GpuShare>,
+        retired: &mut Vec<Slot>,
     ) -> bool {
         let id = ReplacedId::new(node);
 
@@ -954,6 +968,7 @@ impl WgpuSurfaces {
                             premultiplied,
                             texture: &texture,
                             slot: &mut binding.slot,
+                            retired,
                             content_attached: &mut binding.content_attached,
                             content_box,
                         },
@@ -973,6 +988,7 @@ impl WgpuSurfaces {
                             premultiplied,
                             texture,
                             slot: &mut binding.slot,
+                            retired,
                             content_attached: &mut binding.content_attached,
                             content_box,
                         },
@@ -1049,6 +1065,7 @@ impl WgpuSurfaces {
                             premultiplied: true,
                             texture: held,
                             slot: &mut binding.slot,
+                            retired,
                             content_attached: &mut binding.content_attached,
                             content_box,
                         },
@@ -1072,6 +1089,8 @@ struct AttachAsk<'a> {
     texture: &'a wgpu::Texture,
     /// The slot the element is drawn from, replaced when it no longer fits.
     slot: &'a mut Option<Slot>,
+    /// Where a replaced slot waits to be removed.
+    retired: &'a mut Vec<Slot>,
     /// Whether the content cache currently names the slot.
     content_attached: &'a mut bool,
     /// Where the element is, for the damage a new slot owes.
@@ -1081,8 +1100,8 @@ struct AttachAsk<'a> {
 /// Binds one texture to the element's slot and reports its new content.
 ///
 /// The slot is created again when there is none yet, when it belongs to an earlier client, or when
-/// the texture's extent or premultiplication changed. A slot the content cache does not name yet is
-/// attached to the element, and its content box is damaged.
+/// the texture's extent or premultiplication changed, and the old one is retired. A slot the
+/// content cache does not name yet is attached to the element, and its content box is damaged.
 fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
     let client = cx.transaction.client();
     let desc = TextureDesc {
@@ -1095,7 +1114,7 @@ fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
         .is_some_and(|slot| slot.client == client && slot.desc == desc);
     if !fits {
         if let Some(old) = ask.slot.take() {
-            release(cx, old);
+            retire(cx, old, ask.retired);
         }
         let id = cx.transaction.create_texture(desc);
         *ask.slot = Some(Slot { client, id, desc });
@@ -1119,16 +1138,12 @@ fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
     }
 }
 
-/// Removes `slot` from the compositor and its texture from the window's renderer.
-///
-/// A slot of an earlier client was removed with that client.
-fn release(cx: &mut EmbedSyncCx<'_>, slot: Slot) {
-    if slot.client == cx.transaction.client() {
-        cx.transaction.remove(slot.id);
-    }
+/// Removes the texture of `slot` from the window's renderer, and adds the slot to `retired`.
+fn retire(cx: &mut EmbedSyncCx<'_>, slot: Slot, retired: &mut Vec<Slot>) {
     if let Some(renderer) = wgpu_renderer(&mut *cx.renderer) {
         renderer.unbind_external(slot.client, slot.id);
     }
+    retired.push(slot);
 }
 
 /// Exact allocated texel bytes for a texture's mip chain and sample count.
