@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use zgui_bits::DamageSet;
 use zgui_color::Color;
-use zgui_geom::{Device, Scale, Size};
+use zgui_geom::{Device, Point, Rect, Scale, Size};
 use zgui_render::{FrameOutcome, RenderTarget, Renderer, SkipReason};
 use zgui_render_wgpu::renderer::readback;
 use zgui_render_wgpu::target::swapchain::Supplied;
@@ -489,5 +489,417 @@ fn a_supplied_renderer_cannot_rebuild_itself_after_a_loss() {
             .any(|candidate| candidate.reason.contains("supplied them")),
         "the refusal does not say whose job the new textures are: {:?}",
         failure.candidates
+    );
+}
+
+/// Where the square every rotation assertion reads sits, in device pixels.
+///
+/// Around the centre, so [`centre`] reads it, and well inside the surface, so the background is
+/// still visible at a corner.
+const SQUARE: (f32, f32, f32, f32) = (48.0, 48.0, 32.0, 32.0);
+
+/// The damage naming the square alone, which is what makes a frame here a partial redraw.
+fn square_damage() -> DamageSet {
+    let mut damage = DamageSet::new();
+    damage.absorb(Rect::new(
+        Point::new(SQUARE.0 as i32, SQUARE.1 as i32),
+        Size::new(SQUARE.2 as i32, SQUARE.3 as i32),
+    ));
+    damage
+}
+
+/// A dark background with one square of `colour` on it, declared against `damage`.
+fn square_on_background(colour: Color, damage: &DamageSet) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(extent());
+    let back = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(20, 20, 20)));
+    let front = scene.paints.add(zgui_scene::Paint::Solid(colour));
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, SIDE as f32, SIDE as f32), back));
+    scene.push_quad(Quad::filled(
+        rect(SQUARE.0, SQUARE.1, SQUARE.2, SQUARE.3),
+        front,
+    ));
+    scene.finish(damage);
+    scene
+}
+
+#[test]
+fn a_rotating_set_brings_each_buffer_up_to_date_before_this_frame_goes_on_it() {
+    // Every other assertion in this file draws whole frames, so none of them exercises the debt a
+    // rotated buffer carries. A frame writes the rectangles it drew **and** the ones drawn while
+    // this buffer was not the one being written. A buffer given only the rectangles of the frame
+    // in front of it holds a picture that is part this frame and part as many frames old as the
+    // set is deep — which on a display is a corner of the screen that stopped updating.
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, textures)) = supplied(&graphics, 3) else {
+        return;
+    };
+
+    // The square's colour says which step a buffer's picture is from, and the damage names only
+    // the square, so every frame leaves the other two buffers one step further behind.
+    let steps: [[u8; 3]; 7] = [
+        [255, 0, 0],
+        [0, 255, 0],
+        [0, 0, 255],
+        [255, 255, 0],
+        [0, 255, 255],
+        [255, 0, 255],
+        [90, 90, 200],
+    ];
+    let damage = square_damage();
+    for (step, bytes) in steps.iter().enumerate() {
+        let colour = opaque(bytes[0], bytes[1], bytes[2]);
+        let slot = step % textures.len();
+        assert!(renderer.present_into(slot), "slot {slot} of three exists");
+        let outcome = renderer.draw(&square_on_background(colour, &damage), &damage);
+        assert!(
+            outcome.stats().is_some(),
+            "step {step} composed nothing and reported {outcome:?}"
+        );
+        // Checked once the renderer has stopped widening frames for reasons of its own: the first
+        // frame redraws everything whatever it was handed, and this assertion is worth nothing
+        // unless the frames under it really are partial.
+        if step == 3 {
+            assert!(
+                renderer.composed_rects().len() == 1
+                    && renderer.composed_rects()[0].size.width < SIDE,
+                "this assertion needs a partial redraw, and the frame reported {:?}",
+                renderer.composed_rects()
+            );
+        }
+
+        let pixels = read(&renderer, &textures[slot]);
+        assert_eq!(
+            centre(&pixels),
+            [bytes[0], bytes[1], bytes[2], 255],
+            "step {step}: buffer {slot} did not get this frame's square"
+        );
+        assert_eq!(
+            pixels.rgba(2, 2),
+            [20, 20, 20, 255],
+            "step {step}: buffer {slot} never received the background, which only the debt it was \
+             owed can have written"
+        );
+    }
+}
+
+/// Asserts that `texture` holds exactly what the composed target holds.
+///
+/// The property a partial copy has to keep: after each copy, the texture that goes on the screen
+/// is the whole picture, and not only the rectangles this frame drew.
+fn assert_holds_composed(renderer: &WgpuRenderer, texture: &wgpu::Texture, what: &str) {
+    let presented = read(renderer, texture);
+    let composed = renderer.read_composed();
+    for y in 0..SIDE {
+        for x in 0..SIDE {
+            assert_eq!(
+                presented.rgba(x, y),
+                composed.rgba(x, y),
+                "{what}: the buffer differs from the composed target at ({x}, {y})"
+            );
+        }
+    }
+}
+
+/// Damage naming one rectangle.
+fn damage_of(x: i32, y: i32, width: i32, height: i32) -> DamageSet {
+    let mut damage = DamageSet::new();
+    damage.absorb(Rect::new(Point::new(x, y), Size::new(width, height)));
+    damage
+}
+
+/// A dark background with one square of `colour` at `at`, declared against `damage`.
+fn square_at(at: (f32, f32), colour: Color, damage: &DamageSet) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(extent());
+    let back = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(20, 20, 20)));
+    let front = scene.paints.add(zgui_scene::Paint::Solid(colour));
+    scene.push_quad(Quad::filled(rect(0.0, 0.0, SIDE as f32, SIDE as f32), back));
+    scene.push_quad(Quad::filled(rect(at.0, at.1, 16.0, 16.0), front));
+    scene.finish(damage);
+    scene
+}
+
+#[test]
+fn a_held_frame_is_owed_to_the_copy_that_follows_it() {
+    // A frame the platform holds is composed and not copied. When the next frame composes before
+    // the held one is copied, the next copy has to carry both frames' rectangles. A copy that
+    // carries only its own frame leaves the held frame's change out of the buffer.
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, textures)) = supplied(&graphics, 3) else {
+        return;
+    };
+    let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let gate = Arc::clone(&open);
+    renderer.set_present_gate(Box::new(move || {
+        gate.load(std::sync::atomic::Ordering::Relaxed)
+    }));
+
+    let full = DamageSet::full();
+    for slot in 0..textures.len() {
+        assert!(renderer.present_into(slot));
+        let outcome = renderer.draw(&square_at((8.0, 8.0), opaque(0, 0, 0), &full), &full);
+        assert!(outcome.stats().is_some(), "{outcome:?}");
+    }
+
+    // Held: the left square changes and nothing is copied.
+    open.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(renderer.present_into(0));
+    let left = damage_of(8, 8, 16, 16);
+    let outcome = renderer.draw(&square_at((8.0, 8.0), opaque(255, 0, 0), &left), &left);
+    assert_eq!(outcome, FrameOutcome::Skipped(SkipReason::Held));
+
+    // The next frame moves nothing on the left and composes before the held frame is copied.
+    open.store(true, std::sync::atomic::Ordering::Relaxed);
+    let right = damage_of(100, 100, 16, 16);
+    let mut scene = square_at((8.0, 8.0), opaque(255, 0, 0), &right);
+    let paint = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(0, 255, 0)));
+    scene.push_quad(Quad::filled(rect(100.0, 100.0, 16.0, 16.0), paint));
+    scene.finish(&right);
+    for (step, slot) in [0, 1, 2].into_iter().enumerate() {
+        assert!(renderer.present_into(slot));
+        let outcome = renderer.draw(&scene, &right);
+        assert!(outcome.stats().is_some(), "step {step}: {outcome:?}");
+        assert_holds_composed(
+            &renderer,
+            &textures[slot],
+            &format!("step {step}, slot {slot}"),
+        );
+    }
+    assert_eq!(
+        centre_of(&read(&renderer, &textures[0]), 16, 16),
+        [255, 0, 0, 255]
+    );
+}
+
+#[test]
+fn a_held_frame_presented_later_copies_only_what_it_owes() {
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, textures)) = supplied(&graphics, 2) else {
+        return;
+    };
+    let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let gate = Arc::clone(&open);
+    renderer.set_present_gate(Box::new(move || {
+        gate.load(std::sync::atomic::Ordering::Relaxed)
+    }));
+    let full = DamageSet::full();
+    for slot in 0..textures.len() {
+        assert!(renderer.present_into(slot));
+        assert!(
+            renderer
+                .draw(&square_at((8.0, 8.0), opaque(0, 0, 0), &full), &full)
+                .stats()
+                .is_some()
+        );
+    }
+
+    open.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(renderer.present_into(0));
+    let left = damage_of(8, 8, 16, 16);
+    let outcome = renderer.draw(&square_at((8.0, 8.0), opaque(0, 0, 255), &left), &left);
+    assert_eq!(outcome, FrameOutcome::Skipped(SkipReason::Held));
+    open.store(true, std::sync::atomic::Ordering::Relaxed);
+    let outcome = renderer.present_held();
+    let stats = outcome.stats().expect("the held frame is presented");
+    assert_eq!(stats.draw_calls, 1, "one owed rectangle, one draw");
+    assert_holds_composed(&renderer, &textures[0], "the held frame");
+
+    // The other buffer missed the held frame, and is owed it with the next copy.
+    assert!(renderer.present_into(1));
+    let none = damage_of(100, 100, 4, 4);
+    assert!(
+        renderer
+            .draw(&square_at((8.0, 8.0), opaque(0, 0, 255), &none), &none)
+            .stats()
+            .is_some()
+    );
+    assert_holds_composed(&renderer, &textures[1], "the buffer that missed it");
+}
+
+/// Stripes four pixels tall whose colour follows the row, scrolled up by `scrolled` rows.
+fn stripes(scrolled: i32, damage: &DamageSet) -> Scene {
+    let mut scene = Scene::new();
+    scene.begin_frame(extent());
+    for band in 0..(SIDE / 4) {
+        let row = band + scrolled / 4;
+        let paint = scene.paints.add(zgui_scene::Paint::Solid(opaque(
+            (row * 37 % 256) as u8,
+            (row * 91 % 256) as u8,
+            (row * 13 % 256) as u8,
+        )));
+        scene.push_quad(Quad::filled(
+            rect(0.0, (band * 4) as f32, SIDE as f32, 4.0),
+            paint,
+        ));
+    }
+    scene.finish(damage);
+    scene
+}
+
+#[test]
+fn a_shifted_frame_owes_every_buffer_the_pixels_it_moved() {
+    // A scroll moves pixels already in the composed target and redraws only the strip the move
+    // uncovered. Every rotated buffer is owed the whole moved region, or it shows the content
+    // from before the scroll everywhere outside the strip.
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, textures)) = supplied(&graphics, 3) else {
+        return;
+    };
+    let full = DamageSet::full();
+    for slot in 0..textures.len() {
+        assert!(renderer.present_into(slot));
+        assert!(renderer.draw(&stripes(0, &full), &full).stats().is_some());
+    }
+    let port = Rect::new(Point::new(0, 0), extent());
+    for step in 1..=6 {
+        let slot = step as usize % textures.len();
+        renderer.shift_composed(zgui_render::ScrollShift { port, by: (0, -4) });
+        let strip = damage_of(0, SIDE - 4, SIDE, 4);
+        assert!(renderer.present_into(slot));
+        let outcome = renderer.draw(&stripes(step * 4, &strip), &strip);
+        assert!(outcome.stats().is_some(), "step {step}: {outcome:?}");
+        assert_holds_composed(&renderer, &textures[slot], &format!("scroll step {step}"));
+    }
+}
+
+#[test]
+fn a_backdrop_widening_is_owed_to_every_buffer() {
+    // A backdrop reads beyond the damage that reaches it, so the frame redraws all that it reads.
+    // The buffers have to receive the widened rectangles, and not only the damage.
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, textures)) = supplied(&graphics, 3) else {
+        return;
+    };
+    let frosted = |x: f32, damage: &DamageSet| {
+        let mut scene = Scene::new();
+        scene.begin_frame(extent());
+        let white = scene
+            .paints
+            .add(zgui_scene::Paint::Solid(opaque(255, 255, 255)));
+        let red = scene
+            .paints
+            .add(zgui_scene::Paint::Solid(opaque(255, 0, 0)));
+        scene.push_quad(Quad::filled(
+            rect(0.0, 0.0, SIDE as f32, SIDE as f32),
+            white,
+        ));
+        scene.push_quad(Quad::filled(rect(x, 40.0, 8.0, 8.0), red));
+        scene.push_backdrop(zgui_scene::BackdropFilter::new(
+            rect(16.0, 16.0, 96.0, 64.0),
+            [zgui_scene::Filter::Blur(4.0)].into_iter().collect(),
+        ));
+        scene.finish(damage);
+        scene
+    };
+    let full = DamageSet::full();
+    for slot in 0..textures.len() {
+        assert!(renderer.present_into(slot));
+        assert!(
+            renderer
+                .draw(&frosted(20.0, &full), &full)
+                .stats()
+                .is_some()
+        );
+    }
+    for step in 1..=5 {
+        let slot = step as usize % textures.len();
+        let from = 20 + (step - 1) * 8;
+        let damage = damage_of(from, 40, 16, 8);
+        assert!(renderer.present_into(slot));
+        let outcome = renderer.draw(&frosted((20 + step * 8) as f32, &damage), &damage);
+        assert!(outcome.stats().is_some(), "step {step}: {outcome:?}");
+        assert!(
+            renderer
+                .composed_rects()
+                .iter()
+                .any(|rect| rect.size.width > 16),
+            "step {step}: the frame was not widened, so this asserts nothing: {:?}",
+            renderer.composed_rects()
+        );
+        assert_holds_composed(&renderer, &textures[slot], &format!("backdrop step {step}"));
+    }
+}
+
+/// The pixel at (`x`, `y`) of `pixels`.
+fn centre_of(pixels: &Pixels, x: i32, y: i32) -> [u8; 4] {
+    pixels.rgba(x, y)
+}
+
+#[test]
+fn present_damage_covers_every_frame_since_the_last_present() {
+    // What the display is told changed is relative to the frame it showed before. A frame that
+    // was composed and held in between changed the picture too, so its rectangles go with the
+    // next present.
+    let _device = device_lock();
+    let graphics = SharedGraphics::new();
+    let Some((mut renderer, _textures)) = supplied(&graphics, 3) else {
+        return;
+    };
+    let open = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let gate = Arc::clone(&open);
+    renderer.set_present_gate(Box::new(move || {
+        gate.load(std::sync::atomic::Ordering::Relaxed)
+    }));
+    let full = DamageSet::full();
+    assert!(renderer.present_into(0));
+    assert!(
+        renderer
+            .draw(&square_at((8.0, 8.0), opaque(0, 0, 0), &full), &full)
+            .stats()
+            .is_some()
+    );
+    assert_eq!(
+        renderer.presented_damage(),
+        [Rect::new(Point::new(0, 0), extent())],
+        "the first frame changes everything"
+    );
+
+    open.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert!(renderer.present_into(1));
+    let left = damage_of(8, 8, 16, 16);
+    let outcome = renderer.draw(&square_at((8.0, 8.0), opaque(255, 0, 0), &left), &left);
+    assert_eq!(outcome, FrameOutcome::Skipped(SkipReason::Held));
+    open.store(true, std::sync::atomic::Ordering::Relaxed);
+    let right = damage_of(100, 100, 16, 16);
+    let mut scene = square_at((8.0, 8.0), opaque(255, 0, 0), &right);
+    let paint = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(0, 255, 0)));
+    scene.push_quad(Quad::filled(rect(100.0, 100.0, 16.0, 16.0), paint));
+    scene.finish(&right);
+    assert!(renderer.draw(&scene, &right).stats().is_some());
+
+    let covered = |x: i32, y: i32| {
+        renderer
+            .presented_damage()
+            .iter()
+            .any(|rect| rect.contains(Point::new(x, y)))
+    };
+    assert!(
+        covered(10, 10),
+        "the held frame's rectangle: {:?}",
+        renderer.presented_damage()
+    );
+    assert!(
+        covered(110, 110),
+        "this frame's rectangle: {:?}",
+        renderer.presented_damage()
+    );
+    assert!(
+        !covered(64, 64),
+        "nothing else changed: {:?}",
+        renderer.presented_damage()
     );
 }

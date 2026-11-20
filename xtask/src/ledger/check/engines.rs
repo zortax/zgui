@@ -67,12 +67,13 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-platform-drm",
         ],
     ),
-    // Vulkan itself, and one crate names it. A buffer a display controller scans out of is a
+    // Vulkan itself, and two crates name it. A buffer a display controller scans out of is a
     // Vulkan image created with a DRM format modifier, backed by exportable memory and handed to
-    // the kernel as a dma-buf, and wgpu's API has a word for none of that. A second crate reaching
-    // past wgpu into the driver would be a second place a device can be left holding an image
-    // nothing gives back.
-    ("ash", &["zgui-platform-drm"]),
+    // the kernel as a dma-buf, and wgpu's API has a word for none of that. The renderer makes a
+    // swap chain of its own, because wgpu discards what a swap chain image held and presents with
+    // no damage. Any other crate reaching past wgpu into the driver would be one more place a
+    // device can be left holding an image nothing gives back.
+    ("ash", &["zgui-platform-drm", "zgui-render-wgpu"]),
     ("winit", &["zgui-platform-winit"]),
     ("accesskit_winit", &["zgui-platform-winit"]),
     ("arboard", &["zgui-platform-winit"]),

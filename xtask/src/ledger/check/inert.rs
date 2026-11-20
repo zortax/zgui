@@ -220,15 +220,15 @@ struct Variants {
 impl Variants {
     /// Records every variant one file declares.
     fn declare(&mut self, path: &str, text: &str) {
-        for (enum_name, variant, defaulted) in declarations(text) {
+        for (enum_name, variant, exempt) in declarations(text) {
             let row = self
                 .rows
                 .entry(format!("{enum_name}::{variant}"))
                 .or_default();
             row.declared_in = path.to_owned();
             // A `#[default]` variant is built by the derived implementation, which is a producer
-            // that exists and has no text naming it.
-            if defaulted {
+            // that exists and has no text naming it. An uninhabited variant can have no producer.
+            if exempt {
                 row.built += 1;
             }
         }
@@ -354,7 +354,10 @@ fn enum_header(line: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name)
 }
 
-/// Every variant declared in `text`, as its enum, its name, and whether it is the derived default.
+/// Every variant declared in `text`, as its enum, its name, and whether it needs no producer.
+///
+/// A variant needs no producer when it is the derived default, or when its only field is
+/// `Infallible`, which makes it uninhabited.
 fn declarations(text: &str) -> Vec<(String, String, bool)> {
     let mut found = Vec::new();
     let lines: Vec<&str> = text.lines().collect();
@@ -380,7 +383,11 @@ fn declarations(text: &str) -> Vec<(String, String, bool)> {
                 continue;
             }
             if let Some(variant) = variant_name(trimmed) {
-                found.push((name.clone(), variant.to_owned(), defaulted));
+                found.push((
+                    name.clone(),
+                    variant.to_owned(),
+                    defaulted || uninhabited(trimmed),
+                ));
                 defaulted = false;
             }
             index += 1;
@@ -388,6 +395,14 @@ fn declarations(text: &str) -> Vec<(String, String, bool)> {
         index += 1;
     }
     found
+}
+
+/// Whether the variant a line declares holds only `Infallible`, so that no value of it exists.
+fn uninhabited(trimmed: &str) -> bool {
+    trimmed
+        .split_once('(')
+        .and_then(|(_, rest)| rest.strip_suffix("),").or_else(|| rest.strip_suffix(')')))
+        .is_some_and(|field| field.trim().rsplit("::").next() == Some("Infallible"))
 }
 
 /// The variant a line inside an enum body declares, if it declares one.
@@ -513,6 +528,8 @@ pub enum Kind {
 pub enum Other {
     #[default]
     None,
+    Never(core::convert::Infallible),
+    Held(Option<Infallible>),
 }
 ";
         let found = declarations(text);
@@ -522,8 +539,11 @@ pub enum Other {
                 ("Kind".to_owned(), "Box".to_owned(), false),
                 ("Kind".to_owned(), "Scrollbar".to_owned(), false),
                 ("Other".to_owned(), "None".to_owned(), true),
+                ("Other".to_owned(), "Never".to_owned(), true),
+                ("Other".to_owned(), "Held".to_owned(), false),
             ],
-            "the fields of a struct variant are not variants, and a default is marked"
+            "the fields of a struct variant are not variants, and a default and an uninhabited \
+             variant are marked"
         );
         assert_eq!(enum_header("pub(crate) enum Bar {"), Some("Bar"));
         assert_eq!(variant_name("axis: Axis,"), None);

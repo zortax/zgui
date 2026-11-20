@@ -396,6 +396,17 @@ counters! {
     /// Surface pixels inside the damage rectangles that were redrawn.
     DamagePx => damage_px, Group::RendererSpecific;
 
+    /// Pixels the copy at the end of a frame wrote into the presented texture.
+    ///
+    /// The whole surface for a texture that keeps nothing between frames. Only what the texture
+    /// owes for one that keeps its contents.
+    PresentCopyPx => present_copy_px, Group::RendererSpecific;
+
+    /// Pixels a present told the compositor or the display engine had changed.
+    ///
+    /// The whole frame where the present can name no rectangle.
+    PresentDamagePx => present_damage_px, Group::RendererSpecific;
+
     /// Bytes copied to the GPU.
     BytesUploaded => bytes_uploaded, Group::RendererSpecific;
 

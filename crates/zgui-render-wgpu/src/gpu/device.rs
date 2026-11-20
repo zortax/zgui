@@ -47,6 +47,32 @@ fn memory_hints() -> wgpu::MemoryHints {
     }
 }
 
+/// `extensions`, with the one a swap chain of this crate's own names damage with, where one is
+/// wanted and `adapter` has it.
+///
+/// `VK_KHR_incremental_present` is a device extension, so it is enabled when the device is made,
+/// and only where [`ENV`](crate::target::native::ENV) asks for native swap chains. Without it a
+/// native chain still copies only what an image owes, and reports every present as whole.
+fn with_presenter(adapter: &wgpu::Adapter, extensions: &[&'static CStr]) -> Vec<&'static CStr> {
+    #[cfg(vulkan_hal)]
+    {
+        let mut extensions = extensions.to_vec();
+        let name = crate::target::native::INCREMENTAL_PRESENT;
+        if crate::target::native::wanted()
+            && !extensions.contains(&name)
+            && extensions::granted_by(adapter, &[name])
+        {
+            extensions.push(name);
+        }
+        extensions
+    }
+    #[cfg(not(vulkan_hal))]
+    {
+        let _ = adapter;
+        extensions.to_vec()
+    }
+}
+
 /// What a device on `adapter` is asked for.
 ///
 /// Derived once and read by every path that opens a device. The hal path creates the device
@@ -144,7 +170,8 @@ impl Gpu {
         extensions: &[&'static CStr],
     ) -> Result<Self, String> {
         let descriptor = descriptor(&adapter);
-        let (device, queue, extensions) = match extensions::open(&adapter, extensions, &descriptor)
+        let extensions = with_presenter(&adapter, extensions);
+        let (device, queue, extensions) = match extensions::open(&adapter, &extensions, &descriptor)
         {
             Some(opened) => opened,
             None => {

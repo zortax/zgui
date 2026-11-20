@@ -14,6 +14,8 @@
 //! mode on that nobody is looking at. `vkms` is atomic, so the legacy half of this file runs
 //! against its legacy ioctls the same way it runs against a real card.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::thread;

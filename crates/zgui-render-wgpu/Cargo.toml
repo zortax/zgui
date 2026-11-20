@@ -40,6 +40,17 @@ bincode.workspace = true
 naga = { workspace = true, features = ["wgsl-in", "serialize"] }
 zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
 
+# A swap chain made through Vulkan itself, where wgpu's would discard what an image held and name no
+# damage. `ash` at the version wgpu-hal links, so its handles are the types wgpu-hal takes. The
+# targets are the ones `build.rs` sets `vulkan_hal` for.
+[target.'cfg(any(windows, target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
+ash.workspace = true
+
+# A DXGI swap chain made by the renderer itself, where wgpu's would discard what a buffer held and
+# name no dirty rectangles.
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
 [lints]
 workspace = true
 

@@ -13,6 +13,8 @@
 //! `sudo modprobe vkms` gives a device with no hardware behind it, which is a display to put a
 //! cursor on that nobody is looking at.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use zgui_drm::buffer::DumbBuffer;

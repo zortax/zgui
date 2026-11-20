@@ -41,7 +41,7 @@ fn collect(directory: &Path, extension: &str, found: &mut Vec<PathBuf>) -> Resul
         let entry = entry.map_err(|source| Error::io(directory, source))?;
         let path = entry.path();
         if path.is_dir() {
-            if path.file_name().is_some_and(|name| name == "target") {
+            if crate::root::is_build_output(&path) {
                 continue;
             }
             collect(&path, extension, found)?;

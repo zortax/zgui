@@ -10,6 +10,8 @@
 //! mask indexes the resource list, and a connected connector reports a mode with an extent and a
 //! rate.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use std::path::{Path, PathBuf};

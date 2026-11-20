@@ -100,7 +100,7 @@ pub fn plan_segments(
     if !damage.is_full() {
         scene.opaque_covers(&mut opaque);
     }
-    for rect in rects {
+    for &rect in &rects {
         plan_rect(
             &mut builder,
             scene,
@@ -114,7 +114,8 @@ pub fn plan_segments(
             vectors,
         );
     }
-    let plan = builder.finish();
+    let mut plan = builder.finish();
+    plan.rects = rects;
     counter::add(Counter::BatchesCulled, u64::from(plan.culled));
     plan
 }

@@ -415,7 +415,12 @@ impl<W: Into<wgpu::SurfaceTarget<'static>> + Clone> Proof for WindowSurface<W> {
             return Err("the surface is not compatible with this adapter".to_owned());
         }
         Ok(Presentation::Surface(Box::new(
-            ConfiguredSurface::unconfigured(gpu, surface, self.setup),
+            ConfiguredSurface::unconfigured(
+                gpu,
+                surface,
+                self.setup,
+                crate::target::native::NativeWindow::of(self.window.clone()),
+            ),
         )))
     }
 }
@@ -512,7 +517,7 @@ mod tests {
             view_formats: &[],
         });
         let supplied = Supplied::new(vec![texture]).ok_or("the texture was refused")?;
-        let mut presentation = Presentation::Supplied(supplied);
+        let mut presentation = Presentation::Supplied(Box::new(supplied));
         presentation.resize(gpu, Size::new(16, 16));
         Ok(presentation)
     }

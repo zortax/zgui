@@ -1,6 +1,7 @@
 //! What happens to a display list: the frame, and the two steps either side of it.
 
 use zgui_bits::DamageSet;
+use zgui_geom::{Device, Rect};
 use zgui_profile::{Counter, Phase, counter};
 use zgui_render::{
     ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
@@ -15,8 +16,9 @@ use crate::frame::plan::plan_segments;
 use crate::frame::present;
 use crate::gpu::timing::{GpuTimer, PassQueries, TimedWork};
 use crate::pipeline::kind::PipelineKind;
-use crate::renderer::WgpuRenderer;
+use crate::renderer::{WgpuRenderer, readback};
 use crate::target::acquire::{Acquisition, SurfaceAction};
+use crate::target::swapchain::Presentation;
 
 impl Renderer for WgpuRenderer {
     fn capabilities(&self) -> RenderCapabilities {
@@ -164,6 +166,11 @@ impl Renderer for WgpuRenderer {
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
 
+        let redrawn: u64 = damage::rects(damage, self.composed.used())
+            .iter()
+            .map(|rect| damage::area(*rect))
+            .sum();
+
         let formats = self.presentation.formats();
         // Before anything is planned: a display list may name an effect declared since the last
         // frame, and a pipeline built from it has to exist by the time the batch is issued.
@@ -243,14 +250,23 @@ impl Renderer for WgpuRenderer {
         };
         zgui_profile::latency::mark("r.encoder");
         let mut encoder = self.frame_encoder();
+        // What this frame writes into the composed target. Taken from what the frame draws, and
+        // not from the damage it was handed: the full-damage widening above, the backdrop widening
+        // in the plan, the carry and the shift below all write pixels outside that damage.
+        self.composed_rects.clear();
+        self.composed_rects.extend_from_slice(&plan.rects);
         // First of all: a target reallocated by a resize receives the picture of the one it
         // replaced, which the shift below and every pass after it build on.
         if let Some(carried) = self.composed.carry(&mut encoder) {
             zgui_profile::latency::note_with("r.carry", || format!("{carried:?}"));
+            self.composed_rects.push(self.composed.used());
         }
         // Before anything this frame draws, and after nothing: the passes below clear and redraw
         // each damage rectangle, and the pixels this moves are the ones outside them.
         if let Some(shift) = self.pending_shift.take() {
+            if let Some(moved_to) = shift.destination() {
+                self.composed_rects.push(moved_to);
+            }
             let moved = crate::frame::shift::apply(
                 &self.gpu,
                 &mut encoder,
@@ -259,6 +275,11 @@ impl Renderer for WgpuRenderer {
                 shift,
             );
             zgui_profile::latency::note("r.shift", format!("by={:?} moved={moved}", shift.by));
+        }
+        damage::rows_of(&self.composed_rects, &mut self.composed_rows);
+        self.presentation.note_written(&self.composed_rects);
+        for rect in &self.composed_rects {
+            self.unpresented.absorb(*rect);
         }
         zgui_profile::latency::mark("r.buffers");
         let uploaded = self.buffers.upload_frame(&self.gpu, &mut encoder, scene);
@@ -316,15 +337,14 @@ impl Renderer for WgpuRenderer {
         let presented = self.acquire_surface();
         let mut draw_calls = recorded.draw_calls;
         if let Some(view) = &presented.view {
-            let limit = self.blit_limit(&presented);
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
-            draw_calls += 1;
+            let scissors = self.blit_scissors(&presented);
+            draw_calls += self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.submit_frame(encoder);
+        self.verify_native(&presented);
         let acquisition = presented.acquisition;
         self.hand_over(presented);
 
-        let redrawn = Self::redrawn(damage, &self.composed);
         counter::add(Counter::DamagePx, redrawn);
         let stats = FrameStats {
             draw_calls,
@@ -351,11 +371,11 @@ impl Renderer for WgpuRenderer {
         let mut encoder = self.frame_encoder();
         let mut draw_calls = 0;
         if let Some(view) = &presented.view {
-            let limit = self.blit_limit(&presented);
-            self.blit(&mut encoder, view, formats.blit_undoes_srgb(), limit);
-            draw_calls = 1;
+            let scissors = self.blit_scissors(&presented);
+            draw_calls = self.blit(&mut encoder, view, formats.blit_undoes_srgb(), &scissors);
         }
         self.gpu.queue().submit([encoder.finish()]);
+        self.verify_native(&presented);
         let acquisition = presented.acquisition;
         self.hand_over(presented);
         acquisition.outcome(FrameStats {
@@ -637,7 +657,7 @@ impl WgpuRenderer {
         // which is why its damage is retired either way.
         zgui_profile::latency::mark("acq.in");
         let asked = web_time::Instant::now();
-        let presented = present::acquire(&self.presentation, &mut self.faults);
+        let presented = present::acquire(&mut self.presentation, &mut self.faults);
         // Measured around the call and nowhere else. It is the frame's slack seen from the inside:
         // how much earlier than it needed to be the frame was started.
         self.acquire_block = asked.elapsed();
@@ -683,13 +703,48 @@ impl WgpuRenderer {
         // copied that persistent target to the surface. A retry with no new damage must still run
         // through acquisition and the final blit rather than taking the undamaged early return.
         self.present_composed_next = !response.presents;
+        if response.presents {
+            let whole = Rect::new(zgui_geom::Point::new(0, 0), self.target.size);
+            let unpresented = core::mem::take(&mut self.unpresented);
+            self.presented_damage.clear();
+            if unpresented.is_full() {
+                self.presented_damage.push(whole);
+            } else {
+                self.presented_damage.extend(
+                    unpresented
+                        .rects()
+                        .iter()
+                        .filter_map(|rect| rect.intersection(whole))
+                        .filter(|rect| !rect.is_empty()),
+                );
+            }
+        }
         if response.presents
             && let Some(notify) = &self.pre_present
         {
             notify(self.target);
         }
+        let mut response = response;
         if let Some(texture) = presented.surface_texture {
             self.gpu.queue().present(texture);
+        } else if let Some(image) = &presented.native
+            && response.presents
+        {
+            let frame = self.target.size;
+            let (answer, damaged) =
+                self.presentation
+                    .present_native(image.slot, frame, &self.presented_damage);
+            counter::add(Counter::PresentDamagePx, damaged);
+            let after = answer.response();
+            if !after.presents {
+                // The frame is composed and its image never reached the compositor, so the next
+                // frame presents it even with nothing new to draw.
+                self.present_composed_next = true;
+                tracing::debug!(answer = answer.name(), "a present was refused");
+            }
+            response.reconfigure |= after.reconfigure;
+            response.recreate_surface |= after.recreate_surface;
+            response.force_full_damage |= after.force_full_damage;
         }
         zgui_profile::latency::mark("pres.out");
         // After the present, so the frame reaches the screen first. It does nothing unless this
@@ -730,6 +785,67 @@ impl WgpuRenderer {
         }
     }
 
+    /// Checks an image of a swap chain this crate made against the composed target, where
+    /// [`VERIFY_ENV`](crate::target::native::VERIFY_ENV) asks for it.
+    ///
+    /// Runs after the copy is submitted and before the image is given back, because nothing may
+    /// read an image the compositor holds. The readback leaves wgpu tracking the image as a copy
+    /// source, and the barrier that gives the image back expects a colour attachment, so an empty
+    /// pass over the image puts wgpu's tracker back.
+    fn verify_native(&self, presented: &crate::target::swapchain::Presented) {
+        let Some(image) = &presented.native else {
+            return;
+        };
+        if !self.verify || !image.readable || !presented.acquisition.response().presents {
+            return;
+        }
+        let size = self.target.size;
+        let shown = readback::read(&self.gpu, &image.texture, image.texture.format(), size);
+        let composed = readback::read(
+            &self.gpu,
+            self.composed.texture(),
+            self.composed.format(),
+            size,
+        );
+        'rows: for y in 0..size.height {
+            for x in 0..size.width {
+                let (left, right) = (shown.rgba(x, y), composed.rgba(x, y));
+                if left != right {
+                    tracing::error!(
+                        x,
+                        y,
+                        shown = ?left,
+                        composed = ?right,
+                        slot = image.slot,
+                        "a presented image differs from the composed target"
+                    );
+                    break 'rows;
+                }
+            }
+        }
+        let view = image
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.frame_encoder();
+        drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("zgui.present.verified"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Load,
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+            multiview_mask: None,
+        }));
+        self.gpu.queue().submit([encoder.finish()]);
+    }
+
     /// How many pixels `damage` redrew of the composed target.
     fn redrawn(damage: &DamageSet, composed: &crate::target::scene_texture::SceneTexture) -> u64 {
         damage::rects(damage, composed.used())
@@ -747,22 +863,55 @@ impl WgpuRenderer {
             })
     }
 
-    /// The part of an acquired image the copy writes, when the image is larger than the frame.
-    fn blit_limit(&self, presented: &crate::target::swapchain::Presented) -> Option<(u32, u32)> {
-        let texture = &presented.surface_texture.as_ref()?.texture;
-        let width = (self.target.size.width.max(1) as u32).min(texture.width());
-        let height = (self.target.size.height.max(1) as u32).min(texture.height());
-        (width < texture.width() || height < texture.height()).then_some((width, height))
+    /// The rectangles of the presented texture the copy has to cover.
+    ///
+    /// A supplied set is rotated through and its textures persist, so a frame copies the
+    /// rectangles it drew plus the ones drawn while this texture was not the one being written.
+    /// Where those pixels cross a link, that copy is the largest thing a frame spends. Everything
+    /// else is copied whole: an acquired surface texture is a new resource marked wholly
+    /// uninitialised on every acquisition, so a partial copy onto one comes out black everywhere
+    /// it did not write.
+    fn blit_scissors(
+        &mut self,
+        presented: &crate::target::swapchain::Presented,
+    ) -> Vec<Rect<i32, Device>> {
+        match &mut self.presentation {
+            Presentation::Supplied(supplied) => supplied.take_owed(supplied.selected()),
+            Presentation::Surface(_) | Presentation::Offscreen(_) => {
+                // An image of a swap chain this crate made keeps what it held, so it is owed only
+                // what changed since it was last copied into.
+                if let Some(image) = &presented.native {
+                    let frame = self.target.size;
+                    if let Some(owed) = self.presentation.take_owed_native(image.slot, frame) {
+                        return owed;
+                    }
+                }
+                let used = self.composed.used();
+                // A cropping swap chain can be larger than the frame. Only the frame's extent is
+                // shown, so only that is copied, and nothing reads past the composed target.
+                let Some(texture) = presented.surface_texture.as_ref().map(|it| &it.texture) else {
+                    return vec![used];
+                };
+                let width = (self.target.size.width.max(1) as u32).min(texture.width());
+                let height = (self.target.size.height.max(1) as u32).min(texture.height());
+                vec![Rect::new(
+                    zgui_geom::Point::new(0, 0),
+                    zgui_geom::Size::new(width as i32, height as i32),
+                )]
+            }
+        }
     }
 
-    /// Copies the composed target onto whatever is being presented to.
+    /// Copies the composed target onto whatever is being presented to, within `scissors`.
+    ///
+    /// Answers how many draws that took: one for every rectangle that covers any pixel.
     fn blit(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         undo: bool,
-        limit: Option<(u32, u32)>,
-    ) {
+        scissors: &[Rect<i32, Device>],
+    ) -> u32 {
         let kind = if undo {
             PipelineKind::BlitUndoSrgb
         } else {
@@ -771,7 +920,15 @@ impl WgpuRenderer {
         let format = self.presentation.formats().present_attachment();
         let mut pipelines = self.pipelines.borrow_mut();
         let Some(pipeline) = pipelines.get(&self.gpu, kind, format) else {
-            return;
+            return 0;
+        };
+        // A supplied texture persists, and the copy covers only what it owes, so what it holds is
+        // kept. Every other texture is copied whole. An acquired surface texture is marked
+        // uninitialised on each acquisition, so loading it makes wgpu clear it first.
+        let load = if self.presentation.keeps_contents() {
+            wgpu::LoadOp::Load
+        } else {
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
         };
         let queries = self
             .timer
@@ -784,9 +941,7 @@ impl WgpuRenderer {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    // Every pixel is written, so nothing has to be preserved and no clear is
-                    // inserted ahead of the copy.
-                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    load,
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -797,11 +952,27 @@ impl WgpuRenderer {
         });
         pass.set_pipeline(pipeline);
         pass.set_bind_group(0, &self.composed_binding, &[]);
-        // A cropping swap chain can be larger than the frame. Only the frame's extent is shown, so
-        // only that is copied, and nothing reads past the composed target.
-        if let Some((width, height)) = limit {
-            pass.set_scissor_rect(0, 0, width, height);
+        let mut drawn = 0;
+        let mut copied = 0;
+        for rect in scissors {
+            let (width, height) = (
+                rect.size.width.max(0) as u32,
+                rect.size.height.max(0) as u32,
+            );
+            if width == 0 || height == 0 {
+                continue;
+            }
+            pass.set_scissor_rect(
+                rect.origin.x.max(0) as u32,
+                rect.origin.y.max(0) as u32,
+                width,
+                height,
+            );
+            pass.draw(0..4, 0..1);
+            drawn += 1;
+            copied += u64::from(width) * u64::from(height);
         }
-        pass.draw(0..4, 0..1);
+        counter::add(Counter::PresentCopyPx, copied);
+        drawn
     }
 }
