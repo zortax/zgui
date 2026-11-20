@@ -26,11 +26,11 @@ pub(crate) struct Items {
     pub(crate) glyph_runs: Vec<GlyphRun>,
     /// The glyph arena the glyph runs take ranges of.
     pub(crate) glyphs: Vec<Glyph>,
+    /// The coordinate arena the glyph runs take ranges of.
+    pub(crate) coords: Vec<i16>,
     pub(crate) local_clips: Vec<LocalClip>,
     /// The ids the items refer to, each once.
     pub(crate) refs: Vec<Ref>,
-    /// Glyph runs drawn at a variation instance, recorded at the default instance.
-    pub(crate) instanced: usize,
 }
 
 /// An id a chunk's items refer to.
@@ -56,9 +56,9 @@ impl Default for Items {
             lines: Vec::new(),
             glyph_runs: Vec::new(),
             glyphs: Vec::new(),
+            coords: Vec::new(),
             local_clips: Vec::new(),
             refs: Vec::new(),
-            instanced: 0,
         }
     }
 }
@@ -75,9 +75,9 @@ impl Items {
         self.lines.clear();
         self.glyph_runs.clear();
         self.glyphs.clear();
+        self.coords.clear();
         self.local_clips.clear();
         self.refs.clear();
-        self.instanced = 0;
     }
 
     /// Returns the number of items.

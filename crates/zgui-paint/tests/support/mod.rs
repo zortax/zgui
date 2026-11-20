@@ -330,14 +330,13 @@ impl Harness {
     pub(crate) fn paint_content(
         &mut self,
         content: &mut zgui_paint::ContentCache,
-        raster: &dyn zgui_text::GlyphRaster,
     ) -> zgui_paint::PaintReport {
         let retired = self.store.drain_retired_paint();
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
         content.begin_frame();
         let report = {
-            let frame = content.frame(&self.store, &NoGlyphs, raster);
+            let frame = content.frame(&self.store, &NoGlyphs);
             let input = PaintInput {
                 glyphs: &frame,
                 replaced: &frame,
@@ -391,9 +390,8 @@ impl Harness {
         &mut self,
         vectors: &zgui_paint::VectorCache,
         content: &mut zgui_paint::ContentCache,
-        raster: &dyn zgui_text::GlyphRaster,
     ) -> zgui_paint::PaintReport {
-        self.paint_cached_vectors_ready(vectors, content, raster, false)
+        self.paint_cached_vectors_ready(vectors, content, false)
     }
 
     /// The same, as a frame whose general vector rasteriser is built when `ready` is true, and
@@ -402,7 +400,6 @@ impl Harness {
         &mut self,
         vectors: &zgui_paint::VectorCache,
         content: &mut zgui_paint::ContentCache,
-        raster: &dyn zgui_text::GlyphRaster,
         ready: bool,
     ) -> zgui_paint::PaintReport {
         let retired = self.store.drain_retired_paint();
@@ -412,7 +409,7 @@ impl Harness {
         content.begin_frame();
         let report = {
             let drawings = vectors.frame(&self.document);
-            let frame = content.frame(&self.store, &NoGlyphs, raster);
+            let frame = content.frame(&self.store, &NoGlyphs);
             let mut input = PaintInput {
                 vectors: &drawings,
                 vector_masks: &frame,

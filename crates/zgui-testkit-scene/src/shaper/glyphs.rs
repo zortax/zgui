@@ -1,20 +1,12 @@
-//! Positioned glyphs from the fixed face, and the rasteriser that fills them in.
+//! Positioned glyphs from the fixed face.
 //!
 //! This is the half of the shaping contract painting reads, done the same way the measuring half
-//! is: one glyph per character, every one of them a filled rectangle of the cluster's advance and
-//! the face's ascent. Nothing about it is typography. What it buys is that a *painting* test can
+//! is: one glyph per character, each at the pen position of its cluster. Nothing about it is
+//! typography. What it buys is that a *painting* test can
 //! state where a glyph must land — the third character of the second line is at eight times two
 //! plus the line's own left edge — and be wrong only if the pipeline is.
 
-use std::sync::Arc;
-
-use zgui_geom::{DevicePx, Point, Size};
-use zgui_text::kurbo::{BezPath, Rect as KurboRect, Shape};
-use zgui_text::metrics::fixed::ratio;
-use zgui_text::{
-    FaceId, GlyphFormat, GlyphImage, GlyphKey, GlyphOutline, GlyphRaster, OutlineKey, ShapedGlyph,
-    ShapedParagraph, ShapedRun,
-};
+use zgui_text::{FaceId, ShapedGlyph, ShapedParagraph, ShapedRun};
 
 use crate::shaper::cluster::MonoLayout;
 
@@ -50,10 +42,8 @@ pub(crate) fn visit_line(
         return;
     };
     let baseline = geometry.baseline.0 - geometry.top.0;
-    // Device pixels, which is what a run's size is defined to be and what the glyph key built
-    // from it is looked up under. The strut is in CSS pixels, so the ratio the paragraph was
-    // shaped at is what converts it — and leaving it out asks the rasteriser for a one-times
-    // glyph to be drawn into a box the layout sized at the real ratio.
+    // Device pixels, which is what a run's size is defined to be. The strut is in CSS pixels, so
+    // the ratio the paragraph was shaped at converts it.
     let size = shaped.strut().font_size.0 * shaped.engine.scale;
     let mut pen = 0.0;
     let mut glyphs: Vec<ShapedGlyph> = Vec::new();
@@ -115,138 +105,11 @@ fn emit(
     visit(ShapedRun {
         face: FACE,
         size,
-        instance: zgui_text::VariationInstance::DEFAULT,
+        coords: &[],
         synthetic_bold: 0.0,
         synthetic_slant: 0.0,
-        has_color: false,
         brush,
         glyphs,
         text_start: u32::try_from(text_start).unwrap_or(u32::MAX),
     });
-}
-
-/// A rasteriser with no font files, matching [`MonoShaper`](crate::MonoShaper)'s fixed face.
-///
-/// Every glyph is a solid rectangle: as wide as the cluster's advance, as tall as the face's
-/// ascent, sitting on the baseline with no bearing. Space is the one exception and it rasterises
-/// to nothing, which is what a space does in a real face and what keeps a run of prose from
-/// drawing a solid bar.
-///
-/// ```
-/// use zgui_testkit_scene::{MonoRaster, glyph_id};
-/// use zgui_text::{FaceId, GlyphKey, GlyphRaster, RasterStyle, SubpixelOffset};
-///
-/// let raster = MonoRaster::new();
-/// let key = GlyphKey::new(FaceId(0), glyph_id('a'), 16.0, SubpixelOffset(0), RasterStyle::Grayscale);
-/// let image = raster.raster(&key).expect("the fixed face draws every glyph");
-/// assert_eq!(image.size.width, 8, "half the size, as the fixed face's advance is");
-/// assert!(image.is_well_formed());
-/// ```
-#[derive(Clone, Copy, Debug, Default)]
-pub struct MonoRaster;
-
-impl MonoRaster {
-    /// A rasteriser over the fixed face.
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl GlyphRaster for MonoRaster {
-    fn raster(&self, key: &GlyphKey) -> Option<GlyphImage> {
-        if key.face != FACE {
-            return None;
-        }
-        let size = key.size();
-        let width = (size * ratio::ZERO_ADVANCE).round().max(0.0) as u32;
-        let height = (size * ratio::ASCENT).round().max(0.0) as u32;
-        let (width, height) = if key.glyph == glyph_id(' ') {
-            (0, 0)
-        } else {
-            (width, height)
-        };
-        let format = match key.style {
-            zgui_text::RasterStyle::Grayscale => GlyphFormat::Mono,
-            zgui_text::RasterStyle::Subpixel => GlyphFormat::Subpixel,
-            zgui_text::RasterStyle::Color => GlyphFormat::Color,
-        };
-        let texels = (width * height) as usize * format.bytes_per_pixel();
-        Some(GlyphImage {
-            size: Size::new(width, height),
-            // The rectangle sits directly on the baseline and starts at the pen, so its top edge
-            // is its whole height above the origin and its left edge is at zero.
-            placement: Point::new(DevicePx(0.0), DevicePx(height as f32)),
-            format,
-            bytes: vec![u8::MAX; texels],
-        })
-    }
-
-    /// The same rectangle the tile is, as a curve.
-    ///
-    /// The two paths have to agree about what a glyph *is*, or a test that promotes a run to
-    /// outlines would be comparing two different faces and could not tell a promotion from a
-    /// regression. So this is the tile's rectangle exactly: from the pen to the advance, from the
-    /// baseline up to the ascent, in the space outlines are returned in — y upward from the
-    /// baseline is y negative here.
-    fn outline(&self, key: &OutlineKey) -> Option<GlyphOutline> {
-        if key.face != FACE {
-            return None;
-        }
-        let size = f64::from(key.size());
-        let width = (size * f64::from(ratio::ZERO_ADVANCE)).round().max(0.0);
-        let height = (size * f64::from(ratio::ASCENT)).round().max(0.0);
-        if key.glyph == glyph_id(' ') {
-            return Some(Arc::new(BezPath::new()));
-        }
-        let lean = f64::from(key.synthetic_slant().to_radians().tan());
-        let mut path = KurboRect::new(0.0, -height, width, 0.0).to_path(0.1);
-        if lean != 0.0 {
-            // The same shear a real face's curves are given: rightwards in proportion to how far
-            // above the baseline a point is.
-            path.apply_affine(zgui_text::kurbo::Affine::new([
-                1.0, 0.0, -lean, 1.0, 0.0, 0.0,
-            ]));
-        }
-        Some(Arc::new(path))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use zgui_text::{FaceId, GlyphKey, GlyphRaster, RasterStyle, SubpixelOffset};
-
-    use super::{MonoRaster, glyph_id};
-
-    #[test]
-    fn a_space_rasterises_to_nothing_and_a_letter_does_not() {
-        let raster = MonoRaster::new();
-        let at = |character: char| {
-            raster
-                .raster(&GlyphKey::new(
-                    FaceId(0),
-                    glyph_id(character),
-                    16.0,
-                    SubpixelOffset(0),
-                    RasterStyle::Grayscale,
-                ))
-                .expect("the fixed face has every glyph")
-        };
-        assert!(at(' ').is_empty());
-        assert!(!at('a').is_empty());
-    }
-
-    #[test]
-    fn a_handle_no_fixed_face_issued_has_no_glyphs() {
-        assert!(
-            MonoRaster::new()
-                .raster(&GlyphKey::new(
-                    FaceId(9),
-                    1,
-                    16.0,
-                    SubpixelOffset(0),
-                    RasterStyle::Grayscale
-                ))
-                .is_none()
-        );
-    }
 }

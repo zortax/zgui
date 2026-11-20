@@ -32,7 +32,6 @@ struct Window {
     harness: Harness,
     vectors: VectorCache,
     content: ContentCache,
-    raster: zgui_testkit_scene::MonoRaster,
     /// The extent a restyle lays the document out in.
     extent: (f32, f32),
 }
@@ -51,7 +50,6 @@ impl Window {
             harness: Harness::sized(tree, css, size.0, size.1),
             vectors: VectorCache::new(),
             content: ContentCache::new(AtlasLimits::default()),
-            raster: zgui_testkit_scene::MonoRaster::new(),
             extent: size,
         }
     }
@@ -69,12 +67,8 @@ impl Window {
 
     /// Paints one frame with the general rasteriser cold, or built when `ready`.
     fn paint(&mut self, ready: bool) -> PaintReport {
-        self.harness.paint_cached_vectors_ready(
-            &self.vectors,
-            &mut self.content,
-            &self.raster,
-            ready,
-        )
+        self.harness
+            .paint_cached_vectors_ready(&self.vectors, &mut self.content, ready)
     }
 
     /// Gives the element `name` the class `class`, which moves the drawing without refragmenting

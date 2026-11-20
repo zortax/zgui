@@ -265,8 +265,6 @@ pub struct Window {
     /// none of them can do for itself, because none of them counts frames. See
     /// [`budget`](crate::budget).
     budgets: crate::budget::Budgets,
-    /// What turns a glyph into pixels.
-    raster: Arc<dyn zgui_text::GlyphRaster>,
     /// What this frame must redraw.
     damage: DamageSet,
     /// The largest extent the surface had since the last frame that retired its damage.
@@ -612,7 +610,6 @@ impl Window {
         document: Document,
         renderer: Box<dyn Renderer>,
         text: Box<dyn TextEngine>,
-        raster: Arc<dyn zgui_text::GlyphRaster>,
         metrics: Arc<dyn zgui_text::FontMetricsSource>,
         clock: Arc<dyn zgui_platform::Clock>,
         timers: Rc<RefCell<Timers>>,
@@ -774,7 +771,6 @@ impl Window {
             layers_owed: Vec::new(),
             vello_initializers: Vec::new(),
             budgets: crate::budget::Budgets::new(),
-            raster,
             damage: DamageSet::full(),
             damage_extent: None,
             rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),

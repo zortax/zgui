@@ -26,7 +26,7 @@ pub(crate) fn merge(
     merged.glyphs.clone_from(&items.glyphs);
     merged.local_clips.clone_from(&items.local_clips);
     merged.refs.clone_from(&items.refs);
-    merged.instanced = items.instanced;
+    merged.coords.clone_from(&items.coords);
 
     let mut next = 0;
     for (op, &at) in items.ops.iter().zip(&items.at) {

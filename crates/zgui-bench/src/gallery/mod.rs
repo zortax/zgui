@@ -29,7 +29,6 @@ pub(crate) fn runtime(size: &str) -> Runtime {
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let app = zgui::runtime::App::new()
         .with_title("gallery-scale")
         .with_size(WIDTH, HEIGHT)
@@ -38,8 +37,7 @@ pub(crate) fn runtime(size: &str) -> Runtime {
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
-        }))
-        .with_glyph_raster(Box::new(move || raster.raster()));
+        }));
     let built = match size {
         "s0" => app.into_handler(|cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(view! { Gallery0() }.into_view().build(cx))

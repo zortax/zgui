@@ -17,8 +17,6 @@ include.workspace = true
 # font engine is plugged in *through*, so naming one would make every consumer of the contracts
 # depend on the implementation the contracts exist to keep swappable.
 [dependencies]
-# Glyph tiles: the pool a rasterised glyph belongs in and the key it is cached under.
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
@@ -28,11 +26,6 @@ zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 # Pure accessibility data, no platform behind it. Character offsets and text-run attributes are its
 # vocabulary, and a shaped paragraph is what produces them.
 accesskit.workspace = true
-
-# Glyph outlines are Béziers, and this is the workspace's one spelling of a Bézier: the curves a
-# face draws cross from here to a path rasteriser with no conversion at any boundary. Pure data —
-# no engine, no device — so naming it commits this crate to nothing it exists to keep swappable.
-kurbo.workspace = true
 
 rustc-hash.workspace = true
 smallvec.workspace = true

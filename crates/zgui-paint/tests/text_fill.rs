@@ -105,10 +105,9 @@ fn a_ramp_painting_the_text_fills_its_glyphs() {
             visit(zgui_text::ShapedRun {
                 face: zgui_text::FaceId(0),
                 size: 16.0,
-                instance: zgui_text::VariationInstance::DEFAULT,
+                coords: &[],
                 synthetic_bold: 0.0,
                 synthetic_slant: 0.0,
-                has_color: false,
                 brush: zgui_scene::PaintSlot(0),
                 glyphs: &GLYPHS,
                 text_start: 0,

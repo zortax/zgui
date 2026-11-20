@@ -51,7 +51,6 @@ fn intern_face(
         .load(Some(&mut shared.sources))
         .ok_or(FontError::Malformed("the face's bytes could not be read"))?;
     let index = info.index();
-    let colors = shared.color_support((blob.id(), index), blob.data());
     let variable = !info.axes().is_empty();
     let (weight, slant, width) = (
         info.weight().value(),
@@ -67,6 +66,5 @@ fn intern_face(
             slant,
             width,
             is_variable: variable,
-            has_color: colors.any(),
         }))
 }

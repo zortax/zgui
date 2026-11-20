@@ -63,7 +63,7 @@ pub(crate) const ALL: [(&str, &str); 18] = [
 pub(super) const TICK: Duration = Duration::from_micros(8_333);
 
 /// The counters a `VCOUNT` line prints, in order.
-const PRINTED: [Counter; 38] = [
+const PRINTED: [Counter; 37] = [
     Counter::VectorBackendBuilt,
     Counter::VelloRenders,
     Counter::VectorEncodeHits,
@@ -87,7 +87,6 @@ const PRINTED: [Counter; 38] = [
     Counter::VectorTierChanges,
     Counter::VelloPasses,
     Counter::AtlasTilesEvicted,
-    Counter::RebuiltAfterEviction,
     Counter::ChunksReencoded,
     Counter::ChunksTranslated,
     Counter::VectorRouteLayer,

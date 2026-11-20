@@ -96,8 +96,7 @@ pub mod window;
 pub mod windows;
 
 pub use crate::app::{
-    App, ExitPolicy, Failure, MetricsFactory, RasterFactory, RendererFactory, Runtime, TextFactory,
-    ViewFactory,
+    App, ExitPolicy, Failure, MetricsFactory, RendererFactory, Runtime, TextFactory, ViewFactory,
 };
 pub use crate::binding::{HostBinding, NoBinding};
 pub use crate::budget::{BudgetReport, Budgeted, CacheId, CacheReport};

@@ -9,13 +9,12 @@
 
 use crate::brush::Brush;
 use crate::font::face::FaceId;
-use crate::glyph::instance::VariationInstance;
 use crate::glyph::run::{ShapedGlyph, ShapedRun};
 
 /// One style-uniform run of one shaped line, owned.
 ///
-/// The fields are [`ShapedRun`]'s, with two differences. The glyphs are owned rather than borrowed.
-/// And there is no brush: a slot is a property of the scene the run is drawn into rather than of
+/// The fields are [`ShapedRun`]'s, with two differences. The glyphs and the coordinates are owned
+/// rather than borrowed. And there is no brush: a slot is a property of the scene the run is drawn into rather than of
 /// the shaping, so it is supplied at [`as_run`](Self::as_run) time and one cached run can be drawn
 /// in any colour.
 ///
@@ -28,16 +27,15 @@ pub struct ShapedRunOwned {
     pub face: FaceId,
     /// The size the run is drawn at, in device pixels.
     pub size: f32,
-    /// The point in a variable face's design space the glyphs are drawn at.
-    pub instance: VariationInstance,
+    /// The normalised variation coordinates the glyphs are drawn at, empty for the default
+    /// instance.
+    pub coords: Vec<i16>,
     /// How much the glyphs are emboldened to stand in for a weight the face does not have, as a
     /// fraction of the size; zero when the face covers the requested weight.
     pub synthetic_bold: f32,
     /// How far the glyphs are sheared to stand in for an italic the family does not have, in
     /// degrees; zero when a real italic was found.
     pub synthetic_slant: f32,
-    /// Whether the face carries colour glyphs.
-    pub has_color: bool,
     /// The glyphs, in visual order, positioned against the line box's top-left corner.
     pub glyphs: Vec<ShapedGlyph>,
     /// Where in the shaped string each glyph came from: the byte the glyph's cluster starts at, one
@@ -52,41 +50,22 @@ pub struct ShapedRunOwned {
 impl ShapedRunOwned {
     /// The borrowed view, with the brush supplied by whoever draws it.
     ///
-    /// Every key a run is rasterised under is built through this, so a cached run and a freshly
-    /// shaped one produce the same cache entries.
-    ///
     /// ```
     /// use zgui_space::PaintSlot;
-    /// use zgui_text::{
-    ///     FaceId, RasterStyle, ShapedGlyph, ShapedRun, ShapedRunOwned, VariationInstance,
-    /// };
+    /// use zgui_text::{FaceId, ShapedGlyph, ShapedRunOwned};
     ///
-    /// let glyph = ShapedGlyph { glyph: 9, x: 12.25, y: 0.0 };
     /// let owned = ShapedRunOwned {
     ///     face: FaceId(3),
     ///     size: 16.0,
-    ///     instance: VariationInstance::DEFAULT,
+    ///     coords: vec![8192],
     ///     synthetic_bold: 0.0,
     ///     synthetic_slant: 0.0,
-    ///     has_color: false,
-    ///     glyphs: vec![glyph],
+    ///     glyphs: vec![ShapedGlyph { glyph: 9, x: 12.25, y: 0.0 }],
     ///     clusters: vec![0],
     /// };
-    /// let borrowed = ShapedRun {
-    ///     face: FaceId(3),
-    ///     size: 16.0,
-    ///     instance: VariationInstance::DEFAULT,
-    ///     synthetic_bold: 0.0,
-    ///     synthetic_slant: 0.0,
-    ///     has_color: false,
-    ///     brush: PaintSlot(0),
-    ///     glyphs: &[glyph],
-    ///     text_start: 0,
-    /// };
-    /// assert_eq!(
-    ///     owned.as_run(PaintSlot(0)).key_for(glyph, 0.0, RasterStyle::Grayscale),
-    ///     borrowed.key_for(glyph, 0.0, RasterStyle::Grayscale),
-    /// );
+    /// let run = owned.as_run(PaintSlot(2));
+    /// assert_eq!(run.brush, PaintSlot(2));
+    /// assert_eq!(run.coords, &[8192]);
     /// ```
     pub fn as_run(&self, brush: Brush) -> ShapedRun<'_> {
         debug_assert_eq!(
@@ -97,10 +76,9 @@ impl ShapedRunOwned {
         ShapedRun {
             face: self.face,
             size: self.size,
-            instance: self.instance,
+            coords: &self.coords,
             synthetic_bold: self.synthetic_bold,
             synthetic_slant: self.synthetic_slant,
-            has_color: self.has_color,
             brush,
             glyphs: &self.glyphs,
             text_start: 0,
@@ -118,10 +96,9 @@ impl From<ShapedRun<'_>> for ShapedRunOwned {
         Self {
             face: run.face,
             size: run.size,
-            instance: run.instance,
+            coords: run.coords.to_vec(),
             synthetic_bold: run.synthetic_bold,
             synthetic_slant: run.synthetic_slant,
-            has_color: run.has_color,
             glyphs: run.glyphs.to_vec(),
             clusters: vec![0; run.glyphs.len()],
         }
@@ -130,68 +107,10 @@ impl From<ShapedRun<'_>> for ShapedRunOwned {
 
 #[cfg(test)]
 mod tests {
-    use super::{ShapedRunOwned, VariationInstance};
+    use super::ShapedRunOwned;
     use crate::font::face::FaceId;
-    use crate::glyph::key::RasterStyle;
     use crate::glyph::run::{ShapedGlyph, ShapedRun};
     use zgui_space::PaintSlot;
-
-    /// An owned run over one face at one size.
-    fn owned() -> ShapedRunOwned {
-        ShapedRunOwned {
-            face: FaceId(3),
-            size: 16.0,
-            instance: VariationInstance::DEFAULT,
-            synthetic_bold: 0.0,
-            synthetic_slant: 0.0,
-            has_color: false,
-            glyphs: vec![
-                ShapedGlyph {
-                    glyph: 9,
-                    x: 0.0,
-                    y: 12.0,
-                },
-                ShapedGlyph {
-                    glyph: 11,
-                    x: 8.5,
-                    y: 12.0,
-                },
-            ],
-            clusters: vec![0, 1],
-        }
-    }
-
-    #[test]
-    fn the_borrowed_view_carries_the_brush_it_was_asked_for() {
-        let owned = owned();
-        assert_eq!(owned.as_run(PaintSlot(4)).brush, PaintSlot(4));
-        assert_eq!(owned.as_run(PaintSlot(0)).brush, PaintSlot(0));
-        assert_eq!(owned.as_run(PaintSlot(0)).glyphs, owned.glyphs.as_slice());
-    }
-
-    #[test]
-    fn a_cached_run_keys_its_glyphs_exactly_as_a_freshly_shaped_one_does() {
-        let owned = owned();
-        let fresh = ShapedRun {
-            face: owned.face,
-            size: owned.size,
-            instance: owned.instance,
-            synthetic_bold: owned.synthetic_bold,
-            synthetic_slant: owned.synthetic_slant,
-            has_color: owned.has_color,
-            brush: PaintSlot(0),
-            glyphs: &owned.glyphs,
-            text_start: 0,
-        };
-        for glyph in &owned.glyphs {
-            assert_eq!(
-                owned
-                    .as_run(PaintSlot(0))
-                    .key_for(*glyph, 3.25, RasterStyle::Subpixel),
-                fresh.key_for(*glyph, 3.25, RasterStyle::Subpixel),
-            );
-        }
-    }
 
     #[test]
     fn a_borrowed_run_copies_into_an_owned_one() {
@@ -203,18 +122,17 @@ mod tests {
         let run = ShapedRun {
             face: FaceId(1),
             size: 12.0,
-            instance: VariationInstance::DEFAULT,
+            coords: &[-4096],
             synthetic_bold: 0.02,
             synthetic_slant: 8.0,
-            has_color: true,
             brush: PaintSlot(2),
             glyphs: &glyphs,
             text_start: 0,
         };
         let owned = ShapedRunOwned::from(run);
         assert_eq!(owned.face, FaceId(1));
+        assert_eq!(owned.coords, vec![-4096]);
         assert_eq!(owned.synthetic_bold, 0.02);
-        assert!(owned.has_color);
         assert_eq!(owned.glyphs, glyphs.to_vec());
         assert_eq!(owned.clusters.len(), owned.glyphs.len());
     }

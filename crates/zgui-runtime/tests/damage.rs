@@ -221,7 +221,6 @@ fn mount(
                 zgui_testkit_scene::MonoShaper::new(),
             ))
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)

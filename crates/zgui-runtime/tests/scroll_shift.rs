@@ -156,7 +156,6 @@ fn listing(
                 zgui_testkit_scene::MonoShaper::new(),
             ))
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             use zgui_view::{IntoView, View};
             let mut port = zgui_elements::column().class("port").class(port_class);

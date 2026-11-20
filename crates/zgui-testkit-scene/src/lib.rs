@@ -61,7 +61,7 @@ pub use crate::dump::{TreeDump, to_text};
 pub use crate::fixture::Fixture;
 pub use crate::harness::Harness;
 pub use crate::harness::frame::{FrameCx, Pipeline};
-pub use crate::shaper::{MonoLayout, MonoRaster, MonoShaper, glyph_id};
+pub use crate::shaper::{MonoLayout, MonoShaper, glyph_id};
 pub use crate::transcript::Transcript;
 
 /// The clock a test moves by hand, re-exported.

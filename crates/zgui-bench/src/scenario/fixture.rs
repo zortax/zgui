@@ -199,7 +199,6 @@ pub(crate) fn custom(
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     zgui::runtime::App::new()
         .with_title("zgui-bench")
         .with_size(crate::gallery::WIDTH, crate::gallery::HEIGHT)
@@ -209,7 +208,6 @@ pub(crate) fn custom(
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(build)
         .expect("the reactive runtime installs")
 }

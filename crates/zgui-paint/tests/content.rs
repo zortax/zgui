@@ -11,7 +11,6 @@ mod support;
 use zgui_atlas::{AtlasLimits, MemorySink};
 use zgui_geom::Size;
 use zgui_paint::ContentCache;
-use zgui_text::NoRaster;
 
 use support::{Element, Harness};
 
@@ -46,7 +45,7 @@ fn an_attached_image_becomes_a_colour_sprite_over_the_content_box() {
         .set_image(harness.replaced_id("picture"), size, texels)
         .expect("the buffer matches the extent");
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
 
     let sprites = &harness.scene().primitives.color_sprites;
     assert_eq!(
@@ -91,7 +90,7 @@ fn a_replaced_box_with_no_content_draws_no_sprite() {
     harness.compose(200.0, 100.0);
 
     let mut cache = ContentCache::new(AtlasLimits::default());
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
 
     assert!(
         harness.scene().primitives.color_sprites.is_empty(),
@@ -111,8 +110,8 @@ fn one_image_drawn_twice_is_one_tile() {
     let (size, texels) = image();
     cache.set_image(id, size, texels).expect("well formed");
 
-    harness.paint_content(&mut cache, &NoRaster);
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
+    harness.paint_content(&mut cache);
     assert_eq!(
         cache.report().tiles,
         1,
@@ -154,13 +153,13 @@ fn a_full_pool_makes_room_for_a_new_picture_by_evicting_a_cold_one() {
     cache
         .set_image_shared(id, 1, size, texels())
         .expect("well formed");
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(cache.report().tiles, 1, "the first picture fills the pool");
 
     cache
         .set_image_shared(id, 2, size, texels())
         .expect("well formed");
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
 
     assert_eq!(
         harness.scene().primitives.color_sprites.len(),
@@ -188,7 +187,7 @@ fn a_settled_attachment_is_served_by_its_tile_and_reported_when_the_tile_goes() 
         .set_image_shared(id, 7, size, std::sync::Arc::new(texels))
         .expect("well formed");
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     let mut sink = MemorySink::new();
     cache.flush(&mut sink).expect("the in-memory sink accepts");
     assert!(
@@ -203,7 +202,7 @@ fn a_settled_attachment_is_served_by_its_tile_and_reported_when_the_tile_goes() 
         "a flushed shared attachment holds no host bytes"
     );
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(
         harness.scene().primitives.color_sprites.len(),
         1,
@@ -223,7 +222,7 @@ fn a_settled_attachment_is_served_by_its_tile_and_reported_when_the_tile_goes() 
     let id = fresh.replaced_id("picture");
     cache.set_image_uploaded(id, 7, size);
 
-    fresh.paint_content(&mut cache, &NoRaster);
+    fresh.paint_content(&mut cache);
     assert!(
         fresh.scene().primitives.color_sprites.is_empty(),
         "a picture whose tile is gone draws nothing this frame"
@@ -252,7 +251,7 @@ fn a_mipped_attachment_gets_a_standalone_texture_at_its_own_extent() {
         .set_image_shared_mipped(harness.replaced_id("picture"), 7, size, size, texels, mips)
         .expect("well formed");
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     let mut sink = MemorySink::new();
     cache.flush(&mut sink).expect("the in-memory sink accepts");
 
@@ -285,7 +284,7 @@ fn two_nodes_sharing_a_handle_share_one_tile() {
             .expect("well formed");
     }
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
 
     assert_eq!(
         harness.scene().primitives.color_sprites.len(),

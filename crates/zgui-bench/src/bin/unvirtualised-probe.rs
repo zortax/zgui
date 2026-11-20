@@ -106,7 +106,6 @@ fn opened(rows: usize) -> (Harness<Runtime>, watch::Log) {
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let handler = App::new()
         .with_title("unvirtualised-probe")
         .with_size(WIDTH, HEIGHT)
@@ -116,7 +115,6 @@ fn opened(rows: usize) -> (Harness<Runtime>, watch::Log) {
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let mut list = zgui::elements::column().class("bench-list");
             for index in 0..rows {

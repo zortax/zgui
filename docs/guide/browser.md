@@ -179,7 +179,7 @@ order within a frame is fixed and is the whole content of the contract:
 Nothing in this framework implements `HostBinding`. It exists so that somebody building a browser
 has one object to install rather than a fork of the loop.
 
-### 7. Fonts — `FontSource`, `FontMetricsSource`, `ParagraphShaper`, `GlyphRaster` (L4)
+### 7. Fonts — `FontSource`, `FontMetricsSource`, `ParagraphShaper`, `ShapedGlyphs` (L4)
 
 Four seams, so a font engine can be replaced or absent without a consumer changing:
 
@@ -188,7 +188,7 @@ Four seams, so a font engine can be replaced or absent without a consumer changi
 | `FontMetricsSource` | a font system, or `FixedMetrics` | the cascade, resolving `ex`, `ch`, `cap`, `ic` |
 | `FontSource` | a font collection | face resolution and `@font-face` |
 | `ParagraphShaper` | a text engine | layout, once per paragraph and many times per width |
-| `GlyphRaster` | a rasteriser | painting, once per distinct glyph |
+| `ShapedGlyphs` | a text engine | painting, once per line it draws |
 
 Preserve the split between shaping and breaking. Shaping is the expensive operation. Line breaking
 is the cheap operation. Layout can ask for the size of one paragraph at many candidate widths while

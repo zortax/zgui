@@ -28,7 +28,6 @@ struct Window {
     handle: SceneHandle,
     vectors: VectorCache,
     content: ContentCache,
-    raster: zgui_testkit_scene::MonoRaster,
 }
 
 impl Window {
@@ -47,18 +46,13 @@ impl Window {
             handle,
             vectors: VectorCache::new(),
             content: ContentCache::new(AtlasLimits::default()),
-            raster: zgui_testkit_scene::MonoRaster::new(),
         }
     }
 
     /// Paints one frame with the general rasteriser built.
     fn paint(&mut self) -> PaintReport {
-        self.harness.paint_cached_vectors_ready(
-            &self.vectors,
-            &mut self.content,
-            &self.raster,
-            true,
-        )
+        self.harness
+            .paint_cached_vectors_ready(&self.vectors, &mut self.content, true)
     }
 
     /// The marks of the last frame.

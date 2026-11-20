@@ -51,6 +51,8 @@ pub(crate) fn record(
     // stay what they were when the items were built.
     let glyphs = chunk.glyphs(&items.glyphs);
     debug_assert_eq!(glyphs.start, 0);
+    let coords = chunk.coords(&items.coords);
+    debug_assert_eq!(coords.start, 0);
     for clip in &items.local_clips {
         chunk.local_clip(clip.clone());
     }

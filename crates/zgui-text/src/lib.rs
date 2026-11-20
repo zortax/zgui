@@ -1,7 +1,7 @@
 //! The text contracts: everything the rest of the framework says about text, with no font engine
 //! behind any of it.
 //!
-//! Nothing here shapes a glyph, opens a face or rasterises anything. This crate is the set of seams
+//! Nothing here shapes a glyph or opens a face. This crate is the set of seams
 //! a text engine is plugged in through, plus the types on both sides of them — so a font engine can
 //! be replaced, or absent, without a single consumer changing.
 //!
@@ -10,7 +10,7 @@
 //! | [`FontMetricsSource`] | a font system, or [`FixedMetrics`] | the cascade, resolving `ex`, `ch`, `cap` and `ic` |
 //! | [`FontSource`] | a font collection | face resolution and `@font-face` |
 //! | [`ParagraphShaper`] | a text engine | layout, once per paragraph and many times per width |
-//! | [`GlyphRaster`] | a rasteriser | painting, once per distinct glyph |
+//! | [`ShapedGlyphs`] | a text engine | painting, once per line it draws |
 //!
 //! # The one idea everything is arranged around
 //!
@@ -72,23 +72,13 @@ pub mod metrics;
 pub mod paragraph;
 pub mod transform;
 
-/// Path geometry, re-exported because a glyph's outline is part of this crate's vocabulary.
-///
-/// A face's curves cross this contract as `kurbo` paths and reach a path rasteriser unchanged, so
-/// re-exporting the spelling is what lets an implementor of [`GlyphRaster`] name the geometry it
-/// returns without pinning its own copy of a version that might not be this one.
-pub use kurbo;
-
 pub use crate::a11y::{ClusterGeometry, TextRunAttributes};
 pub use crate::brush::Brush;
 pub use crate::cluster::{ClusterRun, ShapedClusters};
 pub use crate::font::{FaceId, FaceRecord, FontData, FontError, FontSource};
 pub use crate::geometry::{LineGeometry, StrutMetrics, TextGeometry};
 pub use crate::glyph::{
-    ATLAS_MAX_SIZE, ATLAS_MAX_STRETCH, AtlasGlyph, GlyphFormat, GlyphImage, GlyphKey, GlyphOutline,
-    GlyphRaster, NoRaster, OutlineKey, PenPosition, RasterPath, RasterStyle, RunProfile,
-    RunSurface, RunTransform, SUBPIXEL_MAX_SIZE, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs,
-    ShapedRun, ShapedRunOwned, SubpixelOffset, VariationInstance,
+    SUBPIXEL_MAX_SIZE, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedGlyphs, ShapedRun, ShapedRunOwned,
 };
 pub use crate::map::{Segment, SourcePos, TextMap};
 pub use crate::metrics::{FaceMetrics, FaceQuery, FixedMetrics, FontMetricsSource};

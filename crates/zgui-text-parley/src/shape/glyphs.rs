@@ -8,7 +8,7 @@
 //! the line box's own space, which is the space everything downstream places a line in — and it is
 //! the only conversion here, because the engine is already working in device pixels.
 
-use zgui_text::{Brush, FontSource, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedRun};
+use zgui_text::{Brush, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedRun};
 
 use crate::shape::brush::SlotBrush;
 use crate::shape::engine::{Form, ShapedLayout};
@@ -52,13 +52,13 @@ pub(crate) fn visit_line(
     }
 }
 
-/// One engine run, described the way a rasteriser needs it.
+/// One engine run, described the way painting needs it.
 ///
 /// `prefix` is how many bytes of directional control lead the engine's string; the run's text
 /// offset is reported in the caller's string, which does not hold them.
 fn described<'a>(
     fonts: &FontSystem,
-    run: &parley::GlyphRun<'_, SlotBrush>,
+    run: &'a parley::GlyphRun<'_, SlotBrush>,
     glyphs: &'a [ShapedGlyph],
     prefix: usize,
 ) -> ShapedRun<'a> {
@@ -78,9 +78,11 @@ fn described<'a>(
     )
 }
 
-/// One run of glyphs in one face, described the way a rasteriser needs it.
+/// One run of glyphs in one face, described the way painting needs it.
 ///
-/// `embolden` and `skew` are the engine's synthesis. `text_start` is in the caller's string.
+/// `coords` are the run's normalised variation coordinates, and a set of zeros is the default
+/// instance. `embolden` and `skew` are the engine's synthesis. `text_start` is in the caller's
+/// string.
 #[expect(
     clippy::too_many_arguments,
     reason = "the fields of one engine run, read once"
@@ -88,7 +90,7 @@ fn described<'a>(
 pub(crate) fn run_of<'a>(
     fonts: &FontSystem,
     font: &parley::FontData,
-    coords: &[i16],
+    coords: &'a [i16],
     size: f32,
     embolden: bool,
     skew: f32,
@@ -96,18 +98,25 @@ pub(crate) fn run_of<'a>(
     glyphs: &'a [ShapedGlyph],
     text_start: u32,
 ) -> ShapedRun<'a> {
-    let face = fonts.face_for(font);
     ShapedRun {
-        face,
+        face: fonts.face_for(font),
         size,
-        instance: fonts.variation_instance(coords),
+        coords: instance(coords),
         // The engine reports *whether* to embolden; how much is a rasterisation decision, and it
         // is the same one wherever a synthesised bold is drawn.
         synthetic_bold: if embolden { SYNTHETIC_BOLD_RATIO } else { 0.0 },
         synthetic_slant: skew,
-        has_color: fonts.face(face).is_some_and(|record| record.has_color),
         brush,
         glyphs,
         text_start,
+    }
+}
+
+/// Returns `coords`, or no coordinates when they are the default instance.
+pub(crate) fn instance(coords: &[i16]) -> &[i16] {
+    if coords.iter().all(|coord| *coord == 0) {
+        &[]
+    } else {
+        coords
     }
 }

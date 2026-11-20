@@ -114,7 +114,7 @@ These are the seams a consumer is most likely to meet.
 | `Surface`, `AppHandler`, `Clock`, `Waker`, `Clipboard` | `zgui-platform` | A windowing system, or the absence of one. |
 | `Dom`, `ViewHost`, `EventSink` | `zgui-view` | The node tree, the engine that laid it out, and where a handler's commands go. |
 | `SheetLoader`, `ReplacedContent`, `LinkResolver`, `PresentationalHints` | `zgui-dom` | The four things a document language brings that a document core cannot define for itself. |
-| `FontSource`, `FontMetricsSource`, `ParagraphShaper`, `GlyphRaster` | `zgui-text` | A font engine, or a fixed-metrics stand-in for tests. |
+| `FontSource`, `FontMetricsSource`, `ParagraphShaper`, `ShapedGlyphs` | `zgui-text` | A font engine, or a fixed-metrics stand-in for tests. |
 | `HostBinding` | `zgui-runtime` | An embedded script engine's event, frame, and shutdown hooks. |
 | `FrameProbe` | `zgui-runtime` | A reader of the window as each frame left it. |
 | `MeasureContent` | `zgui-layout` | The measurement of anything layout cannot size itself. |

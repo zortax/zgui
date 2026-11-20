@@ -162,7 +162,6 @@ fn open(
     let fonts = zgui::app::Fonts::system();
     let shaping = fonts.clone();
     let metrics = fonts.clone();
-    let raster = fonts.clone();
     let runtime = zgui_runtime::App::new()
         .with_title("scale-capture")
         .with_size(gallery::WIDTH, gallery::HEIGHT)
@@ -185,7 +184,6 @@ fn open(
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(
             move |cx: &mut zgui_view::BuildCx<'_>| -> Box<dyn zgui_view::Anchor> {
                 Box::new(gallery::view().into_view().build(cx))

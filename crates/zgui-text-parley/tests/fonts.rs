@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use zgui_geom::CssPx;
 use zgui_interned::Ident;
-use zgui_text::{FaceQuery, FontSource};
-use zgui_text_parley::{ColorSupport, Enumeration, FontSystem, FontSystemOptions};
+use zgui_text::{FaceQuery, FontSource, ParagraphShaper};
+use zgui_text_parley::{Controls, Enumeration, FontSystem, FontSystemOptions};
 use zgui_text_style::{
     FamilyName, FontFamilyList, FontSlant, GenericFamily, LineHeight, TextStyle,
 };
@@ -99,7 +99,6 @@ fn a_face_can_be_registered_under_another_name() {
     assert_eq!(record.family, Ident::new("Brand"));
     assert_eq!(record.weight, 400.0);
     assert_eq!(record.slant, FontSlant::Upright);
-    assert!(!record.has_color);
 }
 
 /// Bytes that are not a font are refused rather than registered as an empty family.
@@ -133,33 +132,6 @@ fn fallback_is_per_character() {
     assert_eq!(
         fonts.face(for_arabic).expect("described").family,
         Ident::new(support::ARABIC)
-    );
-}
-
-/// The colour probe reads the face's tables rather than its name.
-#[test]
-fn colour_support_is_probed_from_the_tables() {
-    let text = support::face("NotoSans-Regular.ttf");
-    let colour = support::face("NotoZnamennyMusicalNotation-Regular.ttf");
-    assert_eq!(
-        ColorSupport::probe((*text).as_ref(), 0),
-        ColorSupport::NONE,
-        "an ordinary text face carries no colour glyphs"
-    );
-    let support = ColorSupport::probe((*colour).as_ref(), 0);
-    assert!(
-        support.outlines,
-        "the shipped colour face carries layered colour outlines"
-    );
-    assert!(support.any());
-
-    let fonts = FontSystem::new(FontSystemOptions::registered_only());
-    fonts.register(colour, None).expect("registers");
-    let style = asking_for(support::COLOR);
-    let face = fonts.resolve(&FaceQuery::of(&style)).expect("resolves");
-    assert!(
-        fonts.face(face).expect("described").has_color,
-        "and the record says so, which is what decides the rasterisation path"
     );
 }
 
@@ -295,4 +267,47 @@ fn the_compositor_registry_shares_the_font_file_of_each_face() {
     let data = registry.get(FontId(faces[0].0)).expect("the face is known");
     assert!(Arc::ptr_eq(&data.file, &file));
     assert_eq!(data.bytes().len(), (*file).as_ref().len());
+}
+
+/// A run's face and the face its family resolves to are one handle, so they name one font.
+#[test]
+fn one_face_has_one_handle() {
+    let (fonts, mut shaper) = support::shaper(Controls::Verbatim);
+    let fixture = support::Fixture::new("g", zgui_text_style::Direction::LeftToRight);
+    let shaped = shaper.shape(&fixture.content());
+    let line = shaped
+        .engine
+        .layout()
+        .expect("a live form")
+        .get(0)
+        .expect("one line");
+    let run = line.runs().next().expect("one run");
+    let face = fonts.face_for(run.font());
+    assert_eq!(
+        fonts.resolve(&FaceQuery::of(&asking_for(support::LATIN))),
+        Some(face)
+    );
+}
+
+/// The compositor's registry keeps handing out a face after its family is unregistered, so a run
+/// shaped before the unregistration still draws.
+#[test]
+fn the_compositor_registry_keeps_a_face_whose_family_was_unregistered() {
+    use compositor_api::FontRegistry;
+    use compositor_types::FontId;
+
+    let fonts = support::fonts();
+    let face = fonts
+        .resolve(&FaceQuery::of(&asking_for(support::LATIN)))
+        .expect("the Latin face resolves");
+    let registry = zgui_text_parley::CompositorFonts::new(Arc::clone(&fonts));
+    let before = registry.get(FontId(face.0)).expect("the face is known");
+
+    fonts.unregister(Ident::new(support::LATIN));
+    assert_eq!(
+        fonts.resolve(&FaceQuery::of(&asking_for(support::LATIN))),
+        None,
+        "the unregistered family is no longer reachable by name"
+    );
+    assert_eq!(registry.get(FontId(face.0)), Some(before));
 }

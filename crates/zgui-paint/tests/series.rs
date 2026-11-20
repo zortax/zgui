@@ -14,7 +14,6 @@ use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
 use zgui_scene::kurbo::{self, Affine, BezPath, Circle, Shape as _};
 use zgui_scene::{MarkFlags, MarkItem, Scene};
-use zgui_testkit_scene::MonoRaster;
 use zgui_testkit_scene::counters::Recording;
 
 use support::{Element, Harness};
@@ -33,8 +32,6 @@ struct Fixture {
     vectors: VectorCache,
     /// The atlas, the recognitions and the payloads.
     content: ContentCache,
-    /// The glyph raster.
-    raster: MonoRaster,
     /// Held so no other test of this binary moves the counters while this one paints.
     recording: Recording,
 }
@@ -55,19 +52,14 @@ impl Fixture {
             handle,
             vectors: VectorCache::new(),
             content: ContentCache::new(AtlasLimits::default()),
-            raster: MonoRaster::new(),
             recording: Recording::begin(),
         }
     }
 
     /// Paints one frame.
     fn paint(&mut self) -> PaintReport {
-        self.harness.paint_cached_vectors_ready(
-            &self.vectors,
-            &mut self.content,
-            &self.raster,
-            true,
-        )
+        self.harness
+            .paint_cached_vectors_ready(&self.vectors, &mut self.content, true)
     }
 
     /// Sets the view transform and writes the view, as the binding would.

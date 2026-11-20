@@ -51,13 +51,6 @@ pub type TextFactory = Box<dyn FnMut() -> Box<dyn TextEngine>>;
 /// Answers the cascade's font-metric questions.
 pub type MetricsFactory = Box<dyn FnMut() -> Arc<dyn zgui_text::FontMetricsSource>>;
 
-/// Turns the glyphs a window shaped into pixels.
-///
-/// Separate from the text engine because the two are used at different times by different code: a
-/// shaper is held mutably while layout measures, and a rasteriser is read from the emit walk while
-/// nothing may be mutated. Shared rather than owned, because one set of faces serves every window.
-pub type RasterFactory = Box<dyn FnMut() -> Arc<dyn zgui_text::GlyphRaster>>;
-
 /// Builds the view one window holds.
 pub type ViewFactory = Box<dyn FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor>>;
 
@@ -138,8 +131,6 @@ pub struct App {
     text: Option<TextFactory>,
     /// What answers the cascade's font-metric questions.
     metrics: Option<MetricsFactory>,
-    /// What turns its glyphs into pixels.
-    raster: Option<RasterFactory>,
     /// What fills its `surface` elements.
     embed: Option<EmbedFactory>,
     /// What answers its custom elements.
@@ -175,7 +166,6 @@ impl App {
             renderer: None,
             text: None,
             metrics: None,
-            raster: None,
             embed: None,
             custom: None,
             shared: None,
@@ -397,15 +387,6 @@ impl App {
         self
     }
 
-    /// Installs what turns each window's glyphs into pixels.
-    ///
-    /// Without one a window lays its text out and draws no glyph at all, which is what an
-    /// application that has chosen a shaper and not a rasteriser has asked for.
-    pub fn with_glyph_raster(mut self, factory: RasterFactory) -> Self {
-        self.raster = Some(factory);
-        self
-    }
-
     /// Turns the application into the handler a platform backend drives.
     ///
     /// # Errors
@@ -522,8 +503,6 @@ pub struct Runtime {
     text: TextFactory,
     /// What answers the cascade's font-metric questions.
     metrics: MetricsFactory,
-    /// What turns glyphs into pixels.
-    raster: RasterFactory,
     /// What builds an embed host, when the application brought one.
     embed: Option<EmbedFactory>,
     /// What builds a custom-element registry, when the application brought one.
@@ -730,9 +709,6 @@ impl Runtime {
             metrics: app
                 .metrics
                 .unwrap_or_else(|| Box::new(|| Arc::new(zgui_text::FixedMetrics::new()))),
-            raster: app
-                .raster
-                .unwrap_or_else(|| Box::new(|| Arc::new(zgui_text::NoRaster))),
             embed: app.embed,
             custom: app.custom,
             windows: Vec::new(),
@@ -898,7 +874,6 @@ impl Runtime {
             .app_options
             .layered_with(&self.live[index].spec.options);
         let text = (self.text)();
-        let raster = (self.raster)();
         let metrics = (self.metrics)();
         let timers = Rc::clone(&self.timers);
         let handle = self.live[index].handle.clone();
@@ -922,7 +897,6 @@ impl Runtime {
                 document.take().expect("the document is taken once"),
                 renderer,
                 text,
-                raster,
                 metrics,
                 clock,
                 timers,

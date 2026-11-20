@@ -24,5 +24,5 @@ pub use crate::emit::highlight::{
 pub use crate::emit::record::Recorder;
 pub use crate::emit::replaced::{ReplacedPlacement, Source};
 pub use crate::emit::scrollbar::ScrollbarPaint;
-pub use crate::emit::text::{DecorationStyle, GlyphSource, NoGlyphs, PlacedGlyph, TextPlacement};
+pub use crate::emit::text::{DecorationStyle, GlyphSource, NoGlyphs, TextPlacement};
 pub use crate::emit::vector::ShapePaint;

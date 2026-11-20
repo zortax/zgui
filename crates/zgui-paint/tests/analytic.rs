@@ -38,7 +38,6 @@ fn paint(harness: &mut Harness) -> PaintReport {
     harness.paint_cached_vectors(
         &VectorCache::new(),
         &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-        &zgui_testkit_scene::MonoRaster::new(),
     )
 }
 
@@ -465,9 +464,8 @@ fn moved(
     let mut harness = Harness::new(tree, css);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let raster = zgui_testkit_scene::MonoRaster::new();
     let mut recording = Recording::begin();
-    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
     assert_eq!(
         first.vector_routes.len(),
         1,
@@ -487,7 +485,7 @@ fn moved(
     harness.compose_from_marks(400.0, 200.0);
     let mut report = None;
     let measured = recording.measure(|| {
-        report = Some(harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true));
+        report = Some(harness.paint_cached_vectors_ready(&vectors, &mut content, true));
     });
     let after = harness
         .scene()

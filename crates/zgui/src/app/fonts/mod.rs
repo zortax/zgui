@@ -6,7 +6,7 @@ mod registry;
 use std::sync::Arc;
 
 use zgui_text::{FontData, FontError, FontSource};
-use zgui_text_parley::{FontSystem, FontSystemOptions, Rasteriser, Shaper};
+use zgui_text_parley::{FontSystem, FontSystemOptions, Shaper};
 
 use crate::app::fonts::pending::Pending;
 
@@ -32,10 +32,10 @@ pub use crate::app::fonts::pending::system_collections_built;
 /// A `Fonts` is a handle. Cloning one costs a reference count, and every clone names the same
 /// collection, so a clone kept by an application and the one the frame uses stay in step.
 ///
-/// [`metrics`](Self::metrics), [`shaper`](Self::shaper) and [`raster`](Self::raster) may be called
-/// on the UI thread at any time once the application is built — from a component's body, from an
-/// event handler, from an effect. The first call blocks until the machine's faces have been
-/// enumerated; later calls do not. Each [`shaper`](Self::shaper) call builds a fresh shaper with
+/// [`metrics`](Self::metrics) and [`shaper`](Self::shaper) may be called on the UI thread at any
+/// time once the application is built — from a component's body, from an event handler, from an
+/// effect. The first call blocks until the machine's faces have been enumerated; later calls do
+/// not. Each [`shaper`](Self::shaper) call builds a fresh shaper with
 /// its own scratch space, which is why one is not shared between threads: hold it where the text
 /// it shapes is, and hold it rather than rebuilding it, because that scratch is what makes the
 /// second line in one style cheap.
@@ -55,10 +55,9 @@ pub use crate::app::fonts::pending::system_collections_built;
 /// # Face handles
 ///
 /// A [`FaceId`](zgui_text::FaceId) is stable for as long as this `Fonts` lives. A handle is never
-/// withdrawn and never reissued, so it is safe to key a cache of shaped runs or rasterised glyphs
-/// on one, and registering or dropping a family leaves the handles already issued alone. A
-/// *different* `Fonts` numbers its faces from zero again, so a handle must never outlive the
-/// collection it came from.
+/// withdrawn and never reissued, so it is safe to key a cache of shaped runs on one, and
+/// registering or dropping a family leaves the handles already issued alone. A *different* `Fonts`
+/// numbers its faces from zero again, so a handle must never outlive the collection it came from.
 ///
 /// [`FontError`]: zgui_text::FontError
 #[derive(Clone, Debug)]
@@ -136,10 +135,5 @@ impl Fonts {
     /// A shaper over these faces.
     pub fn shaper(&self) -> Shaper {
         Shaper::new(Arc::clone(self.system.get()))
-    }
-
-    /// What turns these faces' glyphs into pixels.
-    pub fn raster(&self) -> Arc<dyn zgui_text::GlyphRaster> {
-        Arc::new(Rasteriser::new(Arc::clone(self.system.get()))) as Arc<dyn zgui_text::GlyphRaster>
     }
 }

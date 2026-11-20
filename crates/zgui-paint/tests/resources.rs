@@ -17,7 +17,7 @@ use zgui_atlas::{
 use zgui_geom::{Device, Rect, Size};
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::{ContentCache, FrameContent};
-use zgui_text::{GlyphRaster, NoRaster, ShapedGlyphs};
+use zgui_text::ShapedGlyphs;
 
 use support::{Element, Harness};
 
@@ -104,7 +104,6 @@ fn emit_borrows_no_renderer() {
         &'a mut ContentCache,
         &'a LayoutStore,
         &'a dyn ShapedGlyphs,
-        &'a dyn GlyphRaster,
     ) -> FrameContent<'a> = ContentCache::frame;
 
     // And the walk itself, which takes what it reads and the scene it writes and nothing else.
@@ -123,7 +122,7 @@ fn emit_borrows_no_renderer() {
     cache
         .set_image(harness.replaced_id("picture"), size, texels)
         .expect("the buffer matches the extent");
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
 
     assert_eq!(
         cache.report().tiles,
@@ -149,7 +148,7 @@ fn no_device_call_during_emit() {
         calls: calls.clone(),
     };
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(
         calls.total(),
         0,
@@ -179,7 +178,7 @@ fn a_tile_is_placed_before_anything_has_a_device() {
     cache
         .set_image(harness.replaced_id("picture"), size, texels)
         .expect("the buffer matches the extent");
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
 
     let sprite = harness.scene().primitives.color_sprites[0];
     assert!(

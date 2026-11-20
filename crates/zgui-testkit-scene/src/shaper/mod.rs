@@ -78,7 +78,7 @@ use zgui_text::{
 use zgui_text_style::TextStyle;
 
 pub use crate::shaper::cluster::{Cluster, MonoLayout};
-pub use crate::shaper::glyphs::{MonoRaster, glyph_id};
+pub use crate::shaper::glyphs::glyph_id;
 
 /// The style a paragraph with no runs at all is measured with.
 static FALLBACK: LazyLock<TextStyle> = LazyLock::new(TextStyle::initial);

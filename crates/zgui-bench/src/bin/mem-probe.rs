@@ -358,8 +358,7 @@ fn open<R: ProbeRow>(args: &Args) -> Result<(Harness<Runtime>, Ctx<R>), String> 
         .register(Arc::new(FONT), Some(FONT_FAMILY))
         .map_err(|error| format!("font: {error:?}"))?;
     let metrics = fonts.clone();
-    let shaping = fonts.clone();
-    let raster = fonts;
+    let shaping = fonts;
     let unvirtualized = !args.mode.virtualized();
     let ctx_cell: Rc<RefCell<Option<Ctx<R>>>> = Rc::new(RefCell::new(None));
     let ctx_for_view = Rc::clone(&ctx_cell);
@@ -374,7 +373,6 @@ fn open<R: ProbeRow>(args: &Args) -> Result<(Harness<Runtime>, Ctx<R>), String> 
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let ctx = ctx_for_view
                 .borrow()

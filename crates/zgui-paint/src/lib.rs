@@ -61,7 +61,6 @@ pub mod shiftable;
 pub mod sync;
 pub mod walk;
 
-pub use crate::content::glyphs::GlyphPrediction;
 pub use crate::content::{
     ContentCache, Drawing, FrameContent, ImageError, MipLevel, NoVectors, TileOwner, VectorCache,
     VectorSource, Vectors,
@@ -71,9 +70,7 @@ pub use crate::damage::ink::{ReadExtent, cull_rect, read_extent_of};
 pub use crate::emit::highlight::{
     Highlight, HighlightLayer, HighlightRequest, HighlightSource, NoHighlights,
 };
-pub use crate::emit::text::{
-    GlyphPlacementSource, GlyphSource, NoGlyphPlacements, NoGlyphs, PlacedGlyph,
-};
+pub use crate::emit::text::{GlyphSource, NoGlyphs};
 pub use crate::emit::vector::{VectorRoute, VectorRoutes};
 pub use crate::lower::anim::{AnimOverrides, NoAnim, OwnedPaints};
 pub use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
@@ -81,14 +78,11 @@ pub use crate::lower::key::LoweringKey;
 pub use crate::lower::{PaintStyle, lower};
 pub use crate::sync::{CompositorSync, SyncReport, record_chunk};
 pub use crate::walk::{PaintInput, PaintReport, Painter, VectorRouteReport};
-/// The sprite primitives glyphs are drawn as, and the brush slot a run names, from the scene
-/// vocabulary.
-pub use zgui_scene::{ColorSprite, MonoSprite, PaintSlot, SubpixelSprite};
+/// The brush slot a run names, from the scene vocabulary.
+pub use zgui_scene::PaintSlot;
 /// The shaped-text vocabulary the glyph seams speak, from the text layer.
 ///
 /// Re-exported because a caller that shapes its own runs and draws them through
-/// [`GlyphPlacementSource`] names these types in both halves, and should not have to reach past
-/// this crate for the spelling.
-pub use zgui_text::{
-    Brush, FaceId, RasterStyle, ShapedGlyph, ShapedRun, ShapedRunOwned, VariationInstance,
-};
+/// [`ScenePainter::glyphs`](crate::content::custom::ScenePainter::glyphs) names these types, and
+/// should not have to reach past this crate for the spelling.
+pub use zgui_text::{Brush, FaceId, ShapedGlyph, ShapedRun, ShapedRunOwned};

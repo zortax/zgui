@@ -1,4 +1,5 @@
-//! The atlas a window's glyphs and images share, and the borrowed view one frame draws through.
+//! The atlas a window's images and vector tiles share, and the borrowed view one frame draws
+//! through.
 
 use core::cell::{Cell, RefCell, RefMut};
 
@@ -11,34 +12,27 @@ use zgui_layout::tree::store::LayoutStore;
 use zgui_profile::{Counter, counter};
 use zgui_scene::ExternalTextureId;
 use zgui_scene::{ResourceGeneration, ResourceKey, ResourceRegistry};
-use zgui_text::{GlyphRaster, ShapedGlyphs};
+use zgui_text::ShapedGlyphs;
 
-use crate::content::glyphs::{GlyphCache, Rasterising};
 use crate::content::images::{Content, ImageError};
 use crate::content::vectors::{
     LayerAnswer, LayerRequest, VectorLayerCache, VectorLayerSource, VectorMaskCache,
     VectorMaskRequest, VectorMaskSource,
 };
 use crate::emit::replaced::Source;
-use crate::emit::text::{GlyphPlacementSource, GlyphSource, PlacedGlyph};
+use crate::emit::text::GlyphSource;
 use crate::walk::order::ReplacedSource;
 use crate::walk::replay::hold::ResourceOwner;
 
 /// Everything one window has rasterised, held between frames.
 ///
-/// One atlas serves both halves rather than one each, because they compete for the same texture
-/// memory and a budget split in advance is a budget wrong in one direction or the other: a document
-/// that is all text and a document that is all pictures are both ordinary.
-///
-/// The glyph cache sits beside the atlas rather than inside it, because it answers a wider question
-/// than the atlas can: not only where a glyph's pixels are, but where they go and whether there are
-/// any. Without it a frame that already held every tile still rasterised every glyph.
+/// One atlas serves images and vector tiles rather than one each, because they compete for the
+/// same texture memory and a budget split in advance is a budget wrong in one direction or the
+/// other.
 #[derive(Debug)]
 pub struct ContentCache {
     /// The tiles.
     atlas: Atlas,
-    /// What each glyph rasterised to, last time anything asked.
-    glyphs: GlyphCache,
     /// Geometry identities for small solid vector masks in the monochrome atlas.
     vector_masks: VectorMaskCache,
     /// Whole drawings rasterised on the CPU into the image pool.
@@ -79,7 +73,6 @@ impl ContentCache {
     pub fn new(limits: AtlasLimits) -> Self {
         Self {
             atlas: Atlas::new(limits),
-            glyphs: GlyphCache::default(),
             vector_masks: VectorMaskCache::default(),
             vector_layers: VectorLayerCache::default(),
             images: FxHashMap::default(),
@@ -123,7 +116,6 @@ impl ContentCache {
         // reach a working set and stay there says so here; one that never stops growing says that
         // here too, and says it as a count rather than as a byte figure an allocator has smeared.
         counter::set(Counter::AtlasEntriesLive, self.atlas.len() as u64);
-        counter::set(Counter::GlyphEntriesLive, self.glyphs.held() as u64);
         counter::set(Counter::VectorMaskTilesLive, self.vector_masks.len() as u64);
     }
 
@@ -140,11 +132,9 @@ impl ContentCache {
     /// Ends a frame.
     ///
     /// This removes the mask tiles that shapes changing every frame stopped drawing, so a churning
-    /// shape holds at most two tiles and never pushes glyphs out of the atlas. It also drops the
-    /// prefetched glyphs the walk did not ask for. Call it after [`ContentCache::flush`], for the
-    /// reason [`ContentCache::enforce_soft_limit`] gives.
+    /// shape holds at most two tiles and never pushes other content out of the atlas. Call it
+    /// after [`ContentCache::flush`], for the reason [`ContentCache::enforce_soft_limit`] gives.
     pub fn end_frame(&mut self) {
-        self.glyphs.drop_prefetched();
         self.vector_masks.end_frame(&mut self.atlas);
         self.vector_layers.end_frame(&mut self.atlas);
     }
@@ -184,7 +174,6 @@ impl ContentCache {
     pub fn layer(&mut self, request: LayerRequest<'_>) -> LayerAnswer {
         let Self {
             atlas,
-            glyphs,
             vector_masks,
             vector_layers,
             ..
@@ -193,7 +182,6 @@ impl ContentCache {
         let mut evict = |atlas: &mut Atlas| {
             let mut removed = Vec::new();
             atlas.evict_least_recently_used_into(&mut removed);
-            glyphs.forget_tiles(&removed);
             vector_masks.forget_tiles(&removed);
             removed
         };
@@ -210,7 +198,6 @@ impl ContentCache {
     ) -> Vec<zgui_geom::Rect<i32, Device>> {
         let Self {
             atlas,
-            glyphs,
             vector_masks,
             vector_layers,
             ..
@@ -218,7 +205,6 @@ impl ContentCache {
         let mut evict = |atlas: &mut Atlas| {
             let mut removed = Vec::new();
             atlas.evict_least_recently_used_into(&mut removed);
-            glyphs.forget_tiles(&removed);
             vector_masks.forget_tiles(&removed);
             removed
         };
@@ -257,15 +243,6 @@ impl ContentCache {
     /// nothing.
     pub fn image_bytes(&self) -> u64 {
         self.images.values().map(Content::held_bytes).sum()
-    }
-
-    /// How many glyph keys have a remembered rasterisation.
-    ///
-    /// More than the atlas holds tiles for, and legitimately so: a glyph that rasterised to no
-    /// pixels at all is remembered here and occupies no tile, which is what stops every space on
-    /// the page running the face's hinting program again on every full repaint.
-    pub fn glyphs_held(&self) -> usize {
-        self.glyphs.held()
     }
 
     /// How many times a frame has resolved a replaced node to the content held for it.
@@ -447,43 +424,11 @@ impl ContentCache {
         *self.image_revisions.entry(id).or_insert(0) += 1;
     }
 
-    /// Rasterises on `pool` the glyphs the next emit walk is expected to ask for, and returns how
-    /// many it rasterised.
-    ///
-    /// Only a cache that holds no glyph does this, once: on the first frame with text of a window,
-    /// and again after [`ContentCache::clear`]. Every other frame asks for few new glyphs, and
-    /// reading every line to find them would cost more than the walk saves. A prediction of fewer
-    /// than 128 misses also stays serial.
-    ///
-    /// The walk takes the answers in place of calls to `raster` and allocates every tile where it
-    /// would have without them, so the atlas holds the same tiles at the same places. Answers the
-    /// walk does not ask for are dropped at [`ContentCache::end_frame`].
-    pub fn prefetch_glyphs(
-        &mut self,
-        store: &LayoutStore,
-        shaped: &dyn ShapedGlyphs,
-        raster: &dyn GlyphRaster,
-        pool: &zgui_layout::tree::parallel::LayoutPool,
-        prediction: crate::content::glyphs::GlyphPrediction,
-    ) -> usize {
-        if store.active_paragraph_count() == 0 || !self.glyphs.take_prefetch_turn() {
-            return 0;
-        }
-        let keys = crate::content::glyphs::prefetch::predict(store, shaped, prediction);
-        if keys.len() < crate::content::glyphs::prefetch::MIN_MISSES {
-            return 0;
-        }
-        let answers = crate::content::glyphs::prefetch::rasterise(keys, raster, pool);
-        let count = answers.len();
-        self.glyphs.prefetch(answers);
-        count
-    }
-
     /// Borrows everything one emit walk needs into a source of glyphs and of replaced content.
     ///
-    /// The borrow is the point: the atlas is written during the walk — a glyph nothing has drawn
-    /// before is rasterised the moment it is reached — while the walk itself only reads. Holding
-    /// the mutation behind this view is what keeps the emit walk a pure reader of the document.
+    /// The borrow is the point: the atlas is written during the walk — content nothing has drawn
+    /// before is placed the moment it is reached — while the walk itself only reads. Holding the
+    /// mutation behind this view is what keeps the emit walk a pure reader of the document.
     ///
     /// **Nothing here is a device.** Rasterising, allocating a tile and growing the atlas are all
     /// decided against this window's own state; the texels and the textures they go into are queued
@@ -493,35 +438,30 @@ impl ContentCache {
     /// ```
     /// use zgui_layout::tree::store::LayoutStore;
     /// use zgui_paint::{ContentCache, FrameContent};
-    /// use zgui_text::{GlyphRaster, ShapedGlyphs};
+    /// use zgui_text::ShapedGlyphs;
     ///
-    /// // The whole signature, written out: a fragment tree, shaped text, and a rasteriser. There
-    /// // is nowhere in it for a texture sink or a renderer, and a call that offered one would not
-    /// // compile.
+    /// // The whole signature, written out: a fragment tree and shaped text. There is nowhere in it
+    /// // for a texture sink or a renderer, and a call that offered one would not compile.
     /// let _: for<'a> fn(
     ///     &'a mut ContentCache,
     ///     &'a LayoutStore,
     ///     &'a dyn ShapedGlyphs,
-    ///     &'a dyn GlyphRaster,
     /// ) -> FrameContent<'a> = ContentCache::frame;
     /// ```
     pub fn frame<'a>(
         &'a mut self,
         store: &'a LayoutStore,
         shaped: &'a dyn ShapedGlyphs,
-        raster: &'a dyn GlyphRaster,
     ) -> FrameContent<'a> {
         FrameContent {
             store,
             shaped,
-            raster,
             images: &self.images,
             image_revisions: &self.image_revisions,
             image_hits: &self.image_hits,
             image_failures: &self.image_failures,
             missing_images: &self.missing_images,
             writing: RefCell::new(Rasterising {
-                glyphs: &mut self.glyphs,
                 atlas: &mut self.atlas,
                 vector_masks: &mut self.vector_masks,
                 vector_layers: &mut self.vector_layers,
@@ -534,7 +474,7 @@ impl ContentCache {
     ///
     /// Uploads are queued while the walk runs and leave in one batch, so this has to be called
     /// after emitting and before drawing: a sprite reading a tile whose texels were never written
-    /// samples whatever the texture held before, which is another glyph's pixels rather than
+    /// samples whatever the texture held before, which is another tile's pixels rather than
     /// nothing.
     ///
     /// # Errors
@@ -554,7 +494,6 @@ impl ContentCache {
     pub fn evict(&mut self) -> zgui_atlas::Eviction {
         let mut removed = Vec::new();
         let freed = self.atlas.evict_least_recently_used_into(&mut removed);
-        self.glyphs.forget_tiles(&removed);
         self.vector_masks.forget_tiles(&removed);
         self.vector_layers.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
@@ -575,7 +514,6 @@ impl ContentCache {
     pub fn enforce_soft_limit(&mut self) -> zgui_atlas::Eviction {
         let mut removed = Vec::new();
         let freed = self.atlas.evict_to_soft_limit_into(&mut removed);
-        self.glyphs.forget_tiles(&removed);
         self.vector_masks.forget_tiles(&removed);
         self.vector_layers.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
@@ -588,7 +526,6 @@ impl ContentCache {
     /// what is lost is the upload, and the next frame that draws one performs it again.
     pub fn clear(&mut self) {
         self.atlas.clear();
-        self.glyphs.clear();
         self.vector_masks.clear();
         self.vector_layers.clear();
         // Every name handed out before now pointed into a texture that is about to stop existing,
@@ -601,16 +538,11 @@ impl ContentCache {
 }
 
 /// One frame's view of a [`ContentCache`]: where its glyphs and its images are.
-///
-/// Rasterisation happens on demand, as the emit walk reaches each line, which is what makes a
-/// document whose thousandth row is off screen cost nothing for that row's glyphs.
 pub struct FrameContent<'a> {
     /// The fragment tree, for the way back from a paragraph's name to its shaping key.
     store: &'a LayoutStore,
     /// Where positioned glyphs come from.
     shaped: &'a dyn ShapedGlyphs,
-    /// What turns a glyph into pixels.
-    raster: &'a dyn GlyphRaster,
     /// What is attached to each replaced node.
     images: &'a FxHashMap<ReplacedId, Content>,
     /// How many times each replaced node's attachment has changed.
@@ -622,32 +554,33 @@ pub struct FrameContent<'a> {
     image_failures: &'a RefCell<rustc_hash::FxHashSet<AtlasKey>>,
     /// Uploaded attachments this frame found without a tile.
     missing_images: &'a RefCell<Vec<ReplacedId>>,
-    /// The atlas, the glyph cache and their sink, behind a cell because emitting is an immutable
-    /// walk.
+    /// The atlas and the vector caches, behind a cell because emitting is an immutable walk.
     writing: RefCell<Rasterising<'a>>,
 }
 
-impl GlyphPlacementSource for FrameContent<'_> {
-    /// Places a caller's own run through the same cache, atlas and split the paragraph path uses.
+/// The things a frame writes to while it places tiles.
+///
+/// Borrowed together because they are used together: an eviction from the atlas is forgotten by
+/// every cache that named a tile in it.
+///
+/// There is no device here and there cannot be one. Everything the atlas is asked for during a walk
+/// — allocation, eviction bookkeeping, the queued texels, the queued texture — is arithmetic and
+/// bytes; what a device is asked to do about it is decided afterwards, by whoever has one.
+pub(crate) struct Rasterising<'a> {
+    /// The tiles.
+    pub(crate) atlas: &'a mut Atlas,
+    /// Geometry identities for small solid shapes stored in the monochrome atlas.
+    pub(crate) vector_masks: &'a mut VectorMaskCache,
+    /// Whole drawings rasterised into the image pool.
+    pub(crate) vector_layers: &'a mut VectorLayerCache,
+    /// Every atlas key handed out since the list was last drained.
     ///
-    /// Every tile handed out is named to the frame, so a fragment that replays keeps the tiles its
-    /// recorded primitives draw from.
-    fn place_run(
-        &self,
-        run: &zgui_text::ShapedRun<'_>,
-        style: zgui_text::RasterStyle,
-        origin: zgui_geom::Point<zgui_geom::DevicePx, Device>,
-        out: &mut Vec<PlacedGlyph>,
-    ) {
-        crate::content::glyphs::place(
-            &mut self.writing.borrow_mut(),
-            self.raster,
-            run,
-            style,
-            origin,
-            out,
-        );
-    }
+    /// The list is how what a fragment *drew* becomes something that can be held: a primitive
+    /// carries a rectangle of a texture and not the name the atlas knows it by, so once the walk
+    /// has moved on there is no way back from the display list to the keys it depends on. Whoever
+    /// is going to keep a range of that list has to be told the names while the placement is
+    /// happening, and this is where they are collected.
+    pub(crate) named: Vec<AtlasKey>,
 }
 
 impl GlyphSource for FrameContent<'_> {
@@ -706,7 +639,6 @@ impl ReplacedSource for FrameContent<'_> {
         self.image_hits.set(self.image_hits.get() + 1);
         let mut writing = self.writing.borrow_mut();
         let Rasterising {
-            glyphs,
             atlas,
             vector_masks,
             vector_layers,
@@ -719,7 +651,6 @@ impl ReplacedSource for FrameContent<'_> {
             // enough, because one step frees a whole generation.
             let mut removed = Vec::new();
             let freed = atlas.evict_least_recently_used_into(&mut removed);
-            glyphs.forget_tiles(&removed);
             vector_masks.forget_tiles(&removed);
             vector_layers.forget_tiles(&removed);
             counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
@@ -768,7 +699,6 @@ impl VectorMaskSource for FrameContent<'_> {
     ) -> Option<crate::content::vectors::VectorMask> {
         let mut writing = self.writing.borrow_mut();
         let Rasterising {
-            glyphs,
             atlas,
             vector_masks,
             vector_layers,
@@ -783,7 +713,6 @@ impl VectorMaskSource for FrameContent<'_> {
             None if atlas.refusals() != before => {
                 let mut removed = Vec::new();
                 let freed = atlas.evict_least_recently_used_into(&mut removed);
-                glyphs.forget_tiles(&removed);
                 vector_masks.forget_tiles(&removed);
                 vector_layers.forget_tiles(&removed);
                 counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
@@ -861,7 +790,6 @@ impl VectorMaskSource for FrameContent<'_> {
     ) -> Option<crate::content::vectors::GlyphSheets> {
         let mut writing = self.writing.borrow_mut();
         let Rasterising {
-            glyphs,
             atlas,
             vector_masks,
             vector_layers,
@@ -876,7 +804,6 @@ impl VectorMaskSource for FrameContent<'_> {
             None if atlas.refusals() != before => {
                 let mut removed = Vec::new();
                 let freed = atlas.evict_least_recently_used_into(&mut removed);
-                glyphs.forget_tiles(&removed);
                 vector_masks.forget_tiles(&removed);
                 vector_layers.forget_tiles(&removed);
                 counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
@@ -893,7 +820,6 @@ impl VectorLayerSource for FrameContent<'_> {
     fn layer(&self, request: LayerRequest<'_>) -> LayerAnswer {
         let mut writing = self.writing.borrow_mut();
         let Rasterising {
-            glyphs,
             atlas,
             vector_masks,
             vector_layers,
@@ -904,7 +830,6 @@ impl VectorLayerSource for FrameContent<'_> {
         let mut evict = |atlas: &mut zgui_atlas::Atlas| {
             let mut removed = Vec::new();
             let freed = atlas.evict_least_recently_used_into(&mut removed);
-            glyphs.forget_tiles(&removed);
             vector_masks.forget_tiles(&removed);
             counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
             removed
@@ -930,7 +855,6 @@ impl VectorLayerSource for FrameContent<'_> {
     ) -> Vec<zgui_geom::Rect<i32, Device>> {
         let mut writing = self.writing.borrow_mut();
         let Rasterising {
-            glyphs,
             atlas,
             vector_masks,
             vector_layers,
@@ -941,7 +865,6 @@ impl VectorLayerSource for FrameContent<'_> {
         let mut evict = |atlas: &mut zgui_atlas::Atlas| {
             let mut removed = Vec::new();
             let freed = atlas.evict_least_recently_used_into(&mut removed);
-            glyphs.forget_tiles(&removed);
             vector_masks.forget_tiles(&removed);
             counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
             removed

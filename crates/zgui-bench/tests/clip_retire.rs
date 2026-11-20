@@ -94,7 +94,6 @@ fn opened() -> Harness<Runtime> {
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let handler = App::new()
         .with_title("clip-retire")
         .with_size(WIDTH, HEIGHT)
@@ -112,7 +111,6 @@ fn opened() -> Harness<Runtime> {
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(view! { Fixture() }.into_view().build(cx))
         })

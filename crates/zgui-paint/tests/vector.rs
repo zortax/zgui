@@ -35,11 +35,7 @@ fn an_eligible_drawing_uses_one_tinted_mask_and_no_vector_item() {
     let mut harness = Harness::new(tree(), CSS);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let report = harness.paint_cached_vectors(
-        &vectors,
-        &mut content,
-        &zgui_testkit_scene::MonoRaster::new(),
-    );
+    let report = harness.paint_cached_vectors(&vectors, &mut content);
 
     assert!(harness.scene().primitives.vectors.is_empty());
     assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
@@ -60,24 +56,23 @@ fn an_eligible_drawing_uses_one_tinted_mask_and_no_vector_item() {
 #[test]
 fn recolouring_reuses_a_mask_but_different_geometry_allocates_another() {
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let raster = zgui_testkit_scene::MonoRaster::new();
 
     let mut blue = Harness::new(tree(), CSS);
-    blue.paint_cached_vectors(&VectorCache::new(), &mut content, &raster);
+    blue.paint_cached_vectors(&VectorCache::new(), &mut content);
     let blue_color = blue.scene().primitives.mono_sprites[0].color;
     assert_eq!(content.report().tiles, 1);
 
     let red_css = "root { display: block; width: 200px; height: 100px }
                    mark { display: block; width: 48px; height: 48px; color: red }";
     let mut red = Harness::new(tree(), red_css);
-    red.paint_cached_vectors(&VectorCache::new(), &mut content, &raster);
+    red.paint_cached_vectors(&VectorCache::new(), &mut content);
     assert_ne!(red.scene().primitives.mono_sprites[0].color, blue_color);
     assert_eq!(content.report().tiles, 1, "tint is not a mask key");
 
     let small_css = "root { display: block; width: 200px; height: 100px }
                      mark { display: block; width: 16px; height: 16px; color: red }";
     let mut small = Harness::new(tree(), small_css);
-    small.paint_cached_vectors(&VectorCache::new(), &mut content, &raster);
+    small.paint_cached_vectors(&VectorCache::new(), &mut content);
     assert_eq!(
         content.report().tiles,
         2,
@@ -100,11 +95,7 @@ fn an_eligible_canvas_fill_uses_the_same_mask_route() {
     let mut harness = Harness::new(tree, CSS);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let report = harness.paint_cached_vectors(
-        &vectors,
-        &mut content,
-        &zgui_testkit_scene::MonoRaster::new(),
-    );
+    let report = harness.paint_cached_vectors(&vectors, &mut content);
 
     assert!(harness.scene().primitives.vectors.is_empty());
     assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
@@ -133,11 +124,7 @@ fn a_small_solid_canvas_stroke_uses_a_mask_instead_of_the_vector_rasteriser() {
     let mut harness = Harness::new(tree, CSS);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    harness.paint_cached_vectors(
-        &vectors,
-        &mut content,
-        &zgui_testkit_scene::MonoRaster::new(),
-    );
+    harness.paint_cached_vectors(&vectors, &mut content);
 
     assert!(harness.scene().primitives.vectors.is_empty());
     assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
@@ -153,11 +140,7 @@ fn a_transparent_fill_does_not_disqualify_a_small_solid_css_stroke() {
     let mut harness = Harness::new(tree(), css);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    harness.paint_cached_vectors(
-        &vectors,
-        &mut content,
-        &zgui_testkit_scene::MonoRaster::new(),
-    );
+    harness.paint_cached_vectors(&vectors, &mut content);
 
     assert!(harness.scene().primitives.vectors.is_empty());
     assert_eq!(harness.scene().primitives.mono_sprites.len(), 1);
@@ -176,11 +159,7 @@ fn a_shape_with_a_fill_and_a_stroke_is_two_sprites_and_no_vector_item() {
                       --zgui-stroke-width: 2px }";
     let mut harness = Harness::new(tree(), css);
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let report = harness.paint_cached_vectors(
-        &VectorCache::new(),
-        &mut content,
-        &zgui_testkit_scene::MonoRaster::new(),
-    );
+    let report = harness.paint_cached_vectors(&VectorCache::new(), &mut content);
 
     assert!(
         report.vector_routes[0]
@@ -741,7 +720,6 @@ fn routes_of(tree: Element, css: &str) -> (zgui_paint::VectorRoutes, usize, usiz
     let report = harness.paint_cached_vectors(
         &VectorCache::new(),
         &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-        &zgui_testkit_scene::MonoRaster::new(),
     );
     (
         report.vector_routes[0].routes,
@@ -830,7 +808,6 @@ fn sprite_under(
     harness.paint_cached_vectors(
         &VectorCache::new(),
         &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-        &zgui_testkit_scene::MonoRaster::new(),
     );
     let sprite = harness.scene().primitives.mono_sprites[0];
     (sprite.ink(), [sprite.tile.bounds[2], sprite.tile.bounds[3]])
@@ -906,7 +883,6 @@ fn a_drawing_scaled_to_nothing_reaches_neither_rasteriser() {
     harness.paint_cached_vectors(
         &VectorCache::new(),
         &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-        &zgui_testkit_scene::MonoRaster::new(),
     );
     assert!(harness.scene().primitives.vectors.is_empty());
     assert!(harness.scene().primitives.mono_sprites.is_empty());
@@ -991,11 +967,10 @@ fn redrawn_canvas_masks(ready: bool, frames: u32) -> Vec<bool> {
     let mut harness = Harness::new(tree, CSS);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let raster = zgui_testkit_scene::MonoRaster::new();
     (0..frames)
         .map(|frame| {
             redraw(&mut harness, &handle, frame);
-            harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, ready);
+            harness.paint_cached_vectors_ready(&vectors, &mut content, ready);
             let primitives = &harness.scene().primitives;
             assert_eq!(
                 primitives.mono_sprites.len() + primitives.vectors.len(),
@@ -1047,7 +1022,6 @@ fn an_icon_grid_repainted_without_change_stays_on_the_mask_route() {
     let owners = fragments(&harness);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let raster = zgui_testkit_scene::MonoRaster::new();
     for frame in 0..8 {
         // The same outlines, spelled two ways: each frame writes a new drawing, so every icon
         // encodes again and its placed path is a new allocation, while the geometry stays put.
@@ -1066,7 +1040,7 @@ fn an_icon_grid_repainted_without_change_stays_on_the_mask_route() {
             }
         });
         harness.compose(200.0, 100.0);
-        let report = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+        let report = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
         assert_eq!(
             report.vector_routes.len(),
             6,

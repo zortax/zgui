@@ -20,6 +20,14 @@ impl<'a> Resolver<'a> {
         Self { tx, mirror }
     }
 
+    /// Returns a resolver over the same transaction and mirror for a shorter time.
+    pub(crate) fn reborrow(&mut self) -> Resolver<'_> {
+        Resolver {
+            tx: self.tx,
+            mirror: self.mirror,
+        }
+    }
+
     /// Returns the transform node of the coordinate system in `slot`.
     pub(crate) fn space(&mut self, scene: &Scene, slot: u32) -> TransformId {
         self.mirror.space(self.tx, &scene.spatial, slot)

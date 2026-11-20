@@ -38,7 +38,7 @@ use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, Vector
 use crate::emit::group::{self, Isolation};
 use crate::emit::highlight::{HighlightSource, NoHighlights};
 use crate::emit::scrollbar::ScrollbarPaint;
-use crate::emit::text::{GlyphPlacementSource, GlyphSource, TextPlacement};
+use crate::emit::text::{GlyphSource, TextPlacement};
 use crate::emit::{BoxPlacement, NoGlyphs};
 use zgui_dom::NodeKey;
 use zgui_dom::side::AnimOverride;
@@ -52,9 +52,6 @@ use crate::walk::fill::TextFills;
 use crate::walk::order::{Emission, NoReplaced, ReplacedSource};
 use crate::walk::replay::hold::{NoResources, ResourceOwner};
 use crate::walk::replay::{Encoding, LayerRecord, PaintCache, Painted, Reuse};
-
-/// What the shape of a coordinate system is mixed with while an animation moves it.
-const IN_MOTION: u64 = 0x9e37_79b9_7f4a_7c15;
 
 pub use crate::walk::order::{NoReplaced as NoReplacedContent, ReplacedSource as ReplacedContent};
 
@@ -72,8 +69,6 @@ pub struct PaintInput<'a> {
     pub surface: Option<Rect<i32, Device>>,
     /// Where glyphs come from.
     pub glyphs: &'a dyn GlyphSource,
-    /// Where a run a custom element shaped itself gets its tiles.
-    pub glyph_placements: &'a dyn GlyphPlacementSource,
     /// Where the caret and the selection bands drawn with a line come from.
     pub highlights: &'a dyn HighlightSource,
     /// Where replaced content comes from.
@@ -152,7 +147,6 @@ impl<'a> PaintInput<'a> {
             damage,
             surface: None,
             glyphs: &NoGlyphs,
-            glyph_placements: &crate::emit::text::NoGlyphPlacements,
             highlights: &NoHighlights,
             replaced: &NoReplaced,
             vectors: &NoVectors,
@@ -584,14 +578,7 @@ impl Pass<'_, '_> {
         matrix.columns[3][0] = 0.0;
         matrix.columns[3][1] = 0.0;
         matrix.columns[3][2] = 0.0;
-        let mut hash = matrix.content_hash();
-        // A run of text under a slight scale is drawn from cached tiles while an animation moves
-        // the scale and from its outlines at rest. So a recording under a matrix that does more
-        // than move depends on whether an animation moves it, and one made in motion is not
-        // replayed at rest when the animation ends on the shape it started from.
-        if matrix != zgui_geom::Matrix4::IDENTITY && self.scene.travels(space) {
-            hash ^= IN_MOTION;
-        }
+        let hash = matrix.content_hash();
         self.shapes.insert(space, hash);
         hash
     }
@@ -803,7 +790,6 @@ impl Pass<'_, '_> {
             inline,
             nested_inline: fragment.kind == FragmentKind::Box && node.is_nested_inline(),
             glyphs: self.input.glyphs,
-            glyph_placements: self.input.glyph_placements,
             highlights: self.input.highlights,
             replaced: self.input.replaced,
             vectors: self.input.vectors,

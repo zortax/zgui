@@ -106,7 +106,7 @@ pub(crate) fn with_glyphs<R>(
     content.set_vector_raster_ready(true);
     content.begin_frame();
     let out = {
-        let frame = content.frame(&store, &NoShaped, &zgui_text::NoRaster);
+        let frame = content.frame(&store, &NoShaped);
         draw(&GlyphsOnly(&frame))
     };
     content

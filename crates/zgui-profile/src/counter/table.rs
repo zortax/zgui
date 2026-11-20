@@ -331,39 +331,18 @@ counters! {
     /// would read that trade as a free win.
     VectorClipLayers => vector_clip_layers, Group::BackendNeutral;
 
-    /// Glyphs positioned on the surface, whether or not they had to be rasterised.
+    /// Glyphs recorded into glyph runs.
     GlyphsPlaced => glyphs_placed, Group::BackendNeutral;
 
-    /// Glyphs turned into pixels, which is the expensive half of drawing text.
+    /// Glyph bitmaps the compositor rasterised at the commits of the window's transactions, which
+    /// is the expensive half of drawing text.
     ///
-    /// Read beside [`Counter::GlyphsPlaced`]: a page whose text has not changed places the same
-    /// glyphs every frame and must rasterise none of them, so anything other than zero on a repaint
-    /// of unchanged text is a cache that is not being consulted. Hinting a single glyph costs tens
-    /// of microseconds, which is why this is the one text counter a budget is written against.
+    /// Read beside [`Counter::GlyphsPlaced`]: a page whose text has not changed must rasterise
+    /// none of its glyphs again, so anything other than zero on a repaint of unchanged text is a
+    /// cache that is not being consulted.
     GlyphsRasterised => glyphs_rasterised, Group::BackendNeutral;
 
-    /// Glyphs turned into pixels again because the tile holding them had been freed.
-    ///
-    /// A subset of [`Counter::GlyphsRasterised`], and the one that separates a cache filling up
-    /// from a cache thrashing: a first sighting of a glyph has to be rasterised whatever the
-    /// policy is, and a glyph rasterised twice is work a different policy would not have done.
-    /// Read as a fraction of [`Counter::GlyphsPlaced`] over a window rather than as a total —
-    /// a total only ever grows, so a session that thrashed for one second and behaved for an hour
-    /// is indistinguishable from one that thrashed throughout.
-    RebuiltAfterEviction => rebuilt_after_eviction, Group::BackendNeutral;
-
-    /// Glyphs rasterised on the layout workers before the emit walk asked for them.
-    ///
-    /// The walk still counts each key it asks for in [`Counter::GlyphsRasterised`]. A prefetched
-    /// key that the walk does not ask for is wasted work. When this is larger than
-    /// `GlyphsRasterised` on the same frame, the difference is the least waste of the prediction.
-    GlyphsPrefetched => glyphs_prefetched, Group::BackendNeutral;
-
     /// Cached rasters freed to bring the atlas back under its soft limit.
-    ///
-    /// Read beside [`Counter::RebuiltAfterEviction`]: this one alone says only that the budget is
-    /// doing something, and a budget that frees a thousand tiles a frame and rebuilds them all is
-    /// doing something worse than nothing.
     AtlasTilesEvicted => atlas_tiles_evicted, Group::BackendNeutral;
 
     /// Images that could not enter the atlas, even after an eviction step made room.
@@ -491,8 +470,6 @@ counters! {
     /// Rasterised entries the texture atlas is holding right now.
     AtlasEntriesLive => atlas_entries_live, Group::Live;
 
-    /// Glyph placement or blank-raster answers remembered beside the atlas.
-    GlyphEntriesLive => glyph_entries_live, Group::Live;
 
     /// Layers the vector scratch texture is allocated with right now.
     ScratchLayers => scratch_layers, Group::Live;

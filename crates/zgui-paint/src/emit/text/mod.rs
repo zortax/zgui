@@ -16,15 +16,16 @@
 //! # When a run asks for per-channel coverage
 //!
 //! A run asks for subpixel coverage only when the device can draw it, the target it lands in is
-//! opaque and it sits on the pixel grid. Inside a group's own target the coverage is the blend
-//! factor against a destination that is not opaque, so the run is demoted whatever the device can
-//! do.
+//! opaque, it sits on the pixel grid and it is at most
+//! [`SUBPIXEL_MAX_SIZE`](zgui_text::SUBPIXEL_MAX_SIZE) device pixels. Inside a group's own target
+//! the coverage is the blend factor against a destination that is not opaque, so the run is
+//! demoted whatever the device can do.
 
-use compositor_types::{
-    ArenaRange, ClipRef, Color as Premultiplied, FontId, Glyph, GlyphFlags, Line, LineStyle,
-    PaintKind, PaintRef,
-};
-use smallvec::SmallVec;
+mod run;
+
+pub(crate) use self::run::{RunDraw, flags, record};
+
+use compositor_types::{ClipRef, Color as Premultiplied, Line, LineStyle, PaintKind, PaintRef};
 use zgui_color::Color;
 use zgui_css::parity::Support;
 use zgui_css::values::color::{current, resolve};
@@ -32,7 +33,8 @@ use zgui_css::{ComputedStyle, register_properties};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
 use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
-use zgui_scene::{ClipId, ClipLink, PaintSlot, Resource, Scene, SpatialId};
+use zgui_scene::{ClipId, ClipLink, PaintSlot, Scene, SpatialId};
+use zgui_text::{FaceId, ShapedRun};
 
 use crate::emit::record::Recorder;
 
@@ -40,15 +42,6 @@ register_properties! {
     text_decoration_line      => Support::Implemented("zgui-paint::emit::text"),
     text_decoration_color     => Support::Implemented("zgui-paint::emit::text"),
     text_decoration_style     => Support::Implemented("zgui-paint::emit::text"),
-}
-
-/// One glyph, rasterised and placed on the surface.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct PlacedGlyph {
-    /// The glyph's pixels: where they are, or what they are called.
-    pub resource: Resource,
-    /// Where those pixels land, in absolute device pixels.
-    pub bounds: Rect<DevicePx, Device>,
 }
 
 /// Where a text fragment's glyphs come from.
@@ -82,46 +75,6 @@ impl GlyphSource for NoGlyphs {
         _paragraph: ParagraphId,
         _line: u16,
         _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
-    ) {
-    }
-}
-
-/// Where a run the caller shaped itself gets its rasterised tiles.
-///
-/// [`GlyphSource`] answers for the lines a paragraph was broken into, and is asked by paragraph and
-/// line number. This answers for a run its caller shaped — a custom element drawing its own text —
-/// and is asked with the run itself.
-///
-/// The placements are written into the caller's own vector rather than visited, because the source
-/// holds the glyph cache and the atlas while it answers and whoever draws holds the scene. Handing
-/// back an owned answer closes the first borrow before the second is needed.
-pub trait GlyphPlacementSource {
-    /// Places `run`'s glyphs with the line box's top-left corner at `origin`, rasterising and
-    /// uploading whatever is not cached yet.
-    ///
-    /// `origin` is absolute device pixels on the surface, because the phase a glyph is rasterised
-    /// at is a property of where it lands there. A glyph with no pixels — a space — and a glyph the
-    /// atlas has no room for are both left out, so the answer may be shorter than the run.
-    fn place_run(
-        &self,
-        run: &zgui_text::ShapedRun<'_>,
-        style: zgui_text::RasterStyle,
-        origin: Point<DevicePx, Device>,
-        out: &mut Vec<PlacedGlyph>,
-    );
-}
-
-/// A placement source with no atlas behind it.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct NoGlyphPlacements;
-
-impl GlyphPlacementSource for NoGlyphPlacements {
-    fn place_run(
-        &self,
-        _run: &zgui_text::ShapedRun<'_>,
-        _style: zgui_text::RasterStyle,
-        _origin: Point<DevicePx, Device>,
-        _out: &mut Vec<PlacedGlyph>,
     ) {
     }
 }
@@ -562,11 +515,11 @@ fn collect(glyphs: &dyn GlyphSource, (paragraph, line): (ParagraphId, u16)) -> V
         emitted.push(Emitted {
             slot: shaped.brush,
             text_start: shaped.text_start,
-            face: shaped.face.0,
+            face: shaped.face,
             size: shaped.size,
-            instance: shaped.instance.0,
-            embolden: shaped.synthetic_bold * shaped.size,
-            skew: shaped.synthetic_slant,
+            coords: shaped.coords.to_vec(),
+            synthetic_bold: shaped.synthetic_bold,
+            synthetic_slant: shaped.synthetic_slant,
             glyphs: shaped.glyphs.to_vec(),
         });
     });
@@ -596,46 +549,18 @@ fn draw(
         return 0;
     }
     let origin = drawn.placement.line.origin;
-    let (x, y) = (
-        origin.x.0 + painting.offset.width.0,
-        origin.y.0 + painting.offset.height.0,
-    );
-    let glyphs: SmallVec<[Glyph; 32]> = run
-        .glyphs
-        .iter()
-        .map(|glyph| Glyph {
-            id: u32::from(glyph.glyph),
-            x: x + glyph.x,
-            y: y + glyph.y,
-        })
-        .collect();
-    let mut flags = GlyphFlags::HINT;
-    if subpixel {
-        flags |= GlyphFlags::SUBPIXEL;
-    }
-    if painting.force_mono {
-        flags |= GlyphFlags::SILHOUETTE;
-    }
-    let space = rec.space(drawn.placement.transform);
-    rec.glyph_run(
-        compositor_types::GlyphRun {
-            // A face id is the font id, because the text engine's face table is the font registry.
-            font: FontId(run.face),
-            size: run.size,
-            glyphs: ArenaRange::default(),
-            coords: ArenaRange::default(),
-            paint,
-            embolden: run.embolden,
-            skew: run.skew,
-            clip: drawn.clip,
-            space,
-            flags,
-            _pad: [0; 1],
-            palette: 0,
-        },
-        &glyphs,
-        run.instance != 0,
-    );
+    let shaped = run.shaped();
+    let draw = RunDraw {
+        origin: [
+            origin.x.0 + painting.offset.width.0,
+            origin.y.0 + painting.offset.height.0,
+        ],
+        paint,
+        clip: drawn.clip,
+        space: rec.space(drawn.placement.transform),
+        flags: flags(shaped.size, subpixel, painting.force_mono),
+    };
+    record(rec, &shaped, draw);
     1
 }
 
@@ -724,18 +649,33 @@ struct Emitted {
     slot: PaintSlot,
     /// Where the run's text starts in the generated string.
     text_start: u32,
-    /// The face, as the text engine numbers it.
-    face: u32,
+    face: FaceId,
     /// The em size, in device pixels.
     size: f32,
-    /// The variation instance, zero for the default.
-    instance: u32,
-    /// The synthesised bold, in device pixels.
-    embolden: f32,
+    /// The normalised variation coordinates, empty for the default instance.
+    coords: Vec<i16>,
+    /// The synthesised bold, as a fraction of the size.
+    synthetic_bold: f32,
     /// The synthesised slant, in degrees.
-    skew: f32,
+    synthetic_slant: f32,
     /// The glyph ids and their origins from the line box's top-left corner.
     glyphs: Vec<zgui_text::ShapedGlyph>,
+}
+
+impl Emitted {
+    /// Returns the run as it was visited.
+    fn shaped(&self) -> ShapedRun<'_> {
+        ShapedRun {
+            face: self.face,
+            size: self.size,
+            coords: &self.coords,
+            synthetic_bold: self.synthetic_bold,
+            synthetic_slant: self.synthetic_slant,
+            brush: self.slot,
+            glyphs: &self.glyphs,
+            text_start: self.text_start,
+        }
+    }
 }
 
 /// The colour a run is drawn in, read from its brush slot and falling back to the element's own.
@@ -913,10 +853,9 @@ mod tests {
             visit(zgui_text::ShapedRun {
                 face: zgui_text::FaceId(1),
                 size: 16.0,
-                instance: zgui_text::VariationInstance::DEFAULT,
+                coords: &[],
                 synthetic_bold: 0.0,
                 synthetic_slant: 0.0,
-                has_color: false,
                 brush: zgui_scene::PaintSlot(0),
                 glyphs: &GLYPHS,
                 text_start: 0,

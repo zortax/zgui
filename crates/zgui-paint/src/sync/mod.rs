@@ -83,8 +83,6 @@ pub struct SyncReport {
     pub order_entries: usize,
     /// Primitives of kinds the chunks do not record yet, and filter steps groups leave out.
     pub omitted_primitives: usize,
-    /// Glyph runs at a variation instance, recorded at the default instance.
-    pub omitted_instances: usize,
     /// Nodes and slots removed because no chunk and no node names them any more.
     pub released: usize,
 }
@@ -272,7 +270,6 @@ impl CompositorSync {
         self.mirror.recorded(key);
         self.report.recorded += 1;
         self.report.omitted_primitives += prims.len() - prims.quads.len();
-        self.report.omitted_instances += items.instanced;
         self.chunks.insert(
             fragment.key,
             Chunk {

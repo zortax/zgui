@@ -1686,27 +1686,11 @@ impl Window {
             // pays a bool and two clears of empty vectors.
             self.scene
                 .record_spatial_dependencies(self.check_spatial_dependencies);
-            // A cold cache rasterises its first frame's glyphs on the layout workers first. The
-            // walk takes the answers where it asks for them, so the atlas is the same as without.
-            if let Some(pool) = &self.layout_pool {
-                self.content.prefetch_glyphs(
-                    &layout,
-                    &self.text,
-                    self.raster.as_ref(),
-                    pool,
-                    zgui_paint::GlyphPrediction {
-                        scale: self.scale,
-                        subpixel: capabilities.subpixel_text,
-                    },
-                );
-            }
             // No renderer is borrowed here, and none is reachable from anything the walk touches.
-            // Rasterising a glyph, giving it a tile and growing the atlas to hold it are decided
-            // against this window's own state; what a device is asked to do about any of it is
-            // queued and performed at the flush below.
-            let content = self
-                .content
-                .frame(&layout, &self.text, self.raster.as_ref());
+            // Giving content a tile and growing the atlas to hold it are decided against this
+            // window's own state; what a device is asked to do about any of it is queued and
+            // performed at the flush below.
+            let content = self.content.frame(&layout, &self.text);
             if !retired.is_empty() {
                 self.painter.retire(&retired, &mut self.scene, &content);
             }
@@ -1733,7 +1717,6 @@ impl Window {
                 scale: self.scale,
                 capabilities,
                 glyphs: &content,
-                glyph_placements: &content,
                 placements: Some(&placements),
                 highlights: self.carets.plan(),
                 replaced: &content,

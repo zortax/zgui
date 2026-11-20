@@ -102,7 +102,6 @@ fn window(count: RwSignal<i32>) -> zgui_platform_headless::Harness<Runtime> {
                 zgui_testkit_scene::MonoShaper::new(),
             ))
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let mut column = zgui_elements::column().class("root");
             for _ in 0..ROWS {

@@ -370,8 +370,7 @@ where
         .register(Arc::new(FONT), Some(FONT_FAMILY))
         .map_err(|error| format!("font: {error:?}"))?;
     let metrics = fonts.clone();
-    let shaping = fonts.clone();
-    let raster = fonts;
+    let shaping = fonts;
     let draws = DrawLog::default();
     let runtime = zgui::runtime::App::new()
         .with_title(title)
@@ -382,7 +381,6 @@ where
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(view)
         .map_err(|error| format!("zgui runtime: {error:?}"))?;
     let mut harness = Harness::new(runtime);

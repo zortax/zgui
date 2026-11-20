@@ -68,6 +68,11 @@ impl Recording {
     pub fn glyphs(&self, run: &GlyphRun) -> &[Glyph] {
         &self.items.glyphs[run.glyphs.indices()]
     }
+
+    /// Returns the variation coordinates of `run`.
+    pub fn coords(&self, run: &GlyphRun) -> &[i16] {
+        &self.items.coords[run.coords.indices()]
+    }
 }
 
 /// Where emitters record one chunk's items, and the scene whose tables they read.
@@ -97,6 +102,15 @@ impl<'a> Recorder<'a> {
             scene,
             items,
             resolver,
+        }
+    }
+
+    /// Returns a recorder into the same items for a shorter time.
+    pub(crate) fn reborrow(&mut self) -> Recorder<'_> {
+        Recorder {
+            scene: self.scene,
+            items: self.items,
+            resolver: self.resolver.as_mut().map(Resolver::reborrow),
         }
     }
 
@@ -248,19 +262,13 @@ impl<'a> Recorder<'a> {
         self.items.push_line(line, self.scene.captured());
     }
 
-    /// Appends a glyph run of `glyphs`, at the default instance of its font.
+    /// Appends a glyph run of `glyphs` at the normalised variation coordinates `coords`, empty
+    /// for the default instance of its font.
     ///
-    /// The run's glyph and coordinate ranges are replaced. `instanced` marks a run shaped at a
-    /// variation instance, which is drawn at the default instance.
-    pub fn glyph_run(&mut self, mut run: GlyphRun, glyphs: &[Glyph], instanced: bool) {
-        let start = self.items.glyphs.len() as u32;
-        self.items.glyphs.extend_from_slice(glyphs);
-        run.glyphs = compositor_types::ArenaRange {
-            start,
-            len: glyphs.len() as u32,
-        };
-        run.coords = compositor_types::ArenaRange::default();
-        self.items.instanced += usize::from(instanced);
+    /// The run's glyph and coordinate ranges are replaced.
+    pub fn glyph_run(&mut self, mut run: GlyphRun, glyphs: &[Glyph], coords: &[i16]) {
+        run.glyphs = append(&mut self.items.glyphs, glyphs);
+        run.coords = append(&mut self.items.coords, coords);
         self.items.push_glyph_run(run, self.scene.captured());
     }
 
@@ -289,6 +297,16 @@ impl core::fmt::Debug for Recorder<'_> {
             .field("items", &self.items.len())
             .field("compositor", &self.resolver.is_some())
             .finish()
+    }
+}
+
+/// Appends `values` to `arena` and returns the range they take.
+fn append<T: Copy>(arena: &mut Vec<T>, values: &[T]) -> compositor_types::ArenaRange {
+    let start = arena.len() as u32;
+    arena.extend_from_slice(values);
+    compositor_types::ArenaRange {
+        start,
+        len: values.len() as u32,
     }
 }
 

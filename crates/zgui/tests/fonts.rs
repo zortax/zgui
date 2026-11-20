@@ -82,15 +82,14 @@ fn shipped() -> Fonts {
     fonts
 }
 
-/// A `Fonts` clone answers all three of its questions from another thread.
+/// A `Fonts` clone answers both of its questions from another thread.
 #[test]
 fn a_clone_answers_from_any_thread() {
     let fonts = shipped();
     let other = fonts.clone();
     let worker = std::thread::spawn(move || {
-        // All three seams, on a thread that is not the one that built the collection.
+        // Both seams, on a thread that is not the one that built the collection.
         let _metrics = other.metrics();
-        let _raster = other.raster();
         let mut shaper = other.shaper();
         let families = [Ident::new("Test Face")];
         shaper

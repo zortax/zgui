@@ -727,7 +727,6 @@ impl App {
             .with_text_engine(Box::new(move || {
                 Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
             }))
-            .with_glyph_raster(Box::new(move || fonts.raster()))
             // Installed by default beside the default renderer: an application with no surface
             // elements pays one virtual call per frame, and one with them needs no wiring.
             .with_embed(Box::new(|| Box::new(zgui_wgpu::WgpuSurfaces::new())))

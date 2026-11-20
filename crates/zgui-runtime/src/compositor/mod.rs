@@ -14,6 +14,7 @@ use compositor_types::{
 };
 use web_time::Instant;
 use zgui_bits::DamageSet;
+use zgui_profile::{Counter, counter};
 use zgui_render::{
     ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
     SkipReason, TextureHandle,
@@ -78,14 +79,21 @@ impl CompositorRenderer {
         self.compositor.transaction(self.client)
     }
 
-    /// Commits `transaction`.
+    /// Commits `transaction`, and counts the glyphs the commit rasterised in
+    /// [`Counter::GlyphsRasterised`].
     ///
     /// When the compositor rejects it, the window's client is registered again with nothing, and
     /// [`take_rejected`](Self::take_rejected) reports it.
     pub fn submit(&mut self, transaction: Transaction) {
-        if let Err(error) = self.compositor.commit(transaction) {
-            tracing::error!(target: "zgui::compositor", ?error, "a transaction was rejected");
-            self.restart_client();
+        match self.compositor.commit(transaction) {
+            Ok(report) => counter::add(
+                Counter::GlyphsRasterised,
+                u64::from(report.counters.glyphs_rasterised),
+            ),
+            Err(error) => {
+                tracing::error!(target: "zgui::compositor", ?error, "a transaction was rejected");
+                self.restart_client();
+            }
         }
     }
 

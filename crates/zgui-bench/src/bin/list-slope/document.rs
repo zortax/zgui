@@ -126,7 +126,6 @@ pub(crate) fn opened(rows: usize, height: f32) -> Opened {
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let handler = App::new()
         .with_title("list-slope")
         .with_size(WIDTH, height)
@@ -136,7 +135,6 @@ pub(crate) fn opened(rows: usize, height: f32) -> Opened {
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let root = zgui::elements::column()
                 .class("root")

@@ -79,9 +79,6 @@ where
                 zgui_testkit_scene::MonoShaper::new(),
             ))
         }))
-        .with_glyph_raster(Box::new(|| {
-            std::sync::Arc::new(zgui_testkit_scene::MonoRaster::new())
-        }))
         .into_handler(view)
         .expect("the reactive runtime installs")
 }

@@ -89,8 +89,6 @@ pub struct Emission<'a> {
     pub nested_inline: bool,
     /// Where glyphs come from.
     pub glyphs: &'a dyn GlyphSource,
-    /// Where a run a custom element shaped itself gets its tiles.
-    pub glyph_placements: &'a dyn crate::emit::text::GlyphPlacementSource,
     /// Where the caret and the selection bands drawn with a line come from.
     pub highlights: &'a dyn HighlightSource,
     /// Where replaced content comes from.
@@ -341,7 +339,7 @@ fn content_tracked(
             // survives an opaque destination on the pixel grid, and nothing else.
             let text_subpixel = emission.text_placement.keeps_subpixel(rec.scene_ref());
             let mut painter = crate::content::custom::ScenePainter {
-                scene: rec.scene(),
+                rec: rec.reborrow(),
                 content_box: fragment.content_box(),
                 clip: emission.box_placement.clip,
                 transform: emission.box_placement.transform,
@@ -349,7 +347,6 @@ fn content_tracked(
                 scale: emission.scale,
                 shape_paint: style.shape,
                 vector_masks: emission.vector_masks,
-                glyph_placements: emission.glyph_placements,
                 text_subpixel,
                 vector_id: VectorId(fragment.key.index()),
                 shapes_pushed: 0,
