@@ -250,20 +250,8 @@ fn spread(colours: &[(u8, u8, u8)]) -> (usize, (u8, u8, u8)) {
 fn run(
     opened: &mut Opened,
     on: RwSignal<bool>,
-    check: impl FnMut(&mut Opened) -> Vec<String>,
-) -> Vec<String> {
-    let (faults, shifts) = steps_checked(opened, on, check);
-    assert!(shifts >= 10, "only {shifts} frames moved composed pixels");
-    faults
-}
-
-/// Runs every step of [`steps`] as [`run`] does, and returns what `check` found wrong with how many
-/// frames moved composed pixels.
-fn steps_checked(
-    opened: &mut Opened,
-    on: RwSignal<bool>,
     mut check: impl FnMut(&mut Opened) -> Vec<String>,
-) -> (Vec<String>, usize) {
+) -> Vec<String> {
     opened.aim();
     let mut faults = Vec::new();
     let mut shifts = 0;
@@ -280,7 +268,8 @@ fn steps_checked(
                 .map(|fault| format!("frame {frame} ({step:?}{moved}): {fault}")),
         );
     }
-    (faults, shifts)
+    assert!(shifts >= 10, "only {shifts} frames moved composed pixels");
+    faults
 }
 
 /// Fails when any frame shows a ghost row in two colours, or more than one row lit.
@@ -453,9 +442,7 @@ fn matches_a_repaint(item: Item) {
         opened.specials[2].focus();
         opened.stage.wait(std::time::Duration::from_millis(400));
     }
-    // Each repaint records the window again from nothing, which leaves the compositor nothing to
-    // move on the frame after it, so this run makes no claim about pixel moves.
-    let (faults, _) = steps_checked(&mut opened, on, |opened| {
+    let faults = run(&mut opened, on, |opened| {
         let side = opened
             .inside(opened.rect(opened.side), 0.0)
             .expect("the side shows");
