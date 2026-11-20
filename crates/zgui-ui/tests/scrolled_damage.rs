@@ -229,11 +229,13 @@ fn run(
 ) -> Vec<String> {
     opened.aim();
     let mut faults = Vec::new();
+    let mut shifts = 0;
     for (frame, step) in steps().into_iter().enumerate() {
         if frame % 7 == 0 {
             on.set(!on.get_untracked());
         }
         let shifted = opened.step(step);
+        shifts += usize::from(shifted);
         let moved = if shifted { ", shifted" } else { "" };
         faults.extend(
             check(opened)
@@ -241,6 +243,7 @@ fn run(
                 .map(|fault| format!("frame {frame} ({step:?}{moved}): {fault}")),
         );
     }
+    assert!(shifts >= 10, "only {shifts} frames moved composed pixels");
     faults
 }
 
