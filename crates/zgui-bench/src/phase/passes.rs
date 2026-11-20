@@ -10,10 +10,9 @@
 
 use std::cell::RefCell;
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame as Built, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
-};
+use zgui::bits::DamageSet;
+use zgui_render::{Capacity, Layering};
+use zgui_scene::Scene;
 
 use crate::input::wheel;
 use crate::phase::Driver;

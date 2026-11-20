@@ -2,6 +2,7 @@
 
 mod compositor;
 pub mod fonts;
+mod precision;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -9,8 +10,11 @@ use zgui_platform::{AppHandler, Decorations, PlatformError};
 use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
-pub use crate::app::compositor::compositor;
+pub use crate::app::compositor::{
+    PIPELINE_DIRECTORY_VARIABLE, compositor, latency_marks, pipeline_directory,
+};
 pub use crate::app::fonts::Fonts;
+pub use crate::app::precision::GroupPrecision;
 
 /// A maker of the renderer a window's compositor draws with, given the window's first size in
 /// device pixels.
@@ -283,9 +287,8 @@ impl App {
     ///
     /// What a window that draws its own rounded corners needs, so the desktop shows through them.
     /// A transparent window is composed into a
-    /// [`RenderTarget::translucent`](zgui_render::RenderTarget::translucent) target: each pixel is
-    /// a premultiplied colour, a pixel nothing paints has zero alpha, and text is drawn with
-    /// ordinary coverage in place of per-channel coverage.
+    /// translucent target: each pixel is a premultiplied colour, a pixel nothing paints has zero
+    /// alpha, and text is drawn with ordinary coverage in place of per-channel coverage.
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.inner.attributes_mut().transparent = transparent;
         self
@@ -558,8 +561,7 @@ impl App {
     /// Sets how precisely the default renderer holds a plain group of content.
     ///
     /// The default is [`GroupPrecision::Compact`](crate::GroupPrecision::Compact), which holds a
-    /// plain group in the surface format when that format is `Bgra8Unorm` or `Rgba8Unorm`. That
-    /// target has half the bytes of a sixteen-bit one.
+    /// plain group in eight bits per channel. That target has half the bytes of a sixteen-bit one.
     /// [`GroupPrecision::High`](crate::GroupPrecision::High) holds every group in sixteen-bit
     /// float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
     /// value. A renderer set with [`App::with_renderer`] ignores it.
@@ -691,7 +693,7 @@ impl App {
     {
         // Before the font thread below, which is the first thread this process starts: the guard
         // inside changes the environment only while the process has one thread.
-        zgui_render_wgpu::gpu::loader::prefer_hardware_vulkan();
+        compositor_wgpu::prefer_hardware_vulkan();
         // The last point at which the application could have named its own faces has passed, so
         // this is where enumerating the machine's starts — on a thread of its own, alongside
         // opening the window and the graphics device rather than in front of them.

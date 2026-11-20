@@ -134,10 +134,10 @@ pub mod app;
 pub mod error;
 pub mod prelude;
 
+/// How precisely the default renderer holds a plain group, see [`App::with_group_precision`].
+pub use crate::app::GroupPrecision;
 pub use crate::app::{App, CompositorRendererMaker, app};
 pub use crate::error::Error;
-/// How precisely the default renderer holds a plain group, see [`App::with_group_precision`].
-pub use zgui_render_wgpu::GroupPrecision;
 /// How a window antialiases its text, see [`App::with_text_antialiasing`].
 pub use zgui_runtime::TextAntialiasing;
 
@@ -182,12 +182,14 @@ pub use zgui_platform as platform;
 pub use zgui_reactive as reactive;
 /// Doing something that takes time: on the UI thread, off it, and back on to it.
 pub use zgui_reactive::task;
-/// What a frame is drawn through, for an application supplying a device of its own.
-pub use zgui_render as render;
+/// The compositor interface a window draws through, for an application supplying a renderer of
+/// its own.
+pub mod compositor {
+    pub use compositor_api::*;
+    pub use compositor_types::*;
+}
 /// The frame pipeline, its windows and its timers.
 pub use zgui_runtime as runtime;
-/// The display list a frame is composed into.
-pub use zgui_scene as scene;
 /// Drawing with a shader of one's own: declaring an effect, and the handle it is drawn through.
 pub use zgui_shader as shader;
 /// Faces, shaping, metrics and glyph rasterisation, as seams.

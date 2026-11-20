@@ -63,7 +63,7 @@ pub(crate) fn geometry(window: &zgui::runtime::Window) -> Vec<[u32; 4]> {
 /// The same, over a store and a set of answers held apart from any window.
 pub(crate) fn resolved(
     layout: &zgui_layout::LayoutStore,
-    placements: &zgui::scene::Placements,
+    placements: &zgui_scene::Placements,
 ) -> Vec<[u32; 4]> {
     let mut out = Vec::new();
     for key in layout.keys() {
@@ -214,9 +214,13 @@ pub(crate) struct FullFrame {
 }
 
 impl FullFrame {
-    /// Returns a recorder reading what `shown` shows.
-    pub(crate) fn new(shown: Shown) -> Self {
-        Self { shown }
+    /// Keeps `scene` if it was painted against the whole surface and anyone asked for it.
+    pub(crate) fn observe(&self, scene: &zgui_scene::Scene, damage: &DamageSet) {
+        if self.wanted.get() && damage.is_full() {
+            *self.last.borrow_mut() = Some(
+                zgui_testkit_scene::transcript::of(scene, &DamageSet::default()).into_string(),
+            );
+        }
     }
 
     /// Returns the drawing of the last frame, or `None` before the first one or when the window
@@ -365,10 +369,110 @@ pub(crate) fn compare_readings(
     })
 }
 
+/// What one frame was drawn against: whether the whole surface, and the rectangles otherwise.
+pub(crate) type Drawn = (bool, Vec<zgui::geom::Rect<i32, Device>>);
+
+/// The pixels a window last presented, and the display lists its frames painted, kept for a
+/// comparison to read.
+///
+/// A window owns its renderer, so the only place a readback can be taken from is inside the
+/// renderer itself — after the draw and before anything else can touch the target.
+#[derive(Default)]
+pub(crate) struct Capture {
+    /// Whether the next frame should be read back, which is off by default because a readback is
+    /// a full device synchronisation and a measurement must not pay for one.
+    pub(crate) want: std::cell::Cell<bool>,
+    /// What the last frame that was asked for presented.
+    pub(crate) last: std::cell::RefCell<Option<compositor_wgpu::Pixels>>,
+    /// The persistent target that frame was composed into, which is the one a partial repaint
+    /// accumulates in and the one a stale pixel would survive in.
+    pub(crate) composed: std::cell::RefCell<Option<compositor_wgpu::Pixels>>,
+    /// Every region a paint walk was gated on since the last time the list was emptied.
+    pub(crate) damages: std::cell::RefCell<Vec<Drawn>>,
+    /// The display list of every frame painted against the whole surface.
+    pub(crate) full_lists: std::cell::RefCell<Vec<String>>,
+    /// Whether the list of *every* frame is kept, not only the ones drawn against every pixel.
+    ///
+    /// A step is a sequence of frames and a displacement is introduced by one of them, so which one
+    /// is the question a full-damage frame on its own cannot answer. Off by default because it
+    /// renders a transcript per frame.
+    pub(crate) transcribe: std::cell::Cell<bool>,
+    /// Every frame's list since the run was last emptied, with what it was drawn against.
+    pub(crate) every_list: std::cell::RefCell<Vec<(String, String)>>,
+}
+
+impl Capture {
+    /// Keeps the region of a frame's paint walk and the display list it painted, as asked for.
+    fn observe(&self, scene: &zgui_scene::Scene, damage: &DamageSet) {
+        self.damages
+            .borrow_mut()
+            .push((damage.is_full(), damage.rects().to_vec()));
+        if damage.is_full() {
+            self.full_lists
+                .borrow_mut()
+                .push(zgui_testkit_scene::transcript::of(scene, damage).into_string());
+        }
+        if self.transcribe.get() {
+            let against = if damage.is_full() {
+                "full".to_owned()
+            } else {
+                format!("{:?}", damage.rects())
+            };
+            self.every_list.borrow_mut().push((
+                against,
+                zgui_testkit_scene::transcript::of(scene, &DamageSet::default()).into_string(),
+            ));
+        }
+    }
+}
+
+/// This machine's device, with a readback taken whenever one is asked for.
+pub(crate) struct Recorded {
+    /// The renderer that does the work.
+    pub(crate) inner: compositor_wgpu::WgpuRenderer,
+    /// Where a readback is left.
+    pub(crate) capture: std::rc::Rc<Capture>,
+}
+
+impl compositor_api::Renderer for Recorded {
+    fn capabilities(&self) -> compositor_types::RenderCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn configure(&mut self, target: compositor_types::RenderTarget) {
+        self.inner.configure(target);
+    }
+
+    fn target(&self) -> Option<compositor_types::RenderTarget> {
+        self.inner.target()
+    }
+
+    fn target_age(&self) -> compositor_types::BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &compositor_types::Frame) -> compositor_types::FrameOutcome {
+        let outcome = self.inner.draw(frame);
+        if self.capture.want.get() {
+            *self.capture.last.borrow_mut() = self.inner.read_presented();
+            *self.capture.composed.borrow_mut() = Some(self.inner.read_composed());
+        }
+        outcome
+    }
+
+    fn memory(&self) -> compositor_types::MemoryReport {
+        self.inner.memory()
+    }
+
+    fn vector_status(&self) -> compositor_types::VectorStatus {
+        self.inner.vector_status()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use zgui::geom::Matrix4;
-    use zgui::scene::{Placements, PropertyOwner, SpatialId, SpatialTree};
+    use zgui_scene::{Placements, PropertyOwner, SpatialId, SpatialTree};
 
     use super::{compare_readings, resolved};
 

@@ -25,7 +25,10 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # The counters have to be compiled in, or every band stays green while measuring nothing.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
-zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }

@@ -19,6 +19,8 @@ include.workspace = true
 # decision the layers below deliberately leave open and an application should not have to make
 # before its first line of interface.
 [dependencies]
+# Why a group precision named in the environment was ignored.
+tracing.workspace = true
 web-time.workspace = true
 # The compositor every window draws through, chosen here and nowhere else: the reference
 # compositor, the wgpu renderer and the swash glyph rasteriser.
@@ -28,9 +30,7 @@ compositor-text.workspace = true
 compositor-types.workspace = true
 compositor-vello.workspace = true
 compositor-wgpu.workspace = true
-# The tile store, the display list and the damage set: an application that draws through a device
-# this framework has no backend for implements the renderer contract, and cannot do that without
-# naming what its methods take.
+# The tile store and the damage set.
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
@@ -43,15 +43,10 @@ zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 # wrapper lives with the layout algorithms that call it.
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+# The latency marks a renderer emits, recorded into the traces `ZGUI_LATENCY` asks for.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-# What rasterises the vector parts of a display list. A renderer with none attached plans a
-# drawing's passes and then composites an unwritten scratch, which is an icon that is not there —
-# so this is wiring rather than a choice an application should be asked to make.
-zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # The tokio backend for background work, off unless an application asks for it. Optional rather
 # than a dependency of `zgui-reactive` because a multi-threaded runtime is a cost every program
 # would otherwise carry to make one function work in the few that need it.

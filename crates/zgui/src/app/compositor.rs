@@ -7,7 +7,9 @@ use compositor_core::CompositorImpl;
 use compositor_text::SwashRaster;
 use compositor_types::{RenderTarget, VectorBackend};
 use compositor_vello::VelloOptions;
-use compositor_wgpu::{Gpu, PrePresent, PresentPacing, SharedGraphics, VectorFactory};
+use compositor_wgpu::{
+    Gpu, LatencyMarks, PrePresent, PresentPacing, SharedGraphics, VectorFactory,
+};
 use zgui_platform::{PlatformError, Surface};
 use zgui_runtime::{AppError, RendererFactory};
 
@@ -31,20 +33,46 @@ pub fn compositor(fonts: &crate::app::Fonts) -> Box<dyn Compositor> {
 /// The factory fails as [`AppError::GpuUnavailable`] when no adapter presents to the window, and
 /// as [`AppError::Platform`] when the window offers no handles a graphics API can draw into.
 pub(crate) fn factory(precision: Option<crate::GroupPrecision>) -> RendererFactory {
-    let graphics = SharedGraphics::new();
-    // The compiled path pipelines are kept where zgui keeps its other pipelines.
+    let graphics = SharedGraphics::new().with_options(pipeline_directory(), Some(latency_marks()));
+    // The compiled path pipelines are kept beside the renderer's own.
     let vello = VelloOptions {
         adapter: None,
-        cache_directory: zgui_render_wgpu::gpu::pipeline_cache::directory(),
+        cache_directory: pipeline_directory(),
     };
-    let precision = match crate::GroupPrecision::from_environment()
+    let precision = crate::GroupPrecision::from_environment()
         .or(precision)
         .unwrap_or_default()
-    {
-        crate::GroupPrecision::High => compositor_wgpu::GroupPrecision::High,
-        _ => compositor_wgpu::GroupPrecision::Compact,
-    };
+        .wgpu();
     Box::new(move |surface, target| renderer(&graphics, surface, target, &vello, precision))
+}
+
+/// The variable that names the directory compiled pipelines are kept in.
+pub const PIPELINE_DIRECTORY_VARIABLE: &str = "ZGUI_CACHE_DIR";
+
+/// Returns the directory compiled pipelines are kept in between runs: the one
+/// [`PIPELINE_DIRECTORY_VARIABLE`] names, then `zgui/pipelines` under `XDG_CACHE_HOME` or under
+/// `~/.cache`.
+///
+/// Returns `None` when the environment names none of them.
+pub fn pipeline_directory() -> Option<std::path::PathBuf> {
+    if let Ok(named) = std::env::var(PIPELINE_DIRECTORY_VARIABLE) {
+        return Some(named.into());
+    }
+    let home = std::env::var("XDG_CACHE_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(|_| {
+            std::env::var("HOME").map(|home| std::path::PathBuf::from(home).join(".cache"))
+        })
+        .ok()?;
+    Some(home.join("zgui").join("pipelines"))
+}
+
+/// Returns the marks a renderer emits at the steps of a frame, recorded into zgui's latency traces.
+pub fn latency_marks() -> LatencyMarks {
+    Arc::new(|stage, detail| match detail {
+        Some(detail) => zgui_profile::latency::note(stage, detail),
+        None => zgui_profile::latency::mark(stage),
+    })
 }
 
 /// Returns the factory of the renderers `make` returns, configured for each window's target.
@@ -127,7 +155,7 @@ fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
 }
 
 /// Returns the factory of the path rasteriser a device can run, built with `options`.
-fn vectors(options: VelloOptions) -> VectorFactory {
+pub(crate) fn vectors(options: VelloOptions) -> VectorFactory {
     Box::new(move |gpu: &Arc<Gpu>, size| {
         compositor_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
     })

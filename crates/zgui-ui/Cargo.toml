@@ -35,8 +35,16 @@ zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 # activation defaults under them. Dispatching an event straight at a node answers what a component
 # does *given* a click; only this answers whether a pointer press and release ever becomes one.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
-# The compositor a window draws through, on a device whose composed target and per-frame
-# transcript the painted fixtures read back.
+# A graphics device, and what rasterises the vector parts of a display list on it. Everything else
+# written about a drawing in this package stops at the display list, and a display list is satisfied
+# by a rasteriser that writes nothing — so the gallery's pixels are read back off a real device,
+# through the same two crates a window is drawn through.
+zgui-render = { path = "../zgui-render", version = "0.1.0" }
+zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
+zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
+# The compositor a window draws its boxes and text through, on a device whose composed target and
+# per-frame transcript the painted fixtures read back.
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 compositor-api.workspace = true
 compositor-types.workspace = true
