@@ -328,8 +328,7 @@ fn a_bound_switch_slides_its_thumb_and_moves_the_signal_it_was_bound_to() {
 #[test]
 fn a_bound_radio_group_marks_the_item_that_was_clicked_and_clears_the_other() {
     let bound = Bound::new();
-    // The dot is a drawing.
-    let mut stage = staged!(Pipeline::Scene, bound.view());
+    let mut stage = staged!(bound.view());
     let monthly = bound.built.node(2);
     let yearly = bound.built.node(3);
     let chosen_before = picture(&stage, monthly);

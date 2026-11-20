@@ -5,6 +5,8 @@
 //! exact rasters through the frames the paint report asks for, and that the window parks
 //! afterwards.
 
+mod support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -12,7 +14,7 @@ use std::time::Duration;
 use zgui_profile::Counter;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_runtime::{App, FrameProbe, Window};
+use zgui_runtime::App;
 use zgui_testkit_scene::counters::Recording;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
@@ -21,29 +23,14 @@ mod support;
 /// One frame, reduced to what these cases ask about.
 #[derive(Clone, Copy, Debug)]
 struct Frame {
-    /// General vector items in the display list.
+    /// Paths the output shows.
     vectors: usize,
-    /// Colour sprites in the display list.
+    /// Images the output shows.
     sprites: usize,
 }
 
 /// The frames a run produced.
 type Log = Rc<RefCell<Vec<Frame>>>;
-
-/// A probe that records the display list of every frame.
-struct Recorder {
-    log: Log,
-}
-
-impl FrameProbe for Recorder {
-    fn frame_ended(&self, window: &Window) {
-        let scene = window.scene();
-        self.log.borrow_mut().push(Frame {
-            vectors: scene.primitives.vectors.len(),
-            sprites: scene.primitives.color_sprites.len(),
-        });
-    }
-}
 
 /// Mounts a document styled by `css`, with every frame recorded into `log`.
 fn mount(
@@ -55,11 +42,17 @@ fn mount(
         .with_title("layers")
         .with_size(800.0, 600.0)
         .with_stylesheet(css)
-        .with_probe(Rc::new(Recorder {
-            log: Rc::clone(log),
-        }))
-        .with_compositor(support::compositor())
-        .with_renderer(Box::new(support::screen))
+        .with_renderer(Box::new(support::watched(move || {
+            let log = Rc::clone(&factory);
+            Box::new(
+                move |drawing: &zgui_testkit_compositor::Drawing, _damage: &_| {
+                    log.borrow_mut().push(Frame {
+                        vectors: drawing.of_kind("path").count(),
+                        sprites: drawing.of_kind("color").count(),
+                    });
+                },
+            )
+        })))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)

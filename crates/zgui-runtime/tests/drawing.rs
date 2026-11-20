@@ -6,40 +6,34 @@
 //! a document through the real runtime, runs real frames against the headless platform, and asks
 //! the renderer what it was handed.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    VectorBackend, VectorStatus,
-};
-use zgui_color::Color;
-use zgui_elements::kurbo::BezPath;
-use zgui_platform::Surface;
-use zgui_runtime::{App, AppError, FrameProbe, Window};
-use zgui_scene::ChunkNote;
-use zgui_view::{Anchor, BuildCx, IntoView, View};
-
 mod support;
 
-/// One vector item of a frame, reduced to what these cases ask about.
+use std::cell::RefCell;
+use std::rc::Rc;
+
+use zgui_bits::DamageSet;
+use zgui_elements::kurbo::BezPath;
+use zgui_profile::{Counter, counter};
+use zgui_runtime::App;
+use zgui_testkit_compositor::{Drawing, Instance};
+use zgui_view::{Anchor, BuildCx, IntoView, View};
+
+/// One path the compositor drew for a frame, reduced to what these cases ask about.
 #[derive(Clone, Debug)]
 struct Drawn {
     /// What strokes it and how wide, when anything does.
-    stroke: Option<(Color, f32)>,
+    stroke: Option<([f32; 4], f32)>,
 }
 
-/// One eligible vector shape emitted through the monochrome atlas fast path.
-#[derive(Clone, Copy, Debug)]
+/// One shape the compositor lowered to a path mask.
+#[derive(Clone, Debug)]
 struct Masked {
     /// Where the mask lands, as x, y, width and height.
     bounds: [f32; 4],
     /// The tint inherited from the element.
     color: [f32; 4],
-    /// The atlas identity, which changes when the rasterised geometry changes.
-    tile: zgui_scene::SpriteTile,
+    /// The atlas cell, which changes when the rasterised geometry changes.
+    tile: String,
 }
 
 /// One frame: what it drew, and what it was allowed to draw over.
@@ -49,116 +43,49 @@ struct Masked {
 /// whatever the frame did.
 #[derive(Clone, Debug)]
 struct Frame {
-    /// The vector content of the display list.
+    /// The paths the output shows.
     shapes: Vec<Drawn>,
-    /// Eligible vector content emitted as CPU-rasterised atlas masks.
+    /// The path masks the output shows.
     masks: Vec<Masked>,
     /// Whether the frame was drawn against the whole surface.
     full: bool,
     /// The rectangle the damage rectangles are bounded by, when the set is not full and not empty.
     damaged: Option<zgui_geom::Rect<i32, zgui_geom::Device>>,
-    /// How many recorded paintings holding a vector item were encoded since the last frame.
-    encoded_drawings: usize,
+    /// How many shapes were recorded as paths since the last frame.
+    encoded_drawings: u64,
 }
 
 /// The frames a run produced.
 type Log = Rc<RefCell<Vec<Frame>>>;
 
-/// A probe that records the vector content of every frame's display list.
-struct Recorder {
-    /// Where the frames go.
-    log: Log,
-}
-
-impl FrameProbe for Recorder {
-    fn frame_ended(&self, window: &Window) {
-        let scene = window.scene();
-        let painted = window
-            .last_frame_report()
-            .expect("a frame that ended has a report")
-            .painted;
-        let solid = |reference: zgui_scene::PaintRef| {
-            reference.id().and_then(|id| match scene.paints.get(id) {
-                Some(zgui_scene::Paint::Solid(color)) => Some(*color),
-                _ => None,
-            })
-        };
-        self.log.borrow_mut().push(Frame {
-            shapes: scene
-                .primitives
-                .vectors
-                .iter()
-                .map(|item| Drawn {
-                    stroke: item.stroke.as_ref().and_then(|stroke| {
-                        solid(stroke.paint)
-                            .map(|color| (color, stroke.width() * item.placed_scale() as f32))
-                    }),
-                })
-                .collect(),
-            masks: scene
-                .primitives
-                .mono_sprites
-                .iter()
-                .map(|sprite| Masked {
-                    bounds: sprite.bounds,
-                    color: sprite.color,
-                    tile: sprite.tile,
-                })
-                .collect(),
-            full: painted.is_full(),
-            damaged: painted.bounds(),
-            encoded_drawings: scene
-                .chunk_notes()
-                .iter()
-                .filter(|note| {
-                    matches!(note, ChunkNote::Inserted { prims, .. } if !prims.vectors.is_empty())
-                })
-                .count(),
-        });
+/// The path `instance` draws, with its stroke width in device pixels.
+fn drawn(instance: &Instance) -> Drawn {
+    // The width is in path units, which the path's transform scales to the device.
+    let scale = instance.field("transform").map_or(1.0, |map| {
+        let numbers: Vec<f32> = map
+            .trim_matches(|c| c == '[' || c == ']')
+            .split(',')
+            .filter_map(|number| number.trim().parse().ok())
+            .collect();
+        numbers[0].hypot(numbers[1])
+    });
+    Drawn {
+        stroke: instance.color("stroke").map(|color| {
+            let width: f32 = instance
+                .field("width")
+                .and_then(|width| width.parse().ok())
+                .unwrap_or(1.0);
+            (color, width * scale)
+        }),
     }
 }
 
-/// A renderer that draws nothing and whose path rasteriser is built by the first frame it draws.
-#[derive(Default)]
-struct Lazy {
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Whether a frame has paid the fake backend's lazy cost.
-    initialized: bool,
-}
-
-impl Renderer for Lazy {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn target_age(&self) -> BufferAge {
-        BufferAge::Unknown
-    }
-
-    fn draw(&mut self, _frame: &compositor_types::Frame) -> FrameOutcome {
-        self.initialized = true;
-        FrameOutcome::Presented(FrameStats::default())
-    }
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::default()
-    }
-
-    fn vector_status(&self) -> VectorStatus {
-        VectorStatus {
-            backend: Some(VectorBackend::Compute),
-            name: "vello",
-            initialized: self.initialized,
-        }
+/// The path mask `instance` draws.
+fn masked(instance: &Instance) -> Masked {
+    Masked {
+        bounds: support::world(instance),
+        color: instance.color("paint").unwrap_or_default(),
+        tile: instance.field("tile").unwrap_or_default().to_owned(),
     }
 }
 
@@ -172,26 +99,29 @@ fn mount(
         .with_title("drawing")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_probe(Rc::new(Recorder {
-            log: Rc::clone(log),
-        }))
-        .with_compositor(support::compositor())
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Lazy::default();
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
+        .with_renderer(Box::new(support::watched(move || {
+            let log = Rc::clone(&factory);
+            let mut reencoded = counter::get(Counter::VectorRouteGeneral);
+            Box::new(move |drawing: &Drawing, damage: &DamageSet| {
+                let now = counter::get(Counter::VectorRouteGeneral);
+                log.borrow_mut().push(Frame {
+                    shapes: drawing.of_kind("path").map(drawn).collect(),
+                    masks: drawing.of_kind("mono").map(masked).collect(),
+                    full: damage.is_full(),
+                    damaged: damage.bounds(),
+                    encoded_drawings: now - reencoded,
+                });
+                reencoded = now;
+            })
+        })))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)
 }
 
-/// Runtime diagnostics keep the emitter's real choice, aggregate it through an icon wrapper, and
-/// retain the element keys from the exact frame that constructed the lazy backend.
+/// Runtime diagnostics keep the emitter's real choice and aggregate it through an icon wrapper.
 #[test]
-fn vector_diagnostics_name_the_route_wrapper_and_vello_initializer() {
+fn vector_diagnostics_name_the_route_and_the_wrapper() {
     let log: Log = Rc::default();
     let mut app = mount(CSS, &log, |cx| {
         Box::new(
@@ -243,7 +173,6 @@ fn vector_diagnostics_name_the_route_wrapper_and_vello_initializer() {
             .vector_routes_in_subtree(wrapper)
             .contains(zgui_paint::VectorRoute::GeneralRaster)
     );
-    assert_eq!(window.vello_initializers(), &[icon]);
 }
 
 /// Mounts a document styled by `css` and returns the frames it drew.
@@ -350,12 +279,8 @@ fn a_stroke_declared_as_a_custom_property_reaches_the_window() {
         .iter()
         .find_map(|shape| shape.stroke)
         .expect("the drawing was stroked");
-    assert_eq!(
-        stroked.0.to_premultiplied_srgb(),
-        [0.0, 0.0, 1.0, 1.0],
-        "{shapes:?}"
-    );
-    assert_eq!(stroked.1, 2.0);
+    assert_eq!(stroked.0, [0.0, 0.0, 1.0, 1.0], "{shapes:?}");
+    assert!((stroked.1 - 2.0).abs() < 0.001, "{shapes:?}");
 }
 
 /// The extent of the only drawing fragment in a window, in device pixels.
@@ -426,7 +351,7 @@ fn swapping_the_outlines_redraws_the_icon_and_damages_no_more_than_it() {
 
     let before = settled_masks(log.borrow().clone());
     assert_eq!(before.len(), 1, "{before:?}");
-    let triangle_tile = before[0].tile;
+    let triangle_tile = before[0].tile.clone();
 
     log.borrow_mut().clear();
     zgui_reactive::prelude::Set::set(&swapped, true);
@@ -561,6 +486,10 @@ fn a_scrolled_document_encodes_no_drawing_again() {
     harness.settle(8);
 
     let frames = log.borrow();
-    let encoded: usize = frames.iter().map(|frame| frame.encoded_drawings).sum();
+    assert!(
+        frames.iter().any(|frame| !frame.shapes.is_empty()),
+        "the scroll drew no drawing"
+    );
+    let encoded: u64 = frames.iter().map(|frame| frame.encoded_drawings).sum();
     assert_eq!(encoded, 0, "a scrolled drawing was encoded again");
 }

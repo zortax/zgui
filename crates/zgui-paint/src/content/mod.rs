@@ -1,25 +1,17 @@
-//! The content one window draws from: its shaped lines, its decoded images and its vector tiles.
+//! The content one window draws from: its shaped lines, its decoded images and its vector content.
 //!
-//! Everything above this module describes content by name — *line four of paragraph seven*, *the
-//! picture attached to this node*. This is where a name becomes what is drawn: a line becomes the
-//! shaped runs the compositor rasterises, and a picture becomes a rectangle of an atlas texture.
+//! Everything above this module describes content by name, such as *line four of paragraph seven*
+//! or *the picture attached to this node*. This is where a name becomes what is drawn: a line
+//! becomes the shaped runs the compositor rasterises, and a picture becomes the texels of a
+//! compositor image.
 //!
 //! # What lives where
 //!
 //! | Module | Contents |
 //! |---|---|
-//! | [`cache`] | [`ContentCache`], the atlas, the images registered against it, and the shaped lines |
-//! | [`images`] | replaced content into atlas tiles and external textures |
-//! | [`vectors`] | path notation into placed curves a rasteriser encodes once |
-//!
-//! # The one rule about ordering
-//!
-//! Tiles are allocated while the emit walk runs and uploaded in one batch afterwards, because the
-//! atlas defers its writes. A frame that drew without flushing would sample texels that were never
-//! written — which on most devices is not a blank tile but whatever the texture held before, so it
-//! is the kind of defect that shows up as another picture's pixels rather than as nothing.
-//! [`ContentCache::flush`] is what closes it, and the frame loop calls it between emitting and
-//! drawing.
+//! | [`cache`] | [`ContentCache`], the images attached to replaced nodes, the vector caches and the shaped lines |
+//! | [`images`] | replaced content as decoded texels and external textures |
+//! | [`vectors`] | path notation into placed shapes, route recognitions and CPU layers |
 
 pub mod cache;
 pub mod custom;

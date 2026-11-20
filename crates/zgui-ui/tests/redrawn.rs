@@ -26,14 +26,15 @@ mod device;
 mod painted;
 
 use zgui::geom::{Device, DevicePx, Point, Rect};
+use zgui::reactive::RwSignal;
 use zgui::view;
 use zgui::view::{AnyView, NodeId, NodeRef};
+use zgui_ui::prelude::*;
 use zgui_ui_icons::prelude::*;
 use zgui_ui_icons::set::chevron::CHEVRON_RIGHT;
 use zgui_ui_icons::set::mark::CHECK;
 use zgui_ui_tokens::prelude::*;
 
-use crate::device::Pipeline;
 use crate::device::frame::Drawing;
 use crate::painted::stage::Stage;
 use crate::painted::words::ink;
@@ -57,11 +58,10 @@ const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-fam
 /// and no more, so a threshold set by eye from a filled shape would fail every one of them.
 const MARKED: f32 = 0.02;
 
-/// Opens `view` on zgui's own renderer, which draws the icons, or reports the run skipped on a
-/// machine with no graphics device.
+/// Opens `view`, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        match Stage::open_on(Pipeline::Scene, SHEET, $view) {
+        match Stage::open(SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");
@@ -145,6 +145,32 @@ fn scrolled(built: &Built) -> impl Fn() -> AnyView + use<> {
                     column(class = "port", node_ref = port) {
                         column(class = "tall") {{rows.collect::<Vec<_>>()}}
                     }
+                }
+            }
+        })
+    }
+}
+
+/// A select, whose trigger carries a chevron, and a checkbox that opens nothing.
+fn select(built: &Built) -> impl Fn() -> AnyView + use<> {
+    let built = built.clone();
+    move || {
+        let trigger = NodeRef::new();
+        built.keep(&[trigger]);
+        let chosen = RwSignal::new_local(String::from("euro"));
+        AnyView::new(view! {
+            ThemeProvider {
+                column(class = "page") {
+                    Select(value = chosen) {
+                        box(node_ref = trigger) {
+                            SelectTrigger {SelectValue()}
+                        }
+                        SelectContent {
+                            SelectItem(value = "euro") {"Euro"}
+                            SelectItem(value = "pound") {"Pound sterling"}
+                        }
+                    }
+                    text {"elsewhere"}
                 }
             }
         })
@@ -315,4 +341,81 @@ fn drawings_in_a_scrollport_are_still_drawn_while_it_is_scrolled() {
     for row in rows {
         assert_drawn(&stage, Stage::shapes_in, row, 1, "after four detents");
     }
+}
+
+/// The shapes the last frame that drew held inside the trigger, without its text.
+///
+/// The text is removed by the box of the smallest node that says it, because a glyph can arrive
+/// as a coverage sprite exactly as the chevron can.
+fn chevrons(stage: &Stage, trigger: Rect<DevicePx, Device>) -> Vec<Drawing> {
+    let census = stage.census();
+    let text = census
+        .nodes
+        .iter()
+        .filter(|node| node.text == "Euro")
+        .filter_map(|node| node.rect)
+        .filter(|rect| middle_of(*rect, trigger))
+        .min_by(|left, right| {
+            (left.size.width.0 * left.size.height.0)
+                .total_cmp(&(right.size.width.0 * right.size.height.0))
+        });
+    stage
+        .shapes_in(trigger)
+        .into_iter()
+        .filter(|shape| text.is_none_or(|rect| !middle_of(shape.ink, rect)))
+        .collect()
+}
+
+/// Whether the middle of `inner` is inside `outer`.
+fn middle_of(inner: Rect<DevicePx, Device>, outer: Rect<DevicePx, Device>) -> bool {
+    let x = inner.origin.x.0 + inner.size.width.0 / 2.0;
+    let y = inner.origin.y.0 + inner.size.height.0 / 2.0;
+    x >= outer.origin.x.0
+        && x <= outer.origin.x.0 + outer.size.width.0
+        && y >= outer.origin.y.0
+        && y <= outer.origin.y.0 + outer.size.height.0
+}
+
+/// The control the defect was seen on: a select trigger whose chevron went out and stayed out.
+///
+/// The list is opened over the page and closed again, and after every one of those the chevron has
+/// to still be there. Opening a surface over the page is what used to hide the fault — it forces
+/// the whole window to be redrawn, which puts the drawing back — so the assertion is made after the
+/// close, once the frames that follow are ordinary ones again.
+#[test]
+fn a_select_triggers_chevron_is_still_drawn_after_the_list_has_been_opened_and_closed() {
+    let built = Built::default();
+    let mut stage = staged!(select(&built));
+    let trigger = stage.rect_of(built.node(0));
+    stage.repaint();
+    assert_drawn(&stage, chevrons, trigger, 1, "the first frame");
+
+    // The rounds are collected and reported together rather than asserted inside the loop. A
+    // failure raised while the list is still animating out unwinds a document with a surface half
+    // torn down, and what reaches the log is that teardown rather than the round that failed.
+    let mut lost = Vec::new();
+    for round in 1..=4 {
+        stage.click(stage.centre_of(built.node(0)));
+        stage.settle();
+        stage.press_named(zgui::vocab::NamedKey::Escape);
+        stage.settle();
+        // Only a frame that came to the trigger can say anything about it. The last frame of a
+        // close repaints the region the list and its shadow left behind, and whether the trigger
+        // is inside that region is a fact about how far a popover's shadow reaches — nothing to do
+        // with drawings. A frame that never reached the trigger holds none of its glyphs either,
+        // and that is what tells the two apart: a repainted trigger brings its own text with it.
+        if stage.glyphs_in(trigger).is_empty() {
+            continue;
+        }
+        if chevrons(&stage, trigger).len() != 1 {
+            lost.push(round);
+        }
+    }
+    stage.repaint();
+    assert!(
+        lost.is_empty(),
+        "the trigger's chevron was missing from the frame that repainted it after cycles {lost:?}"
+    );
+    assert_drawn(&stage, chevrons, trigger, 1, "after four cycles");
+    stage.capture("redrawn-select-chevron");
 }

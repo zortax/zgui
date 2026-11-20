@@ -61,7 +61,7 @@ impl Frame {
             })
             .collect();
 
-        let drawings: Vec<Drawing> = drawing
+        let mut drawings: Vec<Drawing> = drawing
             .of_kind("path")
             .enumerate()
             .map(|(order, path)| Drawing {
@@ -70,6 +70,18 @@ impl Frame {
                 ink: placed_ink(path),
             })
             .collect();
+        for (kind, name) in [(Kind::Colour, "color"), (Kind::Mark, "marks")] {
+            drawings.extend(
+                drawing
+                    .of_kind(name)
+                    .enumerate()
+                    .map(|(order, item)| Drawing {
+                        order,
+                        kind,
+                        ink: placed(item),
+                    }),
+            );
+        }
         let mut shapes = drawings.clone();
         shapes.extend(quads.iter().map(|quad| Drawing {
             order: quad.order,

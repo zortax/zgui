@@ -62,7 +62,7 @@ const SLACK: f32 = 1.5;
 /// machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        match Stage::open_on(Pipeline::Scene, SHEET, $view) {
+        match Stage::open_on(Pipeline::Compositor, SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");

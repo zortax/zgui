@@ -149,7 +149,7 @@ fn partial_repaints_of_a_moving_graph_match_a_full_redraw() {
         zoom: RwSignal::new(1.0),
         dragged: RwSignal::new((100.0, 240.0)),
     };
-    let Some(mut stage) = Stage::open_on(Pipeline::Scene, SHEET, graph(scene)) else {
+    let Some(mut stage) = Stage::open_on(Pipeline::Compositor, SHEET, graph(scene)) else {
         eprintln!("skipped: no usable graphics device");
         return;
     };

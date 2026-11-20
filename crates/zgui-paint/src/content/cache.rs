@@ -19,11 +19,8 @@ use crate::content::glyphs::{GlyphCache, Rasterising};
 use crate::emit::text::{GlyphPlacementSource, GlyphSource, PlacedGlyph};
 use crate::walk::replay::hold::ResourceOwner;
 
-/// Everything one window has rasterised, held between frames.
-///
-/// One atlas serves images and vector tiles rather than one each, because they compete for the
-/// same texture memory and a budget split in advance is a budget wrong in one direction or the
-/// other.
+/// The content one window keeps between frames: the images attached to replaced nodes, the vector
+/// route caches and CPU layers, and a tile atlas.
 #[derive(Debug)]
 pub struct ContentCache {
     /// The tiles.

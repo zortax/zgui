@@ -6,10 +6,12 @@
 //! properties were written, the box was built, and no stage turned either into a primitive.
 //!
 //! So this drives the component the way an application does: through the umbrella, over the
-//! headless platform, and asks the renderer what it was handed. It is deliberately the *component*
+//! headless platform, and asks the compositor what it drew. It is deliberately the *component*
 //! rather than the `<vector>` element under it, because the size of an icon comes from the sheet the
 //! component installs — `--zui-icon-size` resolving through a second variable to a fallback — and a
 //! box that resolved to nothing paints nothing however well the element works.
+
+mod screen;
 
 use std::sync::Mutex;
 
@@ -27,75 +29,21 @@ struct Shape {
     height: f64,
     /// What fills it, as premultiplied sRGB, when a solid colour does.
     fill: Option<[f32; 4]>,
-    /// Whether the size is the geometry's own. A vector item records its geometry. A coverage
-    /// sprite records its tile, which is the geometry rounded out to whole pixels.
-    exact: bool,
 }
 
-/// The colour `paint` resolves to in `scene`, as premultiplied sRGB, when it is a solid colour.
-fn solid(scene: &zgui::scene::Scene, paint: zgui::scene::PaintRef) -> Option<[f32; 4]> {
-    match scene.paints.get(paint.id()?) {
-        Some(zgui::scene::Paint::Solid(color)) => Some(color.to_premultiplied_srgb()),
-        _ => None,
-    }
-}
-
-/// A shape of `[x, y, width, height]`.
-fn sized(bounds: [f32; 4], fill: Option<[f32; 4]>) -> Shape {
-    Shape {
-        width: f64::from(bounds[2]),
-        height: f64::from(bounds[3]),
-        fill,
-        exact: false,
-    }
-}
-
-/// The shapes of every frame of the run, in order.
+/// The shapes of every frame, in the order they were drawn.
 static SHAPES: Mutex<Vec<Vec<Shape>>> = Mutex::new(Vec::new());
 
-/// A probe that records the shapes of every frame.
-///
-/// A shape arrives as a vector item, a mark item, a coverage sprite or a quad, depending on the
-/// route the display list gives it, so all four are recorded.
-struct Recorder;
-
-impl zgui::runtime::FrameProbe for Recorder {
-    fn frame_ended(&self, window: &zgui::runtime::Window) {
-        let scene = window.scene();
-        let primitives = &scene.primitives;
-        let mut frame: Vec<Shape> = primitives
-            .vectors
-            .iter()
-            .map(|item| {
-                let bounds = item.placed_bounds();
-                Shape {
-                    width: bounds.width(),
-                    height: bounds.height(),
-                    fill: item.fill.and_then(|reference| solid(scene, reference)),
-                    exact: true,
-                }
-            })
-            .collect();
-        frame.extend(
-            primitives
-                .marks
-                .iter()
-                .map(|mark| sized(mark.bounds, solid(scene, mark.paint))),
-        );
-        frame.extend(
-            primitives
-                .mono_sprites
-                .iter()
-                .map(|sprite| sized(sprite.bounds, Some(sprite.color))),
-        );
-        frame.extend(
-            primitives
-                .quads
-                .iter()
-                .map(|quad| sized(quad.bounds, solid(scene, quad.fill))),
-        );
-        SHAPES.lock().expect("the log is not poisoned").push(frame);
-    }
+/// The shapes `drawing` drew, with the solid colour each is filled with.
+fn shapes(drawing: &zgui_testkit_compositor::Drawing) -> Vec<Shape> {
+    screen::shapes(drawing)
+        .into_iter()
+        .map(|(instance, [width, height])| Shape {
+            width,
+            height,
+            fill: instance.color("fill").or_else(|| instance.color("paint")),
+        })
+        .collect()
 }
 
 /// Drives the application over buffers for a few turns and stops.
@@ -127,9 +75,13 @@ fn an_icon_mounted_in_a_window_paints_a_shape_the_size_its_own_sheet_gave_it() {
         .with_title("icon")
         .with_size(200.0, 120.0)
         .with_stylesheet(SHEET)
-        .with_probe(std::rc::Rc::new(Recorder))
-        .with_compositor_renderer(Box::new(|_size| {
-            Box::new(zgui_testkit_compositor::NullRenderer::default())
+        .with_compositor_renderer(screen::watched(|| {
+            Box::new(|drawing| {
+                SHAPES
+                    .lock()
+                    .expect("the log is not poisoned")
+                    .push(shapes(drawing));
+            })
         }))
         .run_on(buffers, || view! { Card() })
         .expect("the application ran");
@@ -149,12 +101,12 @@ fn an_icon_mounted_in_a_window_paints_a_shape_the_size_its_own_sheet_gave_it() {
     // the sheet, about the fit and about the outline at once, and which "larger than nothing" would
     // not be: a box that collapsed to a point still produces a primitive, of no extent.
     //
-    // A coverage sprite is the geometry rounded out to whole pixels, which adds less than one pixel
-    // at each edge. That is less than the step to the next icon size.
+    // A path mask is the geometry rounded out to whole pixels, which adds less than one pixel at
+    // each edge. That is less than the step to the next icon size.
     let written = zgui::elements::kurbo::Shape::bounding_box(&CHECK.path());
     let ratio = 20.0 / CHECK.view_box();
     let shape = settled[0];
-    let rounding = if shape.exact { 0.0 } else { 2.0 };
+    let rounding = 2.0;
     let fits = |drawn: f64, asked: f64| drawn > asked - 0.01 && drawn < asked + rounding + 0.01;
     assert!(
         fits(shape.width, written.width() * ratio) && fits(shape.height, written.height() * ratio),

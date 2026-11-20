@@ -72,12 +72,11 @@ fn every_registered_cache_is_empty_after_forget() {
         let window = &mut app.app_mut().windows_mut()[0];
         let filled = filled(window);
         assert!(
-            filled.contains(&CacheId::GlyphAtlas)
-                && filled.contains(&CacheId::ParagraphShaping)
+            filled.contains(&CacheId::ParagraphShaping)
                 && filled.contains(&CacheId::VectorResources),
-            "the fixture is meant to fill the glyph atlas, the shaping cache and the vector cache \
-             before anything is forgotten, and filled only {filled:?} — an empty cache is emptied \
-             by doing nothing at all"
+            "the fixture is meant to fill the shaping cache and the vector cache before anything \
+             is forgotten, and filled only {filled:?} — an empty cache is emptied by doing nothing \
+             at all"
         );
         window.forget_caches();
         filled

@@ -216,8 +216,7 @@ fn the_words_are_inked_after_the_dialog_settles() {
 /// without a full repaint in between, because a full repaint repairs exactly the defect reported.
 #[test]
 fn the_triangle_survives_the_dialog_settling() {
-    // The triangle is a drawing.
-    let mut stage = staged!(Pipeline::Scene, delete_dialog);
+    let mut stage = staged!(delete_dialog);
     stage.wait(SETTLED);
     let at = aim(&stage, "Delete");
     stage.click(at);

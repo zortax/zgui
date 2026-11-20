@@ -18,7 +18,7 @@
 //! ```text
 //! VECTOR <scenario> <variant> <stretch> frames=N paint_p50=.. paint_p95=.. paint_max=.. render_p50=.. render_p95=..
 //! VCOUNT <scenario> <variant> <stretch> <field>=<total> ...
-//! VLIVE  <scenario> <variant> <stretch> atlas_entries_live=<start>-><end> vector_mask_tiles_live=<start>-><end> vector_layer_bytes_live=<start>-><end>
+//! VLIVE  <scenario> <variant> <stretch> atlas_entries_live=<start>-><end> vector_layer_bytes_live=<start>-><end>
 //! ```
 
 mod icons;
@@ -63,17 +63,15 @@ pub(crate) const ALL: [(&str, &str); 18] = [
 pub(super) const TICK: Duration = Duration::from_micros(8_333);
 
 /// The counters a `VCOUNT` line prints, in order.
-const PRINTED: [Counter; 37] = [
+const PRINTED: [Counter; 32] = [
     Counter::VectorBackendBuilt,
     Counter::VelloRenders,
     Counter::VectorEncodeHits,
     Counter::VectorEncodeMisses,
-    Counter::VectorRouteMask,
     Counter::VectorRouteGeneral,
     Counter::VectorRouteAnalytic,
     Counter::VectorRouteMarks,
     Counter::VectorRoutePathGlyphs,
-    Counter::PathGlyphTilesRasterised,
     Counter::MarksUnionBins,
     Counter::MarksPayloadBytes,
     Counter::SeriesPayloadsBuilt,
@@ -81,10 +79,7 @@ const PRINTED: [Counter; 37] = [
     Counter::SeriesDrawsProvisional,
     Counter::SeriesChunksDrawn,
     Counter::SeriesChunksCulled,
-    Counter::VectorMaskMisses,
-    Counter::VectorMaskBudgetOverflow,
     Counter::VectorReplaysMoved,
-    Counter::VectorTierChanges,
     Counter::VelloPasses,
     Counter::AtlasTilesEvicted,
     Counter::ChunksReencoded,
@@ -236,9 +231,8 @@ impl Stretch {
             )
         };
         println!(
-            "VLIVE  {scenario} {variant} {name} {} {} {}",
+            "VLIVE  {scenario} {variant} {name} {} {}",
             live(Counter::AtlasEntriesLive),
-            live(Counter::VectorMaskTilesLive),
             live(Counter::VectorLayerBytesLive),
         );
     }

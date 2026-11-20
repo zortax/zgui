@@ -130,23 +130,20 @@ fn run() -> Option<&'static Opened> {
     static OPENED: std::sync::OnceLock<Option<Opened>> = std::sync::OnceLock::new();
     OPENED
         .get_or_init(|| {
-            if !device::available() {
+            if !device::available_on(device::Pipeline::Compositor) {
                 return None;
             }
             let _guard = device::device_lock();
             grab::forget();
             let log: Log = Arc::new(Mutex::new(Vec::new()));
             let found = Mutex::new(Found::default());
-            device::drawn_on(
-                zgui::app()
-                    .with_title("gallery")
-                    .with_size(crate::app::WIDTH, crate::app::HEIGHT)
-                    .with_stylesheet(crate::shell::SHEET),
-                device::Pipeline::Scene,
-                &log,
-            )
-            .run_on(buffers(&found), || (Grab, view! { Gallery() }.into_view()))
-            .expect("the gallery ran");
+            let app = zgui::app()
+                .with_title("gallery")
+                .with_size(crate::app::WIDTH, crate::app::HEIGHT)
+                .with_stylesheet(crate::shell::SHEET);
+            device::drawn_on(app, device::Pipeline::Compositor, &log)
+                .run_on(buffers(&found), || (Grab, view! { Gallery() }.into_view()))
+                .expect("the gallery ran");
             let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
             assert!(!frames.is_empty(), "the gallery drew no frame at all");
             let found = found.into_inner().unwrap_or_else(|held| held.into_inner());
@@ -215,6 +212,20 @@ fn rimmed(rect: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
             DevicePx(rect.size.height.0 + 2.0),
         ),
     )
+}
+
+#[test]
+fn the_gallery_puts_its_drawings_in_the_frame() {
+    let opened = opened!();
+    let frame = settled(opened);
+    // The first frame redraws the whole surface and records only what is on it: the icons further
+    // down the gallery are recorded when a scroll brings them into view.
+    assert!(
+        frame.drawings.len() >= 15,
+        "the gallery's visible icons produced only {} paths, images and marks, so this is \
+         measuring the wrong document rather than the wrong pixels",
+        frame.drawings.len()
+    );
 }
 
 #[test]

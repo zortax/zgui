@@ -7,9 +7,8 @@
 
 mod raster;
 
-use raster::measure::{self, Level};
-use raster::page::{self, BACKDROP, INK};
-use raster::script::MARKER;
+use raster::measure;
+use raster::page::{self, INK, LID, LID_TOP, PANEL};
 
 /// The runs, or nothing on a machine with no graphics device.
 macro_rules! runs {
@@ -91,8 +90,8 @@ fn a_mounted_icon_puts_ink_on_the_device_in_the_colour_of_the_text_around_it() {
 fn the_ink_covers_exactly_the_square_the_box_and_the_view_box_put_it_in() {
     let runs = runs!();
     let frame = page::Runs::settled(&runs.marked);
-    let bounds = measure::ink_bounds(&frame.full, BACKDROP)
-        .expect("a rendering with nothing but the backdrop in it has no icon in it");
+    let bounds = measure::ink_bounds(&frame.full, PANEL)
+        .expect("a rendering with nothing but the panel colour in it has no icon in it");
     let (left, top, right, bottom) = expected_ink();
 
     let slack = 1;
@@ -119,14 +118,14 @@ fn the_ink_covers_exactly_the_square_the_box_and_the_view_box_put_it_in() {
     );
 }
 
-/// The hole in the middle of the ring shows what is behind it.
+/// The hole in the middle of the ring shows the panel behind it.
 ///
 /// The one assertion a bounding box cannot make. The ring is one outline: an outer circle wound one
 /// way and an inner one wound the other, filled by the non-zero rule. A rasteriser that ignored the
 /// winding, or a paint stage that split the two contours into separate filled shapes, produces a
 /// disc — same extent, same colour, same everything a display-list assertion can reach.
 #[test]
-fn the_counter_of_the_ring_shows_what_is_behind_it() {
+fn the_counter_of_the_ring_shows_the_panel_through_it() {
     let runs = runs!();
     let frame = page::Runs::settled(&runs.marked);
 
@@ -136,10 +135,10 @@ fn the_counter_of_the_ring_shows_what_is_behind_it() {
         "only {inside} pixels were tested as the ring's counter, which is too few for the hole in \
          a ninety-six pixel ring — the region is wrong, not the rendering"
     );
-    if let Some((x, y, found)) = measure::first_unlike(&frame.full, in_counter, BACKDROP) {
+    if let Some((x, y, found)) = measure::first_unlike(&frame.full, in_counter, PANEL) {
         panic!(
             "({x}, {y}) is inside the ring's counter and came back {found:?} rather than the \
-             {BACKDROP:?} behind it: the hole is filled in"
+             panel behind it: the hole is filled in"
         );
     }
 }
@@ -154,11 +153,11 @@ fn the_counter_of_the_ring_shows_what_is_behind_it() {
 fn the_edges_are_shaded_rather_than_stepped_and_the_shading_is_only_at_the_edges() {
     let runs = runs!();
     let frame = page::Runs::settled(&runs.marked);
-    let shaded = measure::partial(&frame.full, INK, BACKDROP);
+    let shaded = measure::partial(&frame.full, INK, PANEL);
     assert!(
         shaded.len() > 200,
-        "only {} pixels of this rendering are a partial coverage of the ink over the backdrop, \
-         which is what a hard-stepped outline looks like",
+        "only {} pixels of this rendering are a partial coverage of the ink over the panel, which \
+         is what a hard-stepped outline looks like",
         shaded.len()
     );
     let levels = measure::distinct(&frame.full, &shaded, 2);
@@ -202,96 +201,74 @@ fn the_edges_are_shaded_rather_than_stepped_and_the_shading_is_only_at_the_edges
     );
 }
 
-/// A frame whose document draws nothing plans no rasterisation pass.
+/// A box drawn after the drawing covers it, and the panel drawn before it shows through the hole.
+///
+/// Submission order is z-order here — there is no depth buffer, no stencil and no order-independent
+/// scheme — so a composited vector pass has to be inserted at the drawing's own index in the batch
+/// stream. Inserted at the end it would cover the box; inserted at the start it would be covered by
+/// the panel and there would be no icon at all.
 #[test]
-fn a_document_with_no_drawing_in_it_costs_no_rasterisation() {
+fn a_quad_before_the_drawing_is_under_it_and_a_quad_after_it_is_over_it() {
+    let runs = runs!();
+    let frame = page::Runs::settled(&runs.layered);
+
+    let above = |_x: i32, y: i32| y < LID_TOP;
+    let below = |x: i32, y: i32| (LID_TOP..LID_TOP + 48).contains(&y) && (16..112).contains(&x);
+
+    let ring_above = measure::count(&frame.full, |x, y| in_band(x, y) && above(x, y));
+    assert!(
+        ring_above > 200,
+        "only {ring_above} pixels of the ring are above the lid, so nothing was compared"
+    );
+    if let Some((x, y, found)) =
+        measure::first_unlike(&frame.full, |x, y| in_band(x, y) && above(x, y), INK)
+    {
+        panic!("({x}, {y}) is ring above the lid and came back {found:?} rather than {INK:?}");
+    }
+
+    let under = measure::count(&frame.full, |x, y| in_band(x, y) && below(x, y));
+    assert!(
+        under > 200,
+        "only {under} pixels of the ring are under the lid"
+    );
+    if let Some((x, y, found)) =
+        measure::first_unlike(&frame.full, |x, y| in_band(x, y) && below(x, y), LID)
+    {
+        panic!(
+            "({x}, {y}) is ring under an opaque box drawn after it and came back {found:?}: the \
+             composite landed after the box instead of before it"
+        );
+    }
+
+    // And the panel, drawn before the drawing, is visible through the counter above the lid.
+    let hole = measure::count(&frame.full, |x, y| in_counter(x, y) && above(x, y));
+    assert!(hole > 200, "only {hole} counter pixels are above the lid");
+    if let Some((x, y, found)) =
+        measure::first_unlike(&frame.full, |x, y| in_counter(x, y) && above(x, y), PANEL)
+    {
+        panic!("({x}, {y}) is counter above the lid and came back {found:?} rather than the panel");
+    }
+}
+
+/// A frame whose document draws nothing draws no path.
+#[test]
+fn a_document_with_no_drawing_in_it_draws_no_path() {
     let runs = runs!();
     for frame in &runs.bare {
         assert_eq!(frame.items, 0, "the bare document produced a drawing");
-        assert_eq!(
-            frame.vector_passes, 0,
-            "a frame with no drawing in it planned a rasterisation pass"
-        );
+        assert_eq!(frame.paths, 0, "a frame with no drawing in it drew a path");
     }
-    // The turned icon, on the same device through the same renderer, does plan one — so the count
-    // above is about this document rather than about a number nothing ever moves. The upright icon
-    // is no comparison: it arrives as a coverage mask, which needs no pass.
+    // The turned icon, on the same device through the same compositor, does draw one, so the
+    // count above is about this document rather than about a number nothing ever moves. The
+    // upright icon is no comparison: it arrives as a path mask.
     let turned = page::Runs::settled(&runs.turned);
     assert!(
-        turned.vector_passes > 0,
-        "a turned icon planned no rasterisation pass ({} drawings)",
+        turned.paths > 0,
+        "a turned icon drew no path ({} drawings)",
         turned.items
     );
-}
-
-/// A repaint scissored to the drawing redraws that rectangle and leaves the rest alone.
-///
-/// The target is filled with a colour that appears in no frame first. Whatever the scissored draw
-/// does not touch is still that colour afterwards, and whatever it does touch is the frame.
-#[test]
-fn a_repaint_scissored_to_the_drawing_touches_that_rectangle_and_nothing_else() {
-    let runs = runs!();
-    let frame = page::Runs::settled(&runs.marked);
-    let rectangle = frame.declared.expect("a drawing was planned");
-    let scissored = frame.scissored.as_ref().expect("a scissored repaint ran");
-
-    let inside = |x: i32, y: i32| rectangle.contains(zgui::geom::Point::new(x, y));
-    let outside = move |x: i32, y: i32| !inside(x, y);
-
-    // Outside: still the marker, so the draw physically did not write there.
-    let untouched = measure::count(scissored, outside);
-    assert!(
-        untouched > 10_000,
-        "only {untouched} pixels lie outside the drawing's rectangle in a {}px window",
-        page::SURFACE
-    );
-    if let Some((x, y, found)) = measure::first_unlike(scissored, outside, MARKER) {
-        panic!(
-            "({x}, {y}) is outside the damage rectangle {rectangle:?} and came back {found:?} \
-             rather than the {MARKER:?} that was on the target before the repaint: the scissor \
-             did not hold"
-        );
+    let bare = page::Runs::settled(&runs.bare);
+    if let Some((x, y, found)) = measure::first_unlike(&bare.full, |_, _| true, PANEL) {
+        panic!("({x}, {y}) of the bare panel came back {found:?} rather than {PANEL:?}");
     }
-
-    // Inside: the frame, exactly as a full repaint draws it.
-    if let Some((x, y, was, now)) = measure::first_difference(&frame.full, scissored, inside) {
-        panic!(
-            "({x}, {y}) is inside the damage rectangle and a full repaint drew {was:?} where the \
-             scissored one drew {now:?}: the rectangle was not redrawn"
-        );
-    }
-    // And the rectangle really did change, so the comparison above is not two copies of the marker.
-    let changed = measure::count(scissored, |x, y| {
-        inside(x, y) && scissored.rgba(x, y) != MARKER
-    });
-    assert!(
-        changed > 2_000,
-        "only {changed} pixels inside the rectangle differ from what was on the target before the \
-         repaint, so nothing was redrawn"
-    );
-}
-
-/// The same frame reached by a scissored repaint is the same bytes as a full one.
-#[test]
-fn a_scissored_repaint_is_pixel_identical_to_a_full_one() {
-    let runs = runs!();
-    let frame = page::Runs::settled(&runs.marked);
-    let replayed = frame.replayed.as_ref().expect("a replayed repaint ran");
-    if let Some((x, y, full, partial)) =
-        measure::first_difference(&frame.full, replayed, |_, _| true)
-    {
-        panic!(
-            "({x}, {y}) came back {full:?} from a full repaint and {partial:?} from a repaint \
-             scissored to the drawing"
-        );
-    }
-    // Non-vacuity: the two readbacks are of a picture with an icon in it, not of two blank targets.
-    assert!(
-        matches!(
-            measure::level(replayed, page::centre().0 as i32, 32, INK, BACKDROP),
-            Level::Near | Level::Between
-        ),
-        "the replayed rendering has no ink at the top of the ring, so the comparison compared two \
-         empty targets"
-    );
 }

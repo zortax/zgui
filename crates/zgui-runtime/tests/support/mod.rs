@@ -380,3 +380,84 @@ pub fn line_boxes(
     }
     found
 }
+
+/// What a [`watched`] renderer hands its watcher after every frame: what the output shows and the
+/// damage the frame was drawn against.
+pub type Watch = Box<dyn FnMut(&zgui_testkit_compositor::Drawing, &zgui_bits::DamageSet)>;
+
+/// A renderer that draws through [`compositor`] and hands every frame to a watcher.
+struct Watched {
+    inner: Box<dyn Renderer>,
+    watch: Watch,
+}
+
+impl Renderer for Watched {
+    fn capabilities(&self) -> zgui_render::RenderCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn configure(&mut self, target: RenderTarget) {
+        self.inner.configure(target);
+    }
+
+    fn target(&self) -> Option<RenderTarget> {
+        self.inner.target()
+    }
+
+    fn draw(
+        &mut self,
+        scene: &zgui_scene::Scene,
+        damage: &zgui_bits::DamageSet,
+    ) -> zgui_render::FrameOutcome {
+        let outcome = self.inner.draw(scene, damage);
+        let shown = self
+            .inner
+            .as_any()
+            .and_then(|any| any.downcast_ref::<zgui_runtime::compositor::CompositorRenderer>())
+            .and_then(|bridge| zgui_testkit_compositor::drawing_of(bridge.renderer()));
+        if let Some(drawing) = shown {
+            (self.watch)(&drawing, damage);
+        }
+        outcome
+    }
+
+    fn register_external(
+        &mut self,
+        texture: zgui_render::ExternalTexture,
+    ) -> zgui_render::TextureHandle {
+        self.inner.register_external(texture)
+    }
+
+    fn release_external(&mut self, handle: zgui_render::TextureHandle) {
+        self.inner.release_external(handle);
+    }
+
+    fn memory(&self) -> zgui_render::MemoryReport {
+        self.inner.memory()
+    }
+
+    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
+        self.inner.texture_sink()
+    }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        self.inner.as_any_mut()
+    }
+
+    fn as_any(&self) -> Option<&dyn core::any::Any> {
+        self.inner.as_any()
+    }
+}
+
+/// Returns a renderer factory that draws through [`compositor`] and hands every frame to the
+/// watcher `make` builds.
+pub fn watched(
+    mut make: impl FnMut() -> Watch + 'static,
+) -> impl FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, AppError> + 'static {
+    move |surface, target| {
+        Ok(Box::new(Watched {
+            inner: compositor(surface, target)?,
+            watch: make(),
+        }) as Box<dyn Renderer>)
+    }
+}

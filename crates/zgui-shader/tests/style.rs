@@ -272,67 +272,6 @@ fn an_effect_named_by_the_wrong_property_is_refused() {
     assert_eq!(quads.len(), 1, "the box keeps the painting it had");
 }
 
-/// A filter effect, which reads the box's own content.
-static GLASS: ShaderEffect<NoParams> = shader! {
-    name: "style-glass",
-    mode: Filter,
-    reach: 6.0,
-    source: r#"
-        fn apply(
-            in: ShaderInput,
-            params: Params,
-            beneath: texture_2d<f32>,
-            beneath_sampler: sampler,
-            region: FilterSource,
-        ) -> vec4<f32> {
-            return source_at(beneath, beneath_sampler, region, in.local + vec2<f32>(4.0, 0.0));
-        }
-    "#,
-};
-
-/// A backdrop filter reads what was drawn *beneath* the box rather than what the box drew, so it
-/// reaches the display list as a backdrop rather than as a step of the box's own chain.
-#[test]
-fn a_backdrop_effect_becomes_a_backdrop_the_box_reads_through() {
-    let _ = GLASS.register();
-    let mut app = app(&sheet("--zgui-backdrop-filter: style-glass"));
-    app.settle(16);
-
-    let backdrops = app.app_mut().windows_mut()[0]
-        .scene()
-        .primitives
-        .backdrops
-        .clone();
-    assert_eq!(backdrops.len(), 1, "the box reads what is beneath it");
-    assert!(
-        backdrops[0]
-            .filters
-            .iter()
-            .any(|filter| matches!(filter, zgui_scene::Filter::Custom { .. })),
-        "through the effect the sheet named: {:?}",
-        backdrops[0].filters
-    );
-}
-
-/// A backdrop that samples a neighbourhood has to say how far, or a partial redraw feeds it its
-/// own previous output and the panel smears further every frame.
-#[test]
-fn a_backdrop_effect_reads_as_far_outside_itself_as_it_declared() {
-    let _ = GLASS.register();
-    let mut app = app(&sheet("--zgui-backdrop-filter: style-glass"));
-    app.settle(16);
-
-    let backdrops = app.app_mut().windows_mut()[0]
-        .scene()
-        .primitives
-        .backdrops
-        .clone();
-    assert!(
-        !backdrops[0].reads_only_what_it_writes(),
-        "this effect declared a reach, so it reads outside its own rectangle"
-    );
-}
-
 /// An effect that follows the pointer, which is what the declaration is for.
 static FOLLOW: ShaderEffect<NoParams> = shader! {
     name: "style-follow",

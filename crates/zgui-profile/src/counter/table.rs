@@ -229,10 +229,11 @@ counters! {
     /// Bytes of chunk, transient and resolved-remap content copied into the persistent arenas.
     ChunkBytesUploaded => chunk_bytes_uploaded, Group::RendererSpecific;
 
-    /// Primitives added to the scene.
+    /// Primitives added to the scene, and compositor items a frame drew or culled.
     PrimitivesEmitted => primitives_emitted, Group::BackendNeutral;
 
-    /// Primitives dropped before reaching the scene because nothing damaged could see them.
+    /// Primitives dropped before reaching the scene, and compositor items a frame culled, because
+    /// nothing damaged could see them.
     PrimitivesCulled => primitives_culled, Group::Skip { done: Counter::PrimitivesEmitted };
 
     /// Sprites whose resource had to be looked up again after the whole frame had been pushed.
@@ -337,13 +338,6 @@ counters! {
 
     /// Cached rasters freed to bring the atlas back under its soft limit.
     AtlasTilesEvicted => atlas_tiles_evicted, Group::BackendNeutral;
-
-    /// Images that could not enter the atlas, even after an eviction step made room.
-    ///
-    /// Each count is a picture a frame resolved and then drew nothing for. A nonzero total that
-    /// keeps growing means the colour pool is too small for the working set, or a single image is
-    /// larger than any texture the device may create.
-    ImageInsertFailed => image_insert_failed, Group::BackendNeutral;
 
     /// Encoded bytes live `ImageBytes` registrations are holding.
     ///
@@ -491,9 +485,6 @@ counters! {
     /// Vector item encodings the general rasteriser had to make.
     VectorEncodeMisses => vector_encode_misses, Group::RendererSpecific;
 
-    /// Shapes emitted as coverage masks in the shared atlas.
-    VectorRouteMask => vector_route_mask, Group::BackendNeutral;
-
     /// Shapes emitted as items for the general vector rasteriser.
     VectorRouteGeneral => vector_route_general, Group::BackendNeutral;
 
@@ -505,9 +496,6 @@ counters! {
 
     /// Shapes and series parts emitted as path glyphs.
     VectorRoutePathGlyphs => vector_route_path_glyphs, Group::BackendNeutral;
-
-    /// Path glyph phase cells rasterised.
-    PathGlyphTilesRasterised => path_glyph_tiles_rasterised, Group::BackendNeutral;
 
     /// Union coverage bins planned this frame.
     MarksUnionBins => marks_union_bins, Group::BackendNeutral;
@@ -534,20 +522,8 @@ counters! {
     /// was pinned.
     MarksUncached => marks_uncached, Group::BackendNeutral;
 
-    /// Coverage masks rasterised because no tile held their geometry.
-    VectorMaskMisses => vector_mask_misses, Group::BackendNeutral;
-
-    /// Mask requests declined because the frame had spent its budget for new masks.
-    VectorMaskBudgetOverflow => vector_mask_budget_overflow, Group::BackendNeutral;
-
     /// Vector items a chunk replay moved.
     VectorReplaysMoved => vector_replays_moved, Group::BackendNeutral;
-
-    /// Times one shape part went from the mask route to a decline, or back.
-    VectorTierChanges => vector_tier_changes, Group::BackendNeutral;
-
-    /// Geometry identities the mask cache maps to atlas tiles right now.
-    VectorMaskTilesLive => vector_mask_tiles_live, Group::Live;
 
     /// Drawings emitted as one CPU layer sprite.
     VectorRouteLayer => vector_route_layer, Group::BackendNeutral;

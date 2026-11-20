@@ -153,15 +153,6 @@ impl Part {
         }
     }
 
-    /// The renderer this section is drawn through: the compositor for text, zgui's own renderer
-    /// for vector documents and illustrations.
-    const fn pipeline(self) -> Pipeline {
-        match self {
-            Self::Text => Pipeline::Compositor,
-            Self::Svg | Self::Artwork => Pipeline::Scene,
-        }
-    }
-
     /// What this section is called in a capture's file name.
     const fn slug(self) -> &'static str {
         match self {
@@ -299,7 +290,7 @@ fn run(part: Part) -> Option<&'static Opened> {
         [const { std::sync::OnceLock::new() }; Part::ALL.len()];
     OPENED[part as usize]
         .get_or_init(|| {
-            if !device::available_on(part.pipeline()) {
+            if !device::available_on(Pipeline::Compositor) {
                 return None;
             }
             let _guard = device::device_lock();
@@ -310,7 +301,7 @@ fn run(part: Part) -> Option<&'static Opened> {
                 .with_title("gallery")
                 .with_size(WIDTH, HEIGHT)
                 .with_stylesheet(crate::shell::SHEET);
-            device::drawn_on(app, part.pipeline(), &log)
+            device::drawn_on(app, Pipeline::Compositor, &log)
                 .run_on(buffers(part, &found), move || (Grab, part.view()))
                 .expect("the gallery ran");
             let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
@@ -807,12 +798,13 @@ fn a_document_with_a_ramp_and_a_clip_draws_the_ramp_and_only_inside_the_clip() {
     );
 
     // The clip is a diamond inside a square drawing, so the drawing's own corners show the pane
-    // behind it and not the ramp. The pane is read at its own corner, because its fill is a box
-    // background, which zgui's own renderer does not draw.
+    // behind it and not the ramp. The pane is read between its left edge and the drawing, clear of
+    // its rounded corners.
     let pane = region(opened, "facet on rose");
-    let [r, g, b, _] = frame
-        .pixels
-        .rgba(pane.origin.x.0 as i32 + 2, pane.origin.y.0 as i32 + 2);
+    let [r, g, b, _] = frame.pixels.rgba(
+        ((pane.origin.x.0 + ink.0) / 2.0) as i32,
+        ((ink.1 + ink.3) / 2.0) as i32,
+    );
     let behind = [r, g, b];
     for (x, y) in [
         (ink.0 + 2.0, ink.1 + 2.0),
