@@ -44,8 +44,6 @@ zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.
 # The compositor a window draws its boxes and text through, on a device whose composed target and
 # per-frame transcript the painted fixtures read back.
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
-# Holds the atlas uploads of zgui's own display list until the device that draws it exists.
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 compositor-api.workspace = true
 compositor-types.workspace = true
 # The map the ink measurement tallies colours in.

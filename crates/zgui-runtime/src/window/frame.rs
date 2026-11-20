@@ -1769,14 +1769,7 @@ impl Window {
         // result: the bytes did not move, the geometry did not move, and the pixels are plausible.
         self.scene.check_spatial_dependencies();
         mark("p.upload");
-        let probe = self.probe.clone();
-        let mut uploads = probe.as_deref().and_then(|probe| probe.atlas_uploads());
-        let flushed = match uploads.as_deref_mut() {
-            Some(sink) => self.content.flush(sink),
-            None => self.content.flush(&mut crate::window::unsent::Unsent),
-        };
-        drop(uploads);
-        match flushed {
+        match self.content.flush(&mut crate::window::unsent::Unsent) {
             // Every queued write reached the device, so a shared attachment's tile can stand in
             // for its host texels from here on: the cache gives its copies back, and the loader
             // gives back its own for every tile the cache vouches is resident. Small pictures

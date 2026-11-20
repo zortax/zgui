@@ -352,7 +352,7 @@ fn tiles_of_a_huge_drawing_match_the_general_route() {
         let mut rasters = HashMap::new();
         {
             let store = zgui_layout::tree::store::LayoutStore::new(zgui_arena::DocumentId::FIRST);
-            let frame = content.frame(&store, &NoShaped, &zgui_text::NoRaster);
+            let frame = content.frame(&store, &NoShaped);
             let layers = frame.layers().expect("a content frame keeps layers");
             for (pixels, local) in &placed_tiles {
                 layers.shown(pixels.key, Some(*local));
@@ -395,5 +395,9 @@ impl zgui_text::ShapedGlyphs for NoShaped {
         _line: u16,
         _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
+    }
+
+    fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        None
     }
 }

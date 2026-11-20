@@ -228,17 +228,10 @@ impl<'a> Recorder<'a> {
     /// Appends a glyph run of `glyphs` at the normalised variation coordinates `coords`, empty
     /// for the default instance of its font.
     ///
-    /// The run's glyph and coordinate ranges are replaced. `instanced` marks a run shaped at a
-    /// variation instance, which is drawn at the default instance.
-    pub fn glyph_run(&mut self, mut run: GlyphRun, glyphs: &[Glyph], instanced: bool) {
-        let start = self.items.glyphs.len() as u32;
-        self.items.glyphs.extend_from_slice(glyphs);
-        run.glyphs = compositor_types::ArenaRange {
-            start,
-            len: glyphs.len() as u32,
-        };
-        run.coords = compositor_types::ArenaRange::default();
-        self.items.instanced += usize::from(instanced);
+    /// The run's glyph and coordinate ranges are replaced.
+    pub fn glyph_run(&mut self, mut run: GlyphRun, glyphs: &[Glyph], coords: &[i16]) {
+        run.glyphs = append(&mut self.items.glyphs, glyphs);
+        run.coords = append(&mut self.items.coords, coords);
         self.items.push_glyph_run(run);
     }
 
@@ -265,15 +258,6 @@ impl<'a> Recorder<'a> {
     pub fn backdrop(&mut self, mut backdrop: Backdrop, chain: Arc<[Filter]>) {
         backdrop.filters = self.items.filters(chain);
         self.items.push_backdrop(backdrop);
-    }
-
-    /// Returns a recorder into the same chunk for a shorter borrow.
-    pub fn reborrow(&mut self) -> Recorder<'_> {
-        Recorder {
-            scene: self.scene,
-            items: self.items,
-            resolver: self.resolver.as_mut().map(Resolver::reborrow),
-        }
     }
 
     /// Returns the clip node a node reference was taken from.

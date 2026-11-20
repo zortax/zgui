@@ -54,14 +54,6 @@ pub trait FrameProbe {
     /// A frame has finished on `window`.
     fn frame_ended(&self, window: &Window);
 
-    /// Returns where the window sends the uploads of zgui's own atlas.
-    ///
-    /// The compositor draws nothing from that atlas, so by default the uploads are dropped. A probe
-    /// that draws the window's display list itself takes them here.
-    fn atlas_uploads(&self) -> Option<std::cell::RefMut<'_, dyn zgui_atlas::TextureSink>> {
-        None
-    }
-
     /// What to call this probe in a diagnostic rendering of the window's options.
     ///
     /// Defaulted, because a probe is identified by what it does rather than by what it is called,

@@ -6,7 +6,6 @@ mod vectors;
 use core::cell::RefCell;
 
 use zgui_atlas::{Atlas, AtlasKey, AtlasLimits, AtlasReport, TextureSink};
-use zgui_geom::Device;
 use zgui_layout::fragment::ParagraphId;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_profile::{Counter, counter};
@@ -15,8 +14,7 @@ use zgui_text::ShapedGlyphs;
 
 use crate::content::cache::images::ImageContent;
 use crate::content::cache::vectors::{FrameVectors, VectorContent};
-use crate::content::glyphs::{GlyphCache, Rasterising};
-use crate::emit::text::{GlyphPlacementSource, GlyphSource, PlacedGlyph};
+use crate::emit::text::GlyphSource;
 use crate::walk::replay::hold::ResourceOwner;
 
 /// The content one window keeps between frames: the images attached to replaced nodes, the vector
@@ -25,8 +23,6 @@ use crate::walk::replay::hold::ResourceOwner;
 pub struct ContentCache {
     /// The tiles.
     atlas: Atlas,
-    /// What each glyph rasterised to, last time anything asked.
-    glyphs: GlyphCache,
     /// The vector route caches and the CPU layers.
     vectors: VectorContent,
     /// What is attached to each replaced node.
@@ -44,7 +40,6 @@ impl ContentCache {
     pub fn new(limits: AtlasLimits) -> Self {
         Self {
             atlas: Atlas::new(limits),
-            glyphs: GlyphCache::default(),
             vectors: VectorContent::default(),
             images: ImageContent::default(),
             registry: ResourceRegistry::new(),
@@ -82,16 +77,13 @@ impl ContentCache {
         // reach a working set and stay there says so here; one that never stops growing says that
         // here too, and says it as a count rather than as a byte figure an allocator has smeared.
         counter::set(Counter::AtlasEntriesLive, self.atlas.len() as u64);
-        counter::set(Counter::GlyphEntriesLive, self.glyphs.held() as u64);
     }
 
     /// Ends a frame.
     ///
-    /// This drops the prefetched glyphs the walk did not ask for and the layer rasters no drawing
-    /// uses any more. Call it after [`ContentCache::flush`], for the reason
-    /// [`ContentCache::enforce_soft_limit`] gives.
+    /// This drops the layer rasters no drawing uses any more. Call it after
+    /// [`ContentCache::flush`], for the reason [`ContentCache::enforce_soft_limit`] gives.
     pub fn end_frame(&mut self) {
-        self.glyphs.drop_prefetched();
         self.vectors.end_frame();
     }
 
@@ -108,15 +100,6 @@ impl ContentCache {
     /// How many bytes of rasters the cache is holding: the atlas, and the CPU vector layers.
     pub fn resident_bytes(&self) -> u64 {
         self.atlas.resident_bytes() + self.layer_bytes()
-    }
-
-    /// How many glyph keys have a remembered rasterisation.
-    ///
-    /// More than the atlas holds tiles for, and legitimately so: a glyph that rasterised to no
-    /// pixels at all is remembered here and occupies no tile, which is what stops every space on
-    /// the page running the face's hinting program again on every full repaint.
-    pub fn glyphs_held(&self) -> usize {
-        self.glyphs.held()
     }
 
     /// Sets the level [`ContentCache::enforce_soft_limit`] frees cold content back down to.
@@ -183,7 +166,6 @@ impl ContentCache {
     pub fn evict(&mut self) -> zgui_atlas::Eviction {
         let mut removed = Vec::new();
         let freed = self.atlas.evict_least_recently_used_into(&mut removed);
-        self.glyphs.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }
@@ -202,7 +184,6 @@ impl ContentCache {
     pub fn enforce_soft_limit(&mut self) -> zgui_atlas::Eviction {
         let mut removed = Vec::new();
         let freed = self.atlas.evict_to_soft_limit_into(&mut removed);
-        self.glyphs.forget_tiles(&removed);
         counter::add(Counter::AtlasTilesEvicted, freed.tiles as u64);
         freed
     }
@@ -213,7 +194,6 @@ impl ContentCache {
     /// The attached images survive, because their texels are held here rather than on the device.
     pub fn clear(&mut self) {
         self.atlas.clear();
-        self.glyphs.clear();
         self.vectors.clear();
         // Every name handed out before now pointed into a texture that is about to stop existing,
         // so they stop being names. A sprite still carrying one resolves to nothing rather than to
@@ -233,8 +213,7 @@ pub struct FrameContent<'a> {
     /// The vector route caches and the CPU layers, behind a cell because emitting is an immutable
     /// walk.
     vectors: FrameVectors<'a>,
-    /// The atlas, the glyph cache and their sink, behind a cell because emitting is an immutable
-    /// walk.
+    /// The atlas, behind a cell because emitting is an immutable walk.
     writing: RefCell<Rasterising<'a>>,
 }
 
@@ -242,10 +221,6 @@ pub struct FrameContent<'a> {
 pub(crate) struct Rasterising<'a> {
     /// The tiles.
     pub(crate) atlas: &'a mut Atlas,
-    /// Geometry identities for small solid shapes stored in the monochrome atlas.
-    pub(crate) vector_masks: &'a mut VectorMaskCache,
-    /// Whole drawings rasterised into the image pool.
-    pub(crate) vector_layers: &'a mut VectorLayerCache,
     /// Every atlas key handed out since the list was last drained.
     ///
     /// The list is how what a fragment *drew* becomes something that can be held: a primitive

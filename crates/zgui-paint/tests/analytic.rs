@@ -428,8 +428,7 @@ fn moved(shapes: Vec<zgui_canvas::Shape>, turned: bool) -> (PaintReport, usize, 
     let mut harness = Harness::new(tree, css);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let raster = zgui_testkit_scene::MonoRaster::new();
-    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
     assert_eq!(
         first.vector_routes.len(),
         1,
@@ -443,7 +442,7 @@ fn moved(shapes: Vec<zgui_canvas::Shape>, turned: bool) -> (PaintReport, usize, 
     // The style reaches the box in place, so the canvas keeps its fragment and only moves.
     zgui_layout::boxtree::patch::restyle(&mut harness.store, &harness.document, [spacer]);
     harness.compose_from_marks(400.0, 200.0);
-    let report = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+    let report = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
     let offsets = harness.compositor.sync.offsets;
     let after = top(harness.redraw());
     let shift = before.zip(after).map(|(before, after)| after - before);

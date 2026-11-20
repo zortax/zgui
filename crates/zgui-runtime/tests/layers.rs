@@ -1,9 +1,9 @@
 //! Static vector documents drawn as CPU layers by a real window.
 //!
 //! The paint stage's tests prove the route and the records. These prove the window: that a page of
-//! such documents never puts a general vector item in the display list, that a zoom settles into
-//! exact rasters through the frames the paint report asks for, and that the window parks
-//! afterwards.
+//! such documents never hands the renderer a general vector item, that a zoom settles into exact
+//! rasters through the frames the paint report asks for, that the window parks afterwards, and
+//! that a drawing owed before a scroll shift is drawn where the shift moved it.
 
 mod support;
 
@@ -17,8 +17,6 @@ use zgui_reactive::prelude::{Get, Set};
 use zgui_runtime::App;
 use zgui_testkit_scene::counters::Recording;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
-
-mod support;
 
 /// One frame, reduced to what these cases ask about.
 #[derive(Clone, Copy, Debug)]
@@ -38,11 +36,14 @@ fn mount(
     log: &Log,
     view: impl FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 ) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
+    let factory = Rc::clone(log);
     let handler = App::new()
         .with_title("layers")
         .with_size(800.0, 600.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(support::watched(move || {
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(support::screen))
+        .with_probe(support::watched(move || {
             let log = Rc::clone(&factory);
             Box::new(
                 move |drawing: &zgui_testkit_compositor::Drawing, _damage: &_| {
@@ -52,7 +53,7 @@ fn mount(
                     });
                 },
             )
-        })))
+        }))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)

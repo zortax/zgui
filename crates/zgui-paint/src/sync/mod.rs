@@ -272,7 +272,6 @@ impl CompositorSync {
         self.mirror.recorded(key);
         self.report.recorded += 1;
         self.report.omitted_primitives += prims.len();
-        self.report.omitted_instances += items.instanced;
         self.chunks.insert(
             fragment.key,
             Chunk {

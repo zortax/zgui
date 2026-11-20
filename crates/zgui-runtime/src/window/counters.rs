@@ -39,7 +39,10 @@ pub(crate) fn committed(report: &CommitReport, sync: &SyncReport) {
 
 /// Adds what a frame the compositor built did to the counters.
 pub(crate) fn built(frame: &FrameCounters) {
-    counter::add(Counter::PrimitivesEmitted, u64::from(frame.items_drawn));
+    counter::add(
+        Counter::PrimitivesEmitted,
+        u64::from(frame.items_drawn + frame.items_culled),
+    );
     counter::add(Counter::PrimitivesCulled, u64::from(frame.items_culled));
     counter::add(Counter::BoundsTreeInserts, u64::from(frame.order_inserts));
     counter::add(Counter::VelloPasses, u64::from(frame.vector_passes));

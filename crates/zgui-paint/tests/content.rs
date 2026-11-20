@@ -12,7 +12,6 @@ use zgui_atlas::AtlasLimits;
 use zgui_geom::Size;
 use zgui_paint::ContentCache;
 use zgui_testkit_compositor::{Drawing, Instance};
-use zgui_text::NoRaster;
 
 use support::{Element, Harness};
 
@@ -51,7 +50,7 @@ fn an_attached_image_becomes_an_image_over_the_content_box() {
         .set_image(harness.replaced_id("picture"), size, texels)
         .expect("the buffer matches the extent");
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(
         harness.compositor.commit.images_written, 1,
         "the texels reach the compositor before anything samples them"
@@ -110,9 +109,9 @@ fn one_image_drawn_twice_is_written_once() {
     let (size, texels) = image();
     cache.set_image(id, size, texels).expect("well formed");
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(harness.compositor.commit.images_written, 1);
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(
         harness.compositor.commit.images_written, 0,
         "drawing an image twice must not write it twice"
@@ -129,11 +128,11 @@ fn a_detached_picture_releases_its_image() {
     let id = harness.replaced_id("picture");
     let (size, texels) = image();
     cache.set_image(id, size, texels).expect("well formed");
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(images(&harness.redraw()).len(), 1);
 
     cache.remove_image(id);
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert!(images(&harness.redraw()).is_empty());
     assert!(
         harness.compositor.sync.released >= 1,
@@ -157,7 +156,7 @@ fn a_settled_attachment_is_served_by_its_image_and_reported_when_the_image_goes(
         .set_image_shared(id, 7, size, std::sync::Arc::new(texels))
         .expect("well formed");
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert!(
         cache.image_bytes() > 0,
         "the texels are held until the frame settles"
@@ -222,7 +221,7 @@ fn two_nodes_sharing_a_handle_share_one_image() {
             .expect("well formed");
     }
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(
         harness.compositor.commit.images_written, 1,
         "one decode shown twice is one image, which is what the shared handle buys"

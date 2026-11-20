@@ -66,6 +66,11 @@ impl Recording {
         &self.items.glyphs[run.glyphs.indices()]
     }
 
+    /// Returns the variation coordinates of `run`.
+    pub fn coords(&self, run: &GlyphRun) -> &[i16] {
+        &self.items.coords[run.coords.indices()]
+    }
+
     /// Returns the images, in record order.
     pub fn images(&self) -> &[Image] {
         &self.items.images

@@ -1,8 +1,7 @@
 //! The compositor's reference renderer under the gallery, drawing to a texture.
 //!
-//! A window draws its boxes and text through the compositor. Vector content, images and groups are
-//! not drawn on this path yet, so a fixture asking about those draws through
-//! [`factory`](crate::device::factory) instead.
+//! A window draws everything zgui records through the compositor. What the display list still
+//! holds is drawn through [`recording`](crate::device::recording) instead.
 
 use std::sync::OnceLock;
 use std::sync::atomic::Ordering;

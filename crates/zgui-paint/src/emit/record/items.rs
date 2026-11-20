@@ -29,6 +29,8 @@ pub(crate) struct Items {
     pub(crate) backdrops: Vec<Backdrop>,
     /// The glyph arena the glyph runs take ranges of.
     pub(crate) glyphs: Vec<Glyph>,
+    /// The coordinate arena the glyph runs take ranges of.
+    pub(crate) coords: Vec<i16>,
     /// The payload list the marks items index.
     pub(crate) payloads: Vec<Arc<MarkPayload>>,
     /// The filter-chain list the backdrops index.
@@ -66,6 +68,7 @@ impl Default for Items {
             paths: Vec::new(),
             backdrops: Vec::new(),
             glyphs: Vec::new(),
+            coords: Vec::new(),
             payloads: Vec::new(),
             filters: Vec::new(),
             local_clips: Vec::new(),
@@ -90,7 +93,7 @@ impl PartialEq for Items {
             && self.glyphs == other.glyphs
             && self.local_clips == other.local_clips
             && self.refs == other.refs
-            && self.instanced == other.instanced
+            && self.coords == other.coords
             && self.filters == other.filters
             && all(&self.payloads, &other.payloads, Arc::ptr_eq)
             && all(&self.paths, &other.paths, same_path)
@@ -112,6 +115,7 @@ impl Items {
         self.paths.clear();
         self.backdrops.clear();
         self.glyphs.clear();
+        self.coords.clear();
         self.payloads.clear();
         self.filters.clear();
         self.local_clips.clear();

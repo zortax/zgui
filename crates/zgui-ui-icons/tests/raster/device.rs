@@ -5,7 +5,6 @@
 //! window's surface belongs to the display server the instant it is presented and cannot be read
 //! back.
 
-use std::cell::RefCell;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use compositor_types::{BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities};

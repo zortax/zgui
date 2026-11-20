@@ -206,7 +206,7 @@ mod tests {
         general.insert(zgui_paint::VectorRoute::GeneralRaster);
         assert_eq!(routes(general, None), "general vector rasterizer (pending)");
         assert_eq!(
-            routes(general, Some(zgui::render::VectorBackend::Vello)),
+            routes(general, Some(compositor_types::VectorBackend::Compute)),
             "Vello"
         );
 
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(routes(analytic, None), "analytic quads");
         analytic.insert(zgui_paint::VectorRoute::GeneralRaster);
         assert_eq!(
-            routes(analytic, Some(zgui::render::VectorBackend::Vello)),
+            routes(analytic, Some(compositor_types::VectorBackend::Compute)),
             "analytic quads + Vello"
         );
         assert_eq!(routes(zgui_paint::VectorRoutes::NONE, None), "none");

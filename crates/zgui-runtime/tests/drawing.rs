@@ -96,11 +96,14 @@ fn mount(
     log: &Log,
     view: impl FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 ) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
+    let factory = Rc::clone(log);
     let handler = App::new()
         .with_title("drawing")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(support::watched(move || {
+        .with_compositor(support::compositor())
+        .with_renderer(Box::new(support::screen))
+        .with_probe(support::watched(move || {
             let log = Rc::clone(&factory);
             let mut reencoded = counter::get(Counter::VectorRouteGeneral);
             Box::new(move |drawing: &Drawing, damage: &DamageSet| {
@@ -114,7 +117,7 @@ fn mount(
                 });
                 reencoded = now;
             })
-        })))
+        }))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)

@@ -40,7 +40,6 @@ fn paint_cached(harness: &mut Harness) -> zgui_paint::PaintReport {
     harness.paint_cached_vectors(
         &VectorCache::new(),
         &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-        &zgui_testkit_scene::MonoRaster::new(),
     )
 }
 

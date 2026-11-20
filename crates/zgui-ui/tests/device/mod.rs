@@ -2,10 +2,10 @@
 //!
 //! A fixture draws through one of two pipelines, picked with a [`Pipeline`]. The compositor draws
 //! everything zgui records onto its reference renderer, see [`compositor`]. zgui's own renderer
-//! draws what the scene still holds, external surfaces, built by [`factory`] with the same
-//! builder, format rules and rasteriser selection an opened window goes through. Only the
-//! destination differs, because a window's surface belongs to the platform's compositor the
-//! instant it is presented and cannot be read back.
+//! draws what the display list still holds, see [`recording`], with the same builder, format
+//! rules and rasteriser selection an opened window went through. Only the destination differs,
+//! because a window's surface belongs to the platform's compositor the instant it is presented and
+//! cannot be read back.
 
 #![allow(
     dead_code,
@@ -71,14 +71,11 @@ pub fn real_damage() -> bool {
 /// zgui's own renderer drawing the display list of every frame a window ran, with each frame
 /// recorded beside it.
 ///
-/// The window itself draws through a compositor onto a renderer that draws nowhere. The display
-/// list it still builds holds the vector content, images and surfaces the compositor does not draw
-/// yet, and this draws it.
+/// The window itself draws through a compositor onto a renderer that draws nowhere. This draws what
+/// the display list it still builds holds.
 struct Recording {
     /// The renderer, opened at the first frame for the window's extent.
     renderer: RefCell<Option<WgpuRenderer>>,
-    /// The atlas uploads the renderer has not been sent yet.
-    uploads: RefCell<zgui_testkit_scene::Uploads>,
     /// What each frame produced.
     log: Log,
 }
@@ -117,10 +114,6 @@ impl zgui::runtime::FrameProbe for Recording {
         let scene = window.scene();
         let mut held = self.renderer.borrow_mut();
         let renderer = Self::renderer(&mut held, scene.viewport(), window.scale().get());
-        self.uploads
-            .borrow_mut()
-            .replay(Renderer::texture_sink(renderer))
-            .expect("the device takes the atlas uploads");
         // Over the whole surface, whatever the application asked for. The question is what the
         // gallery *contains*, and a scissored frame answers it only for the rectangle it redrew.
         // The real damage set when a fixture asks for it: the composed target then retains what
@@ -136,20 +129,12 @@ impl zgui::runtime::FrameProbe for Recording {
             .unwrap_or_else(|held| held.into_inner())
             .push(recorded);
     }
-
-    fn atlas_uploads(&self) -> Option<std::cell::RefMut<'_, dyn zgui::atlas::TextureSink>> {
-        Some(std::cell::RefMut::map(
-            self.uploads.borrow_mut(),
-            |uploads| uploads as &mut dyn zgui::atlas::TextureSink,
-        ))
-    }
 }
 
 /// Builds the probe that draws every frame's display list with zgui's own renderer into `log`.
 pub fn recording(log: &Log) -> std::rc::Rc<dyn zgui::runtime::FrameProbe> {
     std::rc::Rc::new(Recording {
         renderer: RefCell::new(None),
-        uploads: RefCell::default(),
         log: Arc::clone(log),
     })
 }
@@ -159,7 +144,7 @@ pub fn recording(log: &Log) -> std::rc::Rc<dyn zgui::runtime::FrameProbe> {
 pub enum Pipeline {
     /// The compositor, which draws boxes and text.
     Compositor,
-    /// zgui's own renderer, which draws what the scene still holds: external surfaces.
+    /// zgui's own renderer, which draws what the display list still holds.
     Scene,
 }
 

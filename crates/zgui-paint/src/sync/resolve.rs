@@ -22,7 +22,7 @@ impl<'a> Resolver<'a> {
         Self { tx, mirror }
     }
 
-    /// Returns a resolver over the same transaction and mirror for a shorter borrow.
+    /// Returns a resolver over the same transaction and mirror for a shorter time.
     pub(crate) fn reborrow(&mut self) -> Resolver<'_> {
         Resolver {
             tx: self.tx,

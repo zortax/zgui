@@ -14,7 +14,6 @@ use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
 use zgui_scene::kurbo::{self, Affine, BezPath, Circle, Shape as _};
 use zgui_testkit_compositor::{Drawing, Instance};
-use zgui_testkit_scene::MonoRaster;
 use zgui_testkit_scene::counters::Recording;
 
 use support::drawn::{number, numbers};

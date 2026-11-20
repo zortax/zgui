@@ -325,8 +325,7 @@ fn a_marks_canvas_replays_when_it_moves() {
     let mut harness = Harness::new(tree, css);
     let vectors = VectorCache::new();
     let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
-    let raster = zgui_testkit_scene::MonoRaster::new();
-    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+    let first = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
     assert!(first.vector_routes[0].routes.contains(VectorRoute::Marks));
     let place = |drawing: &Drawing| {
         let mark = the_mark(drawing);
@@ -342,7 +341,7 @@ fn a_marks_canvas_replays_when_it_moves() {
     harness.edit_and_restyle(|edit| edit.add_class(spacer, zgui_interned::ClassName::new("tall")));
     zgui_layout::boxtree::patch::restyle(&mut harness.store, &harness.document, [spacer]);
     harness.compose_from_marks(400.0, 200.0);
-    let report = harness.paint_cached_vectors_ready(&vectors, &mut content, &raster, true);
+    let report = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
     assert!(
         report.vector_routes.is_empty(),
         "the canvas was encoded again: {:?}",
