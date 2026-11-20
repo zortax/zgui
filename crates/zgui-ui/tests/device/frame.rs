@@ -5,9 +5,6 @@ mod composed;
 pub use composed::Tile;
 
 use zgui::geom::{Device, DevicePx, Point, Rect, Size};
-use zgui_render::FrameOutcome;
-use zgui_render_wgpu::WgpuRenderer;
-use zgui_scene::Scene;
 
 use crate::device::picture::Picture;
 

@@ -18,9 +18,6 @@ pub mod shot;
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use zgui_render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{Builder, WgpuRenderer, wgpu};
-
 use crate::device::frame::Frame;
 
 /// Serialises every fixture in this binary onto the device.

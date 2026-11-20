@@ -34,6 +34,14 @@ impl Window {
         }
     }
 
+    /// Makes the next frame drop everything this window recorded into its compositor and record
+    /// the whole surface again from nothing.
+    ///
+    /// No frame is asked for.
+    pub fn forget_compositor_sync(&self) {
+        self.resync.set(true);
+    }
+
     /// Commits the transaction the embed host wrote into.
     ///
     /// A rejected transaction leaves the compositor with nothing of this window, as a rejected
