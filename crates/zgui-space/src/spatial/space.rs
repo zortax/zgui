@@ -271,7 +271,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_space::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    /// use zgui_space::{Anchoring, PropertyOwner, ScrollPort, SpatialNode, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -280,7 +280,7 @@ impl SpatialTree {
     ///     SpatialNode {
     ///         parent: Some(tree.viewport()),
     ///         local: Matrix4::translation(0.0, -40.0, 0.0),
-    ///         anchoring: Anchoring::Content,
+    ///         anchoring: Anchoring::Content(ScrollPort::EMPTY),
     ///     },
     /// );
     /// assert_eq!(tree.outside_content(content), Some(tree.viewport()));
@@ -290,7 +290,7 @@ impl SpatialTree {
         let mut current = id;
         loop {
             let node = self.get(current)?;
-            if node.anchoring != Anchoring::Content {
+            if !node.anchoring.is_content() {
                 return Some(current);
             }
             current = node.parent?;
@@ -306,7 +306,7 @@ impl SpatialTree {
     ///
     /// ```
     /// use zgui_geom::Matrix4;
-    /// use zgui_space::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    /// use zgui_space::{Anchoring, PropertyOwner, ScrollPort, SpatialNode, SpatialTree};
     ///
     /// let mut tree = SpatialTree::with_viewport();
     /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -315,7 +315,7 @@ impl SpatialTree {
     ///     SpatialNode {
     ///         parent: Some(tree.viewport()),
     ///         local: Matrix4::translation(0.0, -40.0, 0.0),
-    ///         anchoring: Anchoring::Content,
+    ///         anchoring: Anchoring::Content(ScrollPort::EMPTY),
     ///     },
     /// );
     /// assert_eq!(tree.across_content(content, tree.viewport()), Some((0.0, 40.0)));
@@ -329,7 +329,7 @@ impl SpatialTree {
                 return Some(by);
             }
             let node = self.get(current)?;
-            if node.anchoring != Anchoring::Content {
+            if !node.anchoring.is_content() {
                 return None;
             }
             let translation = node.local.columns[3];
@@ -370,7 +370,7 @@ impl SpatialTree {
             return false;
         }
         node.local = local;
-        self.note_written();
+        self.note_written(id);
         true
     }
 }

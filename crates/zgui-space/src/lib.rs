@@ -43,6 +43,6 @@ pub use crate::corner::CornerShape;
 pub use crate::id::{ClipId, PaintId, PaintSlot, ScrollFrameId, StackingContextId};
 pub use crate::spatial::{
     Anchoring, OwnSpace, Placements, PropertyId, PropertyNode, PropertyOwner, PropertyTree,
-    SPATIAL_DOMAIN, SpatialId, SpatialNode, SpatialTree,
+    SPATIAL_DOMAIN, ScrollPort, SpatialId, SpatialNode, SpatialTree, TreeVersion,
 };
 pub use crate::table::{ChangeCoverage, Table, TableVersion};

@@ -1,6 +1,6 @@
 //! One coordinate system, and how it relates to the scrolling above it.
 
-use zgui_geom::Matrix4;
+use zgui_geom::{Device, DevicePx, Matrix4, Rect, Size};
 
 use crate::id::ScrollFrameId;
 use crate::spatial::id::SpatialId;
@@ -32,7 +32,7 @@ impl PropertyNode<SpatialId> for SpatialNode {
 /// Recorded when the node is established rather than looked for afterwards, because the styles it
 /// is read from are in front of the code that establishes the node and behind the code that
 /// resolves it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Anchoring {
     /// Moves with every scroll offset above it. The overwhelming majority.
     Scrolling,
@@ -48,7 +48,34 @@ pub enum Anchoring {
     ///
     /// It moves when that offset changes and nothing else does. A reader that measures geometry
     /// relative to the container can ignore such a move.
-    Content,
+    Content(ScrollPort),
+}
+
+impl Anchoring {
+    /// Reports whether the node is the content of a scroll container.
+    pub const fn is_content(&self) -> bool {
+        matches!(self, Self::Content(_))
+    }
+}
+
+/// The rectangle a scroll container shows its content through, and how far the content scrolls.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ScrollPort {
+    /// The visible rectangle, in the coordinate system of the content's parent.
+    pub rect: Rect<DevicePx, Device>,
+    /// The largest scroll offset on each axis, never negative.
+    pub limit: Size<DevicePx, Device>,
+}
+
+impl ScrollPort {
+    /// A port with no extent and no room to scroll.
+    pub const EMPTY: Self = Self {
+        rect: Rect::new(
+            zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)),
+            Size::new(DevicePx(0.0), DevicePx(0.0)),
+        ),
+        limit: Size::new(DevicePx(0.0), DevicePx(0.0)),
+    };
 }
 
 /// What a box establishes of its own, when it is not simply drawn in the space above it.
@@ -74,7 +101,7 @@ impl OwnSpace {
     /// Sticky and viewport anchoring are two values of one property and never both apply.
     ///
     /// ```
-    /// use zgui_geom::Matrix4;
+    /// use zgui_geom::{Device, DevicePx, Matrix4, Rect, Size};
     /// use zgui_space::{Anchoring, OwnSpace, ScrollFrameId};
     ///
     /// assert_eq!(OwnSpace::of(None, None, false), None, "drawn in the space above it");

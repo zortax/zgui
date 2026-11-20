@@ -27,6 +27,8 @@ use zgui_text::{BreakRequest, BrokenParagraph, ParagraphContent, ParagraphKey, S
 use zgui_text_style::TextPaint;
 use zgui_text_style::TextStyle;
 
+pub(crate) mod compositor;
+
 /// The poison test mode's offset. See [`zgui_scene::spatial::poison`].
 ///
 /// Primitives are recorded in their own space, and the poison mode lays the document out at
@@ -473,6 +475,16 @@ impl Harness {
     pub(crate) fn paint_everything(&mut self) -> zgui_paint::PaintReport {
         self.damage = DamageSet::full();
         self.paint()
+    }
+
+    /// Scrolls the element `name` to `(x, y)` device pixels and composes again.
+    pub(crate) fn scroll_to(&mut self, name: &str, x: f32, y: f32) {
+        let element = self.document.store().key_of(self.element(name));
+        self.scroll.place(
+            element,
+            zgui_geom::Point::new(zgui_geom::DevicePx(x), zgui_geom::DevicePx(y)),
+        );
+        self.compose(self.viewport.width as f32, self.viewport.height as f32);
     }
 
     /// Forgets the damage, which is what the start of a frame does.

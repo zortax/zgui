@@ -87,7 +87,7 @@ fn a_clip_kept_in_a_scrolled_content_space_draws_its_device_form() {
     let node = |offset: f32| SpatialNode {
         parent: Some(viewport),
         local: Matrix4::translation(0.0, -offset, 0.0),
-        anchoring: Anchoring::Content,
+        anchoring: Anchoring::Content(zgui_scene::spatial::ScrollPort::EMPTY),
     };
     let content = scrolled
         .spatial

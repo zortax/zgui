@@ -1,11 +1,13 @@
 //! Property nodes: storage whose names outlive the values held under them.
 
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustc_hash::FxHashMap;
 use zgui_arena::{ChunkArena, DomainId};
 
 use crate::spatial::id::{PropertyId, PropertyOwner};
+use crate::table::ChangeCoverage;
 
 /// What a property tree needs of the values it stores.
 ///
@@ -39,13 +41,14 @@ pub struct PropertyTree<I: PropertyId<Node = N>, N: PropertyNode<I>> {
     nodes: ChunkArena<N>,
     /// The node each box established, so that a box seen again is given back the name it had.
     named: FxHashMap<PropertyOwner, I>,
-    /// The name occupying each slot, so a slot number can be turned back into a name.
+    /// The name occupying each slot and the box that established it, so a slot number can be turned
+    /// back into a name.
     ///
     /// A dense buffer is addressed by slot and an instance in it carries nothing but the slot, so
     /// something reading that buffer back — a renderer filling it, a transcript printing what a
     /// primitive was drawn through — has only the slot to go on. Kept here rather than searched
     /// for, because searching is a walk of every name per lookup.
-    by_slot: Vec<Option<I>>,
+    by_slot: Vec<Option<(I, PropertyOwner)>>,
     /// The slots given back this frame, which stop resolving when it ends.
     released: Vec<u32>,
     /// Whether any node's value or occupancy changed since the last [`PropertyTree::recycle`].
@@ -58,6 +61,21 @@ pub struct PropertyTree<I: PropertyId<Node = N>, N: PropertyNode<I>> {
     written: bool,
     /// The stamp of the last change to any name's answer. See [`PropertyTree::writes`].
     writes: u64,
+    /// This tree, as distinct from another tree whose stamps a reader holds.
+    instance: u64,
+    /// The recent changes, as the stamp each took and the slot it changed, oldest first.
+    changes: VecDeque<(u64, u32)>,
+    /// The stamp of the newest change dropped from `changes`, or zero.
+    forgotten: u64,
+}
+
+/// The identity and write stamp of a property tree at one moment.
+///
+/// A version from another tree asks [`PropertyTree::changes_since`] for a full refresh.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TreeVersion {
+    instance: u64,
+    stamp: u64,
 }
 
 /// The source of write stamps, shared by every tree so that no two states of two trees share one.
@@ -69,6 +87,9 @@ fn next_write() -> u64 {
 }
 
 impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
+    /// How many changes a reader may fall behind before it has to refresh every slot.
+    const CHANGE_HISTORY: usize = 4096;
+
     /// An empty tree that mints names in `domain`.
     ///
     /// The domain says which document owns the tree and which of that document's arenas it is, so
@@ -81,6 +102,9 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
             released: Vec::new(),
             written: false,
             writes: next_write(),
+            instance: next_write(),
+            changes: VecDeque::new(),
+            forgotten: 0,
         }
     }
 
@@ -155,7 +179,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
                     .expect("a name this tree still hands out resolves to a node");
                 if *held != node {
                     *held = node;
-                    self.touch();
+                    self.touch(id.key().index());
                 }
                 id
             }
@@ -166,8 +190,8 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
                 if slot >= self.by_slot.len() {
                     self.by_slot.resize(slot + 1, None);
                 }
-                self.by_slot[slot] = Some(fresh);
-                self.touch();
+                self.by_slot[slot] = Some((fresh, owner));
+                self.touch(fresh.key().index());
                 fresh
             }
         }
@@ -209,10 +233,69 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
         self.writes
     }
 
-    /// Records a change to what a name or slot resolves to.
-    fn touch(&mut self) {
+    /// Returns the tree's identity and its current write stamp.
+    pub fn version(&self) -> TreeVersion {
+        TreeVersion {
+            instance: self.instance,
+            stamp: self.writes,
+        }
+    }
+
+    /// Appends the slots whose answer changed since `version` into `changed`.
+    ///
+    /// A slot changes when the node in it is established, rewritten or given back, and when the
+    /// frame that gave it back ends. A slot that changed more than once is appended once per
+    /// change.
+    ///
+    /// [`ChangeCoverage::All`] means the caller must refresh every slot instead. It is returned for
+    /// a version of another tree, and for a version older than the history the tree keeps.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{ChangeCoverage, OwnSpace, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let slid = OwnSpace::of(Some(Matrix4::translation(4.0, 0.0, 0.0)), None, false);
+    /// let card = tree.space_of(tree.viewport(), owner, slid);
+    ///
+    /// let version = tree.version();
+    /// tree.place(card, Matrix4::translation(9.0, 0.0, 0.0));
+    /// let mut changed = Vec::new();
+    /// assert_eq!(tree.changes_since(version, &mut changed), ChangeCoverage::Delta);
+    /// assert_eq!(changed, vec![card.index()]);
+    /// ```
+    pub fn changes_since(&self, version: TreeVersion, changed: &mut Vec<u32>) -> ChangeCoverage {
+        if version.instance != self.instance
+            || version.stamp > self.writes
+            || version.stamp < self.forgotten
+        {
+            return ChangeCoverage::All;
+        }
+        changed.extend(
+            self.changes
+                .iter()
+                .filter(|(stamp, _)| *stamp > version.stamp)
+                .map(|(_, slot)| *slot),
+        );
+        ChangeCoverage::Delta
+    }
+
+    /// Records a change to what the name in `slot` resolves to.
+    fn touch(&mut self, slot: u32) {
         self.written = true;
         self.writes = next_write();
+        self.journal(slot);
+    }
+
+    /// Appends a change of `slot` at the current stamp to the history.
+    fn journal(&mut self, slot: u32) {
+        self.changes.push_back((self.writes, slot));
+        while self.changes.len() > Self::CHANGE_HISTORY {
+            if let Some((stamp, _)) = self.changes.pop_front() {
+                self.forgotten = stamp;
+            }
+        }
     }
 
     /// The node a name refers to, or `None` if that name is no longer live.
@@ -225,13 +308,13 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
         self.nodes.get_mut(id.key())
     }
 
-    /// Records that a node's value was written through [`PropertyTree::get_mut`].
+    /// Records that the value of `id` was written through [`PropertyTree::get_mut`].
     ///
     /// The one thing a borrow of the value cannot do for itself. A writer that takes the value out
     /// and changes it has to say so, or every reader that skips comparing on
     /// [`PropertyTree::written_since_recycle`] skips the frame the write happened on.
-    pub fn note_written(&mut self) {
-        self.touch();
+    pub fn note_written(&mut self, id: I) {
+        self.touch(id.key().index());
     }
 
     /// Whether a name still refers to the node it was handed out for.
@@ -249,7 +332,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
         let id = self.named.remove(&owner)?;
         self.nodes.remove(id.key());
         self.released.push(id.key().index());
-        self.touch();
+        self.touch(id.key().index());
         Some(id)
     }
 
@@ -258,7 +341,12 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
     /// What turns a primitive's slot number back into the name it was pushed with, which is the
     /// only direction a dense buffer leaves open.
     pub fn at(&self, slot: u32) -> Option<I> {
-        *self.by_slot.get(slot as usize)?
+        Some(self.by_slot.get(slot as usize)?.as_ref()?.0)
+    }
+
+    /// The box whose node occupies `slot`, if one still does.
+    pub fn owner_at(&self, slot: u32) -> Option<PropertyOwner> {
+        Some(self.by_slot.get(slot as usize)?.as_ref()?.1)
     }
 
     /// Every slot in order, with the name occupying it.
@@ -266,7 +354,7 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
     /// The order a dense buffer is written in, so a caller filling one walks this and writes as it
     /// goes rather than sorting afterwards.
     pub fn slots(&self) -> impl ExactSizeIterator<Item = Option<I>> + '_ {
-        self.by_slot.iter().copied()
+        self.by_slot.iter().map(|held| held.map(|(id, _)| id))
     }
 
     /// Ends the frame: drops what was released during it and offers the slots back.
@@ -278,9 +366,13 @@ impl<I: PropertyId<Node = N>, N: PropertyNode<I>> PropertyTree<I, N> {
         if !self.released.is_empty() {
             self.writes = next_write();
         }
-        for slot in self.released.drain(..) {
+        let released = std::mem::take(&mut self.released);
+        for &slot in &released {
             self.by_slot[slot as usize] = None;
+            self.journal(slot);
         }
+        self.released = released;
+        self.released.clear();
         self.nodes.recycle();
         self.written = false;
     }

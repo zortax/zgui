@@ -1,7 +1,7 @@
 //! The nodes and slots one chunk's primitives refer to.
 
 use compositor_types::{
-    ChunkRecorder, ClipId, ClipRef, Color, PaintId, PaintKind, PaintRef, SpaceRef, Transaction,
+    ChunkRecorder, ClipId, ClipRef, PaintId, PaintKind, PaintRef, SpaceRef, Transaction,
     TransformId,
 };
 use rustc_hash::FxHashMap;
@@ -15,7 +15,6 @@ pub(crate) struct Refs {
     spaces: FxHashMap<u32, TransformId>,
     clips: FxHashMap<u32, Option<ClipId>>,
     paints: FxHashMap<u32, Option<(PaintId, PaintKind)>>,
-    solids: FxHashMap<[u32; 4], PaintId>,
 }
 
 /// The references one chunk's items hold, minted once per id by the chunk's recorder.
@@ -24,7 +23,6 @@ pub(crate) struct Recorded {
     spaces: FxHashMap<u32, SpaceRef>,
     clips: FxHashMap<u32, ClipRef>,
     paints: FxHashMap<u32, PaintRef>,
-    solids: FxHashMap<[u32; 4], PaintRef>,
 }
 
 impl Refs {
@@ -53,11 +51,6 @@ impl Refs {
         for run in &chunk.glyph_runs {
             self.space(tx, mirror, scene, run.transform);
             self.clip(tx, mirror, scene, run.clip);
-            let color = Color(run.color);
-            let bits = color.0.map(f32::to_bits);
-            self.solids
-                .entry(bits)
-                .or_insert_with(|| mirror.paints.solid(tx, color));
         }
     }
 
@@ -72,19 +65,13 @@ impl Refs {
         *self
             .spaces
             .entry(slot)
-            .or_insert_with(|| mirror.spaces.ensure(tx, &scene.spatial, slot))
+            .or_insert_with(|| mirror.space(tx, &scene.spatial, slot))
     }
 
     fn clip(&mut self, tx: &mut Transaction, mirror: &mut Mirror, scene: &mut Scene, raw: u32) {
-        self.clips.entry(raw).or_insert_with(|| {
-            mirror.clips.ensure(
-                tx,
-                &mut scene.clips,
-                &mut mirror.spaces,
-                &scene.spatial,
-                zgui_scene::ClipId(raw),
-            )
-        });
+        self.clips
+            .entry(raw)
+            .or_insert_with(|| mirror.clip(tx, scene, zgui_scene::ClipId(raw)));
     }
 
     fn paint(
@@ -97,7 +84,7 @@ impl Refs {
         if let Some(id) = reference.id()
             && !self.paints.contains_key(&id.0)
         {
-            let slot = mirror.paints.ensure(tx, &mut scene.paints, id);
+            let slot = mirror.paint(tx, scene, id);
             self.paints.insert(id.0, slot);
         }
     }
@@ -148,17 +135,8 @@ impl Recorded {
             })
     }
 
-    /// Returns the reference to the slot of the solid `color`.
-    pub(crate) fn solid(
-        &mut self,
-        refs: &Refs,
-        chunk: &mut ChunkRecorder<'_>,
-        color: [f32; 4],
-    ) -> PaintRef {
-        let bits = color.map(f32::to_bits);
-        *self
-            .solids
-            .entry(bits)
-            .or_insert_with(|| chunk.paint_ref(PaintKind::SOLID, refs.solids[&bits]))
+    /// Returns the inline reference to the premultiplied `color`.
+    pub(crate) fn solid(color: [f32; 4]) -> PaintRef {
+        PaintRef::color(color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8))
     }
 }

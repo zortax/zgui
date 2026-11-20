@@ -17,6 +17,7 @@
 #![forbid(unsafe_code)]
 
 mod null;
+mod output;
 mod select;
 mod unavailable;
 
@@ -27,6 +28,7 @@ use compositor_text::SwashRaster;
 use std::sync::Arc;
 
 pub use crate::null::NullRenderer;
+pub use crate::output::TestOutput;
 pub use crate::select::{CompositorKind, RendererKind};
 pub use crate::unavailable::Unavailable;
 

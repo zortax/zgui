@@ -1198,6 +1198,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             return None;
         }
         let local = zgui_geom::Matrix4::translation(-placed.offset.0, -placed.offset.1, 0.0);
+        let port = self.scroll_port(key, placed);
         let spatial = &mut *self.tables.spatial;
         let before = spatial
             .of(owner)
@@ -1208,7 +1209,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             zgui_space::SpatialNode {
                 parent: Some(placed.descent.spatial),
                 local,
-                anchoring: zgui_space::Anchoring::Content,
+                anchoring: zgui_space::Anchoring::Content(port),
             },
         );
         // How far the content moved since the space was last written, read off the two matrices.
@@ -1221,6 +1222,23 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             (by != (0.0, 0.0)).then_some(by)
         });
         Some(ContentSpace { id, moved })
+    }
+
+    /// The port `key` shows its content space through: the padding box without the scrollbars,
+    /// and how far the content scrolls.
+    fn scroll_port(&self, key: BoxKey, placed: &Placed) -> zgui_space::ScrollPort {
+        let limit = crate::scroll_region::code_region_of(self.store, key).map_or(
+            zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)),
+            |region| region.limit(),
+        );
+        let size = Size::new(
+            DevicePx((placed.padding_box.size.width.0 - placed.scrollbar.width.0).max(0.0)),
+            DevicePx((placed.padding_box.size.height.0 - placed.scrollbar.height.0).max(0.0)),
+        );
+        zgui_space::ScrollPort {
+            rect: Rect::new(placed.padding_box.origin, size),
+            limit: Size::new(limit.x, limit.y),
+        }
     }
 
     /// Records a scroll that moved only a content space.

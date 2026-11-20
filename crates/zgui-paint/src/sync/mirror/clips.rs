@@ -1,54 +1,90 @@
 //! Clip chains mirrored as clip nodes.
 
 use compositor_types::{ClipId, ClipNode, ClipShape, Transaction};
+use rustc_hash::FxHashMap;
 use zgui_scene::{ChangeCoverage, ClipLink, ClipTable, SpatialTree, TableVersion};
 
+use crate::sync::mirror::holds::Holds;
 use crate::sync::mirror::spaces::Spaces;
 
 /// The clip node of each mirrored clip chain, by zgui clip id.
 ///
-/// A mirrored chain is held in the zgui table, so its id names the same chain until the mirror
-/// is reset. A link the compositor cannot express, such as a mask, is left out of the chain.
+/// A mirrored chain is held in the zgui table while its node exists, so its id names the same
+/// chain. A link the compositor cannot express, such as a mask, is left out of the chain.
 #[derive(Debug, Default)]
 pub(crate) struct Clips {
-    nodes: Vec<Option<Option<ClipId>>>,
-    written: Vec<Option<ClipNode>>,
+    entries: Vec<Option<Entry>>,
+    nodes: FxHashMap<ClipId, u32>,
     version: Option<TableVersion>,
     changed: Vec<zgui_scene::ClipId>,
 }
 
+/// One mirrored chain.
+#[derive(Clone, Debug)]
+struct Entry {
+    id: ClipId,
+    written: ClipNode,
+}
+
+/// The tables a clip node is mirrored from.
+pub(crate) struct Sources<'a> {
+    pub(crate) table: &'a mut ClipTable,
+    pub(crate) spaces: &'a mut Spaces,
+    pub(crate) tree: &'a SpatialTree,
+}
+
 impl Clips {
-    /// Returns the clip node of the chain `id`, mirroring it and its ancestors on first use.
+    /// Returns the clip node of the chain `id` for the chunk being recorded, mirroring it and its
+    /// ancestors on first use.
     ///
     /// The root chain, and a chain of links the compositor cannot express, is `None`.
     pub(crate) fn ensure(
         &mut self,
         tx: &mut Transaction,
-        table: &mut ClipTable,
-        spaces: &mut Spaces,
-        tree: &SpatialTree,
+        holds: &mut Holds,
+        sources: Sources<'_>,
+        id: zgui_scene::ClipId,
+    ) -> Option<ClipId> {
+        let mut sources = sources;
+        let node = self.mirror(tx, holds, &mut sources, id)?;
+        holds.name(node);
+        Some(node)
+    }
+
+    /// Returns the clip node of the chain `id`, mirroring it and its ancestors on first use.
+    pub(crate) fn mirror(
+        &mut self,
+        tx: &mut Transaction,
+        holds: &mut Holds,
+        sources: &mut Sources<'_>,
         id: zgui_scene::ClipId,
     ) -> Option<ClipId> {
         if self.version.is_none() {
-            self.version = Some(table.version());
+            self.version = Some(sources.table.version());
         }
-        let index = id.0 as usize;
-        if let Some(Some(mirrored)) = self.nodes.get(index) {
-            return *mirrored;
+        if let Some(Some(entry)) = self.entries.get(id.0 as usize) {
+            return Some(entry.id);
         }
-        let (mirrored, written) = match self.node(tx, table, spaces, tree, id) {
-            Some(Ok(node)) => (Some(tx.create_clip(node.clone())), Some(node)),
-            Some(Err(parent)) => (parent, None),
-            None => (None, None),
+        let node = match self.node(tx, holds, sources, id)? {
+            Ok(node) => node,
+            // Mask links need a compositor image of the coverage tile.
+            Err(parent) => return parent,
         };
-        table.retain(id);
-        if self.nodes.len() <= index {
-            self.nodes.resize(index + 1, None);
-            self.written.resize(index + 1, None);
+        let mirrored = tx.create_clip(node.clone());
+        holds.created(mirrored);
+        hold_links(holds, mirrored, &node);
+        sources.table.retain(id);
+
+        let index = id.0 as usize;
+        if self.entries.len() <= index {
+            self.entries.resize(index + 1, None);
         }
-        self.nodes[index] = Some(mirrored);
-        self.written[index] = written;
-        mirrored
+        self.entries[index] = Some(Entry {
+            id: mirrored,
+            written: node,
+        });
+        self.nodes.insert(mirrored, id.0);
+        Some(mirrored)
     }
 
     /// Rewrites the mirrored chains whose value the table changed since the last call.
@@ -57,41 +93,66 @@ impl Clips {
     pub(crate) fn sync(
         &mut self,
         tx: &mut Transaction,
-        table: &mut ClipTable,
-        spaces: &mut Spaces,
-        tree: &SpatialTree,
+        holds: &mut Holds,
+        mut sources: Sources<'_>,
     ) -> usize {
         let Some(version) = self.version else {
             return 0;
         };
-        self.changed.clear();
-        let coverage = table.changes_since(version, &mut self.changed);
-        self.version = Some(table.version());
+        let mut changed = std::mem::take(&mut self.changed);
+        changed.clear();
+        let coverage = sources.table.changes_since(version, &mut changed);
+        self.version = Some(sources.table.version());
         if coverage == ChangeCoverage::All {
-            self.changed.clear();
-            let nodes = &self.nodes;
-            self.changed.extend(
-                (0..nodes.len() as u32)
-                    .map(zgui_scene::ClipId)
-                    .filter(|id| matches!(nodes.get(id.0 as usize), Some(Some(Some(_))))),
-            );
+            changed.clear();
+            changed.extend(self.nodes.values().map(|&raw| zgui_scene::ClipId(raw)));
         }
-        let changed = std::mem::take(&mut self.changed);
         let mut written = 0;
         for &id in &changed {
-            let Some(Some(Some(mirrored))) = self.nodes.get(id.0 as usize).copied() else {
-                continue;
-            };
-            if let Some(Ok(node)) = self.node(tx, table, spaces, tree, id)
-                && self.written[id.0 as usize].as_ref() != Some(&node)
-            {
-                tx.set_clip(mirrored, node.clone());
-                self.written[id.0 as usize] = Some(node);
-                written += 1;
-            }
+            written += self.rewrite(tx, holds, &mut sources, id);
         }
         self.changed = changed;
         written
+    }
+
+    /// Forgets the node `id`, which was removed, and gives its chain's hold back to `table`.
+    pub(crate) fn removed(&mut self, id: ClipId, table: &mut ClipTable) {
+        if let Some(raw) = self.nodes.remove(&id) {
+            self.entries[raw as usize] = None;
+            table.release(zgui_scene::ClipId(raw));
+        }
+    }
+
+    /// Returns the zgui chains of every mirrored node.
+    pub(crate) fn mirrored(&self) -> impl Iterator<Item = zgui_scene::ClipId> + '_ {
+        self.nodes.values().map(|&raw| zgui_scene::ClipId(raw))
+    }
+
+    /// Writes the node of `id` if its value changed, and returns the number of nodes written.
+    fn rewrite(
+        &mut self,
+        tx: &mut Transaction,
+        holds: &mut Holds,
+        sources: &mut Sources<'_>,
+        id: zgui_scene::ClipId,
+    ) -> usize {
+        let Some(Some(entry)) = self.entries.get(id.0 as usize).cloned() else {
+            return 0;
+        };
+        let Some(Ok(node)) = self.node(tx, holds, sources, id) else {
+            return 0;
+        };
+        if node == entry.written {
+            return 0;
+        }
+        hold_links(holds, entry.id, &node);
+        unhold_links(holds, entry.id, &entry.written);
+        tx.set_clip(entry.id, node.clone());
+        self.entries[id.0 as usize] = Some(Entry {
+            id: entry.id,
+            written: node,
+        });
+        1
     }
 
     /// Returns the clip node `id` is mirrored as, or the parent's node when its link cannot be
@@ -99,15 +160,14 @@ impl Clips {
     fn node(
         &mut self,
         tx: &mut Transaction,
-        table: &mut ClipTable,
-        spaces: &mut Spaces,
-        tree: &SpatialTree,
+        holds: &mut Holds,
+        sources: &mut Sources<'_>,
         id: zgui_scene::ClipId,
     ) -> Option<Result<ClipNode, Option<ClipId>>> {
-        let zgui_scene::ClipNode::Link { link, parent, .. } = *table.get(id)? else {
+        let zgui_scene::ClipNode::Link { link, parent, .. } = *sources.table.get(id)? else {
             return None;
         };
-        let parent = self.ensure(tx, table, spaces, tree, parent);
+        let parent = self.mirror(tx, holds, sources, parent);
         let ClipLink::RoundedRect {
             rect,
             radii,
@@ -115,12 +175,14 @@ impl Clips {
             space,
         } = link
         else {
-            // Mask links need a compositor image of the coverage tile.
             return Some(Err(parent));
         };
+        let space = sources
+            .spaces
+            .mirror(tx, holds, sources.tree, space.index());
         Some(Ok(ClipNode {
             parent,
-            space: spaces.ensure(tx, tree, space.index()),
+            space,
             shape: ClipShape::RoundedRect {
                 rect: [
                     rect.origin.x.0,
@@ -142,4 +204,20 @@ impl Clips {
             },
         }))
     }
+}
+
+/// Makes the clip node `id` hold the parent and the space `node` names.
+fn hold_links(holds: &mut Holds, id: ClipId, node: &ClipNode) {
+    if let Some(parent) = node.parent {
+        holds.hold(id, parent);
+    }
+    holds.hold(id, node.space);
+}
+
+/// Ends the holds of the clip node `id` on the parent and the space `node` names.
+fn unhold_links(holds: &mut Holds, id: ClipId, node: &ClipNode) {
+    if let Some(parent) = node.parent {
+        holds.unhold(id, parent);
+    }
+    holds.unhold(id, node.space);
 }

@@ -728,7 +728,7 @@ mod tests {
 
     #[test]
     fn a_port_clips_its_content_space_where_the_scroll_puts_it() {
-        use crate::spatial::{Anchoring, SpatialNode, SpatialTree};
+        use crate::spatial::{Anchoring, ScrollPort, SpatialNode, SpatialTree};
 
         let mut tree = SpatialTree::with_viewport();
         let content = tree.establish(
@@ -736,7 +736,7 @@ mod tests {
             SpatialNode {
                 parent: Some(tree.viewport()),
                 local: zgui_geom::Matrix4::translation(0.0, -30.0, 0.0),
-                anchoring: Anchoring::Content,
+                anchoring: Anchoring::Content(ScrollPort::EMPTY),
             },
         );
         let mut clips = ClipTable::rooted();

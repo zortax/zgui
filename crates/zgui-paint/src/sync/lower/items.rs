@@ -102,7 +102,7 @@ pub(crate) fn glyph_run(
         size: run.size,
         glyphs: chunk.glyphs(glyphs),
         coords: chunk.coords(&[]),
-        paint: recorded.solid(refs, chunk, run.color),
+        paint: Recorded::solid(run.color),
         embolden: run.embolden,
         skew: run.skew,
         clip: recorded.clip(refs, chunk, run.clip),
