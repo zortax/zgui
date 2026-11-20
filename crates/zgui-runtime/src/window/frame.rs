@@ -553,6 +553,13 @@ impl Window {
         // work and not the hold before it. The servo adds its own hold back on, because it is the
         // only thing that knows how much of the interval it gave away.
         let cost = clock.now().saturating_duration_since(now);
+        if outcome.retires_damage() {
+            self.engine
+                .animations()
+                .presented(zgui_style::AnimationTime(
+                    timestamp.since_origin().as_secs_f64() + cost.as_secs_f64(),
+                ));
+        }
         let interval = self.refresh_interval();
         self.present
             .observed(self.renderer.acquire_block(), cost, interval);
