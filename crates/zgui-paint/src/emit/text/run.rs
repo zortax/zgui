@@ -82,6 +82,48 @@ mod tests {
     }
 
     #[test]
+    fn a_run_records_its_synthesis_in_device_pixels_and_degrees() {
+        let glyphs = [zgui_text::ShapedGlyph {
+            glyph: 4,
+            x: 2.0,
+            y: 12.0,
+        }];
+        let run = zgui_text::ShapedRun {
+            face: zgui_text::FaceId(1),
+            size: 50.0,
+            coords: &[],
+            synthetic_bold: zgui_text::SYNTHETIC_BOLD_RATIO,
+            synthetic_slant: 14.0,
+            brush: zgui_scene::PaintSlot(0),
+            glyphs: &glyphs,
+            text_start: 0,
+        };
+        let mut scene = zgui_scene::Scene::new();
+        let mut recording = crate::emit::record::Recording::new();
+        let mut rec = recording.recorder(
+            &mut scene,
+            zgui_scene::SpatialId::VIEWPORT,
+            zgui_scene::ClipId::ROOT,
+        );
+        super::record(
+            &mut rec,
+            &run,
+            super::RunDraw {
+                origin: [10.0, 20.0],
+                paint: compositor_types::PaintRef::color([0, 0, 0, 255]),
+                clip: compositor_types::ClipRef::INHERIT,
+                space: compositor_types::SpaceRef::INHERIT,
+                flags: GlyphFlags::HINT,
+            },
+        );
+        let recorded = recording.glyph_runs()[0];
+        assert_eq!(recorded.embolden, 1.0, "two hundredths of fifty pixels");
+        assert_eq!(recorded.skew, 14.0);
+        let glyph = recording.glyphs(&recorded)[0];
+        assert_eq!((glyph.x, glyph.y), (12.0, 32.0));
+    }
+
+    #[test]
     fn a_silhouette_is_hinted_and_asks_for_no_per_channel_coverage() {
         let flags = super::flags(16.0, false, true);
         assert_eq!(flags, GlyphFlags::HINT | GlyphFlags::SILHOUETTE);
