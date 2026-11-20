@@ -138,18 +138,33 @@ pub fn spelling(stage: &Stage, rect: Rect<DevicePx, Device>) -> Vec<Tile> {
         .collect()
 }
 
-/// Where inside `rect` the letters `word` were drawn, or nothing if they were not drawn there.
+/// Where inside `rect` the letters drawn in `reference` were drawn again, or nothing if they were
+/// not drawn there.
 ///
-/// `word` is the spelling of a reference line rendered in the same style elsewhere on the page —
-/// which is what makes this an assertion that *those letters* landed here, rather than that
-/// something did. The answer is the left edge of the first of them, so two readings a step apart
-/// say how far the thing holding them travelled.
-pub fn found(stage: &Stage, rect: Rect<DevicePx, Device>, word: &[Tile]) -> Option<f32> {
-    assert!(!word.is_empty(), "a reference line that drew no letters");
+/// `reference` holds a line rendered in the same style elsewhere on the page, which is what makes
+/// this an assertion that *those letters* landed here, rather than that something did. The answer
+/// is the left edge `reference` would have if it had moved with its letters, so two readings a step
+/// apart say how far the thing holding them travelled.
+///
+/// # Panics
+///
+/// Panics when `reference` drew no letters.
+pub fn found(
+    stage: &Stage,
+    rect: Rect<DevicePx, Device>,
+    reference: Rect<DevicePx, Device>,
+) -> Option<f32> {
+    let line = stage.glyphs_in(reference);
+    let first = line.first().expect("a reference line that drew no letters");
+    let word: Vec<Tile> = line.iter().map(|glyph| glyph.tile).collect();
+
+    // A glyph's sprite edge sits a glyph-dependent distance from its pen, so the reading is taken
+    // relative to the same glyph in the reference line.
+    let lead = first.bounds.origin.x.0 - reference.origin.x.0;
     let drawn = stage.glyphs_in(rect);
     let tiles: Vec<Tile> = drawn.iter().map(|glyph| glyph.tile).collect();
     tiles
         .windows(word.len())
-        .position(|run| run == word)
-        .map(|at| drawn[at].bounds.origin.x.0)
+        .position(|run| run == word.as_slice())
+        .map(|at| drawn[at].bounds.origin.x.0 - lead)
 }

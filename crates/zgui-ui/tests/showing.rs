@@ -34,7 +34,7 @@ use zgui_ui::prelude::*;
 use zgui_ui_tokens::prelude::*;
 
 use crate::painted::stage::{SETTLED, Stage};
-use crate::painted::words::{assert_absent, assert_painted, found, spelling};
+use crate::painted::words::{assert_absent, assert_painted, found};
 
 /// The page every fixture is laid out on.
 ///
@@ -236,8 +236,7 @@ fn showing(stage: &mut Stage, built: &Built) -> [Option<f32>; 3] {
     let rail = stage.rect_of(built.node(RAIL));
     let mut seen = [None; 3];
     for (at, place) in seen.iter_mut().enumerate() {
-        let word = spelling(stage, stage.rect_of(built.node(at + 1)));
-        *place = found(stage, rail, &word);
+        *place = found(stage, rail, stage.rect_of(built.node(at + 1)));
     }
     seen
 }
@@ -415,10 +414,7 @@ fn showing_of(stage: &mut Stage, built: &Built, count: usize) -> Vec<Option<f32>
     stage.wait(SETTLED);
     let rail = stage.rect_of(built.node(RAIL));
     (0..count)
-        .map(|at| {
-            let word = spelling(stage, stage.rect_of(built.node(at + 1)));
-            found(stage, rail, &word)
-        })
+        .map(|at| found(stage, rail, stage.rect_of(built.node(at + 1))))
         .collect()
 }
 
