@@ -67,10 +67,12 @@ pub(crate) struct PerTick {
     pub(crate) damage: Option<f64>,
     /// How many of the drawn frames declared the whole surface damaged, as a number to judge.
     pub(crate) full_frames: Option<f64>,
-    /// Fragments whose geometry was recomputed, per frame drawn.
+    /// Fragments whose geometry was recomputed, per frame the window ran.
     pub(crate) fragments_rebuilt: Option<f64>,
     /// How many frames the gesture actually drew.
     pub(crate) frames: usize,
+    /// How many frames the window ran, counting those that left the output unchanged.
+    pub(crate) ran: u64,
     /// How many of them declared the whole surface damaged.
     pub(crate) full: usize,
 }
@@ -93,16 +95,19 @@ pub(crate) fn per_tick(open: &mut Opened, height: f32, gesture: Gesture) -> PerT
     open.harness.settle(256);
     open.damage.borrow_mut().clear();
     let before = zgui_profile::counter::snapshot();
-    gesture.drive(&mut open.harness, at, 1);
+    let mut ran = 0;
+    gesture.drive_stepped(&mut open.harness, at, 1, &mut |_, frames| ran += frames);
     let moved = before.delta(&zgui_profile::counter::snapshot());
     let frames = open.damage.borrow().len();
     let full = watch::full_frames(&open.damage);
     PerTick {
         damage: watch::mean_fraction(&open.damage),
         full_frames: (frames > 0).then_some(full as f64),
-        fragments_rebuilt: (frames > 0).then(|| moved.fragments_rebuilt as f64 / frames as f64),
+        // A frame whose output did not change is not drawn, and its rebuilt fragments still count.
+        fragments_rebuilt: (frames > 0).then(|| moved.fragments_rebuilt as f64 / ran as f64),
         frames,
         full,
+        ran,
     }
 }
 
