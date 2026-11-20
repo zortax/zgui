@@ -1,5 +1,6 @@
 //! An application: a window, what is in it, and what draws it.
 
+mod compositor;
 pub mod fonts;
 mod graphics;
 #[cfg(target_arch = "wasm32")]
@@ -681,9 +682,14 @@ impl App {
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
         let group_precision = self.group_precision;
-        let renderer = self
-            .renderer
-            .unwrap_or_else(|| graphics::factory(group_precision));
+        let compositor_fonts = fonts.compositor_registry();
+        let renderer = self.renderer.unwrap_or_else(|| {
+            if compositor::legacy_wanted() {
+                graphics::factory(group_precision)
+            } else {
+                compositor::factory(compositor_fonts)
+            }
+        });
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and
         // therefore resolves them like any other context.

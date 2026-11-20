@@ -47,6 +47,7 @@ use zgui_dom::side::AnimOverride;
 
 use crate::lower::anim::{AnimOverrides, NoAnim, OwnedPaints};
 use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
+use crate::sync::CompositorSync;
 use crate::walk::decorate::Decorations;
 use crate::walk::fill::TextFills;
 use crate::walk::order::{Emission, NoReplaced, ReplacedSource};
@@ -288,6 +289,8 @@ pub struct Painter {
     cache: PaintCache,
     /// The walk's stacks and per-frame maps, kept so a frame reuses the last frame's allocations.
     scratch: WalkScratch,
+    /// The compositor chunks the walk records fragments as, when one is attached.
+    sync: Option<CompositorSync>,
 }
 
 /// The containers one emit walk fills, empty between walks.
@@ -337,6 +340,19 @@ impl Painter {
         &self.cache
     }
 
+    /// Records every fragment the walk visits as a compositor chunk through `sync`.
+    ///
+    /// A fragment `sync` has not recorded is encoded when the walk reaches it, even when its
+    /// record would replay.
+    pub fn attach_compositor(&mut self, sync: CompositorSync) {
+        self.sync = Some(sync);
+    }
+
+    /// Returns the attached compositor sync, if any.
+    pub fn compositor(&mut self) -> Option<&mut CompositorSync> {
+        self.sync.as_mut()
+    }
+
     /// Discards everything held between frames.
     ///
     /// Legal only beside emptying the caches the records hold into — a lost device, a forgotten
@@ -365,6 +381,9 @@ impl Painter {
             };
         };
         self.cache.begin_frame();
+        if let Some(sync) = &mut self.sync {
+            sync.mirror_tables(scene);
+        }
         let scratch = std::mem::take(&mut self.scratch);
         let mut pass = Pass {
             painter: self,
@@ -438,6 +457,9 @@ impl Painter {
         scene: &mut Scene,
         owner: &dyn ResourceOwner,
     ) {
+        if let Some(sync) = &mut self.sync {
+            sync.retire(keys);
+        }
         self.cache.retire(keys, scene, owner);
     }
 
@@ -1045,7 +1067,13 @@ impl Pass<'_, '_> {
                 .layers()
                 .is_some_and(|layers| layers.tiles_alive(id))
         });
-        let reuse = if tiles_gone {
+        // A fragment the compositor holds no chunk for has nothing an offset could move.
+        let unrecorded = self
+            .painter
+            .sync
+            .as_ref()
+            .is_some_and(|sync| !sync.knows(fragment.key));
+        let reuse = if tiles_gone || unrecorded {
             Reuse::Encode
         } else {
             self.painter
@@ -1064,6 +1092,9 @@ impl Pass<'_, '_> {
                 let pushed = (range.end - range.start) as usize;
                 self.report.primitives += pushed;
                 self.painter.cache.replayed(fragment);
+                if let Some(sync) = &mut self.painter.sync {
+                    sync.replayed(fragment, offset);
+                }
             }
             Reuse::Encode => {
                 let Some(mut style) = self.painter.styles.get(style_ref).cloned() else {
@@ -1094,6 +1125,9 @@ impl Pass<'_, '_> {
                     .begin_chunk_capture(self.painter.cache.take_capture_scratch());
                 let emitted = order::fragment_tracked(self.scene, fragment, &emission);
                 let chunk = self.scene.take_chunk_capture();
+                if let Some(sync) = &mut self.painter.sync {
+                    sync.record(store, fragment, &chunk, self.scene);
+                }
                 self.report.primitives += emitted.pushed;
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
                     && let Some(node) = fragment.node

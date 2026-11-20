@@ -11,6 +11,7 @@ mod brushes;
 mod budget;
 pub mod caret;
 mod clicks;
+mod compose;
 mod crossing;
 mod cursor;
 mod drag;
@@ -221,6 +222,8 @@ pub struct Window {
     /// rather than the walk reading the environment, so that the answer is a property of this
     /// window and a test can state it.
     verify_replays: bool,
+    /// Whether the log has said that the compositor path leaves some content undrawn.
+    compositor_omissions_noted: bool,
     /// Whether this window's frames keep the coordinate system every primitive was pushed under.
     ///
     /// See [`Window::set_check_spatial_dependencies`]. Applied to the scene at the start of every
@@ -755,6 +758,7 @@ impl Window {
             scene: Scene::new(),
             painter: Painter::new(),
             verify_replays: zgui_layout::invariants::enabled(),
+            compositor_omissions_noted: false,
             check_spatial_dependencies: zgui_scene::invariant::enabled(),
             content: ContentCache::new(atlas_limits.with_soft_bytes(ATLAS_SOFT_BYTES)),
             replaced_surfaces,

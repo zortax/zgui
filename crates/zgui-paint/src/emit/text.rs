@@ -89,6 +89,10 @@ pub struct GlyphRun<'a> {
     /// The byte offset in the generated string where the run's text starts, which says which
     /// nested inline box the run belongs to.
     pub text_start: u32,
+    /// The shaped run the glyphs came from, when the source has one.
+    ///
+    /// The chunk capture records it by glyph id, for a compositor that rasterises glyphs itself.
+    pub shaped: Option<zgui_text::ShapedRun<'a>>,
 }
 
 /// Where one line's glyphs are wanted, and in what form.
@@ -715,6 +719,14 @@ fn collect(
                 RunContent::Tiles(tiles) => Owned::Tiles(tiles.to_vec()),
                 RunContent::Outlines(outlines) => Owned::Outlines(outlines.to_vec()),
             },
+            shaped: run.shaped.map(|shaped| Shaped {
+                face: shaped.face.0,
+                size: shaped.size,
+                instance: shaped.instance.0,
+                embolden: shaped.synthetic_bold * shaped.size,
+                skew: shaped.synthetic_slant,
+                glyphs: shaped.glyphs.to_vec(),
+            }),
         });
     });
     emitted
@@ -738,6 +750,9 @@ fn draw(
     } else {
         brush(scene, run.slot, painting.tint)
     };
+    if let Some(shaped) = &run.shaped {
+        capture(scene, shaped, placement, painting, color, subpixel);
+    }
     match &run.content {
         Owned::Tiles(tiles) => {
             for glyph in tiles {
@@ -783,6 +798,43 @@ fn draw(
         }
     }
     pushed
+}
+
+/// Records the run by glyph id in the open chunk capture.
+fn capture(
+    scene: &mut Scene,
+    shaped: &Shaped,
+    placement: TextPlacement,
+    painting: Painting,
+    color: Color,
+    subpixel: bool,
+) {
+    let origin = placement.line.origin;
+    let (dx, dy) = (painting.offset.width.0, painting.offset.height.0);
+    scene.capture_glyph_run(zgui_scene::CapturedRun {
+        at: 0,
+        face: shaped.face,
+        size: shaped.size,
+        instance: shaped.instance,
+        glyphs: shaped
+            .glyphs
+            .iter()
+            .map(|glyph| {
+                (
+                    glyph.glyph,
+                    origin.x.0 + glyph.x + dx,
+                    origin.y.0 + glyph.y + dy,
+                )
+            })
+            .collect(),
+        color: color.to_premultiplied_srgb(),
+        embolden: shaped.embolden,
+        skew: shaped.skew,
+        silhouette: painting.force_mono,
+        subpixel,
+        clip: placement.clip.0,
+        transform: placement.transform.index(),
+    });
 }
 
 impl Emitted {
@@ -905,6 +957,24 @@ struct Emitted {
     text_start: u32,
     /// The glyphs.
     content: Owned,
+    /// The shaped run the glyphs came from, when the source had one.
+    shaped: Option<Shaped>,
+}
+
+/// A visited run's shaping, owned.
+struct Shaped {
+    /// The face.
+    face: u32,
+    /// The em size, in device pixels.
+    size: f32,
+    /// The variation instance.
+    instance: u32,
+    /// The synthesised bold, in device pixels.
+    embolden: f32,
+    /// The synthesised slant, in degrees.
+    skew: f32,
+    /// The glyph ids and their origins from the line box's top-left corner.
+    glyphs: Vec<zgui_text::ShapedGlyph>,
 }
 
 /// A visited run's glyphs, owned.
@@ -1281,6 +1351,7 @@ mod tests {
                 paint: zgui_scene::PaintSlot(0),
                 synthetic_bold: 0.0,
                 text_start: 0,
+                shaped: None,
             });
         }
     }
@@ -1453,6 +1524,7 @@ mod tests {
                 paint: zgui_scene::PaintSlot(0),
                 synthetic_bold: 0.0,
                 text_start: 0,
+                shaped: None,
             });
         }
     }

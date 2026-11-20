@@ -1,0 +1,8 @@
+[package]
+name = "zgui-paint"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+compositor-types.workspace = true
+compositor-api.workspace = true

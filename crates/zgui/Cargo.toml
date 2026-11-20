@@ -20,6 +20,15 @@ include.workspace = true
 # before its first line of interface.
 [dependencies]
 web-time.workspace = true
+# The compositor every window draws through, chosen here and nowhere else: the reference
+# compositor, the wgpu renderer and the swash glyph rasteriser.
+compositor-api.workspace = true
+compositor-core.workspace = true
+compositor-text.workspace = true
+compositor-types.workspace = true
+compositor-vector.workspace = true
+compositor-vello.workspace = true
+compositor-wgpu.workspace = true
 # The tile store, the display list and the damage set: an application that draws through a device
 # this framework has no backend for implements the renderer contract, and cannot do that without
 # naming what its methods take.

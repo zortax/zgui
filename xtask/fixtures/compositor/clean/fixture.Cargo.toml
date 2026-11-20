@@ -1,0 +1,9 @@
+# Fixture workspace for `cargo xtask ledger compositor`.
+[workspace]
+members = ["crates/*"]
+
+[workspace.dependencies]
+compositor-types = { path = "../types", version = "0.1.0" }
+compositor-api = { path = "../api", version = "0.1.0" }
+compositor-core = { path = "../core", version = "0.1.0" }
+renderer = { path = "../wgpu", version = "0.1.0", package = "compositor-wgpu" }

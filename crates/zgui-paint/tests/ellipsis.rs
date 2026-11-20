@@ -48,6 +48,7 @@ impl GlyphSource for Recorder {
             paint: zgui_scene::PaintSlot(0),
             synthetic_bold: 0.0,
             text_start: 0,
+            shaped: None,
         });
     }
 }

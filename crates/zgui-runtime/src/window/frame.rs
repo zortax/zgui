@@ -1594,6 +1594,7 @@ impl Window {
     fn paint_and_draw(&mut self) -> FrameOutcome {
         use zgui_profile::latency::mark;
         let vector_before = self.renderer.vector_status();
+        self.open_transaction();
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
         // A built rasteriser takes a shape the mask route declines at no setup cost, so the mask
@@ -1614,6 +1615,7 @@ impl Window {
         // own frame, and the renderer is not reachable while the layout store is borrowed.
         let shift: Option<zgui_render::ScrollShift>;
         let vector_report;
+        let transaction;
         {
             let layout = self.layout.borrow();
             // Before anything reads the set. What a scroll absorbs is where every moved fragment
@@ -1786,6 +1788,10 @@ impl Window {
             mark("p.emit");
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.scene);
+            transaction = self
+                .painter
+                .compositor()
+                .and_then(|sync| sync.close(&layout, &mut self.scene));
             vector_report = report.vector_routes;
             self.layers_owed = report.layers_owed;
             let after = glyph_counts();
@@ -1798,6 +1804,9 @@ impl Window {
                     report.skipped_subtrees
                 )
             });
+        }
+        if let Some(transaction) = transaction {
+            self.submit_transaction(transaction);
         }
         let mut touched = rustc_hash::FxHashMap::default();
         for report in vector_report {

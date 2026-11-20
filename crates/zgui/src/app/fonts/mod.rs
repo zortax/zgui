@@ -1,6 +1,7 @@
 //! The faces an application draws with, and the three seams they reach the frame through.
 
 mod pending;
+mod registry;
 
 use std::sync::Arc;
 
@@ -73,6 +74,11 @@ impl Default for Fonts {
 }
 
 impl Fonts {
+    /// Returns the faces as a compositor font registry, so glyph runs and layout name a face alike.
+    pub(crate) fn compositor_registry(&self) -> Arc<dyn compositor_api::FontRegistry> {
+        Arc::new(registry::Registry::new(Arc::clone(&self.system)))
+    }
+
     /// The faces installed on this machine.
     ///
     /// Enumerating them is started here and finished the first time anything asks a question about

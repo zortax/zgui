@@ -689,6 +689,7 @@ impl GlyphSource for FrameContent<'_> {
                         paint: run.brush,
                         synthetic_bold: run.synthetic_bold * run.size,
                         text_start: run.text_start,
+                        shaped: Some(run),
                     });
                     return;
                 }
@@ -718,6 +719,7 @@ impl GlyphSource for FrameContent<'_> {
                 paint: run.brush,
                 synthetic_bold: 0.0,
                 text_start: run.text_start,
+                shaped: Some(run),
             });
         });
     }

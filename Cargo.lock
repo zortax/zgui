@@ -822,6 +822,211 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-api"
+version = "0.1.0"
+dependencies = [
+ "compositor-types",
+]
+
+[[package]]
+name = "compositor-arena"
+version = "0.1.0"
+
+[[package]]
+name = "compositor-atlas"
+version = "0.1.0"
+dependencies = [
+ "compositor-damage",
+ "compositor-geom",
+ "etagere",
+ "rustc-hash 2.1.3",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "compositor-capture"
+version = "0.1.0"
+dependencies = [
+ "compositor-api",
+ "compositor-types",
+]
+
+[[package]]
+name = "compositor-color"
+version = "0.1.0"
+
+[[package]]
+name = "compositor-content"
+version = "0.1.0"
+dependencies = [
+ "compositor-api",
+ "compositor-atlas",
+ "compositor-geom",
+ "compositor-types",
+ "kurbo",
+ "rustc-hash 2.1.3",
+ "zeno",
+]
+
+[[package]]
+name = "compositor-core"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "compositor-api",
+ "compositor-arena",
+ "compositor-color",
+ "compositor-content",
+ "compositor-damage",
+ "compositor-geom",
+ "compositor-plan",
+ "compositor-types",
+ "kurbo",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "tracing",
+ "web-time",
+]
+
+[[package]]
+name = "compositor-damage"
+version = "0.1.0"
+dependencies = [
+ "compositor-geom",
+]
+
+[[package]]
+name = "compositor-geom"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "compositor-plan"
+version = "0.1.0"
+dependencies = [
+ "compositor-damage",
+ "compositor-geom",
+ "compositor-types",
+ "rustc-hash 2.1.3",
+ "smallvec",
+]
+
+[[package]]
+name = "compositor-text"
+version = "0.1.0"
+dependencies = [
+ "compositor-api",
+ "compositor-types",
+ "rustc-hash 2.1.3",
+ "skrifa",
+ "swash",
+]
+
+[[package]]
+name = "compositor-types"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "compositor-color",
+ "compositor-damage",
+ "compositor-geom",
+ "kurbo",
+ "smallvec",
+]
+
+[[package]]
+name = "compositor-upload"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "tracing",
+ "wgpu",
+]
+
+[[package]]
+name = "compositor-vector"
+version = "0.1.0"
+dependencies = [
+ "compositor-color",
+ "compositor-geom",
+ "compositor-types",
+ "kurbo",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "web-time",
+ "wgpu",
+]
+
+[[package]]
+name = "compositor-vector-coverage"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "compositor-types",
+ "compositor-upload",
+ "compositor-vector",
+ "kurbo",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "tracing",
+ "wgpu",
+]
+
+[[package]]
+name = "compositor-vello"
+version = "0.1.0"
+dependencies = [
+ "compositor-types",
+ "compositor-vector",
+ "compositor-vector-coverage",
+ "kurbo",
+ "peniko",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "tracing",
+ "vello",
+ "wgpu",
+]
+
+[[package]]
+name = "compositor-wgpu"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "bincode",
+ "bytemuck",
+ "compositor-api",
+ "compositor-arena",
+ "compositor-atlas",
+ "compositor-color",
+ "compositor-damage",
+ "compositor-geom",
+ "compositor-types",
+ "compositor-upload",
+ "compositor-vector",
+ "compositor-wgsl",
+ "futures",
+ "naga",
+ "raw-window-handle",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "thiserror 2.0.19",
+ "tracing",
+ "web-time",
+ "wgpu",
+ "windows",
+]
+
+[[package]]
+name = "compositor-wgsl"
+version = "0.1.0"
+dependencies = [
+ "compositor-types",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5593,6 +5798,13 @@ dependencies = [
 name = "zgui"
 version = "0.1.0"
 dependencies = [
+ "compositor-api",
+ "compositor-core",
+ "compositor-text",
+ "compositor-types",
+ "compositor-vector",
+ "compositor-vello",
+ "compositor-wgpu",
  "web-time",
  "zgui-atlas",
  "zgui-bits",
@@ -5997,6 +6209,8 @@ dependencies = [
 name = "zgui-paint"
 version = "0.1.0"
 dependencies = [
+ "compositor-api",
+ "compositor-types",
  "rustc-hash 2.1.3",
  "smallvec",
  "thiserror 2.0.19",
@@ -6018,6 +6232,7 @@ dependencies = [
  "zgui-scene",
  "zgui-style",
  "zgui-svg",
+ "zgui-testkit-compositor",
  "zgui-testkit-scene",
  "zgui-text",
  "zgui-text-style",
@@ -6271,6 +6486,8 @@ name = "zgui-runtime"
 version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
+ "compositor-api",
+ "compositor-types",
  "rustc-hash 2.1.3",
  "thiserror 2.0.19",
  "tracing",
@@ -6442,6 +6659,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-testkit-compositor"
+version = "0.1.0"
+dependencies = [
+ "compositor-api",
+ "compositor-capture",
+ "compositor-core",
+ "compositor-text",
+ "compositor-types",
+ "compositor-wgpu",
+]
+
+[[package]]
 name = "zgui-testkit-scene"
 version = "0.1.0"
 dependencies = [
@@ -6494,6 +6723,8 @@ dependencies = [
 name = "zgui-text-parley"
 version = "0.1.0"
 dependencies = [
+ "compositor-api",
+ "compositor-types",
  "fontique",
  "kurbo",
  "parley",

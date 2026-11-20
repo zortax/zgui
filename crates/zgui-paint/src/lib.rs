@@ -56,6 +56,7 @@ pub mod emit;
 pub mod lower;
 pub mod parity;
 pub mod shiftable;
+pub mod sync;
 pub mod walk;
 
 pub use crate::content::glyphs::{GlyphPrediction, OutlineGlyph};
@@ -77,6 +78,7 @@ pub use crate::lower::anim::{AnimOverrides, NoAnim, OwnedPaints};
 pub use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
 pub use crate::lower::key::LoweringKey;
 pub use crate::lower::{PaintStyle, lower};
+pub use crate::sync::{CompositorSync, SyncReport};
 pub use crate::walk::{PaintInput, PaintReport, Painter, VectorRouteReport};
 /// The sprite primitives glyphs are drawn as, and the brush slot a run names, from the scene
 /// vocabulary.

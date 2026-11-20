@@ -44,6 +44,8 @@ zgui-text = { path = "../zgui-text", version = "0.1.0" }
 # The shared text a drawing's source arrives in, which the vector cache holds to know it again.
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
+# The compositor contract fragments are recorded into.
+compositor-types.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
@@ -51,6 +53,9 @@ tracing.workspace = true
 zeno.workspace = true
 
 [dev-dependencies]
+# The compositor the sync's chunks are committed to, from the one factory tests take it from.
+compositor-api.workspace = true
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 # The paint key that decides *damage* is computed there; this crate's lowering key must stay a
 # subset of it, and the test that says so needs both.
 zgui-style = { path = "../zgui-style", version = "0.1.0" }

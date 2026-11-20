@@ -80,6 +80,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod compositor;
 pub mod direction;
 pub mod font;
 pub mod metrics;
@@ -87,6 +88,7 @@ pub mod raster;
 pub mod shape;
 pub mod system;
 
+pub use crate::compositor::CompositorFonts;
 pub use crate::direction::{Controls, LEFT_TO_RIGHT_MARK, RIGHT_TO_LEFT_MARK};
 pub use crate::font::{ColorSupport, script_of};
 pub use crate::metrics::{BASE_SIZE, MONOSPACE_BASE_SIZE};

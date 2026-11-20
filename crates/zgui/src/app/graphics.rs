@@ -35,7 +35,7 @@ fn notify_wanted(pacing: PresentPacing) -> bool {
 /// Whether the environment asked for the notification on a display-paced backend.
 ///
 /// Read once: the environment does not change under a running process.
-fn pacing_override() -> bool {
+pub(crate) fn pacing_override() -> bool {
     static WANTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *WANTED.get_or_init(
         || matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(value) if value.trim() == "notify"),
