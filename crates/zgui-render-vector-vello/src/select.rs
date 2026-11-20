@@ -28,7 +28,12 @@ pub enum Choice {
 /// because the two can disagree and only one of them is the thing that will be asked to run a
 /// shader.
 pub fn chosen(gpu: &Gpu) -> Choice {
-    if gpu.capabilities().vector_compute {
+    // Vello 0.9 unchecked prefix-sum shaders underflow workgroup indices on Mali-G715, and Vello's
+    // CPU preprocessing copies about 100 MB of fixed-size buffers on each frame. Coverage avoids both.
+    // https://github.com/linebender/vello/issues/1816
+    let mali_g715 =
+        cfg!(target_os = "android") && gpu.adapter().get_info().name.contains("Mali-G715");
+    if gpu.capabilities().vector_compute && !mali_g715 {
         Choice::Compute
     } else {
         Choice::Coverage
@@ -57,9 +62,8 @@ pub fn for_device(gpu: &Arc<Gpu>, size: Size<i32, Device>) -> Box<dyn VectorSour
     } else {
         tracing::info!(
             adapter = %gpu.describe(),
-            "this device cannot run the path renderer's compute shaders, so vector content is \
-             rasterised by the simpler path: no blend or compose set, and multisampled coverage \
-             rather than analytic"
+            "this device cannot run the path renderer, so vector content is rasterised by the \
+             simpler path: no blend or compose set, and multisampled coverage rather than analytic"
         );
     }
     Box::new(CoverageRaster::new(gpu, width, height))

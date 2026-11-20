@@ -54,8 +54,8 @@ pub enum Command {
         /// Whether to animate getting there.
         behavior: ScrollBehavior,
     },
-    /// Route subsequent pointer events to this node until the button is released.
-    CapturePointer(NodeId),
+    /// Route the pointer's subsequent events to this node until the button is released.
+    CapturePointer(NodeId, zgui_vocab::PointerId),
     /// Install this style sheet at the author origin, or replace it when the name is taken.
     InstallStylesheet {
         /// What the sheet is installed under.
@@ -118,9 +118,11 @@ impl core::fmt::Debug for Command {
                 .field("target", target)
                 .field("behavior", behavior)
                 .finish(),
-            Self::CapturePointer(node) => {
-                formatter.debug_tuple("CapturePointer").field(node).finish()
-            }
+            Self::CapturePointer(node, pointer) => formatter
+                .debug_tuple("CapturePointer")
+                .field(node)
+                .field(pointer)
+                .finish(),
             Self::InstallStylesheet { name, css } => formatter
                 .debug_struct("InstallStylesheet")
                 .field("name", name)
@@ -588,6 +590,19 @@ impl ViewHost for RuntimeHost {
             first,
             &self.placements.borrow(),
         )
+    }
+
+    fn is_rtl(&self, node: NodeId) -> bool {
+        let Some(key) = self.key_of(node) else {
+            return false;
+        };
+        let document = self.document.borrow();
+        let Some(index) = document.store().index_of(key) else {
+            return false;
+        };
+        document.node(index).primary_style().is_some_and(|style| {
+            style.get_inherited_box().direction == zgui_css::values::text::Direction::Rtl
+        })
     }
 
     fn scale(&self) -> f32 {

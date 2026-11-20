@@ -81,6 +81,41 @@ pub fn run(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
         .map_err(|error| PlatformError::Backend(error.to_string()))
 }
 
+/// Runs a NativeActivity application using Android's supplied activity handle.
+///
+/// Ends the process when Android destroys the activity.
+///
+/// # Errors
+/// Returns a backend error if creating or running the event loop fails.
+#[cfg(target_os = "android")]
+pub fn run_android(
+    android_app: winit::platform::android::activity::AndroidApp,
+    handler: Box<dyn AppHandler>,
+) -> Result<(), PlatformError> {
+    use winit::platform::android::EventLoopBuilderExtAndroid;
+
+    let event_loop = match EventLoop::<UserEvent>::with_user_event()
+        .with_android_app(android_app.clone())
+        .build()
+    {
+        Ok(event_loop) => event_loop,
+        // winit permits one event loop per process. Android can create a new activity in a
+        // process that still holds the destroyed activity's loop. Exit, so that Android starts
+        // the activity again in a new process.
+        Err(winit::error::EventLoopError::RecreationAttempt) => {
+            tracing::warn!("activity recreated in a used process; restarting process");
+            std::process::exit(0);
+        }
+        Err(error) => return Err(PlatformError::Backend(error.to_string())),
+    };
+    crate::android_host::attach(android_app, event_loop.create_proxy());
+    let mut app = WinitApp::new(&event_loop, handler);
+    zgui_profile::latency::start_epoch();
+    event_loop
+        .run_app(&mut app)
+        .map_err(|error| PlatformError::Backend(error.to_string()))
+}
+
 /// An application, as the event loop sees it.
 ///
 /// Generic over the handler rather than boxing it, so that a caller who owns both can still read
@@ -226,6 +261,12 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let cx = WinitCx::new(&self.shared, event_loop);
         self.handler.surfaces_available(&cx);
+        // Insets and configuration may have arrived before the surfaces existed.
+        #[cfg(target_os = "android")]
+        {
+            self.send_insets(event_loop);
+            self.send_configuration(event_loop);
+        }
     }
 
     fn suspended(&mut self, event_loop: &ActiveEventLoop) {
@@ -237,6 +278,96 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         let reason = match event {
+            #[cfg(target_os = "android")]
+            UserEvent::AndroidInput(mut input) => {
+                let timestamp = self.shared.clock().timestamp();
+                match &mut input {
+                    SurfaceEvent::Key {
+                        timestamp: time, ..
+                    }
+                    | SurfaceEvent::Pointer {
+                        timestamp: time, ..
+                    }
+                    | SurfaceEvent::Wheel {
+                        timestamp: time, ..
+                    } => *time = timestamp,
+                    _ => return,
+                }
+                // Android has one activity surface. Java dispatch replaces its native queue.
+                if let Some(surface) = self.shared.all().into_iter().next() {
+                    let id = Surface::id(surface.as_ref());
+                    if !crate::android_host::pointer(id, &input, surface.scale()) {
+                        let cx = WinitCx::new(&self.shared, event_loop);
+                        self.handler.surface_event(&cx, id, input);
+                    }
+                }
+                None
+            }
+            #[cfg(target_os = "android")]
+            UserEvent::Back => {
+                let cx = WinitCx::new(&self.shared, event_loop);
+                for surface in self.shared.all() {
+                    for state in [
+                        zgui_vocab::KeyState::Pressed,
+                        zgui_vocab::KeyState::Released,
+                    ] {
+                        self.handler.surface_event(
+                            &cx,
+                            Surface::id(surface.as_ref()),
+                            SurfaceEvent::Key {
+                                state,
+                                event: zgui_vocab::KeyEvent::named(
+                                    zgui_vocab::NamedKey::BrowserBack,
+                                    zgui_vocab::PhysicalKey::Unidentified(0),
+                                ),
+                                modifiers: zgui_vocab::Modifiers::NONE,
+                                timestamp: self.shared.clock().timestamp(),
+                            },
+                        );
+                    }
+                }
+                None
+            }
+            #[cfg(target_os = "android")]
+            UserEvent::NativeText {
+                surface,
+                target,
+                revision,
+                text,
+                selection,
+            } => {
+                crate::android_host::acknowledge(surface, target, revision);
+                let cx = WinitCx::new(&self.shared, event_loop);
+                self.handler.surface_event(
+                    &cx,
+                    surface,
+                    SurfaceEvent::NativeText {
+                        target,
+                        text,
+                        selection,
+                    },
+                );
+                None
+            }
+            #[cfg(target_os = "android")]
+            UserEvent::Insets => {
+                self.send_insets(event_loop);
+                None
+            }
+            #[cfg(target_os = "android")]
+            UserEvent::Configuration => {
+                self.send_configuration(event_loop);
+                None
+            }
+            #[cfg(target_os = "android")]
+            UserEvent::Destroyed => {
+                // Android's onDestroy waits for the native thread, and winit cannot create another
+                // loop in this process. Exit now; winit's teardown blocks on the destroyed window.
+                let cx = WinitCx::new(&self.shared, event_loop);
+                self.handler.shutting_down(&cx);
+                tracing::info!("activity destroyed; exiting process");
+                std::process::exit(0);
+            }
             UserEvent::Wake(reason) => Some(reason),
             UserEvent::A11y(event) => a11y_wake(&self.shared, event),
             UserEvent::Redraw(window) => {
@@ -287,6 +418,14 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
         );
 
         if let Some(translated) = translated {
+            #[cfg(target_os = "android")]
+            if crate::android_host::pointer(
+                Surface::id(surface.as_ref()),
+                &translated,
+                surface.scale(),
+            ) {
+                return;
+            }
             if let SurfaceEvent::ColorSchemeChanged(scheme) = translated {
                 self.shared.set_scheme(scheme);
             }
@@ -374,6 +513,50 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
     fn exiting(&mut self, event_loop: &ActiveEventLoop) {
         let cx = WinitCx::new(&self.shared, event_loop);
         self.handler.shutting_down(&cx);
+    }
+}
+
+#[cfg(target_os = "android")]
+impl<A: AppHandler> WinitApp<A> {
+    /// Gives every surface the latest Android dark mode, font scale and layout direction.
+    fn send_configuration(&mut self, event_loop: &ActiveEventLoop) {
+        let Some((dark, font_scale, rtl)) = crate::android_host::configuration() else {
+            return;
+        };
+        let scheme = if dark {
+            zgui_platform::ColorScheme::Dark
+        } else {
+            zgui_platform::ColorScheme::Light
+        };
+        self.shared.set_scheme(scheme);
+        let cx = WinitCx::new(&self.shared, event_loop);
+        for surface in self.shared.all() {
+            let id = Surface::id(surface.as_ref());
+            self.handler
+                .surface_event(&cx, id, SurfaceEvent::ColorSchemeChanged(scheme));
+            self.handler
+                .surface_event(&cx, id, SurfaceEvent::TextScaleChanged(font_scale));
+            self.handler
+                .surface_event(&cx, id, SurfaceEvent::DirectionChanged { rtl });
+        }
+    }
+
+    /// Gives every surface the latest Android system insets.
+    fn send_insets(&mut self, event_loop: &ActiveEventLoop) {
+        let Some((safe_area, keyboard)) = crate::android_host::insets() else {
+            return;
+        };
+        let cx = WinitCx::new(&self.shared, event_loop);
+        for surface in self.shared.all() {
+            self.handler.surface_event(
+                &cx,
+                Surface::id(surface.as_ref()),
+                SurfaceEvent::InsetsChanged {
+                    safe_area,
+                    keyboard,
+                },
+            );
+        }
     }
 }
 

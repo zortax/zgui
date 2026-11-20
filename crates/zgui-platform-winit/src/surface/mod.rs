@@ -127,10 +127,19 @@ impl Surface for WinitSurface {
     }
 
     fn refresh_rate_millihertz(&self) -> Option<u32> {
+        #[cfg(target_os = "android")]
+        if let Some(rate) = crate::android_host::refresh_rate() {
+            return Some(rate);
+        }
         self.window
             .current_monitor()
             .and_then(|monitor| monitor.refresh_rate_millihertz())
             .filter(|rate| *rate > 0)
+    }
+
+    #[cfg(target_os = "android")]
+    fn go_back(&self) {
+        crate::android_host::go_back();
     }
 
     fn request_size(&self, size: Size<CssPx, Css>) -> Option<Size<DevicePx, Device>> {
@@ -292,7 +301,26 @@ impl Surface for WinitSurface {
             self.window
                 .set_ime_purpose(crate::input::ime::purpose(state.purpose));
         }
-        self.window.set_ime_allowed(state.is_some());
+        // On Android, the host's native editor owns the software keyboard.
+        if cfg!(not(target_os = "android")) {
+            self.window.set_ime_allowed(state.is_some());
+        }
+    }
+
+    fn has_native_text_input(&self) -> bool {
+        cfg!(target_os = "android")
+    }
+
+    fn set_native_text_input(&self, state: Option<zgui_platform::NativeTextInput>) {
+        #[cfg(target_os = "android")]
+        crate::android_host::update(self.id, state, self.scale());
+        #[cfg(not(target_os = "android"))]
+        let _ = state;
+    }
+
+    fn request_text_input(&self) {
+        #[cfg(target_os = "android")]
+        crate::android_host::show();
     }
 
     fn reset_dead_keys(&self) {

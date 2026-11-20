@@ -76,6 +76,10 @@
 // what makes it sound.
 #![allow(unsafe_code)]
 
+#[cfg(target_os = "android")]
+mod android_a11y;
+#[cfg(target_os = "android")]
+mod android_host;
 pub mod app;
 pub mod clipboard;
 pub mod clock;
@@ -98,3 +102,6 @@ pub use crate::input::scrolling::desktop_scroll_settings;
 pub use crate::park::{Install, Park, Parked};
 pub use crate::surface::WinitSurface;
 pub use crate::waker::{ProxyWaker, UserEvent};
+
+#[cfg(target_os = "android")]
+pub mod android;

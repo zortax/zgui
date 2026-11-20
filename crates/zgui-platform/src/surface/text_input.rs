@@ -121,3 +121,23 @@ mod tests {
         assert_eq!(state.purpose, TextInputPurpose::Search);
     }
 }
+
+/// Focused field mirrored by an operating-system editor. Offsets are UTF-8 byte offsets.
+/// The target is opaque and must be echoed with edits, preventing late callbacks editing a new field.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NativeTextInput {
+    /// Opaque field identity.
+    pub target: u64,
+    /// Entire current value. Never log this: it may contain a password.
+    pub text: String,
+    /// Selection anchor and focus, in byte offsets.
+    pub selection: (usize, usize),
+    /// Field content rectangle in surface CSS coordinates.
+    pub bounds: zgui_geom::Rect<CssPx, Css>,
+    /// Font size in CSS pixels.
+    pub font_size: CssPx,
+    /// Whether line breaks are accepted.
+    pub multiline: bool,
+    /// Whether native suggestions and clipboard actions must be disabled.
+    pub secret: bool,
+}

@@ -4,7 +4,7 @@ mod support;
 use std::time::Duration;
 use zgui_geom::{CssPx, Point};
 use zgui_platform::SurfaceEvent;
-use zgui_view::{BuildCx, IntoView, NodeRef, View};
+use zgui_view::{BuildCx, IntoView, NodeRef, View, ViewHost};
 use zgui_vocab::{
     KeyCode, KeyEvent, KeyState, Modifiers, NamedKey, PhysicalKey, PointerAction, PointerButton,
     PointerEvent, Timestamp, UiState,
@@ -384,4 +384,63 @@ fn multi_click_selection_uses_css_coordinates_at_fractional_and_retina_scales() 
             "Paragraph selection at {scale}x"
         );
     }
+}
+
+fn touch(app: &mut Harness, action: PointerAction, x: f32, y: f32, time: u64) {
+    let mut event = PointerEvent::mouse(Point::new(CssPx(x), CssPx(y)));
+    event.kind = zgui_vocab::PointerKind::Touch;
+    event.id = zgui_vocab::PointerId::new(1);
+    event.button = Some(PointerButton::Primary);
+    app.deliver_to_first(SurfaceEvent::Pointer {
+        action,
+        event,
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN + Duration::from_millis(time),
+    });
+    app.settle(8);
+}
+
+#[test]
+fn touch_editor_waits_for_tap_and_drag_or_cancel_does_not_focus() {
+    use zgui_reactive::prelude::*;
+    let (mut app, node) = field("one two three", 300, false);
+    let (x, y) = location(&app, 2.0, 0);
+    touch(&mut app, PointerAction::Pressed, x, y, 0);
+    assert!(
+        app.app().windows()[0]
+            .host()
+            .focused()
+            .get_untracked()
+            .is_none()
+    );
+    touch(&mut app, PointerAction::Moved, x, y + 40.0, 100);
+    touch(&mut app, PointerAction::Released, x, y, 200);
+    assert!(
+        app.app().windows()[0]
+            .host()
+            .focused()
+            .get_untracked()
+            .is_none(),
+        "returning to origin must not turn drag into tap"
+    );
+    touch(&mut app, PointerAction::Pressed, x, y, 300);
+    touch(&mut app, PointerAction::Cancelled, x, y, 400);
+    assert!(
+        app.app().windows()[0]
+            .host()
+            .focused()
+            .get_untracked()
+            .is_none()
+    );
+    touch(&mut app, PointerAction::Pressed, x, y, 500);
+    touch(&mut app, PointerAction::Moved, x + 2.0, y + 2.0, 550);
+    touch(&mut app, PointerAction::Released, x + 2.0, y + 2.0, 600);
+    assert!(
+        app.app().windows()[0]
+            .host()
+            .focused()
+            .get_untracked()
+            .is_some()
+    );
+    assert!(node.selection().is_some());
 }

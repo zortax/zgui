@@ -93,6 +93,7 @@ windows = { version = "0.62", default-features = false, features = [
 # `winit`, `accesskit_winit`, `arboard`, `smithay-clipboard` and `zbus` are the windowing
 # backend's: `zgui-platform-winit` is the only crate that ships one of them, and `probe`, the
 # canary that compiles the pinned versions together, links winit and the winit adapter beside it.
+jni = "0.22.4"
 winit = "0.30.13"
 # The accessibility tree, which belongs to no one backend: nine crates may name it and eight do,
 # from the vocabulary a node is described in up to each backend of the platform contract.
@@ -191,6 +192,7 @@ tokio = { version = "1", default-features = false, features = [
     "time",
     "net",
 ] }
+accesskit_android = { version = "0.7.5", features = ["embedded-dex"] }
 
 # --- pure-data geometry, colour and GPU plumbing --------------------------------------------
 kurbo = "0.13.1"
@@ -353,6 +355,7 @@ undocumented_unsafe_blocks = "warn"
 # The font collection under the text engine, vendored so that a font query keeps its resolved
 # families and loaded faces from one paragraph to the next (see vendor/README.md for the changes).
 [patch.crates-io]
+accesskit_android = { path = "vendor/accesskit_android" }
 fontique = { path = "vendor/fontique" }
 
 # A browser build. The module is downloaded before it runs, so its size is part of the start-up

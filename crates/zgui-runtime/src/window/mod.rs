@@ -337,6 +337,14 @@ pub struct Window {
     panning: Vec<zgui_dom::NodeKey>,
     /// The scrolls views asked for, in the order they asked, carried out after the next layout
     /// pass so that they measure the layout that holds what the same flush added.
+    /// System interface over the surface, published to style sheets as root custom properties.
+    insets: zgui_geom::Edges<zgui_geom::DevicePx>,
+    /// Software keyboard height over the surface's bottom edge.
+    keyboard: zgui_geom::DevicePx,
+    /// The user's preferred text size as a factor of the default.
+    text_scale: f32,
+    /// Whether the platform lays out right to left.
+    rtl: bool,
     owed_scrolls: Vec<(
         zgui_dom::NodeKey,
         zgui_view::ScrollTarget,
@@ -381,6 +389,7 @@ pub struct Window {
     /// gesture *began*: re-deriving it from what is under the pointer now would make every drag
     /// select nothing at all.
     selecting: Option<crate::window::pointer_text::Selecting>,
+    pending_touch_text: Option<crate::window::pointer_text::PendingTouchText>,
     /// Where the pointer of the selecting drag is, for the frames that scroll its field.
     drag_pointer: Option<crate::window::pointer_text::DragPointer>,
     /// The caret and field the last caret reveal measured.
@@ -785,6 +794,10 @@ impl Window {
             scroll_settings: zgui_platform::ScrollSettings::default(),
             scroll_frozen: false,
             panning: Vec::new(),
+            insets: zgui_geom::Edges::default(),
+            keyboard: zgui_geom::DevicePx(0.0),
+            text_scale: 1.0,
+            rtl: false,
             owed_scrolls: Vec::new(),
             carried_scrolls: Vec::new(),
             long_press_due: None,
@@ -793,6 +806,7 @@ impl Window {
             focus_modality: zgui_input::FocusSource::Keyboard,
             vertical_goal: None,
             selecting: None,
+            pending_touch_text: None,
             drag_pointer: None,
             revealed: None,
             text_clicks: crate::window::pointer_text::TextClicks::default(),

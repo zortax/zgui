@@ -98,10 +98,10 @@ pub use crate::scroll::ScrollSettings;
 pub use crate::surface::{
     Anchor, BadIcon, CloseReason, ComposeAhead, Constrain, CursorStyle, DecorationSource,
     Decorations, DragEvent, ExclusiveZone, FullscreenMode, GpuSurface, InputSerial,
-    KeyboardInteractivity, Layer, LayerPatch, LayerPlacement, PopupPlacement, PresentPacing,
-    PresentationTiming, ResizeEdge, SubpixelLayout, Surface, SurfaceAttributes, SurfaceEvent,
-    SurfaceId, SurfaceRole, TextInput, TextInputPurpose, TitleButtons, Watchdog, WindowIcon,
-    WindowLevel,
+    KeyboardInteractivity, Layer, LayerPatch, LayerPlacement, NativeTextInput, PopupPlacement,
+    PresentPacing, PresentationTiming, ResizeEdge, SubpixelLayout, Surface, SurfaceAttributes,
+    SurfaceEvent, SurfaceId, SurfaceRole, TextInput, TextInputPurpose, TitleButtons, Watchdog,
+    WindowIcon, WindowLevel,
 };
 pub use crate::theme::ColorScheme;
 pub use crate::waker::Waker;

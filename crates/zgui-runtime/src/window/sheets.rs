@@ -6,11 +6,59 @@
 //! queue meets the style engine — after the reactive flush and before the restyle, so a component
 //! that mounted this frame is styled by its own sheet in the frame it appeared in.
 
+use zgui_geom::{DevicePx, Edges};
 use zgui_style::{SheetOrigin, SheetSource};
 
 use crate::window::Window;
 
+/// Sheet holding the environment custom properties.
+const ENVIRONMENT_SHEET: &str = "zgui-environment";
+
 impl Window {
+    /// Records system insets. A keyboard that grows scrolls the focused element back into view.
+    pub(crate) fn insets_changed(
+        &mut self,
+        safe_area: Edges<DevicePx>,
+        keyboard: DevicePx,
+    ) -> bool {
+        if self.insets == safe_area && self.keyboard == keyboard {
+            return false;
+        }
+        let grew = keyboard.0 > self.keyboard.0;
+        self.insets = safe_area;
+        self.keyboard = keyboard;
+        self.publish_environment();
+        if grew && let Some(node) = self.router.interaction().focus.focused() {
+            self.owed_scrolls.push((
+                node,
+                zgui_view::ScrollTarget::IntoView,
+                zgui_view::ScrollBehavior::Instant,
+            ));
+        }
+        true
+    }
+
+    /// Publishes the platform environment as root custom properties: insets in CSS pixels as
+    /// `--zgui-safe-area-top`, `-right`, `-bottom`, `-left` and `--zgui-keyboard-height`, and the
+    /// preferred text size factor as `--zgui-text-scale`. A right-to-left platform also sets
+    /// `direction: rtl` on the root.
+    pub(crate) fn publish_environment(&mut self) {
+        let px = |length: DevicePx| length.0 / self.scale;
+        let css = format!(
+            ":root {{ --zgui-safe-area-top: {}px; --zgui-safe-area-right: {}px; \
+             --zgui-safe-area-bottom: {}px; --zgui-safe-area-left: {}px; \
+             --zgui-keyboard-height: {}px; --zgui-text-scale: {}{} }}",
+            px(self.insets.top),
+            px(self.insets.right),
+            px(self.insets.bottom),
+            px(self.insets.left),
+            px(self.keyboard),
+            self.text_scale,
+            if self.rtl { "; direction: rtl" } else { "" },
+        );
+        self.install_view_sheet(ENVIRONMENT_SHEET, &css);
+    }
+
     /// Installs a view's style sheet under `name`, or replaces it when the name is taken.
     ///
     /// Replacement keeps the sheet's place in the cascade. Removing and adding would move it to

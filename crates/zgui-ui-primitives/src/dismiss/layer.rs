@@ -214,8 +214,11 @@ pub fn DismissableLayer(
                     // The innermost layer that is still open, rather than the innermost one there
                     // is: a surface playing its exit animation is on the stack and is not open,
                     // and an Escape it claimed would be an Escape the dialog behind it never gets.
+                    // A phone's Back closes the innermost surface as Escape does.
+                    let escape = ev.key == Key::Named(NamedKey::Escape)
+                        || ev.key == Key::Named(NamedKey::BrowserBack);
                     if !dismiss_on_escape.get_untracked()
-                        || ev.key != Key::Named(NamedKey::Escape)
+                        || !escape
                         || !escape_stack.answers_escape(id)
                     {
                         return;

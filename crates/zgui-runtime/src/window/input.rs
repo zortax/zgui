@@ -150,7 +150,14 @@ impl Window {
         // taken before the routing: what it changes is what the window is holding on the document's
         // behalf — a composition, a value nobody has been told about, a pointer's leavings.
         if let Some(focused) = Self::surface_focus_of(event) {
+            if !focused {
+                self.pending_touch_text = None;
+            }
             self.surface_focus_changed(focused, timestamp);
+            return;
+        }
+        if matches!(event, SurfaceEvent::NativeText { .. }) {
+            self.edit_focused(event, timestamp);
             return;
         }
         let modifiers = event.modifiers().unwrap_or(Modifiers::NONE);
@@ -267,11 +274,28 @@ impl Window {
 
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
-            let mut sink = HostSink::new(&host);
+            let pointer = match event {
+                SurfaceEvent::Pointer { event, .. } => event.id,
+                _ => zgui_vocab::PointerId::MOUSE,
+            };
+            let mut sink = HostSink::for_pointer(&host, pointer);
             dispatch::run(
                 self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
             )
         };
+
+        // Back that nothing in the document took, such as a dismissable layer, leaves the
+        // application the way the platform's own Back does.
+        if dispatched.default_allowed
+            && let SurfaceEvent::Key {
+                state: zgui_vocab::KeyState::Pressed,
+                event: key,
+                ..
+            } = event
+            && key.key == zgui_vocab::Key::Named(zgui_vocab::NamedKey::BrowserBack)
+        {
+            self.surface.go_back();
+        }
 
         // Whether an input method has provisional text on the screen right now, read *before* this
         // event is allowed to do anything, because the event may be the one that ends it.
@@ -290,6 +314,26 @@ impl Window {
         // A chord nothing in the document claimed runs the menu action it is the shortcut of.
         if dispatched.default_allowed && !typed && !held && default.is_none() {
             self.note_menu_shortcut(event);
+        }
+        let (deferred_text, tapped_text) =
+            self.defer_touch_text(event, target, dispatched.default_allowed);
+        let default = if deferred_text && tapped_text.is_none() {
+            None
+        } else {
+            default
+        };
+        if let Some(node) = tapped_text {
+            self.move_focus(Some(node), zgui_input::FocusSource::Pointer, timestamp);
+            if let SurfaceEvent::Pointer { event: pointer, .. } = event {
+                let press = SurfaceEvent::Pointer {
+                    action: zgui_vocab::PointerAction::Pressed,
+                    event: *pointer,
+                    modifiers,
+                    timestamp,
+                };
+                self.point_at_text(&press, Some(node));
+                self.selecting = None;
+            }
         }
         let defaulted = dispatched.default_allowed && !typed && !held && default.is_some();
         if dispatched.default_allowed
@@ -324,7 +368,7 @@ impl Window {
         // After the focus default rather than before it, because a press on a field that did not
         // have focus both focuses it and puts the caret where the press landed, and the second of
         // those is meaningless if the first has not happened yet.
-        if dispatched.default_allowed {
+        if dispatched.default_allowed && !deferred_text {
             self.point_at_text(event, target);
         } else if matches!(
             event,
@@ -339,9 +383,8 @@ impl Window {
             self.text_clicks.forget();
         }
         // A finger produces presses and moves and nothing else; what those *mean* is read here and
-        // acted on after the listeners, exactly as the wheel's own default is. A handler that took
-        // responsibility for the press has already stopped the reading from reaching a scroll,
-        // because the recogniser only ever sees what the platform sent.
+        // acted on after the listeners, exactly as the wheel's own default is. A handler that
+        // captured the pointer keeps the reading from reaching a scroll.
         if let SurfaceEvent::Pointer {
             action,
             event,
@@ -409,6 +452,17 @@ impl Window {
             return false;
         };
         let edited = match event {
+            SurfaceEvent::NativeText {
+                target,
+                text,
+                selection,
+            } => {
+                if node.as_u64() != *target {
+                    return false;
+                }
+                let document = self.document.borrow();
+                self.editors.native(&document, node, text, *selection)
+            }
             SurfaceEvent::Key {
                 state: zgui_vocab::KeyState::Pressed,
                 event: key,
@@ -565,6 +619,7 @@ impl Window {
     /// and it is the one that has to be cheap: it is reached on every keystroke, and the surface is
     /// told only when the answer really changed.
     pub(crate) fn report_caret(&mut self) {
+        self.report_native_text_input();
         let Some(node) = self.ime.target() else {
             return;
         };
@@ -624,6 +679,7 @@ impl Window {
     /// A surface without the keyboard has no input method, so text input stays disabled there
     /// even while an element of its document has focus.
     pub(crate) fn report_text_input(&mut self) {
+        self.report_native_text_input();
         let focused = self
             .router
             .interaction()
@@ -641,6 +697,65 @@ impl Window {
                 zgui_input::ime::Told::Disabled => None,
             });
         }
+    }
+
+    /// Mirrors the focused field into a native editor, where supported.
+    fn report_native_text_input(&mut self) {
+        if !self.surface.has_native_text_input() {
+            return;
+        }
+        let state = (|| {
+            let node = self
+                .router
+                .interaction()
+                .focus
+                .focused()
+                .filter(|_| self.surface_focused)?;
+            let document = self.document.borrow();
+            if !crate::editing::Editors::is_editable(&document, node) {
+                return None;
+            }
+            let index = document.store().index_of(node)?;
+            let multiline = document.store().core(index).local_name().as_str() == "editor";
+            let layout = self.layout.borrow();
+            let first = *layout.boxes_of(node).first()?;
+            let resolved = layout.layout_of(first)?;
+            let border = resolved.border_box();
+            let mut bounds = resolved.content_box();
+            if let Some(placed) = zgui_layout::fragment::transform::placed::window_box(
+                &layout,
+                first,
+                &self.host.placements(),
+            ) {
+                bounds.origin.x.0 += placed.origin.x.0 - border.origin.x.0;
+                bounds.origin.y.0 += placed.origin.y.0 - border.origin.y.0;
+            }
+            let style = zgui_text_style::lower::set::text_style(&layout.get(first)?.style);
+            let text = self.editors.native_value(&document, node)?;
+            let selection = self
+                .editors
+                .selection(node)
+                .map_or((text.len(), text.len()), |s| (s.anchor, s.focus));
+            Some(zgui_platform::NativeTextInput {
+                target: node.as_u64(),
+                text,
+                selection,
+                bounds: zgui_geom::Rect::new(
+                    zgui_geom::Point::new(
+                        zgui_geom::CssPx(bounds.origin.x.0 / self.scale),
+                        zgui_geom::CssPx(bounds.origin.y.0 / self.scale),
+                    ),
+                    zgui_geom::Size::new(
+                        zgui_geom::CssPx(bounds.size.width.0 / self.scale),
+                        zgui_geom::CssPx(bounds.size.height.0 / self.scale),
+                    ),
+                ),
+                font_size: style.size,
+                multiline,
+                secret: crate::editing::Editors::is_secure_element(&document, node),
+            })
+        })();
+        self.surface.set_native_text_input(state);
     }
 
     /// The button one surface event names, when it names one.
@@ -774,9 +889,8 @@ impl Window {
                 let key = node.and_then(zgui_view_dom::id::to_document);
                 self.move_focus(key, zgui_input::FocusSource::Script, timestamp);
             }
-            Command::CapturePointer(node) => {
+            Command::CapturePointer(node, pointer) => {
                 if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    let pointer = zgui_vocab::PointerId::MOUSE;
                     self.router.capture_mut().set(pointer, key);
                 }
             }

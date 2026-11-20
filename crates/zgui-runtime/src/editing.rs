@@ -146,6 +146,72 @@ impl Editors {
         self.attached.get(&node).map(|held| held.editor.text())
     }
 
+    /// Adopts a field before handing its value to a native editor.
+    pub fn native_value(&mut self, document: &Document, node: NodeKey) -> Option<String> {
+        let index = document.store().index_of(node)?;
+        Some(
+            self.attached
+                .entry(node)
+                .or_insert_with(|| Attached::adopt(document, index))
+                .editor
+                .text(),
+        )
+    }
+
+    /// Applies a full native editor state as one minimal replacement, preserving Rust undo history.
+    pub fn native(
+        &mut self,
+        document: &Document,
+        node: NodeKey,
+        text: &str,
+        selection: (usize, usize),
+    ) -> Edited {
+        if !Self::is_editable(document, node) {
+            return Edited::default();
+        }
+        let Some(old) = self.native_value(document, node) else {
+            return Edited::default();
+        };
+        let prefix = old
+            .chars()
+            .zip(text.chars())
+            .take_while(|(a, b)| a == b)
+            .map(|(c, _)| c.len_utf8())
+            .sum::<usize>();
+        let suffix = old[prefix..]
+            .chars()
+            .rev()
+            .zip(text[prefix..].chars().rev())
+            .take_while(|(a, b)| a == b)
+            .map(|(c, _)| c.len_utf8())
+            .sum::<usize>();
+        let mut edited = if old != text {
+            self.deliver(document, node, |editor| {
+                editor.apply(zgui_edit::Command::Select(zgui_edit::Selection::new(
+                    prefix,
+                    old.len() - suffix,
+                )));
+                editor.apply(zgui_edit::Command::Insert(
+                    text[prefix..text.len() - suffix].to_owned(),
+                ))
+            })
+        } else {
+            Edited {
+                handled: true,
+                ..Edited::default()
+            }
+        };
+        let selected = self.place(
+            document,
+            node,
+            selection.0,
+            selection.1,
+            zgui_edit::Affinity::Downstream,
+        );
+        edited.selection = selected.selection;
+        edited
+    }
+
     /// Forgets an element's model, which is what removing the element does.
     pub fn detach(&mut self, node: NodeKey) {
         self.attached.remove(&node);
@@ -700,6 +766,36 @@ mod tests {
             })
             .expect("not poisoned");
         (document, field)
+    }
+
+    #[test]
+    fn native_autocorrection_and_unicode_selection_update_document() {
+        let (document, field) = field("field", &["helo 🌍"]);
+        let node = document.store().key_of(field);
+        let mut editors = Editors::new();
+        let edit = editors.native(&document, node, "hello 🌍", (6, 10));
+        assert_eq!(edit.value.as_deref(), Some("hello 🌍"));
+        assert_eq!(edit.selection, Some(6..10));
+        assert_eq!(
+            text_of(
+                &document,
+                document.store().core(field).first_child().unwrap()
+            ),
+            "hello 🌍"
+        );
+        let copied = editors.deliver(&document, node, |editor| {
+            editor.apply(zgui_edit::Command::Copy)
+        });
+        assert_eq!(copied.clipboard.as_deref(), Some("🌍"));
+        let selected = editors.native(&document, node, "hello 🌍", (5, 0));
+        assert_eq!(selected.value, None);
+        assert_eq!(selected.selection, Some(0..5));
+        let replaced = editors.native(&document, node, "goodbye 🌍", (7, 7));
+        assert_eq!(replaced.value.as_deref(), Some("goodbye 🌍"));
+        let undone = editors.deliver(&document, node, |editor| {
+            editor.apply(zgui_edit::Command::Undo)
+        });
+        assert_eq!(undone.value.as_deref(), Some("hello 🌍"));
     }
 
     /// A press of a letter key.
