@@ -66,6 +66,10 @@ impl Renderer for Recording {
     fn memory(&self) -> MemoryReport {
         self.device.memory()
     }
+
+    fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
+        self.device.as_any_mut()
+    }
 }
 
 /// Whether the next frame is drawn over the whole output, whatever the damage set.

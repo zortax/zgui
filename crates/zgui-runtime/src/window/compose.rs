@@ -29,12 +29,18 @@ impl Window {
         }
     }
 
-    /// Makes the next frame drop everything this window recorded into its compositor and record
-    /// the whole surface again from nothing.
+    /// Commits the transaction the embed host wrote into.
     ///
-    /// No frame is asked for.
-    pub fn forget_compositor_sync(&self) {
-        self.resync.set(true);
+    /// A rejected transaction leaves the compositor with nothing of this window, as a rejected
+    /// frame does.
+    pub(super) fn submit_embed_transaction(&mut self, transaction: compositor_types::Transaction) {
+        if self.compositor.commit(transaction).is_err() {
+            if let Some(sync) = self.painter.compositor() {
+                sync.reset();
+            }
+            self.damage = DamageSet::full();
+            self.request_frame();
+        }
     }
 
     /// Commits the frame's transaction.

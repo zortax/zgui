@@ -6,14 +6,15 @@ use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
 use syn::{Ident, LitStr, Token, Type};
-use zgui_wgsl::{ShaderMode, ShaderReads};
+
+use crate::mode::{Mode, Reads};
 
 /// One `shader!` invocation, as it was written.
 struct Declaration {
     /// What the effect is called.
     name: LitStr,
     /// What it does.
-    mode: ShaderMode,
+    mode: Mode,
     /// Where the mode was written, so an error about it points at it.
     mode_span: Span,
     /// The Rust structure its parameters are.
@@ -21,7 +22,7 @@ struct Declaration {
     /// How far outside its own box a filter effect reads, in CSS pixels.
     reach: f32,
     /// What it reads that changes on its own.
-    reads: ShaderReads,
+    reads: Reads,
     /// The application's own text, and where it came from.
     source: Source,
 }
@@ -37,9 +38,9 @@ enum Source {
 impl Parse for Declaration {
     fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
         let mut name: Option<LitStr> = None;
-        let mut mode: Option<(ShaderMode, Span)> = None;
+        let mut mode: Option<(Mode, Span)> = None;
         let mut params: Option<Type> = None;
-        let mut reads = ShaderReads::NOTHING;
+        let mut reads = Reads::default();
         let mut reach = 0.0f32;
         let mut source: Option<Source> = None;
         let mut seen: BTreeSet<String> = BTreeSet::new();
@@ -58,12 +59,12 @@ impl Parse for Declaration {
                 "name" => name = Some(input.parse()?),
                 "mode" => {
                     let written: Ident = input.parse()?;
-                    let Some(chosen) = ShaderMode::from_name(&written.to_string()) else {
+                    let Some(chosen) = Mode::from_name(&written.to_string()) else {
                         return Err(syn::Error::new(
                             written.span(),
                             format!(
                                 "`{written}` is no shading mode; write one of {}",
-                                ShaderMode::ALL
+                                Mode::ALL
                                     .iter()
                                     .map(|mode| mode.name())
                                     .collect::<Vec<_>>()
@@ -126,10 +127,10 @@ impl Parse for Declaration {
 }
 
 /// Parses `[Time, Pointer]`.
-fn parse_reads(input: ParseStream<'_>) -> syn::Result<ShaderReads> {
+fn parse_reads(input: ParseStream<'_>) -> syn::Result<Reads> {
     let content;
     syn::bracketed!(content in input);
-    let mut reads = ShaderReads::NOTHING;
+    let mut reads = Reads::default();
     while !content.is_empty() {
         let written: Ident = content.parse()?;
         reads = reads.with(&written.to_string()).ok_or_else(|| {
@@ -137,7 +138,7 @@ fn parse_reads(input: ParseStream<'_>) -> syn::Result<ShaderReads> {
                 written.span(),
                 format!(
                     "`{written}` is nothing an effect can declare it reads; write one of {}",
-                    ShaderReads::NAMES.join(", ")
+                    Reads::NAMES.join(", ")
                 ),
             )
         })?;
@@ -152,7 +153,9 @@ fn parse_reads(input: ParseStream<'_>) -> syn::Result<ShaderReads> {
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
     let declared: Declaration = syn::parse2(input)?;
     let (snippet, tracked) = read_source(&declared.source)?;
-    let unit = zgui_wgsl::effect(declared.mode, &snippet);
+    // The unit a renderer assembles from the text, so the compiled form is the same program.
+    let unit = compositor_wgsl::effect(declared.mode.compositor(), &snippet)
+        .expect("compositor-wgsl assembles every mode a declaration can name");
 
     // Asked before the unit is parsed, because the epilogue calls the function and a missing one
     // is reported by the shader front end as an unknown identifier deep in text the application
@@ -164,7 +167,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
                 "a `{}` effect writes `fn {}(in: ShaderInput, params: Params)`, and this shader \
                  declares no such function",
                 declared.mode.name(),
-                zgui_wgsl::entry(declared.mode)
+                declared.mode.entry()
             ),
         ));
     }
@@ -193,7 +196,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
                 "a `{}` effect writes `fn {}(in: ShaderInput, params: Params)`, and this shader \
                  declares no such function",
                 declared.mode.name(),
-                zgui_wgsl::entry(declared.mode)
+                declared.mode.entry()
             ),
         ));
     }
@@ -213,6 +216,10 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
         Some(spelled) => quote! { <#spelled as ::zgui::shader::ShaderParams>::LAYOUT },
         None => quote! { ::zgui::shader::ParamsLayout::EMPTY },
     };
+    let shader_params = match crate::layout::params(&module) {
+        Some((size, members)) => crate::layout::tokens(size, &members),
+        None => quote! { ::zgui::shader::ParamsLayout::EMPTY },
+    };
     let bytes = syn::LitByteStr::new(&representation, Span::call_site());
     // Emitted so that rustc watches the file: an effect read from disk has to rebuild when the
     // disk changes, and only the compiler can be told that.
@@ -225,9 +232,10 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
                 ::zgui::shader::EffectProgram {
                     mode: #mode,
                     label: #name,
-                    representation: #bytes,
-                    source: #unit,
+                    prebuilt: #bytes,
+                    source: #snippet,
                     params: #params,
+                    shader_params: #shader_params,
                 },
                 ::zgui::shader::ShaderReads {
                     time: #reads_time,
@@ -286,8 +294,8 @@ fn validate(module: &naga::Module) -> Result<(), String> {
 ///
 /// A textual answer, and deliberately generous: it decides only which of two messages an
 /// application gets, and [`declares_entry`] is the one that decides whether the effect is accepted.
-fn mentions_entry(snippet: &str, mode: ShaderMode) -> bool {
-    let wanted = format!("fn {}", zgui_wgsl::entry(mode));
+fn mentions_entry(snippet: &str, mode: Mode) -> bool {
+    let wanted = format!("fn {}", mode.entry());
     snippet.match_indices(&wanted).any(|(at, matched)| {
         let after = snippet[at + matched.len()..].trim_start();
         after.starts_with('(')
@@ -295,19 +303,19 @@ fn mentions_entry(snippet: &str, mode: ShaderMode) -> bool {
 }
 
 /// Whether the compiled module declares the function the mode calls.
-fn declares_entry(module: &naga::Module, mode: ShaderMode) -> bool {
+fn declares_entry(module: &naga::Module, mode: Mode) -> bool {
     module
         .functions
         .iter()
-        .any(|(_, function)| function.name.as_deref() == Some(zgui_wgsl::entry(mode)))
+        .any(|(_, function)| function.name.as_deref() == Some(mode.entry()))
 }
 
 /// The path naming one mode in the expansion.
-fn mode_path(mode: ShaderMode) -> TokenStream {
+fn mode_path(mode: Mode) -> TokenStream {
     match mode {
-        ShaderMode::Paint => quote! { ::zgui::shader::ShaderMode::Paint },
-        ShaderMode::Coverage => quote! { ::zgui::shader::ShaderMode::Coverage },
-        ShaderMode::Filter => quote! { ::zgui::shader::ShaderMode::Filter },
+        Mode::Paint => quote! { ::zgui::shader::ShaderMode::Paint },
+        Mode::Coverage => quote! { ::zgui::shader::ShaderMode::Coverage },
+        Mode::Filter => quote! { ::zgui::shader::ShaderMode::Filter },
     }
 }
 

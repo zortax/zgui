@@ -1,7 +1,8 @@
 //! zgui's property tables mirrored into compositor nodes and slots.
 //!
 //! Coordinate systems become transform and scroll nodes, clip chains become clip nodes, paints
-//! become paint slots and images become compositor images. Each is mirrored the first time a
+//! become paint slots, images become compositor images, and application shaders and their
+//! parameters become compositor shaders and parameter slots. Each is mirrored the first time a
 //! recorded chunk refers to it, and the tables' change journals then turn into node and slot
 //! writes before each frame's walk.
 //!
@@ -13,6 +14,8 @@ pub(crate) mod color;
 pub(crate) mod holds;
 pub(crate) mod images;
 pub(crate) mod paints;
+pub(crate) mod params;
+pub(crate) mod shaders;
 pub(crate) mod spaces;
 
 use compositor_types::{AnyId, ChunkKey, Transaction};
@@ -27,6 +30,8 @@ pub(crate) struct Mirror {
     pub(crate) clips: clips::Clips,
     pub(crate) paints: paints::Paints,
     pub(crate) images: images::Images,
+    pub(crate) shaders: shaders::Shaders,
+    pub(crate) params: params::Params,
     pub(crate) holds: holds::Holds,
     removed: Vec<AnyId>,
 }
@@ -127,6 +132,25 @@ impl Mirror {
         self.images.ensure(tx, &mut self.holds, key, pixels)
     }
 
+    /// Returns the compositor shader of the declared shader `id`, or `None` for a handle no
+    /// program was declared under.
+    pub(crate) fn shader(
+        &mut self,
+        tx: &mut Transaction,
+        id: zgui_scene::ShaderId,
+    ) -> Option<compositor_types::ShaderId> {
+        self.shaders.ensure(tx, id)
+    }
+
+    /// Returns the parameter slot holding `block`, for the chunk being recorded.
+    pub(crate) fn params(
+        &mut self,
+        tx: &mut Transaction,
+        block: compositor_types::ParamsBlock,
+    ) -> compositor_types::ParamsId {
+        self.params.ensure(tx, &mut self.holds, block)
+    }
+
     /// Makes the chunk `key` hold what was mirrored for it since the last recording.
     pub(crate) fn recorded(&mut self, key: ChunkKey) {
         self.holds.recorded(key);
@@ -148,6 +172,7 @@ impl Mirror {
                 AnyId::Clip(id) => self.clips.removed(id, &mut scene.clips),
                 AnyId::Paint(id) => self.paints.removed(id, &mut scene.paints),
                 AnyId::Image(id) => self.images.removed(id),
+                AnyId::Params(id) => self.params.removed(id),
                 _ => {}
             }
         }

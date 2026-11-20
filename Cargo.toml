@@ -66,6 +66,9 @@ compositor-text = { path = "../compositor/compositor/crates/text", version = "0.
 compositor-vector = { path = "../compositor/compositor/crates/vector", version = "0.1.0" }
 compositor-vello = { path = "../compositor/compositor/crates/vello", version = "0.1.0" }
 compositor-testing = { path = "../compositor/compositor/tool/testing", version = "0.1.0" }
+# The prelude and epilogues an application shader is assembled with, read by the `shader!` macro so
+# that the program it compiles is the one a renderer would assemble.
+compositor-wgsl = { path = "../compositor/compositor/crates/wgsl", version = "0.1.0" }
 
 # --- gpu and vector ------------------------------------------------------------------------
 # wgpu is pinned to 30.x workspace-wide because vello 0.11 links wgpu 30 and shares one

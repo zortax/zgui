@@ -123,38 +123,45 @@ pub struct GroupEffect {
     pub blend: compositor_types::BlendMode,
     /// The filters applied to the group's content, in sequence.
     pub filters: Arc<[compositor_types::Filter]>,
+    /// The application shader that filters the group's content after `filters`.
+    pub shader: Option<crate::emit::shader::ShaderStep>,
     /// Whether the subtree is drawn into a group whatever the other fields say.
     pub isolate: bool,
-    /// How many filter steps the compositor has no counterpart for, and which are left out.
-    pub omitted: usize,
 }
 
 /// Returns the effect a fragment's subtree is drawn with under `isolation`, or `None` when it is
 /// drawn in place.
 ///
 /// A subtree folded to zero alpha is drawn with an opacity of zero, which draws nothing.
+///
+/// The filter effect a style sheet named runs after the `filter` chain, with its parameters, and
+/// its reach is scaled by `scale`.
 pub fn effect(
     style: &PaintStyle,
     fragment: &Fragment,
     isolation: Isolation,
+    shaders: &dyn crate::content::shader::ShaderSource,
+    scale: f32,
 ) -> Option<GroupEffect> {
     match isolation {
         Isolation::Target => {
             let mut filters = Vec::new();
-            let mut omitted = filter::convert(&style.group.filters, &mut filters);
-            omitted += usize::from(
+            filter::convert(&style.group.filters, &mut filters);
+            let shader = crate::emit::shader::filter_step(
                 style
                     .shader
                     .as_ref()
-                    .is_some_and(|shader| shader.filter.is_some()),
+                    .and_then(|shader| shader.filter.as_ref()),
+                shaders,
+                scale,
             );
             Some(GroupEffect {
                 clip: fragment.clip,
                 opacity: style.group.opacity,
                 blend: filter::blend(style.group.blend),
                 filters: filters.into(),
+                shader,
                 isolate: true,
-                omitted,
             })
         }
         Isolation::Folded(alpha) if alpha <= 0.0 => Some(GroupEffect {
@@ -162,8 +169,8 @@ pub fn effect(
             opacity: 0.0,
             blend: compositor_types::BlendMode::NORMAL,
             filters: Arc::from([]),
+            shader: None,
             isolate: false,
-            omitted: 0,
         }),
         Isolation::None | Isolation::Folded(_) => None,
     }
@@ -177,7 +184,7 @@ pub fn effect(
 /// to the rounded border box, as the box's background is. `computed` is the box's computed style,
 /// which gives the radii.
 ///
-/// A filter step of an application shader has no compositor counterpart yet and is left out.
+/// The backdrop effect a style sheet named runs after the `backdrop-filter` chain.
 pub fn backdrop(
     rec: &mut Recorder<'_>,
     style: &PaintStyle,
@@ -186,22 +193,21 @@ pub fn backdrop(
     shaders: &dyn crate::content::shader::ShaderSource,
     scale: f32,
 ) -> usize {
-    let mut filters = style.group.backdrop.clone();
+    let mut chain = Vec::new();
+    filter::convert(&style.group.backdrop, &mut chain);
     // After the chain the `backdrop-filter` property wrote, for the reason a filter effect goes
     // after the `filter` chain: the two are separate properties with no order between them.
-    if let Some(step) = crate::emit::shader::filter_step(
-        rec.scene(),
+    let step = crate::emit::shader::filter_step(
         style
             .shader
             .as_ref()
             .and_then(|shader| shader.backdrop.as_ref()),
         shaders,
         scale,
-    ) {
-        filters.push(step);
+    );
+    if let Some(filter) = step.and_then(|step| rec.shader_filter(step)) {
+        chain.push(filter);
     }
-    let mut chain = Vec::new();
-    filter::convert(&filters, &mut chain);
     if chain.is_empty() {
         return 0;
     }

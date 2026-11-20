@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use compositor_types::{
-    Backdrop, Filter, Glyph, GlyphRun, Image, ItemOp, Line, MarkPayload, Marks, PathItem, Quad,
-    Shadow,
+    Backdrop, ExternalQuad, Filter, Glyph, GlyphRun, Image, ItemOp, Line, MarkPayload, Marks,
+    PathItem, Quad, ShaderQuad, Shadow,
 };
 use zgui_scene::{ClipId, Scene, SpatialId};
 
@@ -13,7 +13,8 @@ use crate::emit::record::{Items, Recorder};
 /// One chunk's items recorded without a compositor, for reading back.
 ///
 /// Nothing refers to a node or a slot. Items name the chunk's default space and clip, colours are
-/// carried in their references, images are slot zero and every other paint is none.
+/// carried in their references, images, shaders, parameter blocks and textures are slot zero and
+/// every other paint is none.
 #[derive(Debug, Default)]
 pub struct Recording {
     items: Items,
@@ -44,6 +45,16 @@ impl Recording {
     /// Returns the quads, in record order.
     pub fn quads(&self) -> &[Quad] {
         &self.items.quads
+    }
+
+    /// Returns the shader quads, in record order.
+    pub fn shader_quads(&self) -> &[ShaderQuad] {
+        &self.items.shader_quads
+    }
+
+    /// Returns the external quads, in record order.
+    pub fn externals(&self) -> &[ExternalQuad] {
+        &self.items.externals
     }
 
     /// Returns the shadows, in record order.

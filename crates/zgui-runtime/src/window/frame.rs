@@ -832,12 +832,14 @@ impl Window {
     fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
         let placements = self.host.placements();
         let mut damage = DamageSet::new();
+        let mut transaction = self.compositor.transaction();
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
             layout: &self.layout,
             placements: &placements,
             renderer: &mut *self.renderer,
             content: &mut self.content,
+            transaction: &mut transaction,
             damage: &mut damage,
             intrinsics: &self.replaced_surfaces,
             revision: self.dom.revision(),
@@ -860,6 +862,10 @@ impl Window {
         let report = self.embed.sync(&mut cx);
         self.embed_animating = report.animating;
         self.damage.absorb_set(&damage);
+        drop(placements);
+        if !transaction.is_empty() {
+            self.submit_embed_transaction(transaction);
+        }
     }
 
     /// Whether anything in the document is animating.

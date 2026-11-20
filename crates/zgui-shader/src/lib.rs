@@ -81,14 +81,15 @@ pub use crate as shader;
 mod effect;
 mod handle;
 mod paint;
+mod program;
 
 pub use crate::effect::ShaderEffect;
 pub use crate::handle::{NoParams, ParamsValue, ShaderHandle, ShaderParams};
 pub use crate::paint::ShaderPainterExt;
+pub use crate::program::{EffectProgram, ParamsField, ParamsLayout};
 
-pub use zgui_render_wgpu::{EffectProgram, ParamsField, ParamsLayout};
-pub use zgui_scene::{ShaderId, ShaderParams as ShaderParamsBlock};
+pub use compositor_types::ParamsBlock as ShaderParamsBlock;
+pub use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderMode, ShaderReads};
 // The derive and the trait share a name deliberately, the way `Debug` does: one is a macro and the
 // other a type, and an application writes `#[derive(ShaderParams)]` against the trait it names.
 pub use zgui_shader_macro::{ShaderParams, shader};
-pub use zgui_wgsl::{MAX_PARAMS_BYTES, ShaderMode, ShaderReads};

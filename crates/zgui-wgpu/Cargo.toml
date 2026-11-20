@@ -14,20 +14,19 @@ include.workspace = true
 # L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
 #
 # The wgpu companion: what an application links to fill `surface` elements with textures another
-# renderer produced. It is the one crate that walks through `Renderer::as_any_mut` to the concrete
-# wgpu backend, and it deliberately names wgpu only through zgui-render-wgpu's re-export, so the
-# single-wgpu rule holds by construction.
+# renderer produced. It is the one crate that walks through `Renderer::as_any_mut` to the
+# compositor's wgpu renderer, binds textures to the window's external texture slots there, and names
+# wgpu only through compositor-wgpu's re-export, so the single-wgpu rule holds by construction.
 [dependencies]
+compositor-types.workspace = true
+compositor-wgpu.workspace = true
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 

@@ -13,7 +13,6 @@
 use zgui_atlas::{AtlasKey, TextureKind};
 use zgui_dom::host::ReplacedId;
 use zgui_geom::{Device, Size};
-use zgui_scene::ExternalTextureId;
 
 /// What went wrong attaching content to a replaced node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -69,7 +68,7 @@ pub(crate) enum Content {
         natural: Size<u32, Device>,
     },
     /// A texture somebody else owns, drawn from where it already is.
-    External(ExternalTextureId),
+    External(compositor_types::TextureId),
 }
 
 impl Content {

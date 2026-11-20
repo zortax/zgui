@@ -214,9 +214,6 @@ impl CompositorSync {
 
     /// Notes the group effect the box `key` is drawn with this frame, `None` for none.
     pub(crate) fn isolate(&mut self, key: BoxKey, effect: Option<crate::emit::group::GroupEffect>) {
-        if let Some(effect) = &effect {
-            self.report.omitted_primitives += effect.omitted;
-        }
         self.order.isolate(key, effect);
     }
 

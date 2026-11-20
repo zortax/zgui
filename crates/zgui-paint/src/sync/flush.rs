@@ -49,6 +49,15 @@ pub(crate) fn record(
             Ref::Image(id) => {
                 chunk.image_slot(id);
             }
+            Ref::Shader(id) => {
+                chunk.shader_slot(id);
+            }
+            Ref::Params(id) => {
+                chunk.params_slot(id);
+            }
+            Ref::Texture(id) => {
+                chunk.texture_slot(id);
+            }
         }
     }
 
@@ -72,6 +81,7 @@ pub(crate) fn record(
         let index = op.index as usize;
         match op.kind {
             ItemKind::QUAD => chunk.quad(items.quads[index]),
+            ItemKind::SHADER_QUAD => chunk.shader_quad(items.shader_quads[index]),
             ItemKind::SHADOW => chunk.shadow(items.shadows[index]),
             ItemKind::LINE => chunk.line(items.lines[index]),
             ItemKind::GLYPH_RUN => chunk.glyph_run(items.glyph_runs[index]),
@@ -79,6 +89,7 @@ pub(crate) fn record(
             ItemKind::MARKS => chunk.marks(items.marks[index]),
             ItemKind::PATH => chunk.path(items.paths[index].clone()),
             ItemKind::BACKDROP => chunk.backdrop(items.backdrops[index]),
+            ItemKind::EXTERNAL => chunk.external(items.externals[index]),
             kind => unreachable!("the recorder holds no item of kind {kind:?}"),
         };
     }

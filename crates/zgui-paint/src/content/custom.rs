@@ -8,11 +8,11 @@
 
 use std::sync::Arc;
 
-use compositor_types::{BorderStyle, PaintRef, Quad};
+use compositor_types::{BorderStyle, PaintRef, ParamsBlock, Quad, ShaderQuad};
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_scene::kurbo;
-use zgui_scene::{ClipId, ShadedQuad, ShaderId, ShaderParams, SpatialId, VectorId};
+use zgui_scene::{ClipId, ShaderId, SpatialId, VectorId};
 
 use crate::emit::record::{Recorder, flat_radii, local_rect};
 
@@ -132,10 +132,11 @@ impl ScenePainter<'_> {
 
     /// Fills a rounded rectangle with an application's own shader.
     ///
-    /// `shader` names an effect the renderer was told about, and `params` is what it draws with.
-    /// The rectangle is the effect's whole world: it is given coordinates measured from that
+    /// `shader` is a declared application shader, and `params` is the block it draws with. The
+    /// rectangle is the effect's whole world: it is given coordinates measured from that
     /// rectangle's own corner, and the framework applies the fragment's clip, its transform and its
-    /// folded alpha to whatever the effect returns.
+    /// folded alpha to whatever the effect returns. Nothing is drawn for a shader no program was
+    /// declared under.
     ///
     /// # What replays
     ///
@@ -147,18 +148,30 @@ impl ScenePainter<'_> {
         rect: Rect<DevicePx, Device>,
         corner_radius: f32,
         shader: ShaderId,
-        params: ShaderParams,
+        params: ParamsBlock,
     ) {
         if !shader.is_some() {
             return;
         }
-        let slot = self.rec.scene().shader_params.intern(params);
-        let shaded = ShadedQuad::new(self.placed(rect), shader, slot)
-            .with_radii(corners(corner_radius))
-            .clipped(self.clip)
-            .transformed(self.transform)
-            .faded(self.alpha);
-        self.pushed += usize::from(self.rec.scene().push_shaded(shaded).is_some());
+        let Some((shader, params)) = self.rec.shader_slots(shader, params) else {
+            return;
+        };
+        let quad = ShaderQuad {
+            bounds: local_rect(self.placed(rect)),
+            radii: flat_radii(corners(corner_radius)),
+            shapes: compositor_types::ROUND,
+            border: [0.0; 4],
+            fill: PaintRef::NONE,
+            stroke: PaintRef::NONE,
+            paint_origin: [0.0; 2],
+            clip: self.rec.clip(self.clip),
+            space: self.rec.space(self.transform),
+            shader,
+            params,
+            opacity: self.alpha,
+        };
+        self.rec.shader_quad(quad);
+        self.pushed += 1;
     }
 
     /// Draws one shape, a path with its own fill and stroke, as vector content.

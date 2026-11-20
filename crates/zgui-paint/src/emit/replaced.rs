@@ -7,10 +7,13 @@
 
 use std::sync::Arc;
 
-use compositor_types::{Extend, Image, ImageDesc, ImageFilter, ImageFlags, ImageFormat, PaintRef};
+use compositor_types::{
+    Extend, ExternalQuad, Image, ImageDesc, ImageFilter, ImageFlags, ImageFormat, PaintRef,
+    TextureId,
+};
 use zgui_css::values::size::{ObjectFitValue, ObjectPositionValue};
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{ClipId, ExternalQuad, ExternalTextureId, SpatialId};
+use zgui_scene::{ClipId, SpatialId};
 
 use crate::emit::record::{ImageKey, ImagePixels, Recorder, flat_radii, local_rect};
 
@@ -32,8 +35,9 @@ pub enum Source {
         /// A number that moves whenever the texels under `key` change.
         revision: u64,
     },
-    /// A texture owned by something else, drawn from where it already is.
-    External(ExternalTextureId),
+    /// A texture owned by something else, drawn from where it already is, as an external
+    /// texture slot of the window's compositor client.
+    External(TextureId),
 }
 
 /// Where a replaced box's content is drawn.
@@ -107,11 +111,15 @@ pub fn emit(rec: &mut Recorder<'_>, source: Source, placement: ReplacedPlacement
             Some(1)
         }
         Source::External(texture) => {
-            let mut quad =
-                ExternalQuad::new(placement.content_box, texture).clipped(placement.clip);
-            quad.transform = placement.transform;
-            quad.opacity = placement.opacity;
-            Some(usize::from(rec.scene().push_external(quad).is_some()))
+            let quad = ExternalQuad {
+                bounds: local_rect(placement.content_box),
+                texture: 0,
+                opacity: placement.opacity,
+                clip: rec.clip(placement.clip),
+                space: rec.space(placement.transform),
+            };
+            rec.external(texture, quad);
+            Some(1)
         }
     }
 }
@@ -180,7 +188,7 @@ fn offset(position: &zgui_css::values::length::LengthPercentage, leftover: f32, 
 #[cfg(test)]
 mod tests {
     use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-    use zgui_scene::{ClipId, ExternalTextureId, Scene, SpatialId};
+    use zgui_scene::{ClipId, Scene, SpatialId};
 
     use super::{ReplacedPlacement, Source, emit};
     use crate::emit::record::Recording;
@@ -199,8 +207,13 @@ mod tests {
         }
     }
 
+    /// An external texture slot of a client.
+    fn texture() -> compositor_types::TextureId {
+        compositor_types::IdSpace::new(compositor_types::ClientId(1)).mint()
+    }
+
     #[test]
-    fn an_external_texture_reaches_the_display_list() {
+    fn an_external_texture_is_recorded_over_the_content_box() {
         let mut scene = Scene::new();
         scene.begin_frame(Size::new(64, 64));
         let rect = Rect::new(
@@ -210,14 +223,13 @@ mod tests {
         let mut recording = Recording::new();
         let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
         assert_eq!(
-            emit(
-                &mut rec,
-                Source::External(ExternalTextureId(7)),
-                placement(rect)
-            ),
+            emit(&mut rec, Source::External(texture()), placement(rect)),
             Some(1)
         );
-        assert_eq!(scene.primitives.externals.len(), 1);
+        let [external] = recording.externals() else {
+            panic!("one external quad: {:?}", recording.externals());
+        };
+        assert_eq!(external.bounds, [0.0, 0.0, 32.0, 32.0]);
     }
 
     /// Every fit mode, against one box and one picture whose aspects disagree.
@@ -312,13 +324,9 @@ mod tests {
         let mut recording = Recording::new();
         let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
         assert_eq!(
-            emit(
-                &mut rec,
-                Source::External(ExternalTextureId(1)),
-                placement(empty)
-            ),
+            emit(&mut rec, Source::External(texture()), placement(empty)),
             Some(0)
         );
-        assert!(scene.primitives.externals.is_empty());
+        assert!(recording.externals().is_empty());
     }
 }

@@ -1393,7 +1393,15 @@ impl stacking::Visitor for Pass<'_, '_> {
         if let Some(sync) = &mut self.painter.sync {
             sync.isolate(
                 key,
-                own.and_then(|fragment| group::effect(&style, fragment, isolation)),
+                own.and_then(|fragment| {
+                    group::effect(
+                        &style,
+                        fragment,
+                        isolation,
+                        self.input.shaders,
+                        self.input.scale,
+                    )
+                }),
             );
         }
         // A subtree at zero alpha composites nothing. Every fragment under it is already refused

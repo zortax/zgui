@@ -3,8 +3,9 @@
 use std::sync::Arc;
 
 use compositor_types::{
-    Backdrop, ClipId, Filter, Glyph, GlyphRun, Image, ImageId, ItemKind, ItemOp, Line, LocalClip,
-    MarkPayload, Marks, PaintId, PaintKind, PathItem, Quad, Shadow, TransformId,
+    Backdrop, ClipId, ExternalQuad, Filter, Glyph, GlyphRun, Image, ImageId, ItemKind, ItemOp,
+    Line, LocalClip, MarkPayload, Marks, PaintId, PaintKind, ParamsId, PathItem, Quad, ShaderId,
+    ShaderQuad, Shadow, TextureId, TransformId,
 };
 use zgui_scene::{ClipId as SceneClip, SpatialId};
 
@@ -20,6 +21,7 @@ pub(crate) struct Items {
     pub(crate) clip: SceneClip,
     pub(crate) ops: Vec<ItemOp>,
     pub(crate) quads: Vec<Quad>,
+    pub(crate) shader_quads: Vec<ShaderQuad>,
     pub(crate) shadows: Vec<Shadow>,
     pub(crate) lines: Vec<Line>,
     pub(crate) glyph_runs: Vec<GlyphRun>,
@@ -27,6 +29,7 @@ pub(crate) struct Items {
     pub(crate) marks: Vec<Marks>,
     pub(crate) paths: Vec<PathItem>,
     pub(crate) backdrops: Vec<Backdrop>,
+    pub(crate) externals: Vec<ExternalQuad>,
     /// The glyph arena the glyph runs take ranges of.
     pub(crate) glyphs: Vec<Glyph>,
     /// The coordinate arena the glyph runs take ranges of.
@@ -51,6 +54,12 @@ pub(crate) enum Ref {
     Paint(PaintKind, PaintId),
     /// An image.
     Image(ImageId),
+    /// An application shader.
+    Shader(ShaderId),
+    /// A shader parameter slot.
+    Params(ParamsId),
+    /// An external texture slot.
+    Texture(TextureId),
 }
 
 impl Default for Items {
@@ -60,6 +69,7 @@ impl Default for Items {
             clip: SceneClip::ROOT,
             ops: Vec::new(),
             quads: Vec::new(),
+            shader_quads: Vec::new(),
             shadows: Vec::new(),
             lines: Vec::new(),
             glyph_runs: Vec::new(),
@@ -67,6 +77,7 @@ impl Default for Items {
             marks: Vec::new(),
             paths: Vec::new(),
             backdrops: Vec::new(),
+            externals: Vec::new(),
             glyphs: Vec::new(),
             coords: Vec::new(),
             payloads: Vec::new(),
@@ -84,12 +95,14 @@ impl PartialEq for Items {
             && self.clip == other.clip
             && self.ops == other.ops
             && self.quads == other.quads
+            && self.shader_quads == other.shader_quads
             && self.shadows == other.shadows
             && self.lines == other.lines
             && self.glyph_runs == other.glyph_runs
             && self.images == other.images
             && self.marks == other.marks
             && self.backdrops == other.backdrops
+            && self.externals == other.externals
             && self.glyphs == other.glyphs
             && self.local_clips == other.local_clips
             && self.refs == other.refs
@@ -107,6 +120,7 @@ impl Items {
         self.clip = clip;
         self.ops.clear();
         self.quads.clear();
+        self.shader_quads.clear();
         self.shadows.clear();
         self.lines.clear();
         self.glyph_runs.clear();
@@ -114,6 +128,7 @@ impl Items {
         self.marks.clear();
         self.paths.clear();
         self.backdrops.clear();
+        self.externals.clear();
         self.glyphs.clear();
         self.coords.clear();
         self.payloads.clear();
@@ -135,6 +150,11 @@ impl Items {
     pub(crate) fn push_quad(&mut self, quad: Quad) {
         self.push_op(ItemKind::QUAD, self.quads.len());
         self.quads.push(quad);
+    }
+
+    pub(crate) fn push_shader_quad(&mut self, quad: ShaderQuad) {
+        self.push_op(ItemKind::SHADER_QUAD, self.shader_quads.len());
+        self.shader_quads.push(quad);
     }
 
     pub(crate) fn push_shadow(&mut self, shadow: Shadow) {
@@ -170,6 +190,11 @@ impl Items {
     pub(crate) fn push_backdrop(&mut self, backdrop: Backdrop) {
         self.push_op(ItemKind::BACKDROP, self.backdrops.len());
         self.backdrops.push(backdrop);
+    }
+
+    pub(crate) fn push_external(&mut self, external: ExternalQuad) {
+        self.push_op(ItemKind::EXTERNAL, self.externals.len());
+        self.externals.push(external);
     }
 
     /// Returns the index of `payload` in the payload list, adding it unless the list holds it.

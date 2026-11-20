@@ -1,7 +1,8 @@
 //! zgui's tables resolved into compositor nodes and slots while a chunk's items are built.
 
 use compositor_types::{
-    ClipId, ImageDesc, ImageId, ImageWrite, PaintId, PaintKind, Transaction, TransformId,
+    ClipId, Filter, ImageDesc, ImageId, ImageWrite, PaintId, PaintKind, ParamsBlock, ParamsId,
+    ShaderId, Transaction, TransformId,
 };
 use zgui_scene::Scene;
 
@@ -69,5 +70,30 @@ impl<'a> Resolver<'a> {
         revision: u64,
     ) -> bool {
         self.mirror.images.write(self.tx, key, write, revision)
+    }
+
+    /// Returns the compositor shader of the declared shader `id`, or `None` for a handle no
+    /// program was declared under.
+    pub(crate) fn shader(&mut self, id: zgui_scene::ShaderId) -> Option<ShaderId> {
+        self.mirror.shader(self.tx, id)
+    }
+
+    /// Returns the parameter slot holding `block`.
+    pub(crate) fn params(&mut self, block: ParamsBlock) -> ParamsId {
+        self.mirror.params(self.tx, block)
+    }
+
+    /// Returns the compositor filter that runs `step`, or `None` for a shader no program was
+    /// declared under.
+    pub(crate) fn shader_filter(
+        &mut self,
+        step: crate::emit::shader::ShaderStep,
+    ) -> Option<Filter> {
+        let shader = self.shader(step.shader)?;
+        Some(Filter::Shader {
+            shader,
+            params: self.params(step.params),
+            reach: step.reach,
+        })
     }
 }

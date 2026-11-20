@@ -50,6 +50,12 @@ pub struct EmbedSyncCx<'a> {
     pub renderer: &'a mut dyn Renderer,
     /// Where a surface node's external texture is attached for the emit walk to find.
     pub content: &'a mut ContentCache,
+    /// A transaction of the window's compositor client, committed once the sync step returns.
+    ///
+    /// A host creates the external texture slots surface nodes are drawn from here, and reports
+    /// new content bound to one with `texture_frame`. The client is the transaction's, and it
+    /// changes when the compositor rejected a commit and every slot was removed.
+    pub transaction: &'a mut compositor_types::Transaction,
     /// The frame's damage, still open: a host that attached new pixels absorbs their rectangle.
     pub damage: &'a mut DamageSet,
     /// The intrinsics slot surface nodes answer layout from.

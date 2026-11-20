@@ -15,8 +15,9 @@ pub use self::recording::Recording;
 use std::sync::Arc;
 
 use compositor_types::{
-    Backdrop, ClipRef, ClipShape, Filter, Glyph, GlyphRun, Line, LocalClip, LocalParent,
-    MarkPayload, Marks, PaintRef, PathItem, Quad, Shadow, SpaceRef,
+    Backdrop, ClipRef, ClipShape, ExternalQuad, Filter, Glyph, GlyphRun, Line, LocalClip,
+    LocalParent, MarkPayload, Marks, PaintRef, ParamsBlock, PathItem, Quad, ShaderQuad, Shadow,
+    SpaceRef, TextureId,
 };
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Rect, Vec2};
@@ -213,6 +214,48 @@ impl<'a> Recorder<'a> {
     /// Appends a quad.
     pub fn quad(&mut self, quad: Quad) {
         self.items.push_quad(quad);
+    }
+
+    /// Returns the slots of the declared shader `shader` and of a parameter block holding `params`,
+    /// in that order.
+    ///
+    /// Returns `None` for a handle no program was declared under. Without a compositor both slots
+    /// are zero.
+    pub fn shader_slots(
+        &mut self,
+        shader: zgui_scene::ShaderId,
+        params: ParamsBlock,
+    ) -> Option<(u32, u32)> {
+        let Some(resolver) = &mut self.resolver else {
+            return Some((0, 0));
+        };
+        let shader = resolver.shader(shader)?;
+        let params = resolver.params(params);
+        refer(self.items, Ref::Shader(shader));
+        refer(self.items, Ref::Params(params));
+        Some((shader.slot(), params.slot()))
+    }
+
+    /// Appends a shader quad, whose shader and parameter block are slots
+    /// [`Recorder::shader_slots`] returned.
+    pub fn shader_quad(&mut self, quad: ShaderQuad) {
+        self.items.push_shader_quad(quad);
+    }
+
+    /// Returns the compositor filter that runs `step`, whose parameter block the chunk holds.
+    ///
+    /// Returns `None` without a compositor and for a shader no program was declared under.
+    pub fn shader_filter(&mut self, step: crate::emit::shader::ShaderStep) -> Option<Filter> {
+        self.resolver.as_mut()?.shader_filter(step)
+    }
+
+    /// Appends an external quad drawing the texture `texture`, whose slot replaces the quad's.
+    pub fn external(&mut self, texture: TextureId, mut quad: ExternalQuad) {
+        quad.texture = texture.slot();
+        if self.resolver.is_some() {
+            refer(self.items, Ref::Texture(texture));
+        }
+        self.items.push_external(quad);
     }
 
     /// Appends a shadow.

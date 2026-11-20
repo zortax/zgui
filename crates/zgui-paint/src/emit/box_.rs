@@ -5,10 +5,10 @@
 //! last — after the box's descendants, which is why it is emitted separately rather than in the
 //! run below.
 
-use compositor_types::{BorderStyle, Color as Premultiplied, PaintKind, Quad, Shadow};
+use compositor_types::{BorderStyle, Color as Premultiplied, PaintKind, Quad, ShaderQuad, Shadow};
 use smallvec::SmallVec;
 use zgui_color::Color;
-use zgui_geom::{Corners, Device, DevicePx, Edges, Point, Rect, Size, Vec2};
+use zgui_geom::{Corners, Device, DevicePx, Edges, Point, Rect, Vec2};
 use zgui_scene::{ClipId, Paint, PaintOwner, PaintRef, PaintRole, PropertyOwner, Scene, SpatialId};
 
 use crate::emit::paint::gradient_paint;
@@ -138,7 +138,7 @@ pub fn background_and_border(
     shaders: &dyn crate::content::shader::ShaderSource,
     pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
 ) -> usize {
-    if let Some(pushed) = shaded(rec.scene(), style, placement, shaders, pointer) {
+    if let Some(pushed) = shaded(rec, style, placement, shaders, pointer) {
         return pushed;
     }
     let (fills, draws_border) = fills_of(rec.scene(), style, placement);
@@ -238,7 +238,7 @@ fn fills_of(
 /// ordinary path — a smoothed corner becomes a rounded one, which is the appearance the box would
 /// have had.
 fn shaded(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     style: &PaintStyle,
     placement: BoxPlacement,
     shaders: &dyn crate::content::shader::ShaderSource,
@@ -251,47 +251,60 @@ fn shaded(
         // Drawing it anyway would put a colour where a shape was asked for.
         return None;
     }
-    let params = scene.shader_params.intern(crate::emit::shader::block_at(
-        named,
-        binding,
-        pointer,
-        placement.border_box,
-    ));
+    let block = crate::emit::shader::block_at(named, binding, pointer, placement.border_box);
+    let (shader, params) = rec.shader_slots(binding.id, block)?;
     let shaped = binding.mode == zgui_scene::ShaderMode::Coverage;
     // A paint effect shades the whole box itself, so it is one rectangle and reads no fill. A
     // coverage effect decides only which pixels are inside, so it is drawn once per background
     // layer — the same list, in the same order, with the border on the last — and the cascade goes
     // on deciding what fills the shape.
     let (fills, draws_border) = if shaped {
-        fills_of(scene, style, placement)
+        fills_of(rec.scene(), style, placement)
     } else {
         (SmallVec::from_slice(&[PaintRef::NONE]), false)
     };
     let borders = border_widths(placement.border);
     // The shaded pipeline strokes in one colour.
-    let stroke = draws_border.then(|| border_stroke(scene, style, borders, false));
+    let stroke = draws_border.then(|| border_stroke(rec.scene(), style, borders, false));
+    let stroke = stroke.map(|stroke| rec.paint(stroke));
+    let owned_fill = shaped && placement.owner_of(PaintRole::Background).is_some();
     let last = fills.len().saturating_sub(1);
-    let mut pushed = 0;
-    for (index, fill) in fills.into_iter().enumerate() {
-        let mut shaded = zgui_scene::ShadedQuad::new(placement.border_box, binding.id, params)
-            .clipped(placement.clip)
-            .transformed(placement.transform)
-            .with_radii(placement.radii)
-            .with_fill(fill);
-        if let Some(stroke) = stroke.filter(|_| index == last) {
-            shaded = shaded.with_border(borders, stroke);
-        }
-        // Only a paint that is read at a point has an origin to be read from, which is why a box
-        // filled flat carries none.
-        if shaded.samples_its_paint() {
-            shaded.reanchor_paint(Size::new(
-                placement.border_box.origin.x,
-                placement.border_box.origin.y,
-            ));
-        }
-        pushed += usize::from(scene.push_shaded(shaded).is_some());
+    let origin = placement.border_box.origin;
+    let (clip, space) = (rec.clip(placement.clip), rec.space(placement.transform));
+    for (index, fill) in fills.iter().enumerate() {
+        let fill = if index == 0 && owned_fill {
+            rec.slot(*fill)
+        } else {
+            rec.paint(*fill)
+        };
+        let (border, stroke) = match stroke.filter(|_| index == last) {
+            Some(stroke) => (borders, stroke),
+            None => ([0.0; 4], compositor_types::PaintRef::NONE),
+        };
+        // Only a paint that is read at a point has an origin to be read from.
+        let samples = [fill, stroke]
+            .iter()
+            .any(|paint| paint.kind == PaintKind::GRADIENT);
+        rec.shader_quad(ShaderQuad {
+            bounds: local_rect(placement.border_box),
+            radii: flat_radii(placement.radii),
+            shapes: [style.corner_shape.get(); 4],
+            border,
+            fill,
+            stroke,
+            paint_origin: if samples {
+                [origin.x.0, origin.y.0]
+            } else {
+                [0.0; 2]
+            },
+            clip,
+            space,
+            shader,
+            params,
+            opacity: 1.0,
+        });
     }
-    Some(pushed)
+    Some(fills.len())
 }
 
 /// Records one quad of a box, optionally carrying the border widths and stroke.

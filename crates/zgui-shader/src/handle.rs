@@ -2,9 +2,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use zgui_render_wgpu::ParamsLayout;
-use zgui_scene::{MAX_PARAMS_BYTES, ShaderId, ShaderParams as Block};
-use zgui_wgsl::ShaderReads;
+use compositor_types::ParamsBlock as Block;
+use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderReads};
+
+use crate::program::ParamsLayout;
 
 /// A structure an effect's `Params` is written as.
 ///
@@ -71,6 +72,14 @@ impl ShaderParams for NoParams {
     fn write(&self, _out: &mut [u8; MAX_PARAMS_BYTES]) {}
 }
 
+/// A block of zeroes.
+const EMPTY: Block = Block {
+    pointer: [0.0; 2],
+    hovered: 0.0,
+    _reserved: 0.0,
+    user: [0; MAX_PARAMS_BYTES],
+};
+
 /// What one mounted effect is currently drawn with.
 #[derive(Debug)]
 struct Slot {
@@ -114,7 +123,7 @@ impl<P: ShaderParams> ShaderHandle<P> {
             id,
             reads,
             slot: Arc::new(Mutex::new(Slot {
-                params: Block::EMPTY,
+                params: EMPTY,
                 revision: 0,
             })),
             marker: core::marker::PhantomData,
@@ -141,7 +150,10 @@ impl<P: ShaderParams> ShaderHandle<P> {
     /// Only useful to an effect that declared it reads the pointer; a handle whose effect did not
     /// is drawn identically whatever this says.
     pub fn set_pointer(&self, pointer: [f32; 2], hovered: bool) {
-        self.update(|held| held.params = held.params.with_pointer(pointer, hovered));
+        self.update(|held| {
+            held.params.pointer = pointer;
+            held.params.hovered = if hovered { 1.0 } else { 0.0 };
+        });
     }
 
     /// The handle a display list names this effect by.
@@ -156,7 +168,7 @@ impl<P: ShaderParams> ShaderHandle<P> {
 
     /// The block the effect is currently drawn with.
     pub fn params(&self) -> Block {
-        self.slot.lock().map_or(Block::EMPTY, |held| held.params)
+        self.slot.lock().map_or(EMPTY, |held| held.params)
     }
 
     /// How many times the parameters have changed.
@@ -179,9 +191,8 @@ impl<P: ShaderParams> ShaderHandle<P> {
 #[cfg(test)]
 mod tests {
     use super::{NoParams, ShaderHandle, ShaderParams};
-    use zgui_render_wgpu::{ParamsField, ParamsLayout};
-    use zgui_scene::ShaderId;
-    use zgui_wgsl::ShaderReads;
+    use crate::program::{ParamsField, ParamsLayout};
+    use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderReads};
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -207,7 +218,7 @@ mod tests {
             ],
         };
 
-        fn write(&self, out: &mut [u8; zgui_scene::MAX_PARAMS_BYTES]) {
+        fn write(&self, out: &mut [u8; MAX_PARAMS_BYTES]) {
             super::ParamsValue::write(self.first, &mut out[0..4]);
             super::ParamsValue::write(self.second, &mut out[4..8]);
         }
@@ -268,6 +279,6 @@ mod tests {
     fn an_effect_with_no_parameters_still_has_a_block() {
         let handle: ShaderHandle<NoParams> = ShaderHandle::new(ShaderId(2), ShaderReads::NOTHING);
         handle.set_params(NoParams);
-        assert_eq!(handle.params().user, [0u8; zgui_scene::MAX_PARAMS_BYTES]);
+        assert_eq!(handle.params().user, [0u8; MAX_PARAMS_BYTES]);
     }
 }

@@ -148,7 +148,8 @@ impl Renderer for Device {
         Some(self)
     }
 
+    /// The wgpu renderer underneath, which a backend companion binds textures on.
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
-        Some(self)
+        self.wgpu.as_any_mut()
     }
 }

@@ -19,12 +19,12 @@ const IDENTITY: Matrix = [
 /// The luminance weights CSS's filter matrices use.
 const LUMA: [f32; 3] = [0.213, 0.715, 0.072];
 
-/// Appends the compositor chain for `filters` to `out`, and returns how many filters it has no
-/// counterpart for.
+/// Appends the compositor chain for `filters` to `out`.
 ///
-/// A filter that changes nothing adds no step.
-pub(crate) fn convert(filters: &[zgui_scene::Filter], out: &mut Vec<Filter>) -> usize {
-    let mut omitted = 0;
+/// A filter that changes nothing adds no step. An application shader adds none either: the chain
+/// carries one to say how far it reads, and the shader itself runs from the effect a style sheet
+/// named, with its parameters.
+pub(crate) fn convert(filters: &[zgui_scene::Filter], out: &mut Vec<Filter>) {
     let mut run: Option<Matrix> = None;
     for filter in filters {
         if let Some(matrix) = matrix(*filter) {
@@ -46,13 +46,10 @@ pub(crate) fn convert(filters: &[zgui_scene::Filter], out: &mut Vec<Filter>) -> 
                 std_dev: blur,
                 color: Color(color),
             }),
-            // Application shaders have no compositor shader id yet.
-            zgui_scene::Filter::Custom { .. } => omitted += 1,
             _ => {}
         }
     }
     flush(&mut run, out);
-    omitted
 }
 
 /// Returns the compositor's mode for `blend`.

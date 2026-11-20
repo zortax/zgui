@@ -5,7 +5,15 @@
 //! the renderer's own companion crate, well above this one, so what crosses here is a lookup and
 //! nothing else: a name in, a handle and the two facts the paint stage decides with out.
 
-use zgui_scene::{ShaderField, ShaderId, ShaderMode, ShaderReads};
+mod declared;
+
+pub(crate) use self::declared::program;
+pub use self::declared::{Declaration, declare};
+
+pub use zgui_scene::{ShaderField, ShaderId, ShaderMode, ShaderReads};
+
+/// The most bytes of its own parameters a shader declares.
+pub const MAX_PARAMS_BYTES: usize = 64;
 
 /// Where a style sheet's shader names are resolved.
 pub trait ShaderSource {

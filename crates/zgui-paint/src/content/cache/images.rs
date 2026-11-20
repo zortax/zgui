@@ -6,7 +6,6 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_atlas::AtlasKey;
 use zgui_dom::host::ReplacedId;
 use zgui_geom::{Device, Size};
-use zgui_scene::ExternalTextureId;
 
 use crate::content::cache::{ContentCache, FrameContent};
 use crate::content::images::{Content, ImageError, shared_key};
@@ -190,8 +189,8 @@ impl ContentCache {
         missing.into_iter().filter(|id| seen.insert(*id)).collect()
     }
 
-    /// Attaches a texture this framework does not own to a replaced node.
-    pub fn set_external(&mut self, id: ReplacedId, texture: ExternalTextureId) {
+    /// Attaches an external texture slot of the window's compositor client to a replaced node.
+    pub fn set_external(&mut self, id: ReplacedId, texture: compositor_types::TextureId) {
         self.attach(id, Content::External(texture));
     }
 

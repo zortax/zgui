@@ -1,21 +1,31 @@
 //! Turning the parameters a style sheet wrote into the block an effect is drawn with.
 
+use compositor_types::ParamsBlock;
 use zgui_geom::{Device, DevicePx, Point, Rect};
-use zgui_scene::{Filter, Scene, ShaderParams};
+use zgui_scene::ShaderId;
 
 use crate::content::shader::{ShaderBinding, ShaderSource};
 use crate::lower::NamedShader;
 
-/// The filter step `named` describes, or `None` when it names nothing that filters.
+/// An application shader in filter mode, as one step of a filter chain.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShaderStep {
+    /// The shader.
+    pub shader: ShaderId,
+    /// The parameters it runs with.
+    pub params: ParamsBlock,
+    /// How far outside its rectangle it reads, in device pixels.
+    pub reach: f32,
+}
+
+/// Returns the filter step `named` describes, or `None` when it names nothing that filters.
 ///
-/// The reach is the effect's own declaration, in CSS pixels, scaled here — it is what makes the
-/// damage a filtered box owes correct, and nothing but the effect can state it.
+/// The reach is the effect's own declaration, in CSS pixels, scaled to device pixels.
 pub fn filter_step(
-    scene: &mut Scene,
     named: Option<&NamedShader>,
     shaders: &dyn ShaderSource,
     scale: f32,
-) -> Option<Filter> {
+) -> Option<ShaderStep> {
     let named = named?;
     let binding = shaders.effect(&named.name)?;
     if binding.mode != zgui_scene::ShaderMode::Filter {
@@ -23,10 +33,9 @@ pub fn filter_step(
         // anyway would read a target with a shader written to draw a rectangle.
         return None;
     }
-    let params = scene.shader_params.intern(block(named, binding));
-    Some(Filter::Custom {
+    Some(ShaderStep {
         shader: binding.id,
-        params,
+        params: block(named, binding),
         reach: binding.reach * scale,
     })
 }
@@ -37,7 +46,7 @@ pub fn filter_step(
 /// write keeps its zero. Both are what a style sheet and a shader that disagree should do: neither
 /// is an error the cascade can report, and a rectangle full of a stranger's numbers is worse than
 /// one full of zeroes.
-pub fn block(named: &NamedShader, binding: ShaderBinding) -> ShaderParams {
+pub fn block(named: &NamedShader, binding: ShaderBinding) -> ParamsBlock {
     block_at(named, binding, None, Rect::ZERO)
 }
 
@@ -51,13 +60,18 @@ pub fn block_at(
     binding: ShaderBinding,
     pointer: Option<Point<DevicePx, Device>>,
     box_: Rect<DevicePx, Device>,
-) -> ShaderParams {
-    let mut params = ShaderParams::EMPTY;
+) -> ParamsBlock {
+    let mut params = ParamsBlock {
+        pointer: [0.0; 2],
+        hovered: 0.0,
+        _reserved: 0.0,
+        user: [0; 64],
+    };
     if binding.reads.pointer
         && let Some(at) = pointer
     {
-        let local = [at.x.0 - box_.origin.x.0, at.y.0 - box_.origin.y.0];
-        params = params.with_pointer(local, box_.contains(at));
+        params.pointer = [at.x.0 - box_.origin.x.0, at.y.0 - box_.origin.y.0];
+        params.hovered = if box_.contains(at) { 1.0 } else { 0.0 };
     }
     for (field, value) in &named.parameters {
         let Some(at) = binding.field(field) else {
@@ -123,7 +137,7 @@ mod tests {
     #[test]
     fn a_field_the_effect_does_not_declare_is_dropped() {
         let params = block(&named(&[("third", 9.0)]), binding());
-        assert_eq!(params.user, [0u8; zgui_scene::MAX_PARAMS_BYTES]);
+        assert_eq!(params.user, [0u8; 64]);
     }
 
     /// An effect that declared it reads the pointer is told where it is, in its own coordinates.

@@ -41,23 +41,21 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use compositor_types::{ClientId, TextureDesc, TextureId};
+use compositor_wgpu::{Gpu, WgpuRenderer};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::NodeKey;
 use zgui_dom::host::replaced::{Intrinsic, ReplacedId};
 use zgui_geom::{Css, CssPx, Device, Size};
 use zgui_reactive::FrameWaker;
-use zgui_render::{ExternalTexture, Renderer as _, TextureHandle};
-use zgui_render_wgpu::Gpu;
-use zgui_render_wgpu::WgpuRenderer;
 use zgui_runtime::embed::{
     EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport,
 };
 use zgui_runtime::wake::RuntimeWaker;
-use zgui_scene::ExternalTextureId;
 use zgui_vocab::{PropKey, PropValue, Timestamp};
 
 /// The re-exported graphics API, so a producer names the same wgpu the renderer links.
-pub use zgui_render_wgpu::wgpu;
+pub use compositor_wgpu::wgpu;
 
 /// One shared device, plus the epoch that says when it stopped being the one you knew.
 ///
@@ -526,18 +524,25 @@ enum Producer {
     },
 }
 
+/// The external texture slot a surface element is drawn from.
+#[derive(Clone, Copy, Debug)]
+struct Slot {
+    /// The compositor client the slot belongs to.
+    client: ClientId,
+    /// The slot.
+    id: TextureId,
+    /// The extent and premultiplication the slot was created with.
+    desc: TextureDesc,
+}
+
 /// One surface element this host is filling.
 struct Binding {
     /// The producer the element names.
     token: u64,
     /// What it is.
     producer: Producer,
-    /// The display list's name for the texture.
-    external: ExternalTextureId,
-    /// The renderer's handle from the last registration, for release on unbind.
-    registered: Option<TextureHandle>,
-    /// The extent and premultiplication last registered, so a change re-registers.
-    described: Option<(Size<i32, Device>, bool)>,
+    /// The slot the element is drawn from, once a texture was attached.
+    slot: Option<Slot>,
     /// The presented texture currently attached, pinned until the next attach.
     attached: Option<Arc<wgpu::Texture>>,
     /// The content box's device-pixel size as of the last sync, for resize edges.
@@ -546,7 +551,7 @@ struct Binding {
     visible: bool,
     /// The first frame timestamp at which this surface was continuously invisible.
     invisible_since: Option<Timestamp>,
-    /// Whether the content cache currently points at this binding's external name.
+    /// Whether the content cache currently names this binding's slot.
     content_attached: bool,
 }
 
@@ -563,8 +568,6 @@ pub struct WgpuSurfaces {
     device: Option<usize>,
     /// The device generation handed out in [`GpuShare`]s.
     generation: u64,
-    /// The next external-texture name.
-    next_external: u64,
 }
 
 impl WgpuSurfaces {
@@ -575,7 +578,6 @@ impl WgpuSurfaces {
             scanned_at: None,
             device: None,
             generation: 0,
-            next_external: 1,
         }
     }
 }
@@ -610,10 +612,8 @@ impl EmbedHost for WgpuSurfaces {
                     generation: self.generation,
                 };
                 for binding in self.bindings.values_mut() {
-                    // Everything attached died with the old device; `recover()` rebuilt the
-                    // renderer around us and wiped its external tables.
-                    binding.registered = None;
-                    binding.described = None;
+                    // Everything attached died with the old device, so the slot stays and is
+                    // bound again to whatever the producer presents next.
                     binding.attached = None;
                     binding.content_attached = false;
                     match &mut binding.producer {
@@ -666,12 +666,12 @@ impl EmbedHost for WgpuSurfaces {
             }
             *drawn = false;
             binding.content_attached = false;
-            binding.described = None;
             cx.content.remove_image(ReplacedId::new(node));
-            if let Some(handle) = binding.registered.take()
+            // The slot stays, and is bound again once the element is visible and drawn.
+            if let Some(slot) = binding.slot
                 && let Some(renderer) = wgpu_renderer(&mut *cx.renderer)
             {
-                renderer.release_external(handle);
+                renderer.unbind_external(slot.client, slot.id);
             }
         }
     }
@@ -783,14 +783,10 @@ impl WgpuSurfaces {
                 continue;
             };
 
-            let external = ExternalTextureId(self.next_external);
-            self.next_external += 1;
             let binding = Binding {
                 token,
                 producer,
-                external,
-                registered: None,
-                described: None,
+                slot: None,
                 attached: None,
                 last_size: None,
                 visible: false,
@@ -835,10 +831,8 @@ impl WgpuSurfaces {
         let id = ReplacedId::new(node);
         cx.content.remove_image(id);
         cx.intrinsics.remove(id);
-        if let Some(handle) = binding.registered
-            && let Some(renderer) = wgpu_renderer(&mut *cx.renderer)
-        {
-            renderer.release_external(handle);
+        if let Some(slot) = binding.slot {
+            release(cx, slot);
         }
         match &binding.producer {
             Producer::Handle(state) => {
@@ -955,13 +949,11 @@ impl WgpuSurfaces {
                     attach(
                         cx,
                         AttachAsk {
-                            id: binding.external,
                             node,
                             extent,
                             premultiplied,
                             texture: &texture,
-                            described: &mut binding.described,
-                            registered: &mut binding.registered,
+                            slot: &mut binding.slot,
                             content_attached: &mut binding.content_attached,
                             content_box,
                         },
@@ -976,13 +968,11 @@ impl WgpuSurfaces {
                     attach(
                         cx,
                         AttachAsk {
-                            id: binding.external,
                             node,
                             extent,
                             premultiplied,
                             texture,
-                            described: &mut binding.described,
-                            registered: &mut binding.registered,
+                            slot: &mut binding.slot,
                             content_attached: &mut binding.content_attached,
                             content_box,
                         },
@@ -1052,15 +1042,13 @@ impl WgpuSurfaces {
                     attach(
                         cx,
                         AttachAsk {
-                            id: binding.external,
                             node,
                             extent,
                             // zgui's own render target: the renderer draws premultiplied, as the
                             // whole pipeline does.
                             premultiplied: true,
                             texture: held,
-                            described: &mut binding.described,
-                            registered: &mut binding.registered,
+                            slot: &mut binding.slot,
                             content_attached: &mut binding.content_attached,
                             content_box,
                         },
@@ -1074,8 +1062,6 @@ impl WgpuSurfaces {
 
 /// Everything one attach needs, named so the call sites stay readable.
 struct AttachAsk<'a> {
-    /// The display list's name for the texture.
-    id: ExternalTextureId,
     /// The element being filled.
     node: NodeKey,
     /// The texture's extent.
@@ -1084,41 +1070,64 @@ struct AttachAsk<'a> {
     premultiplied: bool,
     /// The resource itself.
     texture: &'a wgpu::Texture,
-    /// The description last registered, updated when it changes.
-    described: &'a mut Option<(Size<i32, Device>, bool)>,
-    /// The renderer's handle, for later release.
-    registered: &'a mut Option<TextureHandle>,
-    /// Whether the content cache currently names this external.
+    /// The slot the element is drawn from, replaced when it no longer fits.
+    slot: &'a mut Option<Slot>,
+    /// Whether the content cache currently names the slot.
     content_attached: &'a mut bool,
-    /// Where the element is, for the damage the fresh pixels owe.
+    /// Where the element is, for the damage a new slot owes.
     content_box: Option<zgui_geom::Rect<zgui_geom::DevicePx, Device>>,
 }
 
-/// Registers (when the description moved), attaches, and damages one texture.
+/// Binds one texture to the element's slot and reports its new content.
+///
+/// The slot is created again when there is none yet, when it belongs to an earlier client, or when
+/// the texture's extent or premultiplication changed. A slot the content cache does not name yet is
+/// attached to the element, and its content box is damaged.
 fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
+    let client = cx.transaction.client();
+    let desc = TextureDesc {
+        width: ask.extent.width.max(0) as u32,
+        height: ask.extent.height.max(0) as u32,
+        premultiplied: ask.premultiplied,
+    };
+    let fits = ask
+        .slot
+        .is_some_and(|slot| slot.client == client && slot.desc == desc);
+    if !fits {
+        if let Some(old) = ask.slot.take() {
+            release(cx, old);
+        }
+        let id = cx.transaction.create_texture(desc);
+        *ask.slot = Some(Slot { client, id, desc });
+        *ask.content_attached = false;
+    }
+    let Some(slot) = *ask.slot else {
+        return;
+    };
     let Some(renderer) = wgpu_renderer(&mut *cx.renderer) else {
         return;
     };
-    if *ask.described != Some((ask.extent, ask.premultiplied)) {
-        let handle = renderer.register_external(ExternalTexture {
-            id: ask.id,
-            handle: TextureHandle(0),
-            size: ask.extent,
-            premultiplied: ask.premultiplied,
-        });
-        *ask.registered = Some(handle);
-        *ask.described = Some((ask.extent, ask.premultiplied));
+    renderer.bind_external(slot.client, slot.id, ask.texture, ask.premultiplied);
+    cx.transaction.texture_frame(slot.id);
+    if !*ask.content_attached {
+        cx.content.set_external(ReplacedId::new(ask.node), slot.id);
+        *ask.content_attached = true;
+        if let Some(content_box) = ask.content_box {
+            cx.damage
+                .absorb(zgui_layout::fragment::diff::pixels(content_box));
+        }
     }
-    let attached = renderer.attach_external(ask.id, ask.texture);
-    debug_assert!(
-        attached,
-        "the description above is what makes attach accept"
-    );
-    cx.content.set_external(ReplacedId::new(ask.node), ask.id);
-    *ask.content_attached = true;
-    if let Some(content_box) = ask.content_box {
-        cx.damage
-            .absorb(zgui_layout::fragment::diff::pixels(content_box));
+}
+
+/// Removes `slot` from the compositor and its texture from the window's renderer.
+///
+/// A slot of an earlier client was removed with that client.
+fn release(cx: &mut EmbedSyncCx<'_>, slot: Slot) {
+    if slot.client == cx.transaction.client() {
+        cx.transaction.remove(slot.id);
+    }
+    if let Some(renderer) = wgpu_renderer(&mut *cx.renderer) {
+        renderer.unbind_external(slot.client, slot.id);
     }
 }
 
@@ -1154,9 +1163,7 @@ fn gpu_of(cx: &mut EmbedSyncCx<'_>) -> Option<Arc<Gpu>> {
         .map(|renderer| Arc::clone(renderer.gpu()))
 }
 
-/// Returns the window's renderer as zgui's own wgpu renderer, when it is one.
-// compositor: a window drawing through the compositor binds no external texture yet, so its
-// surfaces show nothing.
+/// Returns the window's renderer as the compositor's wgpu renderer, when it is one.
 fn wgpu_renderer(renderer: &mut dyn compositor_api::Renderer) -> Option<&mut WgpuRenderer> {
     renderer.as_any_mut()?.downcast_mut::<WgpuRenderer>()
 }
