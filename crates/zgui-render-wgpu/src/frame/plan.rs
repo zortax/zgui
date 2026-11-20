@@ -87,7 +87,9 @@ pub fn plan_segments(
     plan_mark_pages(&mut builder, scene, marks);
     let rects = damage::rects_covering_backdrops(damage, used, &backdrops);
     // One rectangle draws every batch, so only several need to know where each batch lands.
-    let batches = reach::batches(scene, rects.len() > 1);
+    let bounded = rects.len() > 1;
+    let batches = reach::batches(scene, bounded);
+    let mark_reaches = reach::marks(scene, bounded);
     let nested = if backdrops.is_empty() {
         Vec::new()
     } else {
@@ -105,6 +107,7 @@ pub fn plan_segments(
             &mut builder,
             scene,
             &batches,
+            &mark_reaches,
             &nested,
             marks,
             &opaque,
@@ -199,26 +202,36 @@ pub(crate) fn mark_instances(item: &zgui_scene::MarkItem, kind: MarkKind) -> cor
 }
 
 /// Plans one batch of marks into the pass open on `target` with `scissor`: each union item
-/// through its bin, and every other one directly.
+/// through its bin, and every other one directly, skipping items whose reach misses `scissor`.
 fn plan_marks(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
     marks: &MarkPlan,
+    mark_reaches: &[Option<Rect<i32, Device>>],
     range: core::ops::Range<usize>,
     target: TargetRef,
     scissor: Rect<i32, Device>,
 ) {
+    if scissor.is_empty() {
+        return;
+    }
     let remap = scene.remap(PrimitiveKind::Marks);
     for position in range {
         let slot = remap[position];
         let item = &scene.primitives.marks[slot as usize];
         if item.is_union() {
             if let Some(bin) = marks.bin(slot) {
+                if !bin.region.intersects(scissor) {
+                    continue;
+                }
                 let block = builder.stage_mark_draw(position, || {
                     MarkDraw::binned(position as u32, bin.page, bin.region, bin.at)
                 });
                 builder.draw(PlannedDraw::MarksComposite { block });
             } else if let Some(bin) = marks.overflow_bin(slot) {
+                if !bin.region.intersects(scissor) {
+                    continue;
+                }
                 // The spare page holds one item at a time, so the item writes its coverage there
                 // right before its composite.
                 let block = builder.stage_mark_draw(position, || {
@@ -231,6 +244,13 @@ fn plan_marks(
                 builder.draw(PlannedDraw::MarksComposite { block });
             }
             // With no bin, the item's ink misses the damage, so the scissor holds none of it.
+            continue;
+        }
+        if mark_reaches
+            .get(slot as usize)
+            .and_then(|reach| *reach)
+            .is_some_and(|reach| !reach.intersects(scissor))
+        {
             continue;
         }
         let block = builder.stage_mark_draw(position, || MarkDraw::direct(position as u32));
@@ -247,6 +267,7 @@ fn plan_rect(
     builder: &mut PlanBuilder<'_>,
     scene: &Scene,
     batches: &[Reached],
+    mark_reaches: &[Option<Rect<i32, Device>>],
     nested: &[i32],
     marks: &MarkPlan,
     opaque: &[OpaqueCover],
@@ -380,12 +401,20 @@ fn plan_rect(
                     None => builder.defer(),
                 }
             }
-            Batch::Marks(ref range) => {
-                plan_marks(builder, scene, marks, range.clone(), current, scissor);
-            }
             // The scissor is the damage rectangle or, inside a group, the group's region. Both
             // bound what any draw of this pass can write.
             _ if reach.is_some_and(|reach| !reach.intersects(scissor)) => builder.note_culled(),
+            Batch::Marks(ref range) => {
+                plan_marks(
+                    builder,
+                    scene,
+                    marks,
+                    mark_reaches,
+                    range.clone(),
+                    current,
+                    scissor,
+                );
+            }
             // Per-channel coverage blends correctly only against an opaque destination, and an
             // isolated target never is one. Paint emits single-channel coverage for text in a
             // group. A plain group's target has the composed format, which has the per-channel

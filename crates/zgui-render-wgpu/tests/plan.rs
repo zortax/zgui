@@ -738,6 +738,90 @@ fn each_damaged_rectangle_runs_the_vector_rounds_from_the_first() {
 }
 
 #[test]
+fn marks_outside_a_damage_rectangle_scissor_are_skipped_per_item_and_per_batch() {
+    use std::sync::Arc;
+    use zgui_scene::{MarkFlags, MarkItem, MarkPayload};
+
+    let Some(renderer) = plain_renderer() else {
+        return;
+    };
+    let (two, corner, middle) = a_corner_and_a_middle();
+
+    let mut scene = Scene::new();
+    scene.begin_frame(Size::new(SIDE, SIDE));
+    let paint = scene
+        .paints
+        .add(zgui_scene::Paint::Solid(opaque(220, 40, 80)));
+    let mut payload = MarkPayload::default();
+    payload.discs.push([8.0, 8.0, 4.0, 0.0]);
+    let payload = Arc::new(payload);
+
+    // One direct mark in `corner`, one union mark in `middle`, and a separate mark batch after a
+    // quad that misses both damage rectangles completely.
+    scene.push_marks(
+        MarkItem::new(rect(4.0, 4.0, 12.0, 12.0), paint, [1, 0, 0, 0]),
+        Arc::clone(&payload),
+    );
+    let mut union_middle = MarkItem::new(rect(84.0, 84.0, 12.0, 12.0), paint, [1, 0, 0, 0]);
+    union_middle.flags = MarkFlags::UNION;
+    scene.push_marks(union_middle, Arc::clone(&payload));
+    scene.push_quad(Quad::filled(rect(200.0, 4.0, 8.0, 8.0), paint));
+    scene.push_marks(
+        MarkItem::new(rect(200.0, 200.0, 12.0, 12.0), paint, [1, 0, 0, 0]),
+        payload,
+    );
+    scene.finish(&two);
+
+    let planned = plan(renderer.gpu(), &scene, &two);
+    let corner_pass = planned
+        .passes()
+        .find(|pass| pass.target == TargetRef::Composed && pass.scissor == corner)
+        .expect("corner pass");
+    assert_eq!(
+        planned
+            .draws_of(corner_pass)
+            .iter()
+            .filter(|draw| matches!(
+                draw,
+                PlannedDraw::Marks { .. } | PlannedDraw::MarksComposite { .. }
+            ))
+            .count(),
+        1,
+        "only the direct mark inside corner is drawn into corner: {:?}",
+        planned.draws_of(corner_pass),
+    );
+
+    let middle_pass = planned
+        .passes()
+        .find(|pass| pass.target == TargetRef::Composed && pass.scissor == middle)
+        .expect("middle pass");
+    let middle_mark_draws: Vec<_> = planned
+        .draws_of(middle_pass)
+        .iter()
+        .filter(|draw| {
+            matches!(
+                draw,
+                PlannedDraw::Marks { .. } | PlannedDraw::MarksComposite { .. }
+            )
+        })
+        .collect();
+    assert_eq!(
+        middle_mark_draws.len(),
+        1,
+        "only the union mark inside middle is composited into middle: {middle_mark_draws:?}",
+    );
+    assert!(matches!(
+        middle_mark_draws[0],
+        PlannedDraw::MarksComposite { .. }
+    ));
+    assert!(
+        planned.culled >= 2,
+        "the trailing mark batch outside both rectangles is culled per rectangle (culled={})",
+        planned.culled,
+    );
+}
+
+#[test]
 fn no_pass_outlives_its_encoder_by_being_told_to_forget_it() {
     // `forget_lifetime` would compile and would hide the ordering constraint the planner exists to
     // state. It is not used, and this is what keeps that true.
