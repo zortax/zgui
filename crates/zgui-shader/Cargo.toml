@@ -37,6 +37,8 @@ zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
+# How many chunks a frame recorded again, which a changed shader handle must not cost.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }

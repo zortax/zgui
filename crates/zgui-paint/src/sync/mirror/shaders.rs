@@ -1,7 +1,8 @@
 //! Declared application shaders mirrored as compositor shaders.
 
+use compositor_types::ShaderReads;
 use compositor_types::{ShaderId, Transaction};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The compositor shader of each declared shader an item drew with.
 ///
@@ -10,6 +11,7 @@ use rustc_hash::FxHashMap;
 #[derive(Debug, Default)]
 pub(crate) struct Shaders {
     ids: FxHashMap<zgui_scene::ShaderId, ShaderId>,
+    timed: FxHashSet<ShaderId>,
 }
 
 impl Shaders {
@@ -25,8 +27,17 @@ impl Shaders {
             return Some(*shader);
         }
         let desc = crate::content::shader::program(id)?;
+        let reads_time = desc.reads.contains(ShaderReads::TIME);
         let shader = tx.create_shader(desc);
+        if reads_time {
+            self.timed.insert(shader);
+        }
         self.ids.insert(id, shader);
         Some(shader)
+    }
+
+    /// Reports whether the shader `id` reads the clock.
+    pub(crate) fn reads_time(&self, id: ShaderId) -> bool {
+        self.timed.contains(&id)
     }
 }

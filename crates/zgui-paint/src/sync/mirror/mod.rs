@@ -34,6 +34,12 @@ pub(crate) struct Mirror {
     pub(crate) params: params::Params,
     pub(crate) holds: holds::Holds,
     removed: Vec<AnyId>,
+    /// Whether the chunk being recorded draws a shader that reads the clock.
+    recording_timed: bool,
+    /// The chunks that draw a shader that reads the clock.
+    timed_chunks: rustc_hash::FxHashSet<ChunkKey>,
+    /// The effect nodes that filter with a shader that reads the clock.
+    pub(crate) timed_effects: rustc_hash::FxHashSet<compositor_types::EffectId>,
 }
 
 /// The zgui ids a mirror held when it was forgotten, to give back to the tables.
@@ -139,7 +145,18 @@ impl Mirror {
         tx: &mut Transaction,
         id: zgui_scene::ShaderId,
     ) -> Option<compositor_types::ShaderId> {
-        self.shaders.ensure(tx, id)
+        let shader = self.shaders.ensure(tx, id)?;
+        self.recording_timed |= self.shaders.reads_time(shader);
+        Some(shader)
+    }
+
+    /// Returns the slot of `params`, for the chunk being recorded.
+    pub(crate) fn shared_params(
+        &mut self,
+        tx: &mut Transaction,
+        params: &crate::content::shader::SharedParams,
+    ) -> compositor_types::ParamsId {
+        self.params.shared(tx, &mut self.holds, params)
     }
 
     /// Returns the parameter slot holding `block`, for the chunk being recorded.
@@ -154,11 +171,22 @@ impl Mirror {
     /// Makes the chunk `key` hold what was mirrored for it since the last recording.
     pub(crate) fn recorded(&mut self, key: ChunkKey) {
         self.holds.recorded(key);
+        if std::mem::take(&mut self.recording_timed) {
+            self.timed_chunks.insert(key);
+        } else {
+            self.timed_chunks.remove(&key);
+        }
     }
 
     /// Ends the holds of the chunk `key`, which was removed.
     pub(crate) fn chunk_removed(&mut self, key: ChunkKey) {
         self.holds.removed(key);
+        self.timed_chunks.remove(&key);
+    }
+
+    /// Reports whether a chunk or an effect node draws a shader that reads the clock.
+    pub(crate) fn reads_time(&self) -> bool {
+        !self.timed_chunks.is_empty() || !self.timed_effects.is_empty()
     }
 
     /// Removes every node and slot nothing holds, and returns how many were removed.

@@ -887,6 +887,10 @@ impl Window {
         if self.host.has_frame_callbacks() {
             return true;
         }
+        // A shader that reads the clock draws something different on every frame.
+        if self.painter.draws_time() {
+            return true;
+        }
         let document = self.document.borrow();
         let Some(root) = document.root_index() else {
             return false;
@@ -1809,9 +1813,12 @@ impl Window {
             format!("{}x{}", viewport.width, viewport.height)
         });
         let interval = self.refresh_interval();
-        let outcome = self
-            .compositor
-            .draw(&mut *self.renderer, self.subpixel_order, interval);
+        let outcome = self.compositor.draw(
+            &mut *self.renderer,
+            self.subpixel_order,
+            self.painted_at.unwrap_or(zgui_vocab::Timestamp::ORIGIN),
+            interval,
+        );
         if let Some(built) = self.compositor.take_built() {
             crate::window::counters::built(&built);
             crate::window::counters::held(&**self.compositor.compositor());

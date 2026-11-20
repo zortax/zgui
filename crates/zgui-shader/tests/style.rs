@@ -415,9 +415,10 @@ fn the_frame_clock_reaches_an_effect_that_reads_it() {
         "a frame that changed nothing is drawn again for an effect that reads the clock"
     );
     let (earlier, later) = (clocks[first - 1], clocks[clocks.len() - 1]);
+    // The compositor's clock is the window's frame moment, which only the harness moves.
     assert!(
-        later.time > earlier.time,
-        "and the clock an effect reads moves with it: {} then {}",
+        later.time - earlier.time >= 0.25,
+        "and the clock an effect reads moves with the window's own: {} then {}",
         earlier.time,
         later.time
     );

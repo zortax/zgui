@@ -21,6 +21,7 @@ use zgui_view::BuildCx;
 struct Record {
     drawing: Option<Drawing>,
     params: Vec<ParamsBlock>,
+    params_written: usize,
     clocks: Vec<ShaderClock>,
 }
 
@@ -65,6 +66,11 @@ impl Seen {
             .and_then(|slot| slot.parse().ok())
             .unwrap_or_else(|| panic!("no parameter slot in `{}`", item.text()));
         self.lock().params[slot]
+    }
+
+    /// Returns how many parameter slots the screens were told to write, in every frame drawn.
+    pub(crate) fn params_written(&self) -> usize {
+        self.lock().params_written
     }
 
     /// Returns the shader clock of every frame drawn, in order.
@@ -121,6 +127,7 @@ impl compositor_api::Renderer for Shading {
             if delta.replace {
                 record.params = delta.all.clone();
             }
+            record.params_written += delta.changed.len();
             for (slot, block) in &delta.changed {
                 let slot = *slot as usize;
                 if record.params.len() <= slot {

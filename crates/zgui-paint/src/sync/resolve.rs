@@ -83,6 +83,14 @@ impl<'a> Resolver<'a> {
         self.mirror.params(self.tx, block)
     }
 
+    /// Returns the slot of `params`.
+    pub(crate) fn shared_params(
+        &mut self,
+        params: &crate::content::shader::SharedParams,
+    ) -> ParamsId {
+        self.mirror.shared_params(self.tx, params)
+    }
+
     /// Returns the compositor filter that runs `step`, or `None` for a shader no program was
     /// declared under.
     pub(crate) fn shader_filter(

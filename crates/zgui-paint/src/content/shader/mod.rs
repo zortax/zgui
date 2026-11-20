@@ -6,9 +6,11 @@
 //! the paint stage decides with out.
 
 mod declared;
+mod shared;
 
 pub(crate) use self::declared::program;
 pub use self::declared::{Declaration, declare};
+pub use self::shared::{SharedParams, Wake};
 
 pub use zgui_scene::{ShaderField, ShaderId, ShaderMode, ShaderReads};
 

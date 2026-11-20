@@ -21,8 +21,13 @@ impl Window {
         }
         let transaction = self.compositor.transaction();
         if self.painter.compositor().is_none() {
-            self.painter
-                .attach_compositor(CompositorSync::new(self.compositor.output()));
+            let mut sync = CompositorSync::new(self.compositor.output());
+            // A shared parameter block that changes asks this window for the frame that draws it.
+            let waker = std::sync::Arc::clone(&self.waker);
+            sync.set_wake(std::sync::Arc::new(move || {
+                zgui_reactive::FrameWaker::wake(&*waker)
+            }));
+            self.painter.attach_compositor(sync);
         }
         if let Some(sync) = self.painter.compositor() {
             sync.open(transaction);

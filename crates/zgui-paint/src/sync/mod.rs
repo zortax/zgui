@@ -85,6 +85,8 @@ pub struct SyncReport {
     pub omitted_primitives: usize,
     /// Nodes and slots removed because no chunk and no node names them any more.
     pub released: usize,
+    /// Shared parameter blocks written because they changed.
+    pub params_written: usize,
 }
 
 impl CompositorSync {
@@ -135,6 +137,7 @@ impl CompositorSync {
                 self.order.fragments_changed(owner);
             }
         }
+        self.report.params_written += self.mirror.params.sync(&mut transaction);
         // The walk's replays rewrite the slots of the clips they carry along.
         self.report.table_writes += self.mirror.sync(&mut transaction, scene);
         let extras = &self.extras;
@@ -171,8 +174,12 @@ impl CompositorSync {
         if let Some(earlier) = self.forgotten.take() {
             held.extend(earlier);
         }
+        let wake = self.mirror.params.wake().cloned();
         *self = Self::new(self.output);
         self.forgotten = Some(held);
+        if let Some(wake) = wake {
+            self.set_wake(wake);
+        }
     }
 
     /// Returns the scroll node that applies the scroll offset of the box `container`.
@@ -182,6 +189,17 @@ impl CompositorSync {
         self.mirror
             .spaces
             .scroll_of(&scene.spatial, PropertyOwner::of(container))
+    }
+
+    /// Makes every window that draws a [`SharedParams`](crate::content::shader::SharedParams)
+    /// recorded through this sync woken by `wake` when the block changes.
+    pub fn set_wake(&mut self, wake: crate::content::shader::Wake) {
+        self.mirror.params.set_wake(wake);
+    }
+
+    /// Reports whether a recorded chunk or a group effect draws a shader that reads the clock.
+    pub fn reads_time(&self) -> bool {
+        self.mirror.reads_time()
     }
 
     /// Reports whether the compositor holds an image of `key`.

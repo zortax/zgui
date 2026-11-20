@@ -15,7 +15,8 @@ impl Client {
     /// A renderer whose presenter composes into the image it presents has that image acquired
     /// first, and the image's age decides what the frame redraws. Otherwise the age is what the
     /// renderer's kept target holds. `subpixel` is the stripe order per-channel text is drawn for,
-    /// and `interval` the display's refresh interval.
+    /// `at` the frame's moment, which the compositor samples animations and shader time at, and
+    /// `interval` the display's refresh interval.
     ///
     /// The outcome depends on what happened:
     ///
@@ -31,6 +32,7 @@ impl Client {
         &mut self,
         renderer: &mut dyn Renderer,
         subpixel: Option<SubpixelOrder>,
+        at: zgui_vocab::Timestamp,
         interval: Duration,
     ) -> FrameOutcome {
         let caps = renderer.capabilities();
@@ -40,7 +42,7 @@ impl Client {
         };
         let age = acquired.map_or_else(|| renderer.target_age(), |(_, age)| age);
 
-        let now_ns = nanos(self.started.elapsed());
+        let now_ns = nanos(at.since_origin());
         let request = FrameRequest {
             caps: &caps,
             age,

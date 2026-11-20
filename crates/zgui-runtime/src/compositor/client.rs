@@ -5,7 +5,6 @@ use compositor_types::{
     ClientId, CommitError, CompositorEvent, Frame, FrameCounters, OutputId, RenderTarget,
     Transaction,
 };
-use web_time::Instant;
 
 use crate::compositor::Shared;
 
@@ -19,8 +18,6 @@ pub(crate) struct Client {
     pub(super) output: OutputId,
     /// The frame the output's frames are built into, kept for its allocations.
     pub(super) frame: Frame,
-    /// The zero of the frame clock.
-    pub(super) started: Instant,
     /// The counters of the last frame built, until they are taken.
     pub(super) built: Option<FrameCounters>,
     /// The buffer the compositor's events are drained into, kept for its allocation.
@@ -40,7 +37,6 @@ impl Client {
             client,
             output,
             frame: Frame::default(),
-            started: Instant::now(),
             built: None,
             events: Vec::new(),
         }

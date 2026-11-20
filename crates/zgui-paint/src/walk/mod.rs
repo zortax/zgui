@@ -341,6 +341,11 @@ impl Painter {
         self.sync = Some(sync);
     }
 
+    /// Reports whether the attached compositor sync records a shader that reads the clock.
+    pub fn draws_time(&self) -> bool {
+        self.sync.as_ref().is_some_and(CompositorSync::reads_time)
+    }
+
     /// Returns the attached compositor sync, if any.
     pub fn compositor(&mut self) -> Option<&mut CompositorSync> {
         self.sync.as_mut()

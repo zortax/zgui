@@ -236,6 +236,26 @@ impl<'a> Recorder<'a> {
         Some((shader.slot(), params.slot()))
     }
 
+    /// Returns the slots of the declared shader `shader` and of the parameter slot of `params`, in
+    /// that order.
+    ///
+    /// Returns `None` for a handle no program was declared under. Without a compositor both slots
+    /// are zero.
+    pub fn shader_slots_shared(
+        &mut self,
+        shader: zgui_scene::ShaderId,
+        params: &crate::content::shader::SharedParams,
+    ) -> Option<(u32, u32)> {
+        let Some(resolver) = &mut self.resolver else {
+            return Some((0, 0));
+        };
+        let shader = resolver.shader(shader)?;
+        let params = resolver.shared_params(params);
+        refer(self.items, Ref::Shader(shader));
+        refer(self.items, Ref::Params(params));
+        Some((shader.slot(), params.slot()))
+    }
+
     /// Appends a shader quad, whose shader and parameter block are slots
     /// [`Recorder::shader_slots`] returned.
     pub fn shader_quad(&mut self, quad: ShaderQuad) {

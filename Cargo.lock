@@ -6607,6 +6607,7 @@ dependencies = [
  "zgui-paint",
  "zgui-platform",
  "zgui-platform-headless",
+ "zgui-profile",
  "zgui-runtime",
  "zgui-shader-macro",
  "zgui-testkit-compositor",

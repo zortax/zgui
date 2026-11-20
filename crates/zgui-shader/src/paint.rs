@@ -12,7 +12,8 @@ pub trait ShaderPainterExt {
     /// Coordinates reach the effect measured from `rect`'s own corner, so an effect is written
     /// against the box it is drawn in rather than against wherever the element ended up. The
     /// fragment's clip, its transform and the alpha folded in from the groups above are applied to
-    /// what the effect returns.
+    /// what the effect returns. A later change to `handle`'s parameters is drawn without the
+    /// element painting again.
     fn effect<P: ShaderParams>(
         &mut self,
         rect: Rect<DevicePx, Device>,
@@ -28,6 +29,6 @@ impl ShaderPainterExt for ScenePainter<'_> {
         corner_radius: f32,
         handle: &ShaderHandle<P>,
     ) {
-        self.shade(rect, corner_radius, handle.id(), handle.params());
+        self.shade(rect, corner_radius, handle.id(), handle.shared());
     }
 }

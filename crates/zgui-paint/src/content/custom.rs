@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{BorderStyle, PaintRef, ParamsBlock, Quad, ShaderQuad};
+use compositor_types::{BorderStyle, PaintRef, Quad, ShaderQuad};
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_scene::kurbo;
@@ -132,28 +132,22 @@ impl ScenePainter<'_> {
 
     /// Fills a rounded rectangle with an application's own shader.
     ///
-    /// `shader` is a declared application shader, and `params` is the block it draws with. The
-    /// rectangle is the effect's whole world: it is given coordinates measured from that
+    /// `shader` is a declared application shader, and `params` is the block it draws with. A change
+    /// to `params` is drawn on the next frame without the element painting again. The rectangle is the effect's whole world: it is given coordinates measured from that
     /// rectangle's own corner, and the framework applies the fragment's clip, its transform and its
     /// folded alpha to whatever the effect returns. Nothing is drawn for a shader no program was
     /// declared under.
-    ///
-    /// # What replays
-    ///
-    /// The parameters are read here, so an element whose revision is unchanged draws the
-    /// parameters it drew last time. Anything the effect is meant to follow — a pointer, a
-    /// progress value, a phase — has to be part of what the element's revision counts.
     pub fn shade(
         &mut self,
         rect: Rect<DevicePx, Device>,
         corner_radius: f32,
         shader: ShaderId,
-        params: ParamsBlock,
+        params: &crate::content::shader::SharedParams,
     ) {
         if !shader.is_some() {
             return;
         }
-        let Some((shader, params)) = self.rec.shader_slots(shader, params) else {
+        let Some((shader, params)) = self.rec.shader_slots_shared(shader, params) else {
             return;
         };
         let quad = ShaderQuad {

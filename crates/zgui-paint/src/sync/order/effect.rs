@@ -49,6 +49,7 @@ pub(crate) fn write(
         Some(written) => {
             hold(mirror, written.id, &node);
             unhold(mirror, written.id, &written.node);
+            time(mirror, written.id, &node);
             tx.set_effect(written.id, node.clone());
             (
                 Some(Written {
@@ -61,6 +62,7 @@ pub(crate) fn write(
         None => {
             let id = tx.create_effect(node.clone());
             hold(mirror, id, &node);
+            time(mirror, id, &node);
             tx.set_order_effect(order, Some(id));
             (Some(Written { id, node }), 1)
         }
@@ -70,6 +72,7 @@ pub(crate) fn write(
 /// Removes the effect node `written`, whose order node no longer names it.
 pub(crate) fn remove(tx: &mut Transaction, mirror: &mut Mirror, written: Written) {
     mirror.holds.forget(written.id);
+    mirror.timed_effects.remove(&written.id);
     tx.remove(written.id);
 }
 
@@ -78,7 +81,7 @@ fn filters(tx: &mut Transaction, mirror: &mut Mirror, wanted: &GroupEffect) -> A
     let Some(step) = wanted.shader else {
         return wanted.filters.clone();
     };
-    let Some(shader) = mirror.shader(tx, step.shader) else {
+    let Some(shader) = mirror.shaders.ensure(tx, step.shader) else {
         return wanted.filters.clone();
     };
     let params = mirror.params.slot(tx, &mut mirror.holds, step.params);
@@ -98,6 +101,18 @@ fn named(node: &EffectNode) -> impl Iterator<Item = AnyId> + '_ {
         _ => None,
     });
     node.clip.map(AnyId::from).into_iter().chain(params)
+}
+
+/// Notes whether the effect node `effect` filters with a shader that reads the clock.
+fn time(mirror: &mut Mirror, effect: EffectId, node: &EffectNode) {
+    let timed = node.filters.iter().any(|filter| {
+        matches!(filter, Filter::Shader { shader, .. } if mirror.shaders.reads_time(*shader))
+    });
+    if timed {
+        mirror.timed_effects.insert(effect);
+    } else {
+        mirror.timed_effects.remove(&effect);
+    }
 }
 
 fn hold(mirror: &mut Mirror, effect: EffectId, node: &EffectNode) {
