@@ -1,7 +1,7 @@
 //! A clock that only moves when it is told to.
 
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::clock::Clock;
 

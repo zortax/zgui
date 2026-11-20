@@ -144,7 +144,9 @@ fn parallelism_is_capped_at_six_workers() {
     );
 
     // Eight is not a slowdown. The engine's per-worker storage is a fixed-length array indexed by
-    // the worker's index in the pool, so the seventh worker indexes past the end of it.
+    // the worker's index in the pool, so the seventh worker would index past the end of it. The
+    // engine refuses such a pool before the traversal, on any machine: whether a seventh worker
+    // takes a job depends on how many cores the machine has.
     let eight = StylePool::exactly(8);
     assert_eq!(eight.width(), 8);
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

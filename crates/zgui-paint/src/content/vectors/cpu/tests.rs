@@ -290,7 +290,7 @@ fn calibrate_the_cost_model() {
             };
             painter.paint(&job, &mut out);
             let runs = 20;
-            let start = std::time::Instant::now();
+            let start = web_time::Instant::now();
             for _ in 0..runs {
                 painter.paint(&job, &mut out);
             }

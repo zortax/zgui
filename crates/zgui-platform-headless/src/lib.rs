@@ -22,7 +22,7 @@
 //! /// An application that asks to be woken once, seven hundred milliseconds from now.
 //! #[derive(Default)]
 //! struct Delayed {
-//!     deadline: Option<std::time::Instant>,
+//!     deadline: Option<web_time::Instant>,
 //!     frames: u32,
 //! }
 //!
@@ -77,13 +77,14 @@
 pub mod clipboard;
 pub mod harness;
 pub mod platform;
+mod role;
 pub mod surface;
 pub mod waker;
 
 pub use crate::clipboard::MemoryClipboard;
 pub use crate::harness::Harness;
-pub use crate::platform::Headless;
-pub use crate::surface::OffscreenSurface;
+pub use crate::platform::{Headless, SessionLockState};
+pub use crate::surface::{OffscreenSurface, Region};
 pub use crate::waker::RecordingWaker;
 
 /// The clock a caller moves by hand, re-exported.

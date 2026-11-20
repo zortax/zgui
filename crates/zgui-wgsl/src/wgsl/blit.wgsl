@@ -4,9 +4,10 @@
 // coordinate reads exactly one texel, which is why the bind-group layout escapes the filtering
 // restriction and why the copy cannot change a single value.
 //
-// The whole surface is copied every frame whatever was damaged, because every acquisition yields a
-// fresh, wholly uninitialised surface texture: loading from one would cost a full clear first, so
-// a partial copy would leave the rest black.
+// The copy is drawn once for each rectangle the presented texture owes. A texture of wgpu's swap
+// chain owes the whole frame every time, because each acquisition yields a fresh, wholly
+// uninitialised texture. A texture that keeps its contents owes only what changed since it was last
+// copied into.
 
 @group(0) @binding(0) var composed: texture_2d<f32>;
 

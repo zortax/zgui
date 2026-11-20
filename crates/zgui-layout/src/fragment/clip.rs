@@ -17,6 +17,8 @@ use zgui_css::values::size::OverflowValue;
 use zgui_geom::{Corners, CssPx, Device, DevicePx, Edges, Rect, Size, Vec2};
 use zgui_scene::{ClipId, ClipLink, ClipTable};
 
+use crate::fragment::custom_properties::CustomProperties;
+
 /// Whether a box clips what is inside it.
 ///
 /// `visible` clips nothing. Every other value does, including `auto`, whose scrollport is a clip
@@ -57,6 +59,7 @@ pub fn chain_for_children(
     clips: &mut ClipTable,
     parent: ClipId,
     style: &ComputedStyle,
+    declared: CustomProperties,
     padding_box: Rect<DevicePx, Device>,
     border: Edges<DevicePx>,
     scale: f32,
@@ -76,7 +79,7 @@ pub fn chain_for_children(
             // The clip a box gives its children is cut the way the box is: content inside a
             // squircle card that was clipped to the ellipse those radii describe would show its
             // own corners past the card's.
-            shape: crate::fragment::corner::shape(style),
+            shape: crate::fragment::corner::shape_with(style, declared),
             space,
         },
         shift,
@@ -150,7 +153,7 @@ mod tests {
     use zgui_geom::{Device, DevicePx, Edges, Point, Rect, Size};
     use zgui_scene::{ClipId, ClipTable};
 
-    use super::{chain_for_children, clips_children, inner_radii};
+    use super::{CustomProperties, chain_for_children, clips_children, inner_radii};
 
     /// A box nothing has carried anywhere.
     const UNMOVED: Size<DevicePx, Device> = Size::ZERO;
@@ -177,6 +180,7 @@ mod tests {
             &mut clips,
             ClipId::ROOT,
             &style,
+            CustomProperties::ALL,
             rect(),
             Edges::ZERO,
             1.0,
@@ -199,6 +203,7 @@ mod tests {
             &mut clips,
             ClipId::ROOT,
             &style,
+            CustomProperties::ALL,
             rect(),
             Edges::ZERO,
             1.0,
@@ -215,6 +220,7 @@ mod tests {
             &mut clips,
             ClipId::ROOT,
             &style,
+            CustomProperties::ALL,
             rect().translate(by),
             Edges::ZERO,
             1.0,
@@ -241,6 +247,7 @@ mod tests {
             &mut clips,
             ClipId::ROOT,
             &style,
+            CustomProperties::ALL,
             rect(),
             Edges::ZERO,
             1.0,
@@ -258,6 +265,7 @@ mod tests {
             &mut clips,
             ClipId::ROOT,
             &style,
+            CustomProperties::ALL,
             wider,
             Edges::ZERO,
             1.0,

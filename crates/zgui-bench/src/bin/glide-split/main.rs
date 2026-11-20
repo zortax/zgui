@@ -9,8 +9,9 @@
 //!
 //! # The question
 //!
-//! A subtree that only moved is offset rather than composed again, and the offsetting walk reaches
-//! every box in it on every frame of a glide. That walk does two unrelated things to each box. It
+//! A subtree that only moved is offset rather than composed again. In a scroller that keeps its
+//! children in its own space (see `document`), the offsetting walk reaches every box in it on
+//! every frame of a glide. That walk does two unrelated things to each box. It
 //! moves five rectangles and re-interns the clip chain a clipping box imposes; and it moves the
 //! box's hit entry and marks a moved control's accessibility node. The first is arithmetic over
 //! geometry this crate owns, and a representation that wrote one offset in one place instead of

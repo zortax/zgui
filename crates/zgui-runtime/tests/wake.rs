@@ -233,3 +233,37 @@ fn a_callback_that_schedules_the_next_one_still_gets_its_frame() {
         "the callback the first one scheduled never ran"
     );
 }
+
+#[test]
+fn a_maintenance_wake_after_every_frame_stays_inside_the_park_budget() {
+    // A timer slower than the maintenance delay: every frame arms one maintenance wake, and that
+    // wake comes due before the next tick. It draws nothing, so the loop resumes twice per frame.
+    let count = zgui_reactive::RwSignal::new(0);
+    let mut harness = support::app(CSS, move |cx: &mut BuildCx<'_>| {
+        let handle = zgui_view::set_interval(Duration::from_secs(5), move || {
+            count.set(count.get_untracked() + 1);
+        });
+        core::mem::forget(handle);
+        counting(count)(cx)
+    });
+    harness.settle(8);
+    harness.reset_counts();
+
+    for _ in 0..10 {
+        harness.run_for(Duration::from_secs(5), Duration::from_secs(1));
+    }
+
+    assert_eq!(
+        count.get_untracked(),
+        10,
+        "every interval tick fired exactly once"
+    );
+    assert!(harness.frames_requested() >= 10);
+    assert!(
+        harness.idle_resumes() >= 9,
+        "{} of {} resumes drew nothing",
+        harness.idle_resumes(),
+        harness.resumes()
+    );
+    harness.assert_park_invariant();
+}

@@ -5,9 +5,10 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, Surface, SurfaceAttributes, SurfaceId, TextInput,
+    CursorStyle, Decorations, FullscreenMode, InputSerial, LayerPatch, LayerPlacement,
+    PopupPlacement, Surface, SurfaceAttributes, SurfaceId, SurfaceRole, TextInput, Unsupported,
 };
 
 /// How many accessibility nodes the surface keeps across the updates it retains.
@@ -44,6 +45,9 @@ impl A11yLog {
         }
     }
 }
+
+/// A region a surface was given: rectangles in CSS pixels, or `None` for the whole surface.
+pub type Region = Option<Vec<Rect<CssPx, Css>>>;
 
 /// A surface that is a buffer, with no window behind it.
 ///
@@ -84,11 +88,13 @@ pub struct OffscreenSurface {
     /// sent before it, so a check on one update alone would reject every correct incremental one.
     ///
     /// The sequence is bounded at [`A11Y_LOG_NODES`] nodes over all retained updates. A headless
-    /// surface always has a listener, so a whole tree is published for every frame that owes one,
-    /// and a driver that runs for thousands of frames would otherwise retain every tree it was
+    /// surface has a listener by default, so a whole tree is published for every frame that owes
+    /// one, and a driver that runs for thousands of frames would otherwise retain every tree it was
     /// ever sent. A driver that wants the whole sequence drains it as it goes, through
     /// [`take_a11y_log`](OffscreenSurface::take_a11y_log).
     a11y_log: Mutex<A11yLog>,
+    /// Whether an accessibility consumer listens. Without one, no update is built.
+    a11y_listener: AtomicBool,
     /// Everything the surface was told about text input, in order.
     ///
     /// Whether an input method is wanted at all, and where its candidate window goes, is a state
@@ -103,8 +109,20 @@ pub struct OffscreenSurface {
     /// cannot read what was said cannot tell a window that honours `cursor` from one that ignores
     /// it.
     cursor_log: Mutex<Vec<CursorStyle>>,
+    /// Every change of shell placement the surface accepted, in order.
+    layer_log: Mutex<Vec<LayerPatch>>,
+    /// Every input region the surface was given, in order.
+    input_region_log: Mutex<Vec<Region>>,
+    /// Every opaque region the surface was given, in order.
+    opaque_region_log: Mutex<Vec<Region>>,
     /// Whether the surface has been shown.
     visible: AtomicBool,
+    /// Whether the surface was last asked to be maximised.
+    ///
+    /// A headless desktop grants each request at once and sends no event.
+    maximized: AtomicBool,
+    /// How the surface was last asked to fill the screen.
+    fullscreen: Mutex<Option<FullscreenMode>>,
     /// The last title it was given.
     title: Mutex<String>,
     /// What the surface was asked to be when it was created.
@@ -113,6 +131,8 @@ pub struct OffscreenSurface {
     /// can otherwise check about an application identifier, a window level or an icon is nothing at
     /// all, and an attribute nothing reads is an attribute that silently stops being sent.
     requested_attributes: Mutex<SurfaceAttributes>,
+    /// The token of the latest press, as a test sets it.
+    input_serial: Mutex<Option<InputSerial>>,
 }
 
 impl OffscreenSurface {
@@ -127,12 +147,27 @@ impl OffscreenSurface {
             requested: AtomicU64::new(0),
             a11y_updates: AtomicU64::new(0),
             a11y_log: Mutex::new(A11yLog::default()),
+            a11y_listener: AtomicBool::new(true),
             text_input_log: Mutex::new(Vec::new()),
             cursor_log: Mutex::new(Vec::new()),
+            layer_log: Mutex::new(Vec::new()),
+            input_region_log: Mutex::new(Vec::new()),
+            opaque_region_log: Mutex::new(Vec::new()),
             visible: AtomicBool::new(false),
+            maximized: AtomicBool::new(false),
+            fullscreen: Mutex::new(None),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
+            input_serial: Mutex::new(None),
         }
+    }
+
+    /// Sets the token [`Surface::input_serial`] answers with, as a press on a real desktop would.
+    pub fn set_input_serial(&self, serial: Option<InputSerial>) {
+        *self
+            .input_serial
+            .lock()
+            .expect("the serial is not poisoned") = serial;
     }
 
     /// Records what the surface was asked to be.
@@ -143,12 +178,39 @@ impl OffscreenSurface {
             .expect("the attributes are not poisoned") = attributes.clone();
     }
 
-    /// What the surface was asked to be when it was created.
+    /// What the surface was asked to be when it was created, with every accepted change of shell
+    /// placement applied.
     pub fn requested_attributes(&self) -> SurfaceAttributes {
         self.requested_attributes
             .lock()
             .expect("the attributes are not poisoned")
             .clone()
+    }
+
+    /// What the surface is to the desktop.
+    pub fn role(&self) -> SurfaceRole {
+        self.requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned")
+            .role
+            .clone()
+    }
+
+    /// Where the shell layer sits now, with every accepted change applied, for a surface made as
+    /// one.
+    pub fn layer_placement(&self) -> Option<LayerPlacement> {
+        match self.role() {
+            SurfaceRole::Layer(placement) => Some(placement),
+            _ => None,
+        }
+    }
+
+    /// Where the pop-up was asked to sit, for a surface made as one.
+    pub fn popup_placement(&self) -> Option<PopupPlacement> {
+        match self.role() {
+            SurfaceRole::Popup(placement) => Some(placement),
+            _ => None,
+        }
     }
 
     /// How many frames have been asked for since this surface was created.
@@ -167,6 +229,14 @@ impl OffscreenSurface {
     /// therefore one frame, which is exactly what the contract promises.
     pub fn take_pending_redraw(&self) -> bool {
         self.pending.swap(0, Ordering::Relaxed) > 0
+    }
+
+    /// Sets whether an accessibility consumer listens. The default is yes.
+    ///
+    /// With no listener the surface builds no update, as a platform surface does when no assistive
+    /// technology has connected.
+    pub fn set_a11y_listener(&self, listening: bool) {
+        self.a11y_listener.store(listening, Ordering::Relaxed);
     }
 
     /// How many accessibility updates have been published.
@@ -245,6 +315,34 @@ impl OffscreenSurface {
             .expect("the log is not poisoned")
             .last()
             .copied()
+    }
+
+    /// Every change of shell placement the surface accepted, in the order it was asked for.
+    ///
+    /// Only a surface made as a shell layer accepts one.
+    pub fn layer_log(&self) -> Vec<LayerPatch> {
+        self.layer_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
+    /// Every input region the surface was given, in the order it was given.
+    ///
+    /// `None` is the whole surface. A headless desktop takes every region it is given.
+    pub fn input_region_log(&self) -> Vec<Region> {
+        self.input_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
+    }
+
+    /// Every opaque region the surface was given, in the order it was given.
+    pub fn opaque_region_log(&self) -> Vec<Region> {
+        self.opaque_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .clone()
     }
 
     /// Whether the surface has been shown.
@@ -333,17 +431,67 @@ impl Surface for OffscreenSurface {
 
     fn set_resizable(&self, _resizable: bool) {}
 
-    fn set_maximized(&self, _maximized: bool) {}
+    fn set_maximized(&self, maximized: bool) {
+        self.maximized.store(maximized, Ordering::Relaxed);
+    }
+
+    fn is_maximized(&self) -> bool {
+        self.maximized.load(Ordering::Relaxed)
+    }
 
     fn set_minimized(&self, _minimized: bool) {}
 
-    fn set_fullscreen(&self, _mode: Option<FullscreenMode>) {}
+    fn set_fullscreen(&self, mode: Option<FullscreenMode>) {
+        *self.fullscreen.lock().expect("the state is not poisoned") = mode;
+    }
+
+    fn fullscreen(&self) -> Option<FullscreenMode> {
+        *self.fullscreen.lock().expect("the state is not poisoned")
+    }
+
+    fn input_serial(&self) -> Option<InputSerial> {
+        *self
+            .input_serial
+            .lock()
+            .expect("the serial is not poisoned")
+    }
 
     fn set_cursor(&self, cursor: CursorStyle) {
         self.cursor_log
             .lock()
             .expect("the log is not poisoned")
             .push(cursor);
+    }
+
+    fn set_layer_placement(&self, patch: &LayerPatch) -> Result<(), Unsupported> {
+        let mut attributes = self
+            .requested_attributes
+            .lock()
+            .expect("the attributes are not poisoned");
+        let SurfaceRole::Layer(placement) = &mut attributes.role else {
+            return Err(Unsupported);
+        };
+        patch.apply_to(placement);
+        self.layer_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(patch.clone());
+        Ok(())
+    }
+
+    fn set_input_region(&self, region: Option<&[Rect<CssPx, Css>]>) -> Result<(), Unsupported> {
+        self.input_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(region.map(<[_]>::to_vec));
+        Ok(())
+    }
+
+    fn set_opaque_region(&self, region: Option<&[Rect<CssPx, Css>]>) {
+        self.opaque_region_log
+            .lock()
+            .expect("the log is not poisoned")
+            .push(region.map(<[_]>::to_vec));
     }
 
     fn set_text_input(&self, state: Option<TextInput>) {
@@ -354,9 +502,12 @@ impl Surface for OffscreenSurface {
     }
 
     fn push_a11y_update(&self, build: &mut dyn FnMut() -> TreeUpdate) {
-        // A headless surface always has a listener, because whatever is driving it is the listener.
-        // What it was told is kept rather than discarded: an assertion about the tree is the only
-        // one that can tell a channel that carries the document from one that carries nothing.
+        if !self.a11y_listener.load(Ordering::Relaxed) {
+            return;
+        }
+        // By default, whatever drives a headless surface is the listener. What it was told is kept
+        // rather than discarded: an assertion about the tree is the only one that can tell a
+        // channel that carries the document from one that carries nothing.
         let update = build();
         let mut log = self.a11y_log.lock().expect("the log is not poisoned");
         log.push(update);
@@ -415,6 +566,26 @@ mod tests {
             1_000,
             "the count is what was published, whatever was taken"
         );
+    }
+
+    #[test]
+    fn no_listener_builds_no_accessibility_update() {
+        let surface = surface();
+        surface.set_a11y_listener(false);
+        let mut built = 0;
+        surface.push_a11y_update(&mut || {
+            built += 1;
+            update_of(3)
+        });
+        assert_eq!(built, 0);
+        assert_eq!(surface.a11y_updates(), 0);
+
+        surface.set_a11y_listener(true);
+        surface.push_a11y_update(&mut || {
+            built += 1;
+            update_of(3)
+        });
+        assert_eq!(built, 1, "a listener that arrives gets the next update");
     }
 
     #[test]

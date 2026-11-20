@@ -7,12 +7,14 @@
 pub(crate) mod alloc;
 pub(crate) mod block;
 mod recycle;
+mod succession;
 
 use crate::chunk::alloc::{SlotState, Slots};
 use crate::chunk::block::Block;
 use crate::key::{DomainId, Key};
 
 pub use crate::chunk::block::BLOCK_LEN;
+pub use crate::chunk::succession::Succession;
 
 /// Storage whose element addresses never change.
 ///
@@ -147,7 +149,9 @@ impl<T> ChunkArena<T> {
             value
         };
         let block = index as usize / BLOCK_LEN;
-        if block == self.blocks.len() {
+        // More than one block can be missing: an arena that succeeds another skips the slots that
+        // one retired, and a whole block of them can lie below the first free slot.
+        while self.blocks.len() <= block {
             self.blocks.push(Block::new());
         }
         // SAFETY: the slot was just claimed, so it holds no value and nothing refers to it — a

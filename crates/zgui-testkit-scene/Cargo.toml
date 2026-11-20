@@ -17,6 +17,7 @@ include.workspace = true
 # dev-dependency: this crate exists to read them, and a build in which they were compiled out
 # would make every assertion written against it pass while measuring nothing.
 [dependencies]
+web-time.workspace = true
 smallvec.workspace = true
 zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }

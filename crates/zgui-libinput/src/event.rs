@@ -37,6 +37,13 @@ impl Press {
     ///
     /// Every other number is read as released. A key reported down and never up is one held for
     /// the rest of the run.
+    #[cfg_attr(
+        all(not(unix), not(test)),
+        expect(
+            dead_code,
+            reason = "only the unix context reads a key or button state"
+        )
+    )]
     pub(crate) const fn of(state: u32) -> Self {
         match state {
             1 => Self::Down,

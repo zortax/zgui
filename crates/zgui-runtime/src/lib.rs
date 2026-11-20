@@ -38,6 +38,8 @@
 //! | [`editing`] | the editors a text field's model lives in, keyed by node |
 //! | [`selection`] | the selection each editable node carries, and the one that is focused |
 //! | [`binding`] | the seam a downstream script engine attaches to |
+//! | [`monitors`] | the outputs the desktop has, as a signal |
+//! | [`grab`] | the keyboard and the pointer, limited to a set of windows |
 //!
 //! ```no_run
 //! use zgui_runtime::App;
@@ -71,12 +73,16 @@ pub mod clipboard;
 pub mod commands;
 pub mod desktop;
 pub mod dispatch;
+mod documents;
 pub mod editing;
 pub mod embed;
 pub mod error;
 pub mod frame_callbacks;
+pub mod grab;
 pub mod host;
 mod images;
+pub mod lock;
+pub mod monitors;
 mod order;
 pub mod parity;
 pub mod probe;
@@ -104,7 +110,11 @@ pub use crate::embed::{
 };
 pub use crate::error::AppError;
 pub use crate::frame_callbacks::FrameCallbacks;
+pub use crate::grab::{ClearedGuard, FocusGrab};
 pub use crate::host::RuntimeHost;
+pub use crate::images::{LoadedPixels, Loading, SourceLoader, set_source_loader};
+pub use crate::lock::{LockError, LockHandle, SessionLock};
+pub use crate::monitors::{try_use_monitors, use_monitors};
 pub use crate::probe::FrameProbe;
 pub use crate::replaced::{IntrinsicTable, ReplacedMux};
 pub use crate::selection::Selections;
@@ -112,11 +122,13 @@ pub use crate::text::TextEngine;
 pub use crate::timer::Timers;
 pub use crate::wake::{FrameGate, RuntimeWaker};
 pub use crate::window::anim::cadence::AnimationCadence;
+pub use crate::window::frame::FrameReport;
 pub use crate::window::present::PresentPace;
 pub use crate::window::resize::ResizePace;
+pub use crate::window::text_aa::TextAntialiasing;
 pub use crate::window::{MAINTENANCE_DELAY, Window, WindowContent};
-pub use crate::windows::WindowOptions;
 pub use crate::windows::{
-    CloseGuard, WindowHandle, WindowId, Windows, on_close_request, try_use_window, try_use_windows,
-    use_window, use_windows,
+    CloseGuard, FocusGuard, WindowHandle, WindowId, Windows, on_close_request, try_use_window,
+    try_use_windows, use_input_region, use_window, use_windows,
 };
+pub use crate::windows::{LayerOptions, PopupOptions, WindowOptions};

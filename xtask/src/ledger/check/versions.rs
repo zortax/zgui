@@ -18,20 +18,22 @@ const PINNED: [(&str, &str); 4] = [
 ];
 
 /// The major version every wgpu in the tree must have.
-const WGPU_MAJOR: &str = "29.";
+const WGPU_MAJOR: &str = "30.";
 
 /// How many copies of a package the resolved graph may hold.
 ///
-/// Two `skrifa` copies are expected: the text engine and the vector rasteriser are on different
-/// releases. One `linebender_resource_handle` is what makes the two font-data types the same
-/// type and the glyph bridge free. One `ash` keeps the `vk::Image` `zgui-platform-drm` creates and
-/// the one `wgpu-hal` takes the same type: two copies are two types with one spelling, and the
-/// compiler names both of them the same way.
-const DUPLICATE_LIMITS: [(&str, usize); 4] = [
+/// One `skrifa` keeps the text engine and the vector rasteriser on the same release. One
+/// `linebender_resource_handle` is what makes the two font-data types the same type and the glyph
+/// bridge free. One `ash` keeps the `vk::Image` `zgui-platform-drm` creates and the one `wgpu-hal`
+/// takes the same type: two copies are two types with one spelling, and the compiler names both of
+/// them the same way. One `windows` does the same for the `ID3D12Resource` the renderer's own DXGI
+/// swap chain hands to `wgpu-hal`.
+const DUPLICATE_LIMITS: [(&str, usize); 5] = [
     ("wgpu", 1),
-    ("skrifa", 2),
+    ("skrifa", 1),
     ("linebender_resource_handle", 1),
     ("ash", 1),
+    ("windows", 1),
 ];
 
 /// The exact feature set the incremental layout engine is built with.

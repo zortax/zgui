@@ -5,7 +5,7 @@
 //! clear: a caret that changed phase changes no fragment's geometry, so nothing else in the frame
 //! would ever put its pixels into the damage.
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_geom::{Device, DevicePx, Point, Rect};
 use zgui_layout::FragmentKind;
@@ -32,12 +32,22 @@ impl Window {
     /// Computes this frame's caret and selection, and damages whatever that moved.
     pub(crate) fn plan_caret(&mut self, now: Instant) {
         let (plan, drawn) = self.caret_plan(now);
-        for rect in self.carets.install(plan, drawn) {
+        // The marks the last frame drew come first in what is owed. They are pixels of the drawn
+        // frame and the rest are this frame's, which tells a scroll that moves composed pixels
+        // which of the two to move.
+        let drawn_before = self.carets.drawn().len();
+        let owed = self.carets.install(plan, drawn);
+        for (index, rect) in owed.into_iter().enumerate() {
             if rect.is_empty() {
                 continue;
             }
-            self.damage
-                .absorb(zgui_layout::fragment::diff::pixels(rect));
+            let rect = zgui_layout::fragment::diff::pixels(rect);
+            self.damage.absorb(rect);
+            if index < drawn_before {
+                self.damage_before_layout.absorb(rect);
+            } else {
+                self.damage_after_layout.absorb(rect);
+            }
         }
         // Where an input method should put its candidate window is a reading of the plan that was
         // just installed, so it is answered here rather than where the caret was asked to move.
@@ -45,7 +55,10 @@ impl Window {
         // candidate window one character behind the text being composed — and answering it when
         // the surface hands the keyboard back reports no rectangle at all, because the frame that
         // plans one has not run yet. The surface is told only when the answer really changed.
-        self.report_caret();
+        //
+        // This reports the full text input state. A field that gets focus before it has a box
+        // cannot enable text input when focus moves, and this is the first moment it can.
+        self.report_text_input();
     }
 
     /// This frame's plan, and the absolute rectangles it will draw.

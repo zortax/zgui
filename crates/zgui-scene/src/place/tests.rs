@@ -191,9 +191,11 @@ fn every_step_inside_the_declared_travel_is_written() {
     assert_eq!(counter::get(Counter::OrderBandEscapes), 0);
     assert_eq!(counter::get(Counter::PlaceWritesWithReemit), 0);
     assert_eq!(counter::get(Counter::PlaceWritesWithoutReemit), 120);
+    // The poison test mode adds the document's own space under the viewport.
+    let document = u32::from(scene.spatial.document() != scene.spatial.viewport());
     assert_eq!(
         scene.spatial.len(),
-        2,
+        2 + document,
         "a hundred and twenty frames of one animation named a hundred and twenty spaces"
     );
 }

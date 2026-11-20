@@ -11,10 +11,13 @@
 //! rather than a guessed duration.
 //!
 //! The moment the *next* tick is owed at is decided here as well, at the other end of the frame,
-//! and it is a phase rather than a delay: see [`cadence`].
+//! and it is a phase rather than a delay: see [`cadence`]. Stepped animations whose values hold
+//! still owe no tick at every refresh. They owe one at their next step boundary, and the frame
+//! records that moment beside the phase.
 
 pub mod cadence;
 mod place;
+mod recolor;
 mod trace;
 
 use zgui_style::AnimationTime;
@@ -22,6 +25,9 @@ use zgui_vocab::Timestamp;
 
 use crate::dispatch::{self, HostSink};
 use crate::window::Window;
+
+/// How long after a step boundary the loop wakes for it.
+const HOLD_SLACK: std::time::Duration = std::time::Duration::from_millis(1);
 
 impl Window {
     /// Advances every running animation and applies what that produced.
@@ -51,14 +57,19 @@ impl Window {
                 layout: &layout,
                 scale: self.scale,
                 damage: zgui_bits::DamageSet::new(),
+                painter: &self.painter,
             };
             let tick = self.animator.tick(&mut document, &report, &mut writing);
             (tick, writing.damage)
         };
+        // A boundary sampled a little early shows the old step, so the wake lands just after it.
+        self.hold_after = tick
+            .wake
+            .map(|wake| std::time::Duration::from_secs_f64((wake - now.0).max(0.0)) + HOLD_SLACK);
 
-        // What the writes moved. Nothing else in the frame will put it in the set: the boxes that
-        // moved were not composed again, which is the whole saving, and the pass that would
-        // otherwise have absorbed their old and new rectangles never descended to them.
+        // What the writes moved and recoloured. Nothing else in the frame will put it in the set:
+        // the boxes that moved were not composed again, which is the whole saving, and the pass
+        // that would otherwise have absorbed their old and new rectangles never descended to them.
         self.damage.absorb_set(&moved);
 
         // Asking for a cascade is the engine's to do; deciding which elements need one is not, and
@@ -96,7 +107,12 @@ impl Window {
     /// An occluded window keeps nothing. Its animations go on running against the clock and are
     /// drawn correctly whenever it is shown again, but the phase they were on describes a rate the
     /// window was not running at, and an occlusion is not bounded by anything.
-    pub(crate) fn pace_animations(&mut self, now: std::time::Instant) {
+    pub(crate) fn pace_animations(&mut self, now: web_time::Instant) {
+        self.hold_due = self
+            .hold_after
+            .take()
+            .filter(|_| !(self.occluded || self.starved))
+            .map(|after| now + after);
         if self.occluded || self.starved || !self.is_animating() {
             self.animation.park();
             return;
@@ -113,6 +129,7 @@ impl Window {
     /// An animation whose keyframes the cascade gave new values is marked as well, so a tick
     /// samples them. A finished animation that fills forwards is otherwise not ticked again.
     pub(crate) fn note_started_animations(&mut self) {
+        self.note_lapsed_holds();
         let mut running = self.engine.animations().running_elements();
         running.extend_from_slice(self.engine.refreshed_animations());
         if running.is_empty() {
@@ -120,6 +137,25 @@ impl Window {
         }
         let mut document = self.document.borrow_mut();
         self.animator.note_started(&mut document, &running);
+    }
+
+    /// Marks the held elements whose animations this frame's cascade ended or replaced.
+    ///
+    /// A stepped animation that holds its values asks for no frame until its next step boundary.
+    /// When the cascade ends it sooner, this mark gets the frame that drops the held value.
+    fn note_lapsed_holds(&mut self) {
+        if self.animator.held().is_empty() {
+            return;
+        }
+        let lapsed = {
+            let document = self.document.borrow();
+            self.engine.lapsed_holds(&document, self.animator.held())
+        };
+        if lapsed.is_empty() {
+            return;
+        }
+        let mut document = self.document.borrow_mut();
+        self.animator.note_lapsed(&mut document, &lapsed);
     }
 
     /// Publishes how many animations each element is running, for views to read.

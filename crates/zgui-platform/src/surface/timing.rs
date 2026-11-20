@@ -1,6 +1,6 @@
 //! When a surface's frames reach the screen, and who decides that they do.
 
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// Who waits for the display.
 ///
@@ -21,6 +21,28 @@ pub enum PresentPacing {
     Display,
     /// The platform paces frames, and presentation must not block.
     Platform,
+}
+
+/// Whether a surface composes its next frame before the platform is ready to show it.
+///
+/// A window that waits for the platform draws each frame from the newest input. A frame that
+/// costs more than what is left of the refresh interval then misses the refresh, and the window
+/// shows a new frame only every second refresh or less often. A window that composes ahead keeps
+/// up at the full refresh rate, and shows each frame about one refresh later.
+///
+/// Only a platform that paces its own frames reads this. The environment variable
+/// `ZGUI_WAYLAND_COMPOSE_AHEAD` (`auto`, `always` or `never`) overrides it on Wayland.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ComposeAhead {
+    /// Compose ahead while the window cannot keep up with the refresh rate.
+    #[default]
+    Auto,
+    /// Always compose ahead. For a window that animates continuously and gives higher throughput
+    /// priority over input latency.
+    Always,
+    /// Never compose ahead. For a window that gives input latency priority over throughput.
+    Never,
 }
 
 /// What the platform knows about when this surface's frames reach the screen.
@@ -46,7 +68,7 @@ impl PresentationTiming {
     /// went stale while the loop was parked usable again rather than discarded.
     ///
     /// ```
-    /// use std::time::{Duration, Instant};
+    /// use web_time::{Duration, Instant};
     /// use zgui_platform::PresentationTiming;
     ///
     /// let now = Instant::now();
@@ -74,7 +96,7 @@ impl PresentationTiming {
 #[cfg(test)]
 mod tests {
     use super::{PresentPacing, PresentationTiming};
-    use std::time::{Duration, Instant};
+    use web_time::{Duration, Instant};
 
     #[test]
     fn a_platform_that_says_nothing_predicts_nothing() {

@@ -26,6 +26,19 @@ pub struct MarksScratch {
     generation: u64,
 }
 
+/// How many layers the texture is created with to hold `layers` pages.
+///
+/// A GL backend makes a texture with one layer a plain 2D texture, and the composite reads the
+/// pages as an array, which is another kind of texture there. Two layers keep it an array. The
+/// second layer is never drawn to and never read.
+fn allocated_layers(gpu: &Gpu, layers: u32) -> u32 {
+    if gpu.adapter().get_info().backend == wgpu::Backend::Gl {
+        layers.max(2)
+    } else {
+        layers
+    }
+}
+
 impl MarksScratch {
     /// Makes sure there is room for `pages` pages of `extent`, or lets go of what is held once
     /// no page has been needed for a while.
@@ -56,7 +69,7 @@ impl MarksScratch {
             size: wgpu::Extent3d {
                 width: held.width,
                 height: held.height,
-                depth_or_array_layers: held.layers,
+                depth_or_array_layers: allocated_layers(gpu, held.layers),
             },
             mip_level_count: 1,
             sample_count: 1,

@@ -5,4 +5,6 @@
 [toolchain]
 channel = "nightly-2026-04-16"
 components = ["rustfmt", "clippy", "rust-src", "miri"]
+# The browser target, which `cargo xtask lint` and `cargo xtask web` build for.
+targets = ["wasm32-unknown-unknown"]
 profile = "minimal"

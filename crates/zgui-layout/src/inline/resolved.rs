@@ -64,6 +64,16 @@ pub struct InlineResolution {
 }
 
 impl InlineResolution {
+    /// The capacity of the vectors this resolution holds, in bytes.
+    ///
+    /// The text map and the source list are shared, and are left out.
+    pub(crate) fn heap_bytes(&self) -> usize {
+        use core::mem::size_of;
+        self.lines.capacity() * size_of::<LineBox>()
+            + self.placements.capacity() * size_of::<Placement>()
+            + self.slices.capacity() * size_of::<InlineSlice>()
+    }
+
     /// Every paragraph this resolution names: the lines' own, and the marks that cut them.
     ///
     /// What the store retains and releases. A mark is a shaped paragraph like any other and is

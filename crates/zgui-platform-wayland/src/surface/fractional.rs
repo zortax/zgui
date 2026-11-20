@@ -25,26 +25,49 @@ pub struct Fractional {
 }
 
 impl Fractional {
-    /// Attaches both to `surface`, when this compositor has both.
+    /// Attaches a viewport to `surface` when this compositor offers one, and a fractional scale
+    /// when it offers both.
     pub fn attach(
         extras: &Extras,
         qh: &QueueHandle<WaylandState>,
         surface: &WlSurface,
         id: SurfaceId,
     ) -> Self {
-        if !extras.scales_fractionally() {
-            return Self::default();
-        }
+        // The viewport also crops a buffer larger than the frame it holds, so it is made wherever
+        // the compositor offers one. The fractional scale needs a viewport to map the buffer back.
         Self {
             scale: extras
-                .fractional_scale
-                .as_ref()
+                .scales_fractionally()
+                .then_some(extras.fractional_scale.as_ref())
+                .flatten()
                 .map(|manager| manager.get_fractional_scale(surface, qh, id)),
             viewport: extras
                 .viewporter
                 .as_ref()
                 .map(|viewporter| viewporter.get_viewport(surface, qh, ())),
         }
+    }
+
+    /// Whether the surface has a viewport, which crops and scales the buffers it is given.
+    pub const fn crops(&self) -> bool {
+        self.viewport.is_some()
+    }
+
+    /// Says that only the top-left `buffer` pixels of the next buffer are shown.
+    ///
+    /// Applied on the commit that carries the buffer, as [`Fractional::destination`] is. The
+    /// surface declares a buffer scale of one while it has a viewport, so the source is in buffer
+    /// pixels.
+    pub fn source(&self, buffer: zgui_geom::Size<i32, zgui_geom::Device>) {
+        let Some(viewport) = &self.viewport else {
+            return;
+        };
+        viewport.set_source(
+            0.0,
+            0.0,
+            f64::from(buffer.width.max(1)),
+            f64::from(buffer.height.max(1)),
+        );
     }
 
     /// Says that a buffer drawn at the surface's scale should appear at `logical`.

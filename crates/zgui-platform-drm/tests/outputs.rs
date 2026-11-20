@@ -1,5 +1,7 @@
 //! Discovering the displays on a real device, and the handles their surfaces report.
 
+#![cfg(target_os = "linux")]
+
 use std::collections::HashSet;
 use std::os::fd::{AsFd, AsRawFd};
 use std::sync::Arc;

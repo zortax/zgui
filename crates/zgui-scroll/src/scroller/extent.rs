@@ -44,7 +44,7 @@ use smallvec::SmallVec;
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point};
 use zgui_layout::LayoutStore;
-use zgui_layout::scroll_region::region_of_element;
+use zgui_layout::scroll_region::code_region_of_element;
 
 use crate::scroller::Scroller;
 
@@ -68,7 +68,7 @@ impl Scroller {
         let mut moved: SmallVec<[NodeKey; 2]> = SmallVec::new();
         let held: SmallVec<[(NodeKey, Point<DevicePx, Device>); 4]> = self.offsets.iter().collect();
         for (container, at) in held {
-            let Some(region) = region_of_element(store, container) else {
+            let Some(region) = code_region_of_element(store, container) else {
                 continue;
             };
             let limit = region.limit();

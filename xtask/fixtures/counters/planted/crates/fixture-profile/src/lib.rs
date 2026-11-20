@@ -7,12 +7,9 @@ counters! {
     /// A counter the clean fixture increments and the planted one does not.
     Beta => beta, Group::BackendNeutral;
 
-    /// A counter the stage below increments while the checker still holds a promise to wire it.
+    /// A renderer counter the stage below increments.
     ///
-    /// The name is one of the real workspace's, because the list of counters awaiting a stage
-    /// belongs to the checker rather than to the tree it is reading. Incrementing it here is the
-    /// second violation the check exists to catch: a promise that has already been kept and never
-    /// retired, which leaves the list saying nothing about the counters still on it.
+    /// It produces no violation while the checker lists no counter as awaiting a stage.
     DrawCalls => draw_calls, Group::RendererSpecific;
 }
 

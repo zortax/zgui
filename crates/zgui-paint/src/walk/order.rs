@@ -142,8 +142,13 @@ pub(crate) fn fragment_tracked(
     let mut pushed = 0;
     // A box whose decorations draw nothing at all is the overwhelming majority of containers, and
     // asking once is cheaper than three calls that each resolve a paint and push no primitive. A
-    // nested inline box draws its decorations on the lines it is on.
-    if !style.paints_nothing() && !emission.nested_inline {
+    // nested inline box draws its decorations on the lines it is on. A box whose animated colours
+    // are in owned slots is drawn at any alpha, so the slots have primitives to rewrite.
+    let draws = match emission.box_placement.owned {
+        Some((_, owned)) if owned.forces_box() => style.visible,
+        _ => !style.paints_nothing(),
+    };
+    if draws && !emission.nested_inline {
         pushed += box_::outer_shadows(scene, &style, emission.box_placement);
         pushed += box_::background_and_border(
             scene,
@@ -185,9 +190,10 @@ pub fn outline(scene: &mut Scene, emission: &Emission<'_>) -> usize {
 /// whole rasterisation pass.
 ///
 /// This is what makes a control that carries several marks and reveals one cost what the one it
-/// shows costs, rather than what all of them cost.
+/// shows costs, rather than what all of them cost. An alpha too faint to move a channel by half a
+/// step has taken everything to nothing as well.
 fn vanished(alpha: f32) -> bool {
-    alpha <= 0.0
+    alpha <= crate::emit::group::INVISIBLE_OPACITY
 }
 
 fn content_tracked(
@@ -268,7 +274,7 @@ fn content_tracked(
                 scene,
                 source,
                 ReplacedPlacement {
-                    content_box: fragment.content_box,
+                    content_box: fragment.content_box(),
                     radii: box_::padding_radii(
                         emission.box_placement.radii,
                         emission.box_placement.border,
@@ -293,7 +299,7 @@ fn content_tracked(
             let Some(drawing) = emission.vectors.drawing(
                 node,
                 DrawingPlacement {
-                    content_box: fragment.content_box,
+                    content_box: fragment.content_box(),
                     scale: emission.scale,
                 },
             ) else {
@@ -335,7 +341,7 @@ fn content_tracked(
             let text_subpixel = emission.text_placement.keeps_subpixel(scene);
             let mut painter = crate::content::custom::ScenePainter {
                 scene,
-                content_box: fragment.content_box,
+                content_box: fragment.content_box(),
                 clip: emission.box_placement.clip,
                 transform: emission.box_placement.transform,
                 alpha: emission.alpha,
@@ -359,6 +365,7 @@ fn content_tracked(
             fragment.border_box,
             scrollbar::resolve(emission.scrollbars, &style.scrollbar),
             emission.box_placement.clip,
+            emission.box_placement.transform,
         ),
     };
     FragmentEmission {

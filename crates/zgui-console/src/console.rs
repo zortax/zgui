@@ -45,7 +45,7 @@
 //! before it arrived, because that decides whether the frame's damage is retired.
 //!
 //! The copied path composes first and offers the picture afterwards. A display that declines it
-//! because a flip is still on its way is [`SkipReason::Timeout`]: the work was submitted, the
+//! because a flip is still on its way is [`SkipReason::Declined`]: the work was submitted, the
 //! damage retires, and asking again after one refresh interval is when the buffer is free.
 //!
 //! The drawn path asks first, because the acquire says which buffer to compose into. Every answer
@@ -64,6 +64,7 @@ use std::sync::Arc;
 use tracing::warn;
 use zgui_atlas::TextureSink;
 use zgui_bits::DamageSet;
+use zgui_geom::{Device, Rect};
 use zgui_platform::{PlatformError, Surface};
 use zgui_platform_drm::{Displays, DrmDisplay};
 use zgui_render::{
@@ -123,9 +124,10 @@ impl DrmRenderer {
         let inner = &mut self.inner;
         drawn_into_scanout(&self.display, |slot| {
             if !inner.present_into(slot) {
-                return refused_slot(slot);
+                return (refused_slot(slot), Vec::new());
             }
-            inner.draw(scene, damage)
+            let drawn = inner.draw(scene, damage);
+            (drawn, inner.presented_damage().to_vec())
         })
     }
 
@@ -161,8 +163,10 @@ impl DrmRenderer {
             // The buffer this frame would be written into is the one still on the screen. The
             // frame's work is submitted and the target holds it, so the damage retires and another
             // frame is asked for — which the contract paces at one refresh interval, by which time
-            // the flip has completed.
-            Ok(false) => FrameOutcome::Skipped(SkipReason::Timeout),
+            // the flip has completed. `Declined` rather than `Timeout`, because this refusal
+            // blocked nothing: `Timeout` is what latches a window as starved, and a probe a second
+            // apart turns a display that answers within a refresh into one frame a second.
+            Ok(false) => FrameOutcome::Skipped(SkipReason::Declined),
             Err(error) => {
                 warn!("a frame could not be put on its display: {error}");
                 FrameOutcome::Skipped(SkipReason::Validation)
@@ -199,7 +203,9 @@ trait Bracket {
     /// A display with a flip still on its way holds the frame and shows it when the completion
     /// arrives, because the kernel takes one page flip per CRTC. Either way the frame reaches the
     /// screen, which `true` says.
-    fn present_drawn(&self) -> Result<bool, PlatformError>;
+    ///
+    /// `damage` is what the frame changed, compared with the frame given over before it.
+    fn present_drawn(&self, damage: &[Rect<i32, Device>]) -> Result<bool, PlatformError>;
 }
 
 impl Bracket for DrmDisplay {
@@ -207,14 +213,15 @@ impl Bracket for DrmDisplay {
         DrmDisplay::acquire(self)
     }
 
-    fn present_drawn(&self) -> Result<bool, PlatformError> {
-        DrmDisplay::present_drawn(self)
+    fn present_drawn(&self, damage: &[Rect<i32, Device>]) -> Result<bool, PlatformError> {
+        DrmDisplay::present_drawn(self, damage)
     }
 }
 
 /// Runs one frame on the drawn path: take the buffer back, compose into it, give it over.
 ///
-/// `compose` is handed the buffer the frame goes into and answers what the frame did. It runs
+/// `compose` is handed the buffer the frame goes into and answers what the frame did, with the
+/// rectangles it changed since the frame given over before it. It runs
 /// **between** the two calls and never outside them: the acquire makes the buffer safe to write,
 /// and the give-over makes the pixels it drew the pixels the display engine reads.
 ///
@@ -237,7 +244,7 @@ impl Bracket for DrmDisplay {
 /// device that could not be rebuilt, and a frame that damaged nothing.
 fn drawn_into_scanout(
     display: &dyn Bracket,
-    compose: impl FnOnce(usize) -> FrameOutcome,
+    compose: impl FnOnce(usize) -> (FrameOutcome, Vec<Rect<i32, Device>>),
 ) -> FrameOutcome {
     let slot = match display.acquire() {
         Ok(Some(slot)) => slot,
@@ -258,12 +265,12 @@ fn drawn_into_scanout(
         }
     };
 
-    let drawn = compose(slot);
+    let (drawn, damage) = compose(slot);
     if !matches!(drawn, FrameOutcome::Presented(_)) {
         return drawn;
     }
 
-    match display.present_drawn() {
+    match display.present_drawn(&damage) {
         // The frame reached the display engine. It goes on the screen at the next vertical blank,
         // either as the flip this asked for or as the frame the outstanding flip's completion
         // commits — which is the display's business rather than this frame's.
@@ -522,7 +529,7 @@ mod tests {
         fn frame(&self, composed: FrameOutcome) -> FrameOutcome {
             drawn_into_scanout(self, |slot| {
                 self.note(format!("compose into {slot}"));
-                composed
+                (composed, Vec::new())
             })
         }
     }
@@ -539,7 +546,7 @@ mod tests {
             Ok(Some(back))
         }
 
-        fn present_drawn(&self) -> Result<bool, PlatformError> {
+        fn present_drawn(&self, _damage: &[Rect<i32, Device>]) -> Result<bool, PlatformError> {
             if self.busy.get() {
                 self.note("give over: no buffer is free");
                 return Ok(false);
@@ -568,7 +575,7 @@ mod tests {
             ))
         }
 
-        fn present_drawn(&self) -> Result<bool, PlatformError> {
+        fn present_drawn(&self, _damage: &[Rect<i32, Device>]) -> Result<bool, PlatformError> {
             panic!("a frame nothing was drawn for was given to the display engine");
         }
     }

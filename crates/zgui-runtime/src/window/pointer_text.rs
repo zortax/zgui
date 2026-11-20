@@ -14,8 +14,10 @@
 //! bytes of a line are drawn in the order shaping decided, which on a line holding two directions
 //! is not the order they are written in.
 
+use web_time::{Duration, Instant};
+
 use zgui_dom::NodeKey;
-use zgui_geom::{Device, DevicePx, Point};
+use zgui_geom::{Device, DevicePx, Point, Rect};
 use zgui_platform::SurfaceEvent;
 use zgui_vocab::{PointerAction, PointerButton, PointerEvent, Timestamp};
 
@@ -81,6 +83,7 @@ impl Window {
                 // it would take the release away from every other default, including the
                 // activation a click on a button is.
                 self.selecting = None;
+                self.drag_pointer = None;
                 false
             }
             _ => false,
@@ -160,7 +163,25 @@ impl Window {
         let Some(drag) = self.selecting else {
             return false;
         };
-        let Some((offset, affinity)) = self.offset_at(drag.node, self.device_point(pointer)) else {
+        let at = self.device_point(pointer);
+        // The time of the last scroll step stays: a move is not a step.
+        let (stepped, scrolling) = self.drag_pointer.map_or_else(
+            || (self.clock.now(), false),
+            |held| (held.stepped, held.scrolling),
+        );
+        self.drag_pointer = Some(DragPointer {
+            at,
+            stepped,
+            scrolling,
+        });
+        let port = self.drag_port(drag.node);
+        let point = port.map_or(at, |port| clamp_into(at, port));
+        self.extend_drag(drag, point)
+    }
+
+    /// Extends a drag's selection to the offset at one point on the surface.
+    fn extend_drag(&mut self, drag: Selecting, point: Point<DevicePx, Device>) -> bool {
+        let Some((offset, affinity)) = self.offset_at(drag.node, point) else {
             return false;
         };
         if drag.unit == Unit::Caret {
@@ -264,4 +285,135 @@ impl Window {
             DevicePx(pointer.position.y.0 * self.scale),
         )
     }
+}
+
+/// How fast a selecting drag scrolls its field, in pixels per second for each pixel that the
+/// pointer is outside the field's scrollport.
+const DRAG_SCROLL_RATE: f32 = 12.0;
+
+/// The highest speed of a selecting drag's scroll, in CSS pixels per second.
+const DRAG_SCROLL_MAX: f32 = 1600.0;
+
+/// The longest time one scroll step of a selecting drag covers.
+///
+/// A frame that comes late scrolls no further than this, so the field does not jump.
+const DRAG_STEP_MAX: Duration = Duration::from_millis(50);
+
+/// Where a selecting drag's pointer is, for the frames that scroll its field.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct DragPointer {
+    /// The pointer, in absolute device pixels.
+    at: Point<DevicePx, Device>,
+    /// When the field last took a scroll step.
+    stepped: Instant,
+    /// Whether the field is scrolling towards the pointer. It is an animation while it does.
+    scrolling: bool,
+}
+
+impl Window {
+    /// Scrolls the field of a selecting drag while the pointer is outside the field.
+    ///
+    /// The speed increases with the distance from the field's edge. The selection follows the
+    /// text that comes into view at that edge.
+    pub(crate) fn advance_text_drag(&mut self, now: Instant) {
+        let Some(drag) = self.selecting else {
+            self.drag_pointer = None;
+            return;
+        };
+        let Some(held) = self.drag_pointer else {
+            return;
+        };
+        // Reset before any early return, so a drag that stops scrolling stops the animation.
+        let step = now
+            .saturating_duration_since(held.stepped)
+            .min(DRAG_STEP_MAX);
+        self.drag_pointer = Some(DragPointer {
+            stepped: now,
+            scrolling: false,
+            ..held
+        });
+        let Some(port) = self.drag_port(drag.node) else {
+            return;
+        };
+        let inside = clamp_into(held.at, port);
+        let mut outside = Point::<DevicePx, Device>::new(
+            DevicePx(held.at.x.0 - inside.x.0),
+            DevicePx(held.at.y.0 - inside.y.0),
+        );
+        if !self.is_multiline(drag.node) {
+            outside.y = DevicePx(0.0);
+        }
+        // Nothing to do when the field is at its end on every axis the pointer is past.
+        let before = self.scroll.borrow().offset_of(drag.node);
+        let Some(limit) =
+            zgui_layout::scroll_region::code_region_of_element(&self.layout.borrow(), drag.node)
+                .map(|region| region.limit())
+        else {
+            return;
+        };
+        let heads =
+            |past: f32, at: f32, end: f32| (past > 0.0 && at < end) || (past < 0.0 && at > 0.0);
+        if !heads(outside.x.0, before.x.0, limit.x.0) && !heads(outside.y.0, before.y.0, limit.y.0)
+        {
+            return;
+        }
+        // The animation cadence asks for the frames that take the next steps.
+        if let Some(held) = self.drag_pointer.as_mut() {
+            held.scrolling = true;
+        }
+        if step.is_zero() {
+            return;
+        }
+        let max = DRAG_SCROLL_MAX * self.scale;
+        let seconds = step.as_secs_f32();
+        let distance = |past: f32| (past * DRAG_SCROLL_RATE).clamp(-max, max) * seconds;
+        let by = Point::new(
+            DevicePx(distance(outside.x.0)),
+            DevicePx(distance(outside.y.0)),
+        );
+        self.carry_out_scroll(
+            zgui_view_dom::id::to_view(drag.node),
+            zgui_view::ScrollTarget::By(by),
+            zgui_view::ScrollBehavior::Instant,
+        );
+        let after = self.scroll.borrow().offset_of(drag.node);
+        // The hit test reads the last frame's fragments, where the content is not scrolled yet. The
+        // text at a point there is the text that the scroll moves to the same point.
+        let moved = Point::new(
+            DevicePx(inside.x.0 + after.x.0 - before.x.0),
+            DevicePx(inside.y.0 + after.y.0 - before.y.0),
+        );
+        self.extend_drag(drag, moved);
+    }
+
+    /// Whether a selecting drag is scrolling its field, which is an animation.
+    pub(crate) fn is_drag_scrolling(&self) -> bool {
+        self.drag_pointer.is_some_and(|held| held.scrolling)
+    }
+
+    /// The scrollport a selecting drag in `node` keeps its selection inside, if it has one.
+    ///
+    /// Only a focused element that code can scroll: a field. A drag through other text selects
+    /// wherever the pointer is.
+    fn drag_port(&self, node: NodeKey) -> Option<Rect<DevicePx, Device>> {
+        if self.router.interaction().focus.focused() != Some(node) {
+            return None;
+        }
+        self.scrollport_on_device(node)
+    }
+}
+
+/// The point in `port` nearest to `point`.
+///
+/// The far edges are left out, because a point on them is outside the port.
+fn clamp_into(
+    point: Point<DevicePx, Device>,
+    port: Rect<DevicePx, Device>,
+) -> Point<DevicePx, Device> {
+    let right = (port.right().0 - 1.0).max(port.left().0);
+    let bottom = (port.bottom().0 - 1.0).max(port.top().0);
+    Point::new(
+        DevicePx(point.x.0.clamp(port.left().0, right)),
+        DevicePx(point.y.0.clamp(port.top().0, bottom)),
+    )
 }

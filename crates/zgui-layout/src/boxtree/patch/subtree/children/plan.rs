@@ -36,7 +36,10 @@ pub(super) struct Plan {
     pub(super) style: ComputedStyle,
     /// Every position of the new child list, in document order.
     pub(super) steps: Vec<Step>,
-    /// The boxes that go, each the root of a subtree proved to hang in exactly one place.
+    /// The out-of-flow boxes the container positions, which follow its in-flow children in its
+    /// layout child list. A departing box is still in it.
+    pub(super) tail: Vec<BoxKey>,
+    /// The boxes that go, each the root of a subtree proved confined and painted by the container.
     pub(super) departing: Vec<BoxKey>,
 }
 
@@ -50,8 +53,10 @@ pub(super) struct Plan {
 ///
 /// **A container that holds a run of inline-level boxes.** A child appearing or disappearing inside
 /// one re-breaks the run into different anonymous boxes, and those boxes belong to the container.
-/// Every child having a box of its own, in both orders, in the same sequence, is what proves there is
-/// no run: an anonymous wrapper appears in the layout order and not in the paint one.
+/// Every in-flow child having a box of its own, laid out by the container in paint order, is what
+/// proves there is no run: an anonymous wrapper appears in the layout order and not in the paint one.
+/// Out-of-flow children are the exception the proof allows. One that an ancestor positions is in the
+/// paint order only, and one that the container positions is in the tail of its layout order.
 ///
 /// **A box the container did not generate for one of its own children.** A `::before`, a `::after`
 /// and a list item's mark all name the container as their source and all sit among its children, so
@@ -62,7 +67,7 @@ pub(super) struct Plan {
 /// container holding one item that carries it lays its children out in an order the document does not
 /// give — and where the arriving child belongs in that order is a question only a full sort answers.
 ///
-/// **A departing subtree that does not hang in one place.** An out-of-flow box positioned into a
+/// **A departing subtree that holds a box positioned from outside.** An out-of-flow box positioned into a
 /// subtree from outside is laid out by an ancestor and painted where it was written, so destroying
 /// the subtree it was positioned into leaves a name behind in a list nothing below it can reach.
 ///
@@ -84,14 +89,32 @@ pub(super) fn of(
     if node.fc == FormattingContext::Inline {
         return None;
     }
-    // Both orders, as one sequence. A container whose two lists differ holds an anonymous wrapper, an
-    // out-of-flow child or a sorted `order`, and each of those is the container's own arrangement
-    // rather than a child's.
-    if node.children != node.paint_children {
+    // The layout order is the in-flow part of the paint order, then the out-of-flow boxes the
+    // container positions. Any other difference between the two lists is an anonymous wrapper or a
+    // sorted `order`, and each of those is the container's own arrangement rather than a child's.
+    let fc = node.fc;
+    let held = node.paint_children.clone();
+    let mut in_flow = Vec::with_capacity(held.len());
+    for &key in &held {
+        let child = store.get(key)?;
+        if !out_of_flow(store, key) {
+            in_flow.push(key);
+        } else if child.parent != Some(own)
+            && store
+                .declared(key)
+                .is_none_or(|declared| declared.parent != own)
+        {
+            return None;
+        }
+    }
+    let (head, tail) = node
+        .children
+        .split_at_checked(in_flow.len())
+        .unwrap_or((&node.children, &[]));
+    if head != in_flow.as_slice() || !tail.iter().all(|&key| out_of_flow(store, key)) {
         return None;
     }
-    let fc = node.fc;
-    let held = node.children.clone();
+    let tail = tail.to_vec();
 
     let mut kept: FxHashMap<NodeIndex, BoxKey> = FxHashMap::default();
     let mut departing = Vec::new();
@@ -99,11 +122,14 @@ pub(super) fn of(
     let own_key = document.store().key_of(container);
     for key in held {
         let child = store.get(key)?;
-        if child.pseudo.is_some() || !child.block_level {
+        if child.pseudo.is_some() {
             return None;
         }
-        if matches!(fc, FormattingContext::Flex | FormattingContext::Grid)
-            && child.style.get_position().order != 0
+        // An out-of-flow child takes no part in the wrapping or the ordering of the others.
+        if !out_of_flow(store, key)
+            && (!child.block_level
+                || matches!(fc, FormattingContext::Flex | FormattingContext::Grid)
+                    && child.style.get_position().order != 0)
         {
             return None;
         }
@@ -125,6 +151,9 @@ pub(super) fn of(
         } else {
             confine::departed(store, document, key)?
         };
+        if confined.painter != own {
+            return None;
+        }
         doomed.extend(confined.subtree.iter().copied());
         departing.push(key);
     }
@@ -171,6 +200,15 @@ pub(super) fn of(
         containing_block: place::containing_block(store, own)?,
         style: document.node(container).primary_style()?,
         steps,
+        tail,
         departing,
     })
+}
+
+/// Whether `key` is an out-of-flow box: one the build re-parented onto its containing block.
+pub(super) fn out_of_flow(store: &LayoutStore, key: BoxKey) -> bool {
+    store.declared(key).is_some()
+        && store
+            .get(key)
+            .is_some_and(|node| classify(&node.style).out_of_flow)
 }

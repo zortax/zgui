@@ -28,6 +28,10 @@ use zgui_scene::{BackdropFilter, ClipId, ClipLink, GroupBoundary, Scene, Spatial
 
 use crate::lower::PaintStyle;
 
+/// The highest opacity that draws nothing a display shows: it moves no 8-bit channel by half a
+/// step, so every pixel under it rounds to the value it had. A group at or below it folds to zero.
+pub const INVISIBLE_OPACITY: f32 = 0.5 / 255.0;
+
 /// What a fragment's group properties come to once its subtree has been taken into account.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Isolation {
@@ -91,8 +95,9 @@ pub fn isolation(style: &PaintStyle, fragment: &Fragment) -> Isolation {
     // Nothing times anything is nothing. A group at zero contributes no pixel however its subtree
     // is arranged, so neither overlapping children nor a blending one can make a target tell a
     // different story from the fold — and the fold is what lets the emitter recognise a subtree
-    // that has vanished and stop pushing primitives for it.
-    if style.group.opacity <= 0.0 {
+    // that has vanished and stop pushing primitives for it. A group too faint to move a channel by
+    // half a step shows the same nothing.
+    if style.group.opacity <= INVISIBLE_OPACITY {
         return Isolation::Folded(0.0);
     }
     if fragment.subtree_disjoint && !blending_below {
@@ -103,23 +108,27 @@ pub fn isolation(style: &PaintStyle, fragment: &Fragment) -> Isolation {
 
 /// What a group writes, in the coordinate system `space` it composites under.
 ///
-/// The fragment's subtree ink is on the device, through the matrix `space` had when the fragment
-/// was composed. A place write moves `space` and composes nothing, so a device rectangle goes stale
-/// while the content drawn under `space` moves on. In the coordinates of `space` the rectangle moves
-/// with the content, as the rectangle of every primitive does.
+/// The fragment's subtree ink is in its anchor's space, through the matrix `space` had when the
+/// fragment was composed, and the anchor's matrix puts it on the device. A place write moves
+/// `space` and composes nothing, so a device rectangle goes stale while the content drawn under
+/// `space` moves on. In the coordinates of `space` the rectangle moves with the content, as the
+/// rectangle of every primitive does.
 ///
 /// The fragment's own ink and local ink are one rectangle on the two sides of the composition
 /// matrix, which gives the way back for a translation and a scale. A matrix that turns, skews or
 /// flips, or a fragment with no ink of its own, maps back through the current matrix instead, as
 /// the box around the result.
 fn local_bounds(scene: &Scene, fragment: &Fragment, space: SpatialId) -> Rect<DevicePx, Device> {
-    let device = fragment.subtree_ink;
+    let device = fragment.on_device_in(fragment.subtree_ink, &scene.spatial);
     let Some(matrix) = scene.spatial.resolve(space) else {
         return device;
     };
     let [x_axis, y_axis, ..] = matrix.columns;
     let axis_aligned = x_axis[1] == 0.0 && y_axis[0] == 0.0 && x_axis[0] > 0.0 && y_axis[1] > 0.0;
-    let (ink, local) = (fragment.ink, fragment.local_ink);
+    let (ink, local) = (
+        fragment.on_device_in(fragment.ink, &scene.spatial),
+        fragment.local_ink,
+    );
     let fits = |device: f32, local: f32| device > 0.0 && local > 0.0;
     if !axis_aligned
         || !fits(ink.size.width.0, local.size.width.0)
@@ -310,6 +319,20 @@ mod tests {
         assert_eq!(
             isolation(&translucent(0.5), &fragment(true, true)),
             Isolation::Target
+        );
+    }
+
+    /// A fade that rests just above zero: it moves no channel, so it draws nothing either.
+    #[test]
+    fn a_group_too_faint_to_move_a_channel_folds_to_nothing() {
+        assert_eq!(
+            isolation(&translucent(0.001), &fragment(false, false)),
+            Isolation::Folded(0.0)
+        );
+        assert_eq!(
+            isolation(&translucent(0.01), &fragment(false, false)),
+            Isolation::Target,
+            "an opacity of 0.01 moves a white channel over black by two and a half steps"
         );
     }
 

@@ -4,7 +4,7 @@ mod manual;
 
 pub use manual::VirtualClock;
 
-use std::time::Instant;
+use web_time::Instant;
 
 use zgui_vocab::Timestamp;
 

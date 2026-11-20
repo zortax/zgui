@@ -11,6 +11,8 @@
 //! under a compositor and on any card the user may open. A device without universal planes hides
 //! its primary and cursor planes, which is where the interesting layouts are.
 
+#![cfg(target_os = "linux")]
+
 mod support;
 
 use zgui_drm::Device;

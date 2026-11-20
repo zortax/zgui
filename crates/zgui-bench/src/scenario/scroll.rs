@@ -12,7 +12,9 @@
 use zgui::geom::{CssPx, Point};
 use zgui::vocab::PointerAction;
 
-use crate::scenario::band::{Band, INTERACTION_TOLERANCE, Measurement, Pace, Spread};
+use crate::scenario::band::{
+    Band, INTERACTION_TOLERANCE, Measurement, Pace, SCHEDULER_TOLERANCE, Spread,
+};
 use crate::scenario::fixture::{self, Fixture};
 use crate::scenario::{Outcome, counters, quiet};
 
@@ -83,10 +85,12 @@ pub(crate) fn run() -> Outcome {
             continue;
         }
         let mark = zgui_profile::counter::snapshot();
+        let gpu = crate::gpu_time::phase("scroll.tick");
         let started = std::time::Instant::now();
         harness.advance(std::time::Duration::from_micros(8_333));
         let ran = harness.pump();
         let cost = started.elapsed().as_secs_f64() * 1e6;
+        drop(gpu);
         if ran == 0 {
             continue;
         }
@@ -143,12 +147,13 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: translated.p50,
                 band: Band::Time {
-                    baseline: 44.0,
-                    tolerance: INTERACTION_TOLERANCE,
+                    baseline: 27.0,
+                    tolerance: SCHEDULER_TOLERANCE,
                 },
-                rationale: "measured at 43-45 us across runs. It was 257 before the renderer was \
-                            allowed to move the pixels it had already composed: a translation \
-                            frame now draws the band the movement uncovered instead of the port",
+                rationale: "measured at 23-38 us across thirteen runs, the spread set by the core \
+                            the process runs on. The scroll container draws its content in a \
+                            space of its own, so a translation frame moves that space and draws \
+                            the band the movement uncovered",
                 budget: Some(1_000.0),
                 spread: Some(translated),
             },
@@ -157,14 +162,12 @@ pub(crate) fn run() -> Outcome {
                 unit: "us",
                 value: recycled.p50,
                 band: Band::Time {
-                    baseline: 560.0,
+                    baseline: 286.0,
                     tolerance: INTERACTION_TOLERANCE,
                 },
-                rationale: "measured at 550-565 us across runs, down from 1030: the window's two \
-                            spacers were custom properties, which inherit, so a window that moved \
-                            changed the inherited environment of every row in it and recascaded \
-                            the whole port to shift it by one. Written straight onto the pane, a \
-                            recycle frame recascades the row that arrived",
+                rationale: "measured at 238-384 us across thirteen runs. A recycle frame builds \
+                            and lays out the row that arrived, and the rest of the port keeps its \
+                            recorded paint",
                 budget: Some(1_500.0),
                 spread: Some(recycled),
             },
@@ -201,9 +204,8 @@ pub(crate) fn run() -> Outcome {
         .collect(),
         counters: counters(&all),
         notes: vec![format!(
-            "one row shift rebuilds {:.0} boxes and relays out {:.0} nodes, which is the row that \
-             arrived and not the port it arrived in; it still emits {:.0} primitives, which is the \
-             port, and is what a recycle frame's remaining cost is",
+            "one row shift rebuilds {:.0} boxes, relays out {:.0} nodes and emits {:.0} \
+             primitives, which is the row that arrived and not the port it arrived in",
             per(rebuild.boxes, recycle.len()),
             per(rebuild.nodes, recycle.len()),
             per(rebuild.emitted, recycle.len()),

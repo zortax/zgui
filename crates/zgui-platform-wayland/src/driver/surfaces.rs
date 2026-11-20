@@ -8,6 +8,8 @@ use zgui_platform::{
     Unsupported,
 };
 
+use wayland_client::protocol::wl_output::WlOutput;
+
 use crate::driver::WaylandState;
 use crate::surface::role::{Popup, Role, Toplevel, layer};
 use crate::surface::{Fractional, Links, WaylandSurface};
@@ -39,9 +41,19 @@ impl WaylandState {
                 .get_or_insert_with(|| named.as_str().to_owned());
         }
         let wanted = attributes.size.unwrap_or(DEFAULT_SIZE);
+        let bound = match &attributes.role {
+            SurfaceRole::Layer(placement) => placement
+                .monitor
+                .as_ref()
+                .map(|target| self.output_for(target))
+                .transpose()?,
+            SurfaceRole::Lock(target) => Some(self.output_for(target)?),
+            _ => None,
+        };
         let wl = self.compositor.create_surface(&self.qh);
         let fractional = Fractional::attach(&self.extras, &self.qh, &wl, id);
-        let role = self.make_role(id, attributes, wl)?;
+        let seed = self.seed_scale(bound.as_ref(), fractional.crops());
+        let role = self.make_role(id, attributes, wanted, wl, bound.as_ref())?;
 
         let (placement, parent_extent) = match &attributes.role {
             SurfaceRole::Popup(placement) => (
@@ -59,10 +71,27 @@ impl WaylandState {
             parent_extent,
             self.links(),
         );
+        {
+            let mut shared = surface.shared();
+            shared.ahead =
+                crate::frame::Ahead::new(crate::frame::ahead::mode(attributes.compose_ahead));
+            if let SurfaceRole::Layer(placement) = &attributes.role {
+                shared.layer = Some(placement.clone());
+            }
+            shared.bound = bound;
+            // The first frame is drawn at the scale of the output the surface opens on. The
+            // compositor states the surface's own scale only after it has shown the surface, so
+            // without this a surface on a 2x output draws its first frame at 1x and then again.
+            shared.ladder.seed(seed);
+            shared.scale = shared.ladder.factor();
+        }
         apply(&surface, attributes);
-        // The commit that asks to be configured. Nothing is attached to it, which is what makes it
-        // the initial commit rather than a frame.
-        surface.role().commit();
+        // The commit that asks to be configured. Nothing is attached to it, which makes it the
+        // initial commit. A lock surface is configured unasked, and a commit before it
+        // acknowledges that configure is a protocol error.
+        if surface.role().lock().is_none() {
+            surface.role().commit();
+        }
         self.live.surfaces.borrow_mut().push(Arc::clone(&surface));
         Ok(surface)
     }
@@ -72,11 +101,29 @@ impl WaylandState {
         &self,
         id: SurfaceId,
         attributes: &SurfaceAttributes,
+        wanted: Size<CssPx, Css>,
         wl: wayland_client::protocol::wl_surface::WlSurface,
+        bound: Option<&WlOutput>,
     ) -> Result<Role, PlatformError> {
         match &attributes.role {
-            SurfaceRole::Layer(placement) => self.make_layer(wl, placement),
+            SurfaceRole::Layer(placement) => {
+                let application = attributes
+                    .application_id
+                    .as_ref()
+                    .map(zgui_vocab::SharedString::as_str);
+                self.make_layer(wl, placement, application, wanted, bound)
+            }
             SurfaceRole::Popup(placement) => self.make_popup(id, wl, placement, attributes),
+            SurfaceRole::Lock(_) => {
+                let Some(output) = bound else {
+                    return Err(PlatformError::SurfaceCreation(
+                        "a lock surface needs an output".to_owned(),
+                    ));
+                };
+                self.locks
+                    .surface(wl, output, &self.qh)
+                    .map(|lock| Role::Lock(Box::new(lock)))
+            }
             _ => Ok(Role::Toplevel(Box::new(Toplevel::new(
                 &self.xdg,
                 &self.qh,
@@ -93,6 +140,10 @@ impl WaylandState {
     /// space the anchor rectangle arrives in and the space the compositor measures it in. A
     /// rectangle outside it, or one of no extent, is a protocol error rather than a placement the
     /// compositor corrects, so both are clamped before they are sent.
+    ///
+    /// A window or another pop-up is the pop-up's parent directly. A shell layer adopts a pop-up
+    /// made with no parent. The adoption and the grab both precede the first commit, which the
+    /// protocol requires of each.
     fn make_popup(
         &self,
         id: SurfaceId,
@@ -105,14 +156,17 @@ impl WaylandState {
                 "the surface this pop-up belongs to has already gone".to_owned(),
             ));
         };
-        let Some(anchor) = parent.role().xdg_surface() else {
+        let layer = parent.role().layer();
+        let anchor = parent.role().xdg_surface();
+        if layer.is_none() && anchor.is_none() {
             return Err(PlatformError::SurfaceCreation(
-                "a pop-up can only be placed against a window or another pop-up".to_owned(),
+                "a pop-up can only be placed against a window, a pop-up or a shell layer"
+                    .to_owned(),
             ));
-        };
+        }
         let extent = parent.shared().logical;
         let size = attributes.size.unwrap_or(extent);
-        Ok(Role::Popup(Box::new(Popup::new(
+        let popup = Popup::new(
             &self.xdg,
             &self.qh,
             wl,
@@ -123,35 +177,85 @@ impl WaylandState {
                 parent: extent,
                 size,
             },
-        ))))
+        );
+        if let Some(layer) = layer {
+            layer.get_popup(popup.xdg_popup());
+        }
+        if let Some(serial) = placement.grab {
+            match &self.seat.serials.seat {
+                Some(seat) => popup.grab(seat, serial.raw()),
+                None => tracing::debug!(?serial, "a pop-up grab with no seat to grab on"),
+            }
+        }
+        Ok(Role::Popup(Box::new(popup)))
     }
 
     /// A surface that is part of the desktop shell rather than a window.
+    ///
+    /// The namespace is the placement's own, or else the application identifier. A compositor's
+    /// layer rules match it, so two kinds of shell surface from one application stay apart only
+    /// when each names its own.
     fn make_layer(
         &self,
         wl: wayland_client::protocol::wl_surface::WlSurface,
         placement: &LayerPlacement,
+        application: Option<&str>,
+        wanted: Size<CssPx, Css>,
+        bound: Option<&WlOutput>,
     ) -> Result<Role, PlatformError> {
         let Some(shell) = &self.layers else {
             return Err(PlatformError::Unsupported(Unsupported));
         };
-        let output = placement.monitor.as_ref().and_then(|name| {
-            self.outputs.outputs().find(|output| {
-                self.outputs
-                    .info(output)
-                    .and_then(|info| info.name)
-                    .is_some_and(|found| &found == name)
-            })
-        });
         let surface = shell.create_layer_surface(
             &self.qh,
             wl,
             layer::layer(placement.layer),
-            Some("zgui"),
-            output.as_ref(),
+            Some(layer::namespace(placement, application)),
+            bound,
         );
-        layer::apply(&surface, placement);
+        layer::apply(&surface, placement, wanted);
         Ok(Role::Layer(Box::new(surface)))
+    }
+
+    /// The output a shell layer or a lock surface asks to open on.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`PlatformError::SurfaceCreation`] when `target` names an output that is not
+    /// connected. The desktop would otherwise choose an output, and a bar opened on the wrong
+    /// screen is a second bar on that screen.
+    fn output_for(&self, target: &zgui_platform::MonitorTarget) -> Result<WlOutput, PlatformError> {
+        self.outputs
+            .outputs()
+            .find(|output| {
+                self.outputs
+                    .info(output)
+                    .is_some_and(|info| target.matches(&crate::output::describe(&info)))
+            })
+            .ok_or_else(|| {
+                PlatformError::SurfaceCreation(format!("no connected output matches {target:?}"))
+            })
+    }
+
+    /// The scale a new surface starts at: its bound output's, else the sharpest output's.
+    ///
+    /// A surface with no bound output can open on any output, and the sharpest one is the one
+    /// where drawing at too low a scale shows.
+    fn seed_scale(&self, bound: Option<&WlOutput>, viewport: bool) -> Option<f64> {
+        match bound {
+            Some(output) => self
+                .outputs
+                .info(output)
+                .map(|info| crate::output::mode::seed(&info, viewport)),
+            None => crate::output::mode::sharpest(
+                self.outputs
+                    .outputs()
+                    .filter_map(|output| self.outputs.info(&output))
+                    .collect::<Vec<_>>()
+                    .iter(),
+            )
+            .map(f64::from),
+        }
     }
 
     /// What every surface this loop makes is wired into.
@@ -196,13 +300,5 @@ fn apply(surface: &Arc<WaylandSurface>, attributes: &SurfaceAttributes) {
             let fixed = attributes.size;
             window.set_bounds(fixed, fixed);
         }
-    }
-    if let Some(size) = attributes.size
-        && let Some(layer) = surface.role().layer()
-    {
-        layer.set_size(
-            size.width.0.round().max(1.0) as u32,
-            size.height.0.round().max(1.0) as u32,
-        );
     }
 }

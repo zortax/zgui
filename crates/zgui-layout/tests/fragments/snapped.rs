@@ -2,7 +2,7 @@
 
 use zgui_geom::Matrix4;
 
-use crate::probe::{box_named, own_fragment};
+use crate::probe::{box_named, drawn_matrix, own_fragment};
 use crate::support::{Element, Fixture, lay_out, measurer};
 
 /// The matrix a lone `card` under `declarations` is drawn through.
@@ -21,10 +21,7 @@ fn card_matrix(declarations: &str) -> Matrix4 {
     let space = own_fragment(&store, card)
         .transform
         .expect("every fragment names a coordinate system");
-    frame
-        .spatial
-        .resolve(space)
-        .expect("a live coordinate system")
+    drawn_matrix(&frame, space)
 }
 
 /// The matrix's horizontal and vertical translation.

@@ -108,10 +108,12 @@ impl HeldModifiers {
     ///
     /// Every stamped input event carries the set as well as the change, so this follows the
     /// platform rather than accumulating presses and releases of its own — an accumulator loses
-    /// track the first time a modifier is released while the window is not focused.
+    /// track the first time a modifier is released while the window is not focused. The locks a
+    /// change reports are left out, so an event stamped from this set carries the held modifiers
+    /// alone.
     pub fn observe(&mut self, event: &SurfaceEvent) {
         if let Some(modifiers) = event.modifiers() {
-            self.0 = modifiers;
+            self.0 = modifiers.held();
         }
     }
 }
@@ -126,6 +128,15 @@ mod tests {
     };
 
     use super::{HeldModifiers, InputEvent};
+
+    #[test]
+    fn the_locks_of_a_change_are_not_held() {
+        let mut held = HeldModifiers::default();
+        held.observe(&SurfaceEvent::ModifiersChanged(
+            Modifiers::SHIFT | Modifiers::CAPS_LOCK,
+        ));
+        assert_eq!(held.get(), Modifiers::SHIFT);
+    }
 
     #[test]
     fn an_unstamped_event_takes_the_modifiers_that_are_held() {
