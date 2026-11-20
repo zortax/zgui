@@ -13,6 +13,7 @@ pub(crate) use crate::gallery::probe::*;
 pub(crate) use crate::gallery::sheet::*;
 pub(crate) use crate::gallery::sizes::*;
 
+use crate::draw::renderer;
 use zgui::prelude::*;
 use zgui::runtime::Runtime;
 use zgui::view::IntoView;

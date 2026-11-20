@@ -343,7 +343,6 @@ where
         .map_err(|error| format!("font: {error:?}"))?;
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let draws = DrawLog::default();
     let runtime = zgui::runtime::App::new()
         .with_title(title)

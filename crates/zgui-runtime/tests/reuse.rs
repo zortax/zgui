@@ -11,8 +11,6 @@
 
 mod support;
 
-use std::sync::Arc;
-
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};

@@ -28,8 +28,8 @@
 //! valid file takes two to three times as long. The sweep gives every scenario a private cache
 //! directory next to its binary and runs this scenario once before it measures, so the measured
 //! start always finds a valid file, and the user's own cache has no effect. Set `ZGUI_FONT_CACHE`
-//! before the sweep (for example to `off`) to measure another state. With `ZGUI_BENCH_COMPOSITOR`
-//! set, the compositor rasterises the first frame's glyphs at its commit on worker threads, so the
+//! before the sweep (for example to `off`) to measure another state. The compositor
+//! rasterises the first frame's glyphs at its commit on worker threads, so the
 //! number also depends on how many cores the process gets.
 
 use zgui::geom::{DevicePx, Size};

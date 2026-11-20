@@ -272,7 +272,6 @@ fn open<R: ProbeRow>(args: &Args) -> Result<(Harness<Runtime>, Ctx<R>), String> 
         .map_err(|error| format!("font: {error:?}"))?;
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let unvirtualized = !args.mode.virtualized();
     let ctx_cell: Rc<RefCell<Option<Ctx<R>>>> = Rc::new(RefCell::new(None));
     let ctx_for_view = Rc::clone(&ctx_cell);

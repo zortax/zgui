@@ -41,7 +41,6 @@ zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
 # The compositor a window under test draws through, and a renderer that records its frames.
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }

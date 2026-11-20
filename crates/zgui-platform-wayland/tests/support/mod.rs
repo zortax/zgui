@@ -294,6 +294,11 @@ impl<A: AppHandler> AppHandler for StopAfter<A> {
     }
 }
 
+/// Returns the compositor every window of a test application draws through.
+pub(crate) fn compositor() -> Box<dyn compositor_api::Compositor> {
+    zgui_testkit_compositor::fake_text_compositor()
+}
+
 /// The renderer factory every window of this program draws through.
 ///
 /// One device behind all of them, as in the application. So a property about several windows

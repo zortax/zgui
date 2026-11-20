@@ -275,8 +275,6 @@ pub struct Window {
     /// Damage outside it names no pixel of the drawn frame or of the next one, so a layout pass
     /// cuts what it absorbs to it. `None` until the surface is first configured.
     damage_extent: Option<zgui_geom::Size<i32, zgui_geom::Device>>,
-    /// Whether the cascade moved a text colour since the display list's brushes were last copied.
-    brushes_moved: bool,
     /// Which brush slot each element's text is drawn through.
     ///
     /// Held per element rather than per cascade result, because a cascade result is a new object
@@ -765,7 +763,6 @@ impl Window {
             budgets: crate::budget::Budgets::new(),
             damage: DamageSet::full(),
             damage_extent: None,
-            brushes_moved: false,
             text_slots: crate::window::brushes::TextSlots::default(),
             text,
             renderer,

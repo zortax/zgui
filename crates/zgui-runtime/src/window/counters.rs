@@ -31,6 +31,10 @@ pub(crate) fn committed(report: &CommitReport, sync: &SyncReport) {
         u64::from(report.counters.chunks_identical),
     );
     counter::add(Counter::OrderEntriesDiffed, sync.order_entries as u64);
+    counter::add(
+        Counter::GlyphsRasterised,
+        u64::from(report.counters.glyphs_rasterised),
+    );
 }
 
 /// Adds what a frame the compositor built did to the counters.

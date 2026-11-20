@@ -60,6 +60,7 @@ impl Gallery {
             .with_title("wall-clock")
             .with_size(1080.0, 720.0)
             .with_stylesheet(SHEET)
+            .with_compositor(zgui::app::compositor(&fonts))
             .with_renderer(Box::new(crate::support::renderer::build))
             .with_metrics(Box::new(move || metrics.metrics()))
             .with_text_engine(Box::new(move || {

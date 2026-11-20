@@ -15,7 +15,6 @@ mod support;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use zgui_geom::{Device, Point, Rect, Size};
 use zgui_reactive::RwSignal;

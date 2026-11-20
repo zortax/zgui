@@ -14,7 +14,6 @@ use zgui_custom::{
 use zgui_geom::{Device, DevicePx, Point};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
-use zgui_runtime::compositor::CompositorRenderer;
 use zgui_runtime::{App, AppError, Runtime};
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
@@ -106,12 +105,7 @@ impl CustomElement for Label {
 
 /// The glyphs the window shows, as `[x, y, width, height]` and colour.
 fn glyphs(app: &Harness<Runtime>) -> Vec<([f32; 4], Option<String>)> {
-    let bridge = app.app().windows()[0]
-        .renderer()
-        .as_any()
-        .and_then(|any| any.downcast_ref::<CompositorRenderer>())
-        .expect("the window draws through a compositor");
-    zgui_testkit_compositor::drawing_of(bridge.renderer())
+    zgui_testkit_compositor::drawing_of(app.app().windows()[0].renderer())
         .expect("the window drew a frame")
         .glyphs()
         .into_iter()

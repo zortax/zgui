@@ -3,8 +3,7 @@
 //!
 //! The real gallery — the very source files `crates/zgui-ui/examples/gallery` ships, included
 //! through `#[path]` so the two cannot drift — driven against the headless platform with the real
-//! cascade, the real layout and the real font engine, and with `ZGUI_BENCH_COMPOSITOR` set the real
-//! compositor and glyph rasteriser. Nothing here is a fixture written to be measured, with the two
+//! cascade, the real layout, the real font engine, and the real compositor and glyph rasteriser. Nothing here is a fixture written to be measured, with the two
 //! exceptions the scenarios need and name.
 //!
 //! ```text

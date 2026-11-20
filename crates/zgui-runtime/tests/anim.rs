@@ -22,7 +22,6 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use std::cell::RefCell;
-use std::sync::Arc;
 
 use zgui_geom::{CssPx, Point};
 use zgui_platform::SurfaceEvent;

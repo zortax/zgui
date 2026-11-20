@@ -233,6 +233,7 @@ mod supported {
                  root { display: block; height: 120px; background: #345;
                         animation: pulse 300ms linear infinite }",
             )
+            .with_compositor(support::compositor())
             .with_renderer(support::renderers())
             .into_handler(|cx: &mut BuildCx<'_>| {
                 Box::new(zgui_elements::column().class("root").into_view().build(cx))

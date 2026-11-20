@@ -20,7 +20,6 @@ mod support;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
 use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::SurfaceEvent;

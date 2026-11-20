@@ -294,6 +294,7 @@ mod supported {
             .without_primary_window()
             .with_exit_policy(ExitPolicy::Explicit)
             .with_stylesheet("root { display: block; width: 100%; height: 100% }")
+            .with_compositor(support::compositor())
             .with_renderer(support::renderers())
             .into_handler(|_cx: &mut zgui_view::BuildCx<'_>| {
                 unreachable!("there is no primary window")
