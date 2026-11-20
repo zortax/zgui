@@ -5921,6 +5921,9 @@ dependencies = [
 name = "zgui-bench"
 version = "0.1.0"
 dependencies = [
+ "compositor-api",
+ "compositor-core",
+ "compositor-text",
  "zgui",
  "zgui-a11y",
  "zgui-dom",

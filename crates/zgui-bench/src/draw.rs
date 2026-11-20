@@ -134,6 +134,33 @@ pub(crate) fn mounted_recorder() -> std::rc::Rc<crate::verify::FullFrame> {
     })
 }
 
+/// Returns the factory of the renderers windows over `fonts` draw through.
+///
+/// With `ZGUI_BENCH_COMPOSITOR` set, each window draws through its own `compositor-core`
+/// compositor, which shares `fonts` and rasterises glyphs with swash, onto a renderer that keeps
+/// nothing. Otherwise the factory is [`renderer`].
+pub(crate) fn factory(fonts: &zgui::prelude::Fonts) -> zgui::runtime::RendererFactory {
+    if std::env::var_os("ZGUI_BENCH_COMPOSITOR").is_none() {
+        return Box::new(renderer);
+    }
+    let fonts = fonts.clone();
+    let raster = Arc::new(compositor_text::SwashRaster::new());
+    Box::new(move |_surface, target| {
+        let full = std::rc::Rc::new(crate::verify::FullFrame::default());
+        FULL_FRAMES.with(|held| held.borrow_mut().push(full));
+        let registry = zgui_text_parley::CompositorFonts::new(Arc::clone(fonts.shaper().fonts()));
+        let mut compositor = compositor_core::CompositorImpl::new();
+        compositor_api::Compositor::use_font_registry(&mut compositor, Arc::new(registry));
+        compositor_api::Compositor::use_glyph_raster(&mut compositor, Arc::clone(&raster) as _);
+        let mut window = zgui::runtime::compositor::CompositorRenderer::new(
+            Box::new(compositor),
+            Box::new(zgui_testkit_compositor::NullRenderer::default()),
+        );
+        window.configure(target);
+        Ok(Box::new(window) as Box<dyn Renderer>)
+    })
+}
+
 /// Builds the renderer a window draws through: nothing, or this machine's device offscreen.
 pub(crate) fn renderer(
     _surface: &Arc<dyn Surface>,

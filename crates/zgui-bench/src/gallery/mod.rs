@@ -13,7 +13,6 @@ pub(crate) use crate::gallery::probe::*;
 pub(crate) use crate::gallery::sheet::*;
 pub(crate) use crate::gallery::sizes::*;
 
-use crate::draw::renderer;
 use zgui::prelude::*;
 use zgui::runtime::Runtime;
 use zgui::view::IntoView;
@@ -35,7 +34,7 @@ pub(crate) fn runtime(size: &str) -> Runtime {
         .with_title("gallery-scale")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(sheet())
-        .with_renderer(Box::new(renderer))
+        .with_renderer(crate::draw::factory(&fonts))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))

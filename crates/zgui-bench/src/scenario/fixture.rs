@@ -204,7 +204,7 @@ pub(crate) fn custom(
         .with_title("zgui-bench")
         .with_size(crate::gallery::WIDTH, crate::gallery::HEIGHT)
         .with_stylesheet(sheet)
-        .with_renderer(Box::new(crate::draw::renderer))
+        .with_renderer(crate::draw::factory(&fonts))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))

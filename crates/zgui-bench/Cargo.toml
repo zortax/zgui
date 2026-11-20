@@ -36,8 +36,10 @@ zgui-a11y = { path = "../zgui-a11y", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
-
-[dev-dependencies]
+# The compositor a scenario draws through when `ZGUI_BENCH_COMPOSITOR` is set.
+compositor-api.workspace = true
+compositor-core.workspace = true
+compositor-text.workspace = true
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [features]
