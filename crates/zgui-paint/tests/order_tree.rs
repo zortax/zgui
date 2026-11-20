@@ -72,3 +72,30 @@ fn a_z_index_change_rebuilds_only_the_list_of_the_parent() {
     assert_eq!(written.report.order_entries, 7, "{written:?}");
     assert_eq!(written.commit.keys_spliced, 7, "{written:?}");
 }
+
+#[test]
+fn a_box_that_stops_being_a_stacking_context_goes_back_into_its_parent_list() {
+    let Some(mut output) = Recorded::new([200, 200]) else {
+        return;
+    };
+    let mut harness = stack();
+    output.frame_everything(&mut harness);
+    let red = harness.element("r");
+    for (class, add) in [("over", true), ("over", false)] {
+        harness.edit_and_restyle(|edit| {
+            if add {
+                edit.add_class(red, ClassName::new(class));
+            } else {
+                edit.remove_class(red, ClassName::new(class));
+            }
+        });
+        zgui_layout::boxtree::patch::restyle(&mut harness.store, &harness.document, [red]);
+        harness.compose_from_marks(200.0, 200.0);
+        output.frame_everything(&mut harness);
+    }
+
+    let fills = fills(&output);
+    if !fills.is_empty() {
+        assert_eq!(fills, ["red", "green", "blue"]);
+    }
+}

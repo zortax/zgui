@@ -3,9 +3,17 @@
 //! Each box with children, each box that establishes a stacking context and each box drawn with a
 //! group effect gets an order node. A node lists the chunks of its box's fragments, then each child
 //! in painting order: a child with a node of its own as that node, any other child as the chunks
-//! of its fragments. A box's list is rebuilt only when the layout store marks the order of its
-//! children as dirty, or when a child's place in it changed: a fragment came or went, or the
-//! child gained or lost its node.
+//! of its fragments.
+//!
+//! A box's list is rebuilt in these cases:
+//!
+//! - The layout store marks the order of its children as dirty.
+//! - A child's place in it changed: a fragment came or went, or the child gained or lost its node.
+//! - A child sorts by the place of other boxes, such as an absolutely positioned box ranked where
+//!   it was written. No mark covers those boxes, so the list is rebuilt on every sync.
+//!
+//! A rebuilt list is written as one splice of the part that differs, and a list that did not
+//! change writes nothing.
 
 mod effect;
 
@@ -34,6 +42,9 @@ pub(crate) struct Order {
     restyled: FxHashSet<BoxKey>,
     /// Entries spliced into the lists of nodes created during the current sync.
     created: usize,
+    /// The boxes whose list holds a child that sorts by other boxes than itself, which no mark
+    /// covers, so they are rebuilt on every sync.
+    volatile: FxHashSet<BoxKey>,
     scratch: Scratch,
 }
 
@@ -123,6 +134,7 @@ impl Order {
             work.extend(self.nodes.keys().copied());
         }
         work.extend(self.dirty.drain());
+        work.extend(self.volatile.iter().copied());
 
         let mut entries = self.sync_root(context, root);
         let mut visited = FxHashSet::default();
@@ -211,6 +223,14 @@ impl Order {
         let mut entries = Vec::new();
         push_chunks(store, key, &mut entries);
         let children = stacking::children_in_paint_order(store, key).into_owned();
+        if children
+            .iter()
+            .any(|&child| sorts_by_others(store, key, child))
+        {
+            self.volatile.insert(key);
+        } else {
+            self.volatile.remove(&key);
+        }
         for &child in &children {
             let node = self.needs_node(store, child);
             self.placed.insert(child, Place { owner: key, node });
@@ -283,6 +303,7 @@ impl Order {
             let Some(node) = self.nodes.remove(&key) else {
                 continue;
             };
+            self.volatile.remove(&key);
             context.tx.remove(node.id);
             if let Some(written) = node.effect {
                 effect::remove(context.tx, context.mirror, written);
@@ -300,6 +321,16 @@ impl Order {
         }
         self.scratch.orphans = orphans;
     }
+}
+
+/// Reports whether `child`, listed by `owner`, sorts among its siblings by the place of other
+/// boxes: an out-of-flow box ranked where it was written, or a box listed by another than its
+/// parent.
+fn sorts_by_others(store: &LayoutStore, owner: BoxKey, child: BoxKey) -> bool {
+    store.declared(child).is_some()
+        || store
+            .get(child)
+            .is_some_and(|node| node.parent != Some(owner))
 }
 
 /// Appends the chunk of each fragment of the box `key`.

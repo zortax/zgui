@@ -537,7 +537,7 @@ struct Pass<'a, 'b> {
     /// A box that is going to be moved by writing its coordinate system is ordered against the
     /// whole region its movement visits rather than against where it happens to be, because the
     /// write happens after this walk has assigned every order. Opened as the box is entered and
-    /// closed as it is left, like the group stack beside it and for the same reason.
+    /// closed as it is left, like the alpha stack beside it and for the same reason.
     bands: Vec<BoxKey>,
     /// The folded alpha in force, innermost last.
     alpha: Vec<f32>,
@@ -1264,8 +1264,8 @@ impl stacking::Visitor for Pass<'_, '_> {
         // for every box below a panel that is laid out and invisible. A closed disclosure costs
         // its own box rather than its contents.
         //
-        // Refused before either stack is pushed, and before a band or a group target is opened, so
-        // the leave that never comes has nothing to withdraw.
+        // Refused before either stack is pushed, and before a band is opened, so the leave that
+        // never comes has nothing to withdraw.
         if isolation.alpha() == 0.0 {
             self.report.skipped_subtrees += 1;
             counter::add(Counter::PrimitivesCulled, 1);

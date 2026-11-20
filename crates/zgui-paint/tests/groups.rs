@@ -134,3 +134,42 @@ fn assert_holds(drawing: &str, parts: &[&str]) {
         assert!(drawing.contains(part), "no `{part}` in:\n{drawing}");
     }
 }
+
+#[test]
+fn a_group_cut_by_a_rounded_frame_holds_the_frame_clip_until_both_go() {
+    let Some(mut output) = Recorded::new([200, 200]) else {
+        return;
+    };
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("frame").children(vec![
+            Element::new("card")
+                .classes(&["group"])
+                .children(vec![Element::new("a"), Element::new("b")]),
+        ])]),
+        "root { display: block; width: 200px; height: 200px; background: white }
+         frame { display: block; width: 120px; height: 120px; overflow: hidden;
+                 border-radius: 12px }
+         card { display: block; width: 100px; height: 100px }
+         .group { filter: blur(2px) }
+         a, b { display: block; width: 40px; height: 40px; background: blue }
+         b { margin-top: -20px }",
+        200.0,
+        200.0,
+    );
+    output.frame_everything(&mut harness);
+    assert_eq!(output.output.counters().frame.groups, 1);
+
+    restyle(&mut harness, "card", &[]);
+    let ungrouped = output.frame(&mut harness);
+    let frame = harness.element("frame");
+    harness.edit_and_restyle(|edit| edit.remove(frame));
+    harness.rebuild(200.0, 200.0);
+    let removed = output.frame(&mut harness);
+
+    assert_eq!(ungrouped.report.released, 0, "{ungrouped:?}");
+    assert!(removed.report.removed > 0, "{removed:?}");
+    assert_eq!(
+        removed.report.released, 2,
+        "the frame's clip and the blue paint: {removed:?}"
+    );
+}
