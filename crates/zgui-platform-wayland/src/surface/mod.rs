@@ -26,10 +26,10 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Rect, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, GpuSurface, PresentPacing, PresentationTiming,
-    Surface, SurfaceId, TextInput, Unsupported,
+    CursorStyle, DecorationSource, Decorations, FullscreenMode, GpuSurface, PresentPacing,
+    PresentationTiming, Surface, SurfaceId, TextInput, Unsupported,
 };
 
 use crate::driver::WaylandState;
@@ -618,7 +618,13 @@ impl Surface for WaylandSurface {
 
     fn set_decorations(&self, decorations: Decorations) {
         if let Some(window) = self.role.window() {
+            if !window.has_decoration_manager() {
+                self.shared().decorations = DecorationSource::Application;
+                return;
+            }
             window.request_decorations(decorations);
+            let _ = self.conn.flush();
+            self.ping.ping();
         }
     }
 
@@ -657,6 +663,22 @@ impl Surface for WaylandSurface {
         self.shared()
             .fullscreen
             .then_some(FullscreenMode::Borderless)
+    }
+
+    fn tiled(&self) -> Edges<bool> {
+        self.shared().tiled
+    }
+
+    fn decoration_source(&self) -> DecorationSource {
+        self.shared().decorations
+    }
+
+    fn can_minimize(&self) -> Option<bool> {
+        Some(self.shared().wm_capabilities.minimize)
+    }
+
+    fn can_maximize(&self) -> Option<bool> {
+        Some(self.shared().wm_capabilities.maximize)
     }
 
     fn focus(&self) {

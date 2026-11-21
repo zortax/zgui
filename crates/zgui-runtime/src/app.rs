@@ -912,6 +912,7 @@ impl Runtime {
                 | zgui_platform::SurfaceRole::Lock(_)
         );
         handle.set_focused(starts_focused);
+        handle.seed_surface(&surface);
         let close = Rc::clone(&self.live[index].spec.close);
         let view = &mut self.live[index].spec.view;
         // Under the application's scope, so that this window's own scope is a child of it: what the
@@ -1572,6 +1573,7 @@ impl AppHandler for Runtime {
             // The desktop changed the state with no resize, or after the last resize of the
             // change. Read the state again and draw it.
             WakeReason::SurfaceStateChanged(surface) => {
+                *self.windows_api.capabilities_slot().borrow_mut() = cx.capabilities().clone();
                 if let Some(window) = self.window_mut(surface) {
                     window.refresh_window_state();
                     window.request_frame();

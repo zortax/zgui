@@ -3,11 +3,11 @@
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use zgui_geom::{DevicePx, Size};
+use zgui_geom::{DevicePx, Edges, Size};
 use zgui_platform::{
-    Clipboard, Clock, ColorScheme, FocusGrabId, MonitorInfo, PlatformCapabilities, PlatformCx,
-    PlatformError, ScrollSettings, Surface, SurfaceAttributes, SurfaceId, VirtualClock, WakeReason,
-    Waker,
+    Clipboard, Clock, ColorScheme, DecorationSource, FocusGrabId, MonitorInfo,
+    PlatformCapabilities, PlatformCx, PlatformError, ScrollSettings, Surface, SurfaceAttributes,
+    SurfaceId, VirtualClock, WakeReason, Waker,
 };
 
 use crate::clipboard::MemoryClipboard;
@@ -260,6 +260,38 @@ impl Headless {
     /// Whether anything is waiting to be delivered as a wake.
     pub fn has_pending_wakes(&self) -> bool {
         self.waker.pending() > 0
+    }
+
+    /// Configures `id`'s tiled edges and wakes the loop with
+    /// [`WakeReason::SurfaceStateChanged`].
+    pub fn set_surface_tiled(&self, id: SurfaceId, tiled: Edges<bool>) {
+        if let Some(surface) = self.offscreen(id) {
+            surface.set_tiled(tiled);
+            self.waker.wake(WakeReason::SurfaceStateChanged(id));
+        }
+    }
+
+    /// Configures `id`'s negotiated decoration source and wakes the loop with
+    /// [`WakeReason::SurfaceStateChanged`].
+    pub fn set_surface_decoration_source(&self, id: SurfaceId, source: Option<DecorationSource>) {
+        if let Some(surface) = self.offscreen(id) {
+            surface.set_decoration_source(source);
+            self.waker.wake(WakeReason::SurfaceStateChanged(id));
+        }
+    }
+
+    /// Configures `id`'s per-window minimise/maximise capabilities and wakes the loop with
+    /// [`WakeReason::SurfaceStateChanged`].
+    pub fn set_surface_window_capabilities(
+        &self,
+        id: SurfaceId,
+        minimize: Option<bool>,
+        maximize: Option<bool>,
+    ) {
+        if let Some(surface) = self.offscreen(id) {
+            surface.set_window_capabilities(minimize, maximize);
+            self.waker.wake(WakeReason::SurfaceStateChanged(id));
+        }
     }
 }
 

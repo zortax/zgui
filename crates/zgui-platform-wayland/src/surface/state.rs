@@ -3,12 +3,12 @@
 use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::client::protocol::wl_output::WlOutput;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
-use zgui_platform::{PresentationTiming, SurfaceEvent};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Size};
+use zgui_platform::{DecorationSource, PresentationTiming, SurfaceEvent};
 
 use crate::frame::{Ahead, Pacer, Timing, Visibility, Watchdog};
 use crate::surface::role::toplevel;
-use crate::surface::role::xdg::configure::Pending;
+use crate::surface::role::xdg::configure::{Pending, ToplevelCapabilities};
 
 /// The smallest and largest extents a window may be dragged to, in that order.
 ///
@@ -156,6 +156,16 @@ pub(crate) struct Shared {
     pub(crate) maximized: bool,
     /// Whether the compositor last configured the surface as full screen.
     pub(crate) fullscreen: bool,
+    /// Which edges the compositor last configured as tiled.
+    pub(crate) tiled: Edges<bool>,
+    /// Who draws the frame for this surface, as settled at configure time.
+    pub(crate) decorations: DecorationSource,
+    /// A decoration mode that arrived before `xdg_surface.configure` sealed the batch.
+    pub(crate) pending_decorations: Option<DecorationSource>,
+    /// Which window-management actions the compositor advertised for this surface.
+    pub(crate) wm_capabilities: ToplevelCapabilities,
+    /// Window-management capabilities that arrived before `xdg_surface.configure` sealed the batch.
+    pub(crate) pending_wm_capabilities: Option<ToplevelCapabilities>,
     /// Whether the compositor last configured the surface as being interactively resized.
     pub(crate) resizing: bool,
     /// Whether the application has been told a drag is running.
@@ -229,6 +239,11 @@ impl Shared {
             ladder: crate::surface::Scale::default(),
             maximized: false,
             fullscreen: false,
+            tiled: Edges::NONE,
+            decorations: DecorationSource::Application,
+            pending_decorations: None,
+            wm_capabilities: ToplevelCapabilities::all(),
+            pending_wm_capabilities: None,
             resizing: false,
             told_resizing: false,
             bounds: (None, None),
@@ -244,9 +259,28 @@ impl Shared {
         }
     }
 
-    /// Applies the maximised and full-screen states of a configure.
+    /// Applies stashed `xdg-decoration` and `wm_capabilities` updates, reporting whether either
+    /// changed.
+    pub(crate) fn apply_pending_metadata(&mut self) -> bool {
+        let mut flipped = false;
+        if let Some(decorations) = self.pending_decorations.take()
+            && self.decorations != decorations
+        {
+            self.decorations = decorations;
+            flipped = true;
+        }
+        if let Some(capabilities) = self.pending_wm_capabilities.take()
+            && self.wm_capabilities != capabilities
+        {
+            self.wm_capabilities = capabilities;
+            flipped = true;
+        }
+        flipped
+    }
+
+    /// Applies the maximised, full-screen, tiled and decoration states of a configure.
     ///
-    /// Returns the extent to draw at, and whether either state changed. An axis the compositor
+    /// Returns the extent to draw at, and whether any window state changed. An axis the compositor
     /// leaves unnamed takes the saved normal extent when the window leaves maximised or full
     /// screen. A second expanded state keeps the extent saved by the first.
     pub(crate) fn apply_shell_states(
@@ -254,7 +288,11 @@ impl Shared {
         pending: &Pending,
         wanted: Size<CssPx, Css>,
     ) -> (Size<CssPx, Css>, bool) {
-        let flipped = self.maximized != pending.maximized || self.fullscreen != pending.fullscreen;
+        let metadata_flipped = self.apply_pending_metadata();
+        let flipped = metadata_flipped
+            || self.maximized != pending.maximized
+            || self.fullscreen != pending.fullscreen
+            || self.tiled != pending.tiled;
         let was_expanded = self.maximized || self.fullscreen;
         let expanded = pending.maximized || pending.fullscreen;
         if !was_expanded && expanded {
@@ -267,6 +305,7 @@ impl Shared {
         };
         self.maximized = pending.maximized;
         self.fullscreen = pending.fullscreen;
+        self.tiled = pending.tiled;
         (toplevel::extent(pending.size, wanted, fallback), flipped)
     }
 
@@ -1199,5 +1238,38 @@ mod tests {
         let mut shared = Shared::new();
         shared.mapped = true;
         assert!(shared.answers_restatement(true));
+    }
+
+    #[test]
+    fn tiled_edges_and_decoration_negotiation_count_as_state_flips() {
+        use crate::surface::role::xdg::configure::{Pending, ToplevelCapabilities};
+        use zgui_geom::Edges;
+        use zgui_platform::DecorationSource;
+
+        let mut shared = Shared::new();
+        let wanted = logical(960.0, 640.0);
+
+        let pending = Pending {
+            tiled: Edges::new(true, false, true, true),
+            ..Pending::default()
+        };
+        let (_, flipped) = shared.apply_shell_states(&pending, wanted);
+        assert!(flipped);
+        assert_eq!(shared.tiled, pending.tiled);
+
+        let (_, repeated) = shared.apply_shell_states(&pending, wanted);
+        assert!(!repeated, "restating identical tiled edges flips nothing");
+
+        shared.pending_decorations = Some(DecorationSource::Platform);
+        let (_, deco_flipped) = shared.apply_shell_states(&pending, wanted);
+        assert!(deco_flipped);
+        assert_eq!(shared.decorations, DecorationSource::Platform);
+
+        let mut no_minimize = ToplevelCapabilities::all();
+        no_minimize.minimize = false;
+        shared.pending_wm_capabilities = Some(no_minimize);
+        assert!(shared.apply_pending_metadata());
+        assert!(!shared.wm_capabilities.minimize);
+        assert!(!shared.apply_pending_metadata());
     }
 }
