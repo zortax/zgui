@@ -266,6 +266,15 @@ impl SeatLink {
         std::mem::take(&mut self.lock().asked)
     }
 
+    /// The seat and serial a window menu request may quote.
+    pub fn menu(&self) -> Result<(WlSeat, u32), Unsupported> {
+        let inner = self.lock();
+        match (inner.seat.clone(), inner.grab) {
+            (Some(seat), Some(serial)) => Ok((seat, serial)),
+            _ => Err(Unsupported),
+        }
+    }
+
     /// The seat and serial a drag started by `surface` may quote.
     pub fn drag(&self, surface: SurfaceId) -> Result<(WlSeat, u32), Unsupported> {
         let inner = self.lock();
@@ -309,6 +318,14 @@ mod tests {
             link.drag(SurfaceId::new(1)).is_err(),
             "nothing has been pressed yet"
         );
+    }
+
+    #[test]
+    fn a_window_menu_needs_a_seat_and_press_serial() {
+        let link = SeatLink::default();
+        assert!(link.menu().is_err(), "no seat or press serial exists yet");
+        link.pressed(17);
+        assert!(link.menu().is_err(), "no seat is bound yet");
     }
 
     #[test]

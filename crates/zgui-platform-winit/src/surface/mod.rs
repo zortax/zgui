@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::TreeUpdate;
+use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::window::Window;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
@@ -247,6 +248,23 @@ impl Surface for WinitSurface {
         // something needs the user now; a desktop that draws only one kind of attention draws that.
         self.window
             .request_user_attention(urgent.then_some(winit::window::UserAttentionType::Critical));
+    }
+
+    fn show_window_menu(&self, position: Point<CssPx, Css>) -> Result<(), Unsupported> {
+        let supported = self.window.window_handle().is_ok_and(|handle| {
+            matches!(
+                handle.as_raw(),
+                RawWindowHandle::Wayland(_) | RawWindowHandle::Win32(_)
+            )
+        });
+        if !supported {
+            return Err(Unsupported);
+        }
+        self.window.show_window_menu(LogicalPosition::new(
+            f64::from(position.x.0),
+            f64::from(position.y.0),
+        ));
+        Ok(())
     }
 
     #[cfg(target_os = "macos")]
