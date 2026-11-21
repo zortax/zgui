@@ -332,6 +332,26 @@ fn a_link_in_a_moved_space_resolves_where_its_box_is_drawn() {
     );
 }
 
+#[test]
+fn identity_placement_keeps_corner_rounding_and_elliptical_radii() {
+    use zgui_geom::Matrix4;
+
+    let mut clips = ClipTable::rooted();
+    let link = clips.only(ClipLink::rounded(
+        rect(4096.0, 8192.0, 10.0001, 20.0002),
+        Vec2::new(DevicePx(1.25), DevicePx(2.5)),
+    ));
+    let resolved = clips.resolve_placed(link, &|_| Some(Matrix4::IDENTITY));
+    let expected = [4096.0, 8192.0, 10.0, 20.0];
+    assert_eq!(resolved.aabb, expected);
+    assert_eq!(resolved.rounded_count, 1);
+    assert_eq!(resolved.rounded[0].rect, expected);
+    assert_eq!(
+        resolved.rounded[0].radii,
+        [1.25, 2.5, 1.25, 2.5, 1.25, 2.5, 1.25, 2.5]
+    );
+}
+
 /// A scaled space scales the rounded test's radii with its rectangle, so the curve content is cut
 /// to is the curve being drawn.
 #[test]
