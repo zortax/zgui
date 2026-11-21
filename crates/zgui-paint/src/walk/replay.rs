@@ -43,7 +43,7 @@ pub mod hold;
 use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use zgui_atlas::AtlasKey;
-use zgui_geom::{Device, DevicePx, Rect, Size};
+use zgui_geom::{Device, DevicePx, Edges, Rect, Size};
 use zgui_layout::{FragKey, Fragment, FragmentKind};
 use zgui_profile::{Counter, counter};
 
@@ -203,6 +203,8 @@ pub struct Record {
     pub painted: Painted,
     /// The border box it was painted at.
     pub border_box: Rect<DevicePx, Device>,
+    /// The border widths it was painted with.
+    pub border: Edges<DevicePx>,
     /// What the clip resolved to when the range was recorded.
     pub clip_hash: Option<u64>,
     /// The frame this record was last selected in — encoded or replayed.
@@ -570,7 +572,7 @@ impl PaintCache {
         if record.kind != fragment.kind {
             return Reuse::Encode;
         }
-        if record.border_box.size != fragment.border_box.size {
+        if record.border_box.size != fragment.border_box.size || record.border != fragment.border {
             return Reuse::Encode;
         }
         // The chain must still resolve to the content it was recorded against. Interned clip ids
@@ -737,6 +739,7 @@ impl PaintCache {
                 kind: fragment.kind,
                 painted,
                 border_box: fragment.border_box,
+                border: fragment.border,
                 clip_hash: scene.clips.content_hash(painted.clip),
                 last_selected: self.epoch,
                 resources: held,

@@ -105,6 +105,33 @@ fn a_fragment_with_no_record_is_encoded() {
 }
 
 #[test]
+fn a_fragment_whose_border_widths_moved_is_encoded() {
+    // Layout snaps the widths at a fractional scale, so they can move while the border box and
+    // the style stand still.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    let mut ruled = fragment(0.0, 0.0);
+    ruled.border.top = DevicePx(2.0);
+    cache.encoded(
+        &mut scene,
+        &ruled,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
+            drawn: Rect::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    ruled.border.top = DevicePx(1.0);
+    assert_eq!(cache.reuse(&scene, &ruled, painted(0), None), Reuse::Encode);
+}
+
+#[test]
 fn a_moved_fragment_replays_with_the_distance_it_moved() {
     let mut cache = PaintCache::new();
     let mut scene = scene();
