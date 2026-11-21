@@ -1,13 +1,11 @@
-//! SVG documents as drawable content: read once, coloured by context, drawn by either rasteriser.
+//! SVG documents as drawable content: read once, coloured by context, drawn by any rasteriser.
 //!
 //! # What this crate is
 //!
 //! A reader. It turns an SVG document into a flat list of outlines with paints, stroke styles and
 //! clips attached, expressed in `kurbo` and `peniko` and this framework's own colour type. It
-//! draws nothing, it holds no device, and it names no rasteriser — which is exactly why a document
-//! read here can be drawn by the compute-shader path renderer *and* by the fallback that needs no
-//! compute shaders. A reader that produced one rasteriser's own scene type would have bound every
-//! SVG asset in an application to that rasteriser.
+//! draws nothing, it holds no device, and it names no rasteriser, so a document read here becomes
+//! compositor paths, marks or layers like any other drawing.
 //!
 //! # The colour rule
 //!

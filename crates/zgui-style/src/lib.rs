@@ -62,7 +62,7 @@
 //!
 //! It does not paint, lay out or shape anything, and it holds no table any of those own. The text
 //! colours a restyle changed leave as a list of values rather than as writes into a paint table,
-//! because the table belongs to the scene and this crate does not depend on it.
+//! because the table belongs to the paint stage and this crate does not depend on it.
 
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
