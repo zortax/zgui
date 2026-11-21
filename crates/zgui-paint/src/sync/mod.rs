@@ -28,7 +28,7 @@ pub(crate) use self::resolve::Resolver;
 use compositor_types::{ChunkKey, OutputId, ScrollId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
-use zgui_geom::{Device, DevicePx, Size};
+use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_layout::{FragKey, Fragment, LayoutStore};
 use zgui_scene::spatial::PropertyOwner;
 use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId};
@@ -50,6 +50,7 @@ pub struct CompositorSync {
     outlined: FxHashMap<FragKey, ChunkKey>,
     backdropped: FxHashMap<FragKey, ChunkKey>,
     retired: FxHashSet<ChunkKey>,
+    subtrees: FxHashMap<FragKey, Rect<DevicePx, Device>>,
     report: SyncReport,
     forgotten: Option<Held>,
 }
@@ -103,6 +104,7 @@ impl CompositorSync {
             outlined: FxHashMap::default(),
             backdropped: FxHashMap::default(),
             retired: FxHashSet::default(),
+            subtrees: FxHashMap::default(),
             report: SyncReport::default(),
             forgotten: None,
         }
@@ -238,6 +240,14 @@ impl CompositorSync {
     /// Reports whether the fragment `key` is recorded.
     pub(crate) fn knows(&self, key: FragKey) -> bool {
         self.chunks.contains_key(&key)
+    }
+
+    /// Notes that the subtree of the box whose first fragment is `first` is laid out over `ink`,
+    /// and reports whether that changed since the last note.
+    ///
+    /// A box noted for the first time counts as changed.
+    pub(crate) fn subtree_moved(&mut self, first: FragKey, ink: Rect<DevicePx, Device>) -> bool {
+        self.subtrees.insert(first, ink) != Some(ink)
     }
 
     /// Returns the resolver of the open transaction, if one is open.
@@ -397,20 +407,29 @@ impl CompositorSync {
         }
     }
 
-    /// Marks the chunks of the fragments `keys` for removal when the frame closes.
+    /// Marks the chunks of the fragments `keys` for removal when the frame closes, and forgets
+    /// the fragments.
     pub(crate) fn retire(&mut self, keys: &[FragKey]) {
         for fragment in keys {
-            if let Some(chunk) = self.chunks.remove(fragment)
-                && self.owners.get(&chunk.key) == Some(fragment)
+            self.subtrees.remove(fragment);
+            self.withdraw(*fragment);
+        }
+    }
+
+    /// Marks the chunks of `fragment` for removal when the frame closes.
+    ///
+    /// The fragment counts as unrecorded from then on.
+    pub(crate) fn withdraw(&mut self, fragment: FragKey) {
+        if let Some(chunk) = self.chunks.remove(&fragment)
+            && self.owners.get(&chunk.key) == Some(&fragment)
+        {
+            self.retired.insert(chunk.key);
+        }
+        for extras in [&mut self.outlined, &mut self.backdropped] {
+            if let Some(key) = extras.remove(&fragment)
+                && self.owners.get(&key) == Some(&fragment)
             {
-                self.retired.insert(chunk.key);
-            }
-            for extras in [&mut self.outlined, &mut self.backdropped] {
-                if let Some(key) = extras.remove(fragment)
-                    && self.owners.get(&key) == Some(fragment)
-                {
-                    self.retired.insert(key);
-                }
+                self.retired.insert(key);
             }
         }
     }

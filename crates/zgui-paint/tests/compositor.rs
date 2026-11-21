@@ -199,3 +199,74 @@ fn a_row_a_plain_port_scrolls_away_is_not_visited() {
         "the first row was visited after it scrolled away"
     );
 }
+
+/// A port whose card straddles the bottom edge, with a red mark inside the card below the edge.
+fn straddling_card() -> Harness {
+    Harness::sized(
+        Element::new("root").children(vec![Element::new("port").children(vec![
+            Element::new("spacer"),
+            Element::new("card").children(vec![Element::new("gap"), Element::new("mark")]),
+            Element::new("tail"),
+        ])]),
+        "root { display: block; width: 200px; height: 100px }
+         port { display: block; width: 200px; height: 100px; overflow-y: scroll }
+         spacer { display: block; height: 50px }
+         .tall { height: 300px }
+         card { display: block; height: 100px }
+         gap { display: block; height: 60px }
+         mark { display: block; height: 20px; background: rgb(255, 0, 0) }
+         tail { display: block; height: 600px }",
+        200.0,
+        100.0,
+    )
+}
+
+/// How many red quads a whole redraw of `harness` draws.
+fn red_quads(harness: &mut Harness) -> usize {
+    harness
+        .redraw()
+        .quads()
+        .iter()
+        .filter(|quad| quad.color("fill") == Some([1.0, 0.0, 0.0, 1.0]))
+        .count()
+}
+
+/// Replaces the damage with the band of the surface from `top` down by `height`.
+fn damage(harness: &mut Harness, top: i32, height: i32) {
+    harness.clear_damage();
+    harness
+        .damage
+        .absorb(zgui_geom::Rect::<i32, zgui_geom::Device>::new(
+            zgui_geom::Point::new(0, top),
+            zgui_geom::Size::new(200, height),
+        ));
+}
+
+#[test]
+fn a_chunk_left_where_layout_moved_its_box_away_is_not_drawn() {
+    // A reflow moves the card off the surface, and a scroll then brings the place the mark was
+    // recorded at into view.
+    let mut harness = straddling_card();
+    harness.paint_everything();
+    harness.scroll_to("port", 0.0, 100.0);
+    harness.paint_everything();
+    assert_eq!(red_quads(&mut harness), 1, "the control: the mark is drawn");
+    harness.scroll_to("port", 0.0, 0.0);
+    harness.paint_everything();
+
+    let spacer = harness.element("spacer");
+    harness.edit_and_restyle(|edit| edit.add_class(spacer, zgui_interned::ClassName::new("tall")));
+    zgui_layout::boxtree::patch::restyle(&mut harness.store, &harness.document, [spacer]);
+    harness.compose_from_marks(200.0, 100.0);
+    damage(&mut harness, 50, 50);
+    harness.paint();
+    harness.scroll_to("port", 0.0, 30.0);
+    damage(&mut harness, 70, 30);
+    harness.paint();
+
+    assert_eq!(
+        red_quads(&mut harness),
+        0,
+        "the mark is drawn where it was before the reflow"
+    );
+}

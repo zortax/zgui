@@ -186,7 +186,8 @@ pub struct Record {
     pub prims: Arc<ChunkPrims>,
     /// How many items the fragment recorded into its compositor chunk.
     pub items: usize,
-    /// The device rectangle the walk culled the fragment against when it was encoded.
+    /// The rectangle the walk culled the fragment against when it was encoded, in the
+    /// fragment's anchor.
     pub drawn: Rect<DevicePx, Device>,
     /// How far the replays since the encoding moved the fragment.
     pub moved: Size<DevicePx, Device>,
@@ -283,7 +284,7 @@ pub struct Encoding<'a> {
     pub chunk: ChunkPrims,
     /// How many items the fragment recorded into its compositor chunk.
     pub items: usize,
-    /// The device rectangle the walk culled the fragment against.
+    /// The rectangle the walk culled the fragment against, in the fragment's anchor.
     pub drawn: Rect<DevicePx, Device>,
     /// The rasters the encoding named, in the order it named them and with repeats.
     pub resources: &'a [AtlasKey],
@@ -605,16 +606,18 @@ impl PaintCache {
             .map(|record| record.painted.anim)
     }
 
-    /// Where `fragment`'s record was last drawn, when the fragment has moved away from it since:
-    /// the rectangle it was culled against when it was encoded, moved as its replays moved it.
+    /// Where `fragment`'s record was last drawn, in the fragment's anchor, when the fragment has
+    /// moved away from it or changed its size since: the rectangle it was culled against when it
+    /// was encoded, moved as its replays moved it.
     ///
     /// `None` when the fragment has no record or stands where its record was last drawn.
     pub fn moved_from(&self, fragment: &Fragment) -> Option<Rect<DevicePx, Device>> {
         let record = self.records.get(&fragment.key)?;
-        let at = record.border_box.origin;
-        let now = fragment.border_box.origin;
-        let stands =
-            at.x.0 + record.moved.width.0 == now.x.0 && at.y.0 + record.moved.height.0 == now.y.0;
+        let (at, now) = (record.border_box, fragment.border_box);
+        // The offset a replay would write, compared with the one the chunk holds.
+        let stands = now.origin.x.0 - at.origin.x.0 == record.moved.width.0
+            && now.origin.y.0 - at.origin.y.0 == record.moved.height.0
+            && now.size == at.size;
         (!stands).then(|| record.drawn.translate(record.moved))
     }
 

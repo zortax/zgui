@@ -16,6 +16,7 @@
 
 pub mod corners;
 pub mod decorate;
+mod displaced;
 pub mod fill;
 pub mod order;
 pub mod replay;
@@ -673,7 +674,21 @@ impl Pass<'_, '_> {
         if !sync.knows(fragment.key) {
             return None;
         }
-        self.painter.cache.moved_from(fragment)
+        let drawn = self.painter.cache.moved_from(fragment)?;
+        Some(self.where_drawn(fragment, drawn))
+    }
+
+    /// Withdraws the chunks under the skipped subtree of `key` that their fragments moved away
+    /// from, when layout changed the subtree since the walk last reached it.
+    fn culled(&mut self, store: &LayoutStore, key: BoxKey) {
+        let Some(sync) = &mut self.painter.sync else {
+            return;
+        };
+        if let Some((first, ink)) = displaced::laid_out(store, key)
+            && sync.subtree_moved(first, ink)
+        {
+            displaced::sweep(store, key, &self.painter.cache, sync);
+        }
     }
 
     /// What `key`'s element is currently animating, if anything.
@@ -1064,10 +1079,8 @@ impl Pass<'_, '_> {
         // The marks drawn *with* a line are part of what it paints, and one of them can be the
         // only thing it paints: an emptied field's line box has no width, so its ink alone is a
         // rectangle no damage can reach and the caret standing on it would be culled away.
-        let mut cull = self.where_drawn(
-            fragment,
-            crate::damage::ink::cull_rect(store, fragment, self.input.scale),
-        );
+        let ink = crate::damage::ink::cull_rect(store, fragment, self.input.scale);
+        let mut cull = self.where_drawn(fragment, ink);
         if let Some(marks) = crate::damage::marks::extent(
             fragment,
             self.input.highlights,
@@ -1081,8 +1094,21 @@ impl Pass<'_, '_> {
                 .retained(fragment)
                 .is_some_and(|drawn| self.reaches(drawn));
         if !reached {
+            if let Some(sync) = &mut self.painter.sync {
+                displaced::withdraw_if_moved(fragment, &self.painter.cache, sync);
+            }
             return;
         }
+        // Measured in the fragment's anchor, so the place stays right while that anchor moves.
+        let drawn = match crate::damage::marks::extent(
+            fragment,
+            self.input.highlights,
+            self.input.scale,
+            None,
+        ) {
+            Some(marks) => ink.union(marks),
+            None => ink,
+        };
         let clip = fragment.clip;
         let transform = crate::lower::transform::of(fragment);
         let slices = inline_slices(store, fragment);
@@ -1240,7 +1266,7 @@ impl Pass<'_, '_> {
                     Encoding {
                         chunk,
                         items,
-                        drawn: cull,
+                        drawn,
                         resources: &self.named,
                         // A deferred drawing drew nothing this frame, which a record would replay.
                         complete: self.input.resources.refusals() == refusals
@@ -1323,7 +1349,7 @@ fn inline_slices<'s>(
 }
 
 impl stacking::Visitor for Pass<'_, '_> {
-    fn descends(&mut self, _store: &LayoutStore, key: BoxKey) -> bool {
+    fn descends(&mut self, store: &LayoutStore, key: BoxKey) -> bool {
         // The refusal `enter` makes for the root, asked before the box is ranked among its
         // siblings so a skipped subtree costs its ink test and nothing else. `enter` trusts a
         // pass and does not test again.
@@ -1332,6 +1358,7 @@ impl stacking::Visitor for Pass<'_, '_> {
             return false;
         };
         if !self.reaches(ink) {
+            self.culled(store, key);
             counter::bump(Counter::NodesVisited);
             self.report.skipped_subtrees += 1;
             counter::bump(Counter::PaintSubtreesCulled);
@@ -1350,6 +1377,7 @@ impl stacking::Visitor for Pass<'_, '_> {
                 return false;
             };
             if !self.reaches(ink) {
+                self.culled(store, key);
                 self.report.skipped_subtrees += 1;
                 counter::bump(Counter::PaintSubtreesCulled);
                 return false;
@@ -1359,6 +1387,12 @@ impl stacking::Visitor for Pass<'_, '_> {
                 self.subtree_ink(key).is_some_and(|ink| self.reaches(ink)),
                 "the walk entered {key:?} without `descends` letting it",
             );
+        }
+        // Read by `culled` on a later frame that skips the subtree.
+        if let Some(sync) = &mut self.painter.sync
+            && let Some((first, ink)) = displaced::laid_out(store, key)
+        {
+            sync.subtree_moved(first, ink);
         }
         let Some(node) = store.get(key) else {
             return false;
