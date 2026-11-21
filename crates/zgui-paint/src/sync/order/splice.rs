@@ -27,6 +27,9 @@ pub(super) fn splice(
     if old.is_empty() && new.is_empty() {
         return 0;
     }
+    if let Some(spliced) = shifted(tx, node, prefix as u32, old, new) {
+        return spliced;
+    }
 
     let kept = kept(old, new).unwrap_or_default();
 
@@ -44,6 +47,56 @@ pub(super) fn splice(
         from = [to_old + 1, to_new + 1];
     }
     spliced
+}
+
+/// Writes `new` over `old` at `at` when `new` drops entries at one end of `old` and adds entries at
+/// the other, and returns the number of entries removed and inserted.
+///
+/// Returns `None` and writes nothing for any other change.
+fn shifted(
+    tx: &mut Transaction,
+    node: OrderId,
+    at: u32,
+    old: &[OrderEntry],
+    new: &[OrderEntry],
+) -> Option<usize> {
+    if old.is_empty() || new.is_empty() {
+        tx.splice(node, at, old.len() as u32, new);
+        return Some(old.len() + new.len());
+    }
+    // The entries left at the front, then the entries added at the back.
+    if let Some(dropped) = new
+        .first()
+        .and_then(|first| old.iter().position(|e| e == first))
+    {
+        let kept = old.len() - dropped;
+        if new.len() >= kept && old[dropped..] == new[..kept] {
+            if dropped > 0 {
+                tx.splice(node, at, dropped as u32, &[]);
+            }
+            if new.len() > kept {
+                tx.splice(node, at + kept as u32, 0, &new[kept..]);
+            }
+            return Some(dropped + new.len() - kept);
+        }
+    }
+    // The entries added at the front, then the entries left at the back.
+    if let Some(added) = old
+        .first()
+        .and_then(|first| new.iter().position(|e| e == first))
+    {
+        let kept = new.len() - added;
+        if old.len() >= kept && new[added..] == old[..kept] {
+            if added > 0 {
+                tx.splice(node, at, 0, &new[..added]);
+            }
+            if old.len() > kept {
+                tx.splice(node, at + new.len() as u32, (old.len() - kept) as u32, &[]);
+            }
+            return Some(added + old.len() - kept);
+        }
+    }
+    None
 }
 
 /// Returns the positions in `old` and in `new` of the most entries both hold in the same order,

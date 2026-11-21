@@ -86,6 +86,10 @@ pub(crate) struct Synced {
 struct Scratch {
     marked: Vec<BoxKey>,
     orphans: Vec<BoxKey>,
+    visited: FxHashSet<BoxKey>,
+    volatile: Vec<BoxKey>,
+    seen: FxHashSet<BoxKey>,
+    entries: Vec<OrderEntry>,
 }
 
 /// What a sync of the order tree reads and writes besides the order tree.
@@ -159,13 +163,15 @@ impl Order {
         if coverage == ChangeCoverage::All {
             work.extend(self.nodes.keys().copied());
         }
-        let volatile = self.volatile_above(context.store, &work, coverage);
+        let mut volatile = std::mem::take(&mut self.scratch.volatile);
+        self.volatile_above(context.store, &work, coverage, &mut volatile);
         work.extend(self.dirty.drain());
 
         let mut entries = self.sync_root(context, root);
-        let mut visited = FxHashSet::default();
+        let mut visited = std::mem::take(&mut self.scratch.visited);
+        visited.clear();
         entries += self.drain(context, &mut work, &mut visited);
-        for key in volatile {
+        for &key in &volatile {
             if visited.contains(&key) {
                 continue;
             }
@@ -180,6 +186,8 @@ impl Order {
         let effects = self.write_effects(context);
         self.remove_orphans(context);
         self.scratch.marked = work;
+        self.scratch.visited = visited;
+        self.scratch.volatile = volatile;
         Synced { entries, effects }
     }
 
@@ -209,25 +217,28 @@ impl Order {
         spliced
     }
 
-    /// Returns the volatile boxes that are `marked` boxes or hold one below them, or every volatile
-    /// box when `coverage` is all of them.
+    /// Replaces `found` with the volatile boxes that are `marked` boxes or hold one below them, or
+    /// with every volatile box when `coverage` is all of them.
     ///
     /// A child that sorts by the place of other boxes sorts by boxes below its owner, so only an
     /// order mark there can change its rank.
     fn volatile_above(
-        &self,
+        &mut self,
         store: &LayoutStore,
         marked: &[BoxKey],
         coverage: ChangeCoverage,
-    ) -> Vec<BoxKey> {
+        found: &mut Vec<BoxKey>,
+    ) {
+        found.clear();
         if coverage == ChangeCoverage::All {
-            return self.volatile.iter().copied().collect();
+            found.extend(self.volatile.iter().copied());
+            return;
         }
-        let mut found = Vec::new();
         if self.volatile.is_empty() {
-            return found;
+            return;
         }
-        let mut seen: FxHashSet<BoxKey> = FxHashSet::default();
+        let seen = &mut self.scratch.seen;
+        seen.clear();
         for &key in marked {
             let mut current = Some(key);
             while let Some(key) = current {
@@ -240,7 +251,6 @@ impl Order {
                 current = store.get(key).and_then(|node| node.parent);
             }
         }
-        found
     }
 
     /// Visits every box in `work` not yet `visited`, and returns the entries spliced.
@@ -316,41 +326,58 @@ impl Order {
     }
 
     /// Rebuilds the list of the box `key`'s node, and returns the entries spliced.
+    ///
+    /// A list whose children and entries stay as they are writes nothing.
     fn rebuild(&mut self, context: &mut Context<'_>, key: BoxKey) -> usize {
         let store = context.store;
-        let mut entries = Vec::new();
-        push_chunks(store, key, &mut entries);
-        let children = stacking::children_in_paint_order(store, key).into_owned();
-        if children
+        let children = stacking::children_in_paint_order(store, key);
+        let volatile = children
             .iter()
-            .any(|&child| sorts_by_others(store, key, child))
-        {
-            self.volatile.insert(key);
-        } else {
-            self.volatile.remove(&key);
+            .any(|&child| sorts_by_others(store, key, child));
+        if volatile != self.volatile.contains(&key) {
+            if volatile {
+                self.volatile.insert(key);
+            } else {
+                self.volatile.remove(&key);
+            }
         }
-        for &child in &children {
-            let node = self.needs_node(store, child);
-            self.placed.insert(child, Place { owner: key, node });
+        // Taken while the list is built, since a child's new node builds its own list first.
+        let mut entries = std::mem::take(&mut self.scratch.entries);
+        entries.clear();
+        push_chunks(store, key, &mut entries);
+        for &child in children.iter() {
             push_backdrop(context.backdropped, child, &mut entries);
-            if node {
+            if self.needs_node(store, child) {
                 entries.push(OrderEntry::Node(self.ensure_node(context, child)));
             } else {
                 push_chunks(store, child, &mut entries);
                 push_outline(context.outlined, child, &mut entries);
-                if self.nodes.contains_key(&child) {
-                    self.scratch.orphans.push(child);
-                }
             }
         }
         push_outline(context.outlined, key, &mut entries);
 
+        let unchanged = self
+            .nodes
+            .get(&key)
+            .is_none_or(|node| node.entries == entries && *node.children == *children);
+        if unchanged {
+            self.scratch.entries = entries;
+            return 0;
+        }
+        for &child in children.iter() {
+            let node = self.needs_node(store, child);
+            self.placed.insert(child, Place { owner: key, node });
+            if !node && self.nodes.contains_key(&child) {
+                self.scratch.orphans.push(child);
+            }
+        }
         let Some(node) = self.nodes.get_mut(&key) else {
             return 0;
         };
-        let kept: FxHashSet<BoxKey> = children.iter().copied().collect();
-        for old in std::mem::replace(&mut node.children, children) {
-            if kept.contains(&old) {
+        let old = std::mem::replace(&mut node.children, children.into_owned());
+        let listed = Listed::of(&node.children);
+        for old in old {
+            if listed.holds(old) {
                 continue;
             }
             if self
@@ -363,7 +390,7 @@ impl Order {
             self.scratch.orphans.push(old);
         }
         let spliced = splice(context.tx, node.id, &node.entries, &entries);
-        node.entries = entries;
+        self.scratch.entries = std::mem::replace(&mut node.entries, entries);
         spliced
     }
 
@@ -421,6 +448,34 @@ impl Order {
             }
         }
         self.scratch.orphans = orphans;
+    }
+}
+
+/// The children of one list, for asking whether it holds a box.
+enum Listed<'a> {
+    /// A short list, searched in place.
+    Few(&'a [BoxKey]),
+    /// A long list, hashed.
+    Many(FxHashSet<BoxKey>),
+}
+
+impl<'a> Listed<'a> {
+    /// The longest list searched in place.
+    const FEW: usize = 32;
+
+    fn of(children: &'a [BoxKey]) -> Self {
+        if children.len() <= Self::FEW {
+            Self::Few(children)
+        } else {
+            Self::Many(children.iter().copied().collect())
+        }
+    }
+
+    fn holds(&self, key: BoxKey) -> bool {
+        match self {
+            Self::Few(children) => children.contains(&key),
+            Self::Many(children) => children.contains(&key),
+        }
     }
 }
 
