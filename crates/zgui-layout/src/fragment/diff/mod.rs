@@ -48,6 +48,7 @@ pub use crate::fragment::diff::scratch::DiffScratch;
 
 use crate::fragment::diff::damage::{absorb, overlaps, pairwise_disjoint};
 use crate::fragment::diff::geometry::{Geometry, compare, repositioned_within};
+use crate::fragment::diff::scratch::KeptAdmitted;
 
 /// What a fragment's geometry did between two frames.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -150,6 +151,7 @@ pub fn rebuild_in(
     // before *any* pass ran is the caller's to remember, because only the caller knows which pass
     // was the first.
     let bound = damage.bound();
+    scratch.admitted.clear();
     let mut pass = Pass {
         store,
         hit,
@@ -181,6 +183,7 @@ pub fn rebuild_in(
         }
         walk::Mode::On => {
             if !pass.repaint_only(root) {
+                pass.scratch.admitted.clear();
                 pass.visit(root, descent, None, None, (0, HitOrder::MAX));
             }
         }
@@ -188,6 +191,7 @@ pub fn rebuild_in(
             let before = *pass.damage;
             let served = pass.repaint_only(root);
             let walked = core::mem::replace(pass.damage, before);
+            pass.scratch.admitted.clear();
             pass.proven = served;
             pass.visit(root, descent, None, None, (0, HitOrder::MAX));
             pass.proven = false;
@@ -199,6 +203,7 @@ pub fn rebuild_in(
             );
         }
     }
+    pass.scratch.admitted.clear();
     let moves = pass.moves;
     // Every rigid move the walk made wrote its entries and left the hierarchy above them for here,
     // so that a scroll repairs it once instead of once per entry. Nothing may query the index
@@ -449,7 +454,7 @@ impl RigidMoves {
 /// A newtype rather than a bare rectangle so that a caller cannot pass a fragment's own ink where
 /// the region admitting it belongs — the two are both device-space rectangles about the same box
 /// and mean opposite things.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct Admitted(Rect<DevicePx, Device>);
 
 impl Admitted {
@@ -787,15 +792,59 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     ///
     /// Resolved through the frame's own matrices rather than read flat, because a chain inside a
     /// transformed subtree interned its rectangles in that subtree's coordinates and the subtree
-    /// moves without the links being interned again.
-    fn admits(&self, clip: ClipId) -> Rect<DevicePx, Device> {
-        self.tables
+    /// moves without the links being interned again. Kept per chain under the spatial tree's
+    /// [write stamp](zgui_scene::PropertyTree::writes) so the rows and cells sharing one port do
+    /// not each walk its chain again.
+    fn admits(&mut self, clip: ClipId) -> Rect<DevicePx, Device> {
+        let stamp = self.tables.spatial.writes();
+        #[cfg(debug_assertions)]
+        let clips_version = self.tables.clips.version();
+        if let Some(held) = self.scratch.admitted.get_mut(&clip)
+            && held.stamp == stamp
+        {
+            let bounds = held.bounds;
+            #[cfg(debug_assertions)]
+            if held.verified_at != clips_version {
+                held.verified_at = clips_version;
+                let fresh = self
+                    .tables
+                    .clips
+                    .bounds_placed(clip, &|id| self.tables.spatial.resolve(id));
+                debug_assert!(
+                    rect_bits(bounds) == rect_bits(fresh),
+                    "the kept clip bounds of {clip:?} are not the ones the chain resolves"
+                );
+            }
+            return bounds;
+        }
+        let bounds = self
+            .tables
             .clips
-            .bounds_placed(clip, &|id| self.resolve(id))
+            .bounds_placed(clip, &|id| self.resolve(id));
+        debug_assert!(
+            {
+                let fresh = self
+                    .tables
+                    .clips
+                    .bounds_placed(clip, &|id| self.tables.spatial.resolve(id));
+                rect_bits(bounds) == rect_bits(fresh)
+            },
+            "the resolved clip bounds of {clip:?} are not the ones the chain resolves"
+        );
+        self.scratch.admitted.insert(
+            clip,
+            KeptAdmitted {
+                stamp,
+                bounds,
+                #[cfg(debug_assertions)]
+                verified_at: clips_version,
+            },
+        );
+        bounds
     }
 
     /// What a fragment's chain admits, as a region damage may be cut to.
-    fn admitted(&self, clip: ClipId) -> Admitted {
+    fn admitted(&mut self, clip: ClipId) -> Admitted {
         Admitted(self.admits(clip))
     }
 
@@ -1092,6 +1141,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // the second one may write the same entries again.
         if content.is_some() && children_bound.contains(FragmentFlags::FIXED_UNDER_SCROLLED) {
             self.hit.settle();
+            self.scratch.admitted.clear();
             let outer = self.refused.replace(key);
             let again = self.visit(key, from, parent, generator, between);
             self.refused = outer;
@@ -2210,6 +2260,16 @@ fn paints_nothing_itself(kind: FragmentKind, flags: FragmentFlags) -> bool {
     kind == FragmentKind::Box && flags.contains(FragmentFlags::PAINTS_NOTHING)
 }
 
+/// The raw `f32` bit pattern of `rect`, for bit-exact cache verification.
+fn rect_bits(rect: Rect<DevicePx, Device>) -> [u32; 4] {
+    [
+        rect.origin.x.0.to_bits(),
+        rect.origin.y.0.to_bits(),
+        rect.size.width.0.to_bits(),
+        rect.size.height.0.to_bits(),
+    ]
+}
+
 /// The strips along every edge that differs between `was` and `is`, each reaching `reach` to
 /// either side of both positions of its edge and spanning both rectangles across it.
 ///
@@ -2283,6 +2343,199 @@ mod edge_tests {
                         "({x}, {y}) is in one rectangle only and in no strip"
                     );
                 }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod admitted_tests {
+    use core::cell::Cell;
+
+    use zgui_arena::DocumentId;
+    use zgui_bits::DamageSet;
+    use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
+    use zgui_scene::{
+        ClipId, ClipLink, ClipTable, OwnSpace, Placements, PropertyOwner, SpatialTree,
+    };
+
+    use super::{Admitted, Anchors, Chase, DiffScratch, Everything, Pass, RigidMoves, split};
+    use crate::fragment::build::Tables;
+    use crate::fragment::hit::HitIndex;
+    use crate::scroll_region::ScrollOffsets;
+    use crate::style::DeviceStyle;
+    use crate::tree::store::LayoutStore;
+
+    fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
+        Rect::new(
+            Point::new(DevicePx(x), DevicePx(y)),
+            Size::new(DevicePx(width), DevicePx(height)),
+        )
+    }
+
+    fn owner(word: u64) -> PropertyOwner {
+        PropertyOwner::new(word).expect("a non-zero word names an owner")
+    }
+
+    fn uncached(pass: &Pass<'_, '_, Everything>, clip: ClipId) -> Admitted {
+        Admitted(
+            pass.tables
+                .clips
+                .bounds_placed(clip, &|id| pass.tables.spatial.resolve(id)),
+        )
+    }
+
+    #[test]
+    fn cached_clip_bounds_match_uncached_resolution_across_spatial_writes() {
+        let mut store = LayoutStore::new(DocumentId::FIRST);
+        let mut hit = HitIndex::new();
+        let mut clips = ClipTable::rooted();
+        let mut spatial = SpatialTree::with_viewport();
+        let scroll = ScrollOffsets::new();
+        let mut dirty = Everything;
+        let mut damage = DamageSet::new();
+        let mut scratch = DiffScratch::default();
+
+        let viewport = spatial.viewport();
+        let outer_space = spatial.space_of(
+            viewport,
+            owner(10),
+            OwnSpace::of(Some(Matrix4::translation(12.0, -8.0, 0.0)), None, false),
+        );
+        let inner_space = spatial.space_of(
+            outer_space,
+            owner(11),
+            OwnSpace::of(Some(Matrix4::scale(2.0, 1.5, 1.0)), None, false),
+        );
+
+        let port_clip = clips.push_named(
+            ClipId::ROOT,
+            ClipLink::rect_in(rect(0.0, 0.0, 300.0, 200.0), viewport),
+            Size::ZERO,
+            owner(20),
+        );
+        let outer_clip = clips.push_named(
+            port_clip,
+            ClipLink::rect_in(rect(10.0, 20.0, 120.0, 90.0), outer_space),
+            Size::ZERO,
+            owner(21),
+        );
+        let nested_clip = clips.push_named(
+            outer_clip,
+            ClipLink::rect_in(rect(5.0, 4.0, 40.0, 30.0), inner_space),
+            Size::ZERO,
+            owner(22),
+        );
+
+        let mut tables = Tables {
+            clips: &mut clips,
+            spatial: &mut spatial,
+            drawn: &Placements::EMPTY,
+            device: DeviceStyle::default(),
+            scroll: &scroll,
+            placements: &[],
+        };
+        let anchors = Anchors::of(&tables, viewport);
+        let mut pass = Pass {
+            store: &mut store,
+            hit: &mut hit,
+            tables: &mut tables,
+            dirty: &mut dirty,
+            damage: &mut damage,
+            scratch: &mut scratch,
+            restacked: false,
+            renumber: false,
+            born_order: None,
+            anchors,
+            moves: RigidMoves::default(),
+            passes: split::Passes::Together,
+            refused: None,
+            chase: Chase::default(),
+            resolved: [Cell::new(None), Cell::new(None)],
+            proven: false,
+        };
+
+        let all = [ClipId::ROOT, port_clip, outer_clip, nested_clip];
+
+        // Repeated lookups at the initial stamp populate once per distinct chain and reuse it,
+        // including when four chains interleave past `Pass::resolved`'s two-slot transform cache.
+        for _ in 0..4 {
+            for &clip in &all {
+                let got = pass.admitted(clip);
+                assert_eq!(got, uncached(&pass, clip));
+            }
+        }
+        assert_eq!(pass.scratch.admitted.len(), all.len());
+        let initial_stamp = pass.tables.spatial.writes();
+        assert!(
+            pass.scratch
+                .admitted
+                .values()
+                .all(|kept| kept.stamp == initial_stamp)
+        );
+
+        // Interning an unrelated sibling clip advances `clips.version()` while leaving the
+        // spatial stamp untouched; cached chains still match fresh uncached resolutions.
+        let sibling_clip = pass.tables.clips.push_named(
+            port_clip,
+            ClipLink::rect_in(rect(40.0, 10.0, 80.0, 50.0), outer_space),
+            Size::ZERO,
+            owner(23),
+        );
+        for &clip in &[port_clip, outer_clip, nested_clip, sibling_clip] {
+            let got = pass.admitted(clip);
+            assert_eq!(got, uncached(&pass, clip));
+        }
+
+        // Writing `outer_space` advances `spatial.writes()` and moves both `outer_clip` and
+        // `nested_clip`; every lookup refreshes under the new stamp and agrees with uncached.
+        let before_outer = uncached(&pass, outer_clip);
+        assert!(
+            pass.tables
+                .spatial
+                .place(outer_space, Matrix4::translation(48.0, 16.0, 0.0))
+        );
+        let moved_stamp = pass.tables.spatial.writes();
+        assert_ne!(moved_stamp, initial_stamp);
+        assert_ne!(uncached(&pass, outer_clip), before_outer);
+
+        for _ in 0..3 {
+            for &clip in &[
+                ClipId::ROOT,
+                port_clip,
+                outer_clip,
+                nested_clip,
+                sibling_clip,
+            ] {
+                let got = pass.admitted(clip);
+                assert_eq!(got, uncached(&pass, clip));
+            }
+        }
+        assert!(
+            pass.scratch
+                .admitted
+                .values()
+                .all(|kept| kept.stamp == moved_stamp)
+        );
+
+        // Writing `inner_space` advances `spatial.writes()` again and rescales `nested_clip`.
+        let before_nested = uncached(&pass, nested_clip);
+        assert!(
+            pass.tables
+                .spatial
+                .place(inner_space, Matrix4::scale(0.5, 2.5, 1.0))
+        );
+        assert_ne!(uncached(&pass, nested_clip), before_nested);
+        for _ in 0..2 {
+            for &clip in &[
+                ClipId::ROOT,
+                port_clip,
+                outer_clip,
+                nested_clip,
+                sibling_clip,
+            ] {
+                let got = pass.admitted(clip);
+                assert_eq!(got, uncached(&pass, clip));
             }
         }
     }

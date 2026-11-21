@@ -130,8 +130,13 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
                 continue;
             };
             let (kind, flags) = (fragment.kind, fragment.flags);
-            let (ink, subtree_ink, anchor) = (fragment.ink, fragment.subtree_ink, fragment.anchor);
-            let admitted = self.admitted(fragment.clip);
+            let (ink, subtree_ink, anchor, clip) = (
+                fragment.ink,
+                fragment.subtree_ink,
+                fragment.anchor,
+                fragment.clip,
+            );
+            let admitted = self.admitted(clip);
             // As `update` reads them: a line paints the nested inline boxes on it.
             let own = if matches!(kind, FragmentKind::Line { .. })
                 && flags.contains(FragmentFlags::INLINE_EFFECTS)
