@@ -932,7 +932,7 @@ impl Pass<'_, '_> {
                 store,
                 fragment,
                 crate::sync::Part::Outline,
-                &painter.outline,
+                &mut painter.outline,
                 self.tables,
             );
         }
@@ -1130,10 +1130,10 @@ impl Pass<'_, '_> {
                 );
                 let emitted = order::fragment_tracked(&mut rec, fragment, &emission);
                 let minted = self.tables.take_minted();
-                if let Some(sync) = &mut painter.sync {
-                    sync.record(store, fragment, &painter.items, self.tables);
-                }
                 let items = painter.items.len();
+                if let Some(sync) = &mut painter.sync {
+                    sync.record(store, fragment, &mut painter.items, self.tables);
+                }
                 self.report.primitives += emitted.pushed;
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
                     && let Some(node) = fragment.node

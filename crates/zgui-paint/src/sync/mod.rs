@@ -277,12 +277,12 @@ impl CompositorSync {
         }
     }
 
-    /// Records `items` as the painting of `fragment`.
+    /// Records `items` as the painting of `fragment`, and leaves them empty.
     pub(crate) fn record(
         &mut self,
         store: &LayoutStore,
         fragment: &Fragment,
-        items: &Items,
+        items: &mut Items,
         tables: &mut Tables,
     ) {
         let Some(transaction) = &mut self.transaction else {
@@ -321,13 +321,13 @@ impl CompositorSync {
     ///
     /// - If they are empty, the chunk is removed.
     /// - If the chunk holds them already for `fragment`, nothing is written.
-    /// - Otherwise the chunk is recorded.
+    /// - Otherwise the chunk is recorded, and the items are left empty.
     pub(crate) fn record_extra(
         &mut self,
         store: &LayoutStore,
         fragment: &Fragment,
         part: Part,
-        items: &Items,
+        items: &mut Items,
         tables: &mut Tables,
     ) {
         let Some(transaction) = &mut self.transaction else {
@@ -361,6 +361,7 @@ impl CompositorSync {
         if !replaces && !self.extras.contains_key(&key) {
             self.order.part_changed(fragment.box_, part);
         }
+        let held = items.clone();
         flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
         self.report.recorded += 1;
@@ -370,7 +371,7 @@ impl CompositorSync {
             key,
             Extra {
                 fragment: fragment.key,
-                items: items.clone(),
+                items: held,
             },
         );
     }
@@ -469,7 +470,7 @@ pub fn record_chunk(
         space,
         clip,
     ));
-    flush::record(transaction, &mut mirror, tables, key, &items);
+    flush::record(transaction, &mut mirror, tables, key, &mut items);
     mirror.recorded(key);
 }
 

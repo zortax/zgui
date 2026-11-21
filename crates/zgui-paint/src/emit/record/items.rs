@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use compositor_types::{
-    Backdrop, ClipId, ExternalQuad, Filter, Glyph, GlyphRun, Image, ImageId, ItemKind, ItemOp,
-    Line, LocalClip, MarkPayload, Marks, PaintId, PaintKind, ParamsId, PathItem, Quad, ShaderId,
-    ShaderQuad, Shadow, TextureId, TransformId,
+    AnyId, Backdrop, ClipId, ExternalQuad, Filter, Glyph, GlyphRun, Image, ImageId, ItemKind,
+    ItemOp, Line, LocalClip, MarkPayload, Marks, PaintId, PaintKind, ParamsId, PathItem, Quad,
+    RecordedChunk, ShaderId, ShaderQuad, Shadow, TextureId, TransformId,
 };
 use zgui_space::{ClipId as SceneClip, SpatialId};
 
@@ -60,6 +60,20 @@ pub(crate) enum Ref {
     Params(ParamsId),
     /// An external texture slot.
     Texture(TextureId),
+}
+
+impl From<Ref> for AnyId {
+    fn from(reference: Ref) -> Self {
+        match reference {
+            Ref::Space(id) => id.into(),
+            Ref::Clip(id) => id.into(),
+            Ref::Paint(_, id) => id.into(),
+            Ref::Image(id) => id.into(),
+            Ref::Shader(id) => id.into(),
+            Ref::Params(id) => id.into(),
+            Ref::Texture(id) => id.into(),
+        }
+    }
 }
 
 impl Default for Items {
@@ -135,6 +149,31 @@ impl Items {
         self.filters.clear();
         self.local_clips.clear();
         self.refs.clear();
+    }
+
+    /// Moves the items, the arenas, the lists and the ids into the empty `chunk`, and leaves the
+    /// items empty with the buffers `chunk` had.
+    pub(crate) fn move_into(&mut self, chunk: &mut RecordedChunk) {
+        use core::mem::swap;
+
+        swap(&mut self.ops, &mut chunk.ops);
+        swap(&mut self.quads, &mut chunk.quads);
+        swap(&mut self.shader_quads, &mut chunk.shader_quads);
+        swap(&mut self.shadows, &mut chunk.shadows);
+        swap(&mut self.lines, &mut chunk.lines);
+        swap(&mut self.glyph_runs, &mut chunk.glyph_runs);
+        swap(&mut self.images, &mut chunk.images);
+        swap(&mut self.marks, &mut chunk.marks);
+        swap(&mut self.paths, &mut chunk.paths);
+        swap(&mut self.backdrops, &mut chunk.backdrops);
+        swap(&mut self.externals, &mut chunk.externals);
+        swap(&mut self.glyphs, &mut chunk.glyphs);
+        swap(&mut self.coords, &mut chunk.coords);
+        swap(&mut self.payloads, &mut chunk.payloads);
+        swap(&mut self.filters, &mut chunk.filters);
+        swap(&mut self.local_clips, &mut chunk.local_clips);
+
+        chunk.refs.extend(self.refs.drain(..).map(AnyId::from));
     }
 
     /// Returns the number of items.
