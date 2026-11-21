@@ -9,6 +9,7 @@ const UNMOVED: Size<DevicePx, Device> = Size::ZERO;
 use zgui_profile::{Counter, counter};
 
 use crate::clip::link::{ClipLink, ClipNode};
+use crate::clip::placed::placed;
 use crate::clip::resolved::{KeptClip, ResolvedClip, RoundedTest};
 use crate::id::ClipId;
 use crate::spatial::SpatialId;
@@ -530,70 +531,6 @@ impl ClipTable {
         links.reverse();
         links
     }
-}
-
-/// One link's rectangle and radii, put where its coordinate system's matrix says it is drawn.
-///
-/// The four corners go through the matrix and the upright box around them is taken, so a rotation
-/// answers with the box its clip actually reaches rather than a rectangle that never turned. The
-/// radii are scaled by the length each axis maps to, which is exact for every translation and
-/// scale and a generous reading for a rotation — a clip slightly too admitting, never one that
-/// cuts what the transform kept inside it.
-fn placed(
-    rect: Rect<DevicePx, Device>,
-    radii: Corners<Vec2<DevicePx>>,
-    matrix: Option<Matrix4>,
-) -> (Rect<DevicePx, Device>, Corners<Vec2<DevicePx>>) {
-    let Some(matrix) = matrix else {
-        return (rect, radii);
-    };
-    let (x, y) = (rect.origin.x.0, rect.origin.y.0);
-    let (width, height) = (rect.size.width.0, rect.size.height.0);
-    let corners = [
-        matrix.transform_point(x, y, 0.0),
-        matrix.transform_point(x + width, y, 0.0),
-        matrix.transform_point(x, y + height, 0.0),
-        matrix.transform_point(x + width, y + height, 0.0),
-    ];
-    let left = corners
-        .iter()
-        .map(|point| point[0])
-        .fold(f32::MAX, f32::min);
-    let right = corners
-        .iter()
-        .map(|point| point[0])
-        .fold(f32::MIN, f32::max);
-    let top = corners
-        .iter()
-        .map(|point| point[1])
-        .fold(f32::MAX, f32::min);
-    let bottom = corners
-        .iter()
-        .map(|point| point[1])
-        .fold(f32::MIN, f32::max);
-    let moved = Rect::new(
-        Point::new(DevicePx(left), DevicePx(top)),
-        Size::new(DevicePx(right - left), DevicePx(bottom - top)),
-    );
-    // How long one unit of each axis is once mapped, which is what an ellipse radius scales by.
-    let origin = matrix.transform_point(0.0, 0.0, 0.0);
-    let unit_x = matrix.transform_point(1.0, 0.0, 0.0);
-    let unit_y = matrix.transform_point(0.0, 1.0, 0.0);
-    let scale_x = ((unit_x[0] - origin[0]).powi(2) + (unit_x[1] - origin[1]).powi(2)).sqrt();
-    let scale_y = ((unit_y[0] - origin[0]).powi(2) + (unit_y[1] - origin[1]).powi(2)).sqrt();
-    let scaled = |radius: Vec2<DevicePx>| {
-        Vec2::new(
-            DevicePx(radius.x.0 * scale_x),
-            DevicePx(radius.y.0 * scale_y),
-        )
-    };
-    let moved_radii = Corners {
-        top_left: scaled(radii.top_left),
-        top_right: scaled(radii.top_right),
-        bottom_right: scaled(radii.bottom_right),
-        bottom_left: scaled(radii.bottom_left),
-    };
-    (moved, moved_radii)
 }
 
 /// The shader's form of one rounded link.

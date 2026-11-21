@@ -1,6 +1,7 @@
 //! Clipping: a chain of links, and the flattened form a draw call binds.
 
 pub mod link;
+mod placed;
 pub mod resolved;
 pub mod table;
 
