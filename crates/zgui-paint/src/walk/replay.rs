@@ -44,7 +44,7 @@ use rustc_hash::FxHashMap;
 use std::sync::Arc;
 use zgui_atlas::AtlasKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};
-use zgui_layout::{FragKey, Fragment, FragmentKind};
+use zgui_layout::{FragKey, Fragment, FragmentFlags, FragmentKind};
 use zgui_profile::{Counter, counter};
 
 use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId, TableHolds};
@@ -523,8 +523,9 @@ impl PaintCache {
     /// What `fragment` costs this frame, given the style it lowers to now.
     ///
     /// A record is replayable when the fragment is still drawing what it was drawing, the style,
-    /// the chain and the transform are the ones it was recorded with, and the fragment is the
-    /// same size. Anything else is encoded again.
+    /// the chain and the transform are the ones it was recorded with, and either the fragment is
+    /// the same size or it is a plain [`FragmentFlags::PAINTS_NOTHING`] box whose recorded chunk
+    /// is empty. Anything else is encoded again.
     ///
     /// `phase` is the sixteenth-pixel phase of a drawing fragment's origin on the device. A record
     /// holding a layer sprite replays only at the phase it was rasterised for. A provisional layer
@@ -553,7 +554,9 @@ impl PaintCache {
         if record.kind != fragment.kind {
             return Reuse::Encode;
         }
-        if record.border_box.size != fragment.border_box.size {
+        if record.border_box.size != fragment.border_box.size
+            && !reusable_empty_box(record, fragment)
+        {
             return Reuse::Encode;
         }
         // The chain must still resolve to the content it was recorded against. Interned clip ids
@@ -577,6 +580,13 @@ impl PaintCache {
             "a replayed range's clip or transform no longer resolves to what it was recorded with"
         );
         Reuse::Replay(offset)
+    }
+
+    /// Whether `fragment`'s recorded border-box size differs from `size`.
+    pub(crate) fn size_changed(&self, fragment: FragKey, size: Size<DevicePx, Device>) -> bool {
+        self.records
+            .get(&fragment)
+            .is_some_and(|record| record.border_box.size != size)
     }
 
     /// The animation signature `fragment`'s record was encoded under, if it has a record.
@@ -780,6 +790,23 @@ impl PaintCache {
             .filter(|key| !owner.contains(*key))
             .collect()
     }
+}
+
+/// Whether `record` is a plain box that emitted no primitives or layer state on the recorded
+/// frame and whose current `fragment` still carries [`FragmentFlags::PAINTS_NOTHING`], so a
+/// change of border-box size leaves its empty chunk exact.
+fn reusable_empty_box(record: &Record, fragment: &Fragment) -> bool {
+    record.kind == FragmentKind::Box
+        && fragment.kind == FragmentKind::Box
+        && fragment.flags.contains(FragmentFlags::PAINTS_NOTHING)
+        && record.prims.is_empty()
+        && record.prims.minted.is_empty()
+        && record.resources.is_empty()
+        && record.layer_phase.is_none()
+        && !record.provisional
+        && !record.promote
+        && record.tiled.is_none()
+        && record.window.is_none()
 }
 
 /// Whether `window`, moved by `offset`, holds what the viewport shows of the space `painted` is

@@ -955,3 +955,86 @@ fn a_cut_record_replays_only_while_its_window_holds_what_is_shown() {
     layered(&mut cache, &mut scene, &first, LayerRecord::default());
     assert_ne!(cache.reuse(&scene, &far, painted(0), None), Reuse::Encode);
 }
+
+#[test]
+fn a_resized_paints_nothing_empty_box_replays_while_painting_boxes_encode_again() {
+    use zgui_layout::FragmentFlags;
+
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+
+    let mut wrapper = fragment(0.0, 0.0);
+    wrapper.flags = FragmentFlags::PAINTS_NOTHING;
+    cache.encoded(
+        &mut scene,
+        &wrapper,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+
+    scene.begin_frame(Size::new(256, 256));
+    let mut resized_and_moved = fragment(24.0, 12.0);
+    resized_and_moved.border_box.size = Size::new(DevicePx(180.0), DevicePx(40.0));
+    resized_and_moved.flags = FragmentFlags::PAINTS_NOTHING;
+    assert_eq!(
+        cache.reuse(&scene, &resized_and_moved, painted(0), None),
+        Reuse::Replay(Size::new(DevicePx(24.0), DevicePx(12.0))),
+        "an empty PAINTS_NOTHING box replays across a size and origin change"
+    );
+
+    // Transitioning from PAINTS_NOTHING to painting (either by clearing the flag or changing the
+    // lowered style) forces a fresh encoding at the new size.
+    let mut started_painting = resized_and_moved.clone();
+    started_painting.flags = FragmentFlags::EMPTY;
+    assert_eq!(
+        cache.reuse(&scene, &started_painting, painted(0), None),
+        Reuse::Encode
+    );
+    assert_eq!(
+        cache.reuse(&scene, &resized_and_moved, painted(1), None),
+        Reuse::Encode
+    );
+
+    // A non-box fragment with an empty chunk still encodes again when resized.
+    let mut resized_vector = fragment(0.0, 0.0);
+    resized_vector.key = key(2);
+    resized_vector.kind = FragmentKind::Vector;
+    resized_vector.flags = FragmentFlags::PAINTS_NOTHING;
+    cache.encoded(
+        &mut scene,
+        &resized_vector,
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    scene.begin_frame(Size::new(256, 256));
+    resized_vector.border_box.size = Size::new(DevicePx(96.0), DevicePx(48.0));
+    assert_eq!(
+        cache.reuse(&scene, &resized_vector, painted(0), None),
+        Reuse::Encode
+    );
+
+    // A box record that actually emitted primitives never bypasses the size check, even if a
+    // synthetic caller left `PAINTS_NOTHING` set on the next fragment.
+    let mut non_empty = fragment(0.0, 0.0);
+    non_empty.key = key(3);
+    encode_one_quad(&mut cache, &mut scene, &non_empty);
+    scene.begin_frame(Size::new(256, 256));
+    non_empty.border_box.size = Size::new(DevicePx(128.0), DevicePx(24.0));
+    non_empty.flags = FragmentFlags::PAINTS_NOTHING;
+    assert_eq!(
+        cache.reuse(&scene, &non_empty, painted(0), None),
+        Reuse::Encode
+    );
+}
