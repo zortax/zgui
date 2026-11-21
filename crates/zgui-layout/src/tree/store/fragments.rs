@@ -370,7 +370,15 @@ impl LayoutStore {
     /// fragment that kept its geometry but changed its name would cost a whole-index rebuild and
     /// throw away a cache entry that was still valid.
     pub(crate) fn fragment_mut(&mut self, key: FragKey) -> Option<&mut Fragment> {
+        self.fragment_writes += 1;
         self.fragments.get_mut(key)
+    }
+
+    /// Returns a count that grows with every fragment added, handed out for writing, or removed.
+    ///
+    /// Two equal readings mean no fragment changed between them.
+    pub fn fragment_writes(&self) -> u64 {
+        self.fragment_writes
     }
 
     /// The fragment one box produced in position `slot`, if it produced that many and that one is
@@ -407,6 +415,7 @@ impl LayoutStore {
         box_: BoxKey,
         fill: impl FnOnce(&mut Fragment),
     ) -> FragKey {
+        self.fragment_writes += 1;
         let node = self.get(box_).and_then(|record| record.source);
         let key = self.fragments.insert_with(|key| {
             let mut fragment = Fragment::new(key, box_, FragmentKind::Box);
@@ -439,6 +448,7 @@ impl LayoutStore {
         if state.fragments.len() <= len {
             return;
         }
+        self.fragment_writes += 1;
         let dropped: Vec<FragKey> = state.fragments.drain(len..).collect();
         if len == 0 {
             // A piece born later starts from nothing, as a new box does.

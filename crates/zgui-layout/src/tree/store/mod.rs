@@ -168,6 +168,8 @@ pub struct LayoutStore {
     /// Without this the names of deleted boxes are never given back, and the dense buffer they are
     /// the index of grows for the life of the process.
     retired_boxes: Vec<BoxKey>,
+    /// How many times a fragment was added, written or removed.
+    fragment_writes: u64,
     /// The boxes whose children may paint in a different order than they did.
     order_dirty: order_dirty::OrderJournal,
     /// Every fragment whose filter chain reads pixels outside every rectangle it writes.
@@ -264,6 +266,7 @@ impl LayoutStore {
             retired: Vec::new(),
             retired_paint: Vec::new(),
             retired_boxes: Vec::new(),
+            fragment_writes: 0,
             order_dirty: order_dirty::OrderJournal::new(),
             read_extents: Vec::new(),
             flattenings: 0,

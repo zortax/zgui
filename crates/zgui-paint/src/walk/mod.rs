@@ -360,8 +360,11 @@ impl Painter {
             };
         };
         self.cache.begin_frame();
+        let writes = input.store.fragment_writes();
+        let mut laid_out = false;
         if let Some(sync) = &mut self.sync {
             sync.mirror_tables(tables);
+            laid_out = sync.fragments_changed(writes);
         }
         let scratch = std::mem::take(&mut self.scratch);
         let mut pass = Pass {
@@ -374,6 +377,7 @@ impl Painter {
                 ..PaintReport::default()
             },
             root,
+            laid_out,
             alpha: scratch.alpha,
             opaque: scratch.opaque,
             outlines: scratch.outlines,
@@ -468,6 +472,8 @@ struct Pass<'a, 'b> {
     ///
     /// [`Visitor::descends`]: stacking::Visitor::descends
     root: BoxKey,
+    /// Whether a fragment can have changed since the last walk.
+    laid_out: bool,
     /// The folded alpha in force, innermost last.
     alpha: Vec<f32>,
     /// Whether the target in force is opaque, innermost last.
@@ -610,6 +616,10 @@ impl Pass<'_, '_> {
         let Some(sync) = &mut self.painter.sync else {
             return;
         };
+        // Without a fragment write since the last walk, nothing under the subtree moved.
+        if !self.laid_out {
+            return;
+        }
         if let Some((first, ink)) = displaced::laid_out(store, key)
             && sync.subtree_moved(first, ink)
         {

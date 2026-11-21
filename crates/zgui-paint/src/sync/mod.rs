@@ -51,7 +51,10 @@ pub struct CompositorSync {
     outlined: FxHashMap<FragKey, ChunkKey>,
     backdropped: FxHashMap<FragKey, ChunkKey>,
     retired: FxHashSet<ChunkKey>,
-    subtrees: FxHashMap<FragKey, Rect<DevicePx, Device>>,
+    /// The subtree ink last noted for each box, by the slot index of its first fragment.
+    subtrees: Vec<Option<(FragKey, Rect<DevicePx, Device>)>>,
+    /// The layout's fragment write count when a walk last read it.
+    walked_writes: Option<u64>,
     report: SyncReport,
     forgotten: Option<Held>,
 }
@@ -103,7 +106,8 @@ impl CompositorSync {
             outlined: FxHashMap::default(),
             backdropped: FxHashMap::default(),
             retired: FxHashSet::default(),
-            subtrees: FxHashMap::default(),
+            subtrees: Vec::new(),
+            walked_writes: None,
             report: SyncReport::default(),
             forgotten: None,
         }
@@ -241,12 +245,22 @@ impl CompositorSync {
         self.chunks.contains_key(&key)
     }
 
+    /// Notes that a walk reads a layout whose fragment write count is `writes`, and reports whether
+    /// a fragment can have changed since the last walk.
+    pub(crate) fn fragments_changed(&mut self, writes: u64) -> bool {
+        self.walked_writes.replace(writes) != Some(writes)
+    }
+
     /// Notes that the subtree of the box whose first fragment is `first` is laid out over `ink`,
     /// and reports whether that changed since the last note.
     ///
     /// A box noted for the first time counts as changed.
     pub(crate) fn subtree_moved(&mut self, first: FragKey, ink: Rect<DevicePx, Device>) -> bool {
-        self.subtrees.insert(first, ink) != Some(ink)
+        let index = first.index() as usize;
+        if index >= self.subtrees.len() {
+            self.subtrees.resize(index + 1, None);
+        }
+        self.subtrees[index].replace((first, ink)) != Some((first, ink))
     }
 
     /// Returns the resolver of the open transaction, if one is open.
@@ -405,7 +419,11 @@ impl CompositorSync {
     /// the fragments.
     pub(crate) fn retire(&mut self, keys: &[FragKey]) {
         for fragment in keys {
-            self.subtrees.remove(fragment);
+            if let Some(slot) = self.subtrees.get_mut(fragment.index() as usize)
+                && slot.is_some_and(|(held, _)| held == *fragment)
+            {
+                *slot = None;
+            }
             self.withdraw(*fragment);
         }
     }
