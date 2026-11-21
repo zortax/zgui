@@ -125,24 +125,24 @@ pub(crate) fn rebuilds(gesture: Gesture) -> Criterion {
 ///
 /// # What the recorded value says
 ///
-/// **0.1186–0.1258 over three runs.** One drawn frame of a wheel glide over a virtualised list
-/// costs about an eighth of what repainting the same realised rows costs. A glide frame writes one
+/// **0.1285–0.1406 over three runs.** One drawn frame of a wheel glide over a virtualised list
+/// costs about a seventh of what repainting the same realised rows costs. A glide frame writes one
 /// scroll offset, and the compositor shifts the rows it already drew and draws only the band that
-/// comes into view. The advisory lines say the same thing in units: about 1.25 µs per realised row
-/// per drawn frame against about 9.9 µs for the repaint.
+/// comes into view. The advisory lines say the same thing in units: 1.0 to 1.1 µs per realised row
+/// per drawn frame against about 8.0 µs for the repaint.
 ///
 /// The glide's cost is divided by the frames the compositor drew. A frame that left the output
 /// unchanged draws nothing and is not counted.
 ///
-/// The band is twenty-three per cent, four times the spread of the three runs it was recorded
+/// The band is thirty-five per cent, four times the spread of the three runs it was recorded
 /// from.
 pub(crate) const GLIDE: Criterion = Criterion {
     name: "LIST-glide",
     subject: "one drawn frame of a wheel glide over a hundred thousand rows, per realised row",
     baseline: "a full repaint of the same realised rows, per realised row",
     allowed: Allowed::Near {
-        recorded: 0.125,
-        tolerance: 0.23,
+        recorded: 0.137,
+        tolerance: 0.35,
     },
     advice: "The proportion between what carrying rows past a port costs and what repainting them \
              costs has moved. Both slopes are in the advisory lines above: the one that moved is \
