@@ -34,11 +34,52 @@ pub fn batches(scene: &Scene, bounded: bool) -> Vec<Reached> {
         .collect()
 }
 
+/// The device pixels each mark item of `scene` can write, parallel to `scene.primitives.marks`,
+/// when `bounded`.
+///
+/// Empty when `!bounded`, so a single-rectangle frame allocates nothing.
+pub fn marks(scene: &Scene, bounded: bool) -> Vec<Option<Rect<i32, Device>>> {
+    if !bounded {
+        return Vec::new();
+    }
+    let mut spaces = Spaces::new(scene);
+    scene
+        .primitives
+        .marks
+        .iter()
+        .map(|item| item_reach(&mut spaces, item.bounds, item.transform))
+        .collect()
+}
+
+/// The device pixels one primitive of `bounds` under `space` can write, or `None` when it is
+/// never culled.
+fn item_reach(spaces: &mut Spaces<'_>, bounds: [f32; 4], space: u32) -> Option<Rect<i32, Device>> {
+    let local = Rect::from_corners(
+        Point::new(DevicePx(bounds[0] - 1.0), DevicePx(bounds[1] - 1.0)),
+        Point::new(
+            DevicePx(bounds[0] + bounds[2] + 1.0),
+            DevicePx(bounds[1] + bounds[3] + 1.0),
+        ),
+    );
+    let placed = spaces.on_device(space, local)?;
+    let (low, high) = (
+        (placed.left().0, placed.top().0),
+        (placed.right().0, placed.bottom().0),
+    );
+    if !(low.0.is_finite() && low.1.is_finite() && high.0.is_finite() && high.1.is_finite()) {
+        return None;
+    }
+    Some(Rect::from_corners(
+        Point::new(low.0.floor() as i32 - 1, low.1.floor() as i32 - 1),
+        Point::new(high.0.ceil() as i32 + 1, high.1.ceil() as i32 + 1),
+    ))
+}
+
 /// The device pixels `batch` can write, or `None` when it is never culled.
 ///
 /// The vertex stage draws a quad, shaded quad, shadow or decoration over its bounds grown by one
-/// pixel in its own space, and a sprite over its bounds. This is the larger of the two, put through
-/// the instance's matrix the same way, and grown by one more pixel for rounding.
+/// pixel in its own space, and a sprite or mark over its bounds. This is the larger of the two, put
+/// through the instance's matrix the same way, and grown by one more pixel for rounding.
 fn reach_of(scene: &Scene, spaces: &mut Spaces<'_>, batch: &Batch) -> Option<Rect<i32, Device>> {
     let (kind, range) = match batch {
         Batch::Quads(range) => (PrimitiveKind::Quad, range),
@@ -48,13 +89,12 @@ fn reach_of(scene: &Scene, spaces: &mut Spaces<'_>, batch: &Batch) -> Option<Rec
         Batch::MonoSprites { range, .. } => (PrimitiveKind::MonoSprite, range),
         Batch::SubpixelSprites { range, .. } => (PrimitiveKind::SubpixelSprite, range),
         Batch::ColorSprites { range, .. } => (PrimitiveKind::ColorSprite, range),
-        // Each of these changes the target, reads a target or draws out of a payload of its own,
-        // so it is planned whatever the scissor is.
-        Batch::Marks(_)
-        | Batch::Vector(_)
-        | Batch::External(_)
-        | Batch::Backdrop(_)
-        | Batch::Group(_) => return None,
+        Batch::Marks(range) => (PrimitiveKind::Marks, range),
+        // Each of these changes the target, reads a target or advances a rasteriser round, so it is
+        // planned whatever the scissor is.
+        Batch::Vector(_) | Batch::External(_) | Batch::Backdrop(_) | Batch::Group(_) => {
+            return None;
+        }
     };
     let remap = scene.remap(kind);
     let mut low = (f32::INFINITY, f32::INFINITY);
@@ -113,6 +153,10 @@ fn geometry(scene: &Scene, kind: PrimitiveKind, slot: usize) -> Option<([f32; 4]
             .color_sprites
             .get(slot)
             .map(|p| (p.bounds, p.transform))?,
+        PrimitiveKind::Marks => primitives
+            .marks
+            .get(slot)
+            .map(|p| (p.bounds, p.transform))?,
         _ => return None,
     })
 }
@@ -167,10 +211,12 @@ fn maps_affinely(matrix: &Matrix4) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{Reached, batches};
+    use std::sync::Arc;
+
+    use super::{Reached, batches, marks};
     use zgui_bits::DamageSet;
     use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
-    use zgui_scene::{Batch, OwnSpace, Paint, PropertyOwner, Quad, Scene};
+    use zgui_scene::{Batch, MarkItem, MarkPayload, OwnSpace, Paint, PropertyOwner, Quad, Scene};
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
         Rect::new(
@@ -241,5 +287,52 @@ mod tests {
         ]);
         let scene = one_quad(rect(0.0, 0.0, 10.0, 10.0), Some(tilted));
         assert_eq!(batches(&scene, true)[0].reach, None);
+    }
+
+    #[test]
+    fn marks_reach_their_bounds_and_refuse_culling_under_perspective() {
+        let mut scene = Scene::new();
+        scene.begin_frame(Size::new(256, 256));
+        let paint = scene.paints.add(Paint::Solid(zgui_color::Color::BLACK));
+        let mut payload = MarkPayload::default();
+        payload.discs.push([12.0, 22.0, 4.0, 0.0]);
+        scene.push_marks(
+            MarkItem::new(rect(10.5, 20.0, 30.0, 8.0), paint, [1, 0, 0, 0]),
+            Arc::new(payload.clone()),
+        );
+        let tilted = Matrix4::from_columns([
+            [1.0, 0.0, 0.0, 0.001],
+            [0.0, 1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [0.0, 0.0, 0.0, 1.0],
+        ]);
+        let owner = PropertyOwner::new(9).expect("a handle is never the empty word");
+        let viewport = scene.spatial.viewport();
+        let space =
+            scene
+                .spatial
+                .space_of(viewport, owner, OwnSpace::of(Some(tilted), None, false));
+        let mut persp_item = MarkItem::new(rect(60.0, 60.0, 10.0, 10.0), paint, [1, 0, 0, 0]);
+        persp_item.transform = space.index();
+        scene.push_marks(persp_item, Arc::new(payload));
+        scene.finish(&DamageSet::full());
+
+        assert!(marks(&scene, false).is_empty());
+        let item_reaches = marks(&scene, true);
+        assert_eq!(
+            item_reaches,
+            vec![
+                Some(Rect::from_corners(Point::new(8, 18), Point::new(43, 30))),
+                None,
+            ]
+        );
+        assert_eq!(
+            batches(&scene, true)[0],
+            Reached {
+                batch: Batch::Marks(0..2),
+                reach: None,
+            },
+            "a batch containing a perspective mark is never culled as a whole"
+        );
     }
 }
