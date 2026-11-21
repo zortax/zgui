@@ -40,8 +40,13 @@ fn available() -> bool {
     }
 }
 
-/// An application with one callback surface bound to `invalidator`, drawn on an offscreen device.
-fn app(renders: &Arc<AtomicUsize>, invalidator: &SurfaceInvalidator) -> Harness<Runtime> {
+/// An application with `count` callback surfaces bound to `invalidator`, drawn on an offscreen
+/// device. All surfaces count into `renders`.
+fn app(
+    renders: &Arc<AtomicUsize>,
+    invalidator: &SurfaceInvalidator,
+    count: usize,
+) -> Harness<Runtime> {
     let renders = Arc::clone(renders);
     let invalidator = invalidator.clone();
     let handler = App::new()
@@ -63,18 +68,20 @@ fn app(renders: &Arc<AtomicUsize>, invalidator: &SurfaceInvalidator) -> Harness<
         }))
         .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(move |cx: &mut BuildCx<'_>| {
-            Box::new(
-                zgui_elements::surface()
-                    .class("pane")
-                    .renderer_with_invalidator(
-                        Counting {
-                            renders: Arc::clone(&renders),
-                        },
-                        &invalidator,
-                    )
-                    .into_view()
-                    .build(cx),
-            )
+            let mut root = zgui_elements::r#box();
+            for _ in 0..count {
+                root = root.child(
+                    zgui_elements::surface()
+                        .class("pane")
+                        .renderer_with_invalidator(
+                            Counting {
+                                renders: Arc::clone(&renders),
+                            },
+                            &invalidator,
+                        ),
+                );
+            }
+            Box::new(root.into_view().build(cx))
         })
         .expect("the reactive runtime installs");
     let mut harness = Harness::new(handler);
@@ -95,7 +102,7 @@ fn an_invalidated_renderer_renders_once_more_and_only_then() {
     }
     let renders = Arc::new(AtomicUsize::new(0));
     let invalidator = SurfaceInvalidator::new();
-    let mut app = app(&renders, &invalidator);
+    let mut app = app(&renders, &invalidator, 1);
 
     run(&mut app);
     assert_eq!(renders.load(Ordering::Relaxed), 1, "the first frame draws");
@@ -127,6 +134,32 @@ fn an_invalidated_renderer_renders_once_more_and_only_then() {
         renders.load(Ordering::Relaxed),
         2,
         "the invalidation is spent once taken"
+    );
+}
+
+#[test]
+fn one_invalidator_renders_every_renderer_bound_to_it() {
+    if !available() {
+        return;
+    }
+    let renders = Arc::new(AtomicUsize::new(0));
+    let invalidator = SurfaceInvalidator::new();
+    let mut app = app(&renders, &invalidator, 2);
+
+    run(&mut app);
+    assert_eq!(
+        renders.load(Ordering::Relaxed),
+        2,
+        "the first frame draws both"
+    );
+
+    invalidator.invalidate();
+    invalidator.invalidate();
+    run(&mut app);
+    assert_eq!(
+        renders.load(Ordering::Relaxed),
+        4,
+        "each renderer renders once more, and the two calls merge"
     );
 }
 

@@ -38,7 +38,7 @@
 #![recursion_limit = "256"]
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -308,26 +308,41 @@ impl SurfaceHandle {
 
 /// The shared half of one invalidator.
 struct InvalidatorState {
-    /// Whether a render is owed and no frame has taken it yet.
-    owed: AtomicBool,
-    /// How to wake the UI loop, once the renderer is bound to a window.
-    waker: Mutex<Option<Arc<RuntimeWaker>>>,
+    /// How many times [`SurfaceInvalidator::invalidate`] was called. A binding renders when this
+    /// moved past the value it last rendered at.
+    generation: AtomicU64,
+    /// The UI loop of each bound renderer, by the renderer's token.
+    wakers: Mutex<Vec<(u64, Arc<RuntimeWaker>)>>,
 }
 
 impl InvalidatorState {
-    /// The waker slot, locked; a poisoned lock is inherited.
-    fn waker(&self) -> std::sync::MutexGuard<'_, Option<Arc<RuntimeWaker>>> {
-        self.waker
+    /// The waker list, locked; a poisoned lock is inherited.
+    fn wakers(&self) -> std::sync::MutexGuard<'_, Vec<(u64, Arc<RuntimeWaker>)>> {
+        self.wakers
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
+
+    /// Removes the waker of the renderer named `token`.
+    fn unbind(&self, token: u64) {
+        self.wakers().retain(|(bound, _)| *bound != token);
+    }
+}
+
+/// One callback renderer's link to its invalidator.
+struct Invalidation {
+    /// The shared state.
+    state: Arc<InvalidatorState>,
+    /// The generation the renderer last rendered at.
+    seen: u64,
 }
 
 /// The handle that asks a [`SurfaceRenderer`] to render again, from any thread.
 ///
 /// Use it when the content changes because of an event outside the renderer: a pointer drag, a
 /// button, a frame from a worker thread. Cloneable, `Send + Sync`. Bind it with its renderer
-/// through [`SurfaceElementExt::renderer_with_invalidator`]. Bind one invalidator to one renderer.
+/// through [`SurfaceElementExt::renderer_with_invalidator`]. One invalidator can serve many
+/// renderers, in one window or in many; each call renders all of them again.
 #[derive(Clone)]
 pub struct SurfaceInvalidator {
     /// The shared state, kept alive by the clones and by the binding.
@@ -339,25 +354,31 @@ impl SurfaceInvalidator {
     pub fn new() -> Self {
         Self {
             state: Arc::new(InvalidatorState {
-                owed: AtomicBool::new(false),
-                waker: Mutex::new(None),
+                generation: AtomicU64::new(0),
+                wakers: Mutex::new(Vec::new()),
             }),
         }
     }
 
-    /// Marks the renderer due and wakes the UI loop.
+    /// Marks every bound renderer due and wakes the UI loops they draw in.
     ///
-    /// The next frame calls [`render`](SurfaceRenderer::render) once and damages only the
-    /// element's content box. Calls before that frame merge into one render and one wake. When
-    /// the element is not visible, the render stays owed until it is visible again. Before the
-    /// element is bound, the call only marks the renderer; its first frame renders it.
+    /// The next frame calls [`render`](SurfaceRenderer::render) once for each bound renderer
+    /// and damages only the element's content box. Calls before that frame merge into one render.
+    /// When an element is not visible, its render stays owed until it is visible again. Before a
+    /// renderer is bound, the call has no effect on it; its first frame renders it.
     pub fn invalidate(&self) {
-        // A render already owed has its wake already sent, or is kept for a hidden element.
-        if self.state.owed.swap(true, Ordering::AcqRel) {
-            return;
-        }
-        let waker = self.state.waker().clone();
-        if let Some(waker) = waker {
+        // Release pairs with the frame's acquire load: what the caller wrote before this call is
+        // visible to the render it causes.
+        self.state.generation.fetch_add(1, Ordering::Release);
+        // Every call wakes. A wake can be lost in the gap between two frames, and the next call
+        // must then wake again.
+        let wakers: Vec<Arc<RuntimeWaker>> = self
+            .state
+            .wakers()
+            .iter()
+            .map(|(_, waker)| Arc::clone(waker))
+            .collect();
+        for waker in wakers {
             waker.wake();
         }
     }
@@ -501,7 +522,7 @@ enum Producer {
         /// Whether anything has been drawn since the texture last changed identity.
         drawn: bool,
         /// The invalidator bound with the renderer, if any.
-        invalidator: Option<Arc<InvalidatorState>>,
+        invalidator: Option<Invalidation>,
     },
 }
 
@@ -691,7 +712,7 @@ impl EmbedHost for WgpuSurfaces {
                 Producer::Handle(state) => tell(state, SurfaceEvent::Detached),
                 Producer::Callback { invalidator, .. } => {
                     if let Some(invalidator) = invalidator {
-                        *invalidator.waker() = None;
+                        invalidator.state.unbind(binding.token);
                     }
                 }
             }
@@ -749,7 +770,10 @@ impl WgpuSurfaces {
                     texture: None,
                     animate: false,
                     drawn: false,
-                    invalidator: parked.invalidator,
+                    invalidator: parked.invalidator.map(|state| Invalidation {
+                        seen: state.generation.load(Ordering::Acquire),
+                        state,
+                    }),
                 }
             } else {
                 // A token whose producer is gone — the handle dropped, or a callback adopted by
@@ -788,7 +812,10 @@ impl WgpuSurfaces {
                     ..
                 } => {
                     if let Some(invalidator) = invalidator {
-                        *invalidator.waker() = Some(Arc::clone(cx.waker));
+                        invalidator
+                            .state
+                            .wakers()
+                            .push((token, Arc::clone(cx.waker)));
                     }
                     cx.intrinsics.set(id, renderer.intrinsic().lower());
                 }
@@ -818,7 +845,7 @@ impl WgpuSurfaces {
             }
             Producer::Callback { invalidator, .. } => {
                 if let Some(invalidator) = invalidator {
-                    *invalidator.waker() = None;
+                    invalidator.state.unbind(binding.token);
                 }
             }
         }
@@ -993,10 +1020,11 @@ impl WgpuSurfaces {
                     *drawn = false;
                 }
                 let held = texture.as_ref().expect("just ensured");
-                // Taken on every visible frame, so a render owed for any reason absorbs it.
-                let invalidated = invalidator
-                    .as_ref()
-                    .is_some_and(|state| state.owed.swap(false, Ordering::AcqRel));
+                // Read on every visible frame, so a render owed for any reason absorbs it.
+                let invalidated = invalidator.as_mut().is_some_and(|invalidator| {
+                    let current = invalidator.state.generation.load(Ordering::Acquire);
+                    std::mem::replace(&mut invalidator.seen, current) != current
+                });
                 let due = !*drawn || *animate || invalidated;
                 if due {
                     let view = held.create_view(&wgpu::TextureViewDescriptor::default());
