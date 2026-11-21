@@ -167,26 +167,24 @@ impl Order {
         self.volatile_above(context.store, &work, coverage, &mut volatile);
         work.extend(self.dirty.drain());
 
+        self.scratch.visited.clear();
         let mut entries = self.sync_root(context, root);
-        let mut visited = std::mem::take(&mut self.scratch.visited);
-        visited.clear();
-        entries += self.drain(context, &mut work, &mut visited);
+        entries += self.drain(context, &mut work);
         for &key in &volatile {
-            if visited.contains(&key) {
+            if self.scratch.visited.contains(&key) {
                 continue;
             }
             if self.keeps_children(context.store, key) {
-                visited.insert(key);
+                self.scratch.visited.insert(key);
                 continue;
             }
             work.push(key);
-            entries += self.drain(context, &mut work, &mut visited);
+            entries += self.drain(context, &mut work);
         }
         entries += std::mem::take(&mut self.created);
         let effects = self.write_effects(context);
         self.remove_orphans(context);
         self.scratch.marked = work;
-        self.scratch.visited = visited;
         self.scratch.volatile = volatile;
         Synced { entries, effects }
     }
@@ -253,16 +251,11 @@ impl Order {
         }
     }
 
-    /// Visits every box in `work` not yet `visited`, and returns the entries spliced.
-    fn drain(
-        &mut self,
-        context: &mut Context<'_>,
-        work: &mut Vec<BoxKey>,
-        visited: &mut FxHashSet<BoxKey>,
-    ) -> usize {
+    /// Visits every box in `work` not yet visited in this sync, and returns the entries spliced.
+    fn drain(&mut self, context: &mut Context<'_>, work: &mut Vec<BoxKey>) -> usize {
         let mut entries = 0;
         while let Some(key) = work.pop() {
-            if visited.insert(key) {
+            if self.scratch.visited.insert(key) {
                 entries += self.visit(context, key, work);
             }
         }
@@ -306,10 +299,13 @@ impl Order {
     }
 
     /// Returns the order node of the box `key`, creating it with its whole list on first use.
+    ///
+    /// A node created counts as visited by the sync.
     fn ensure_node(&mut self, context: &mut Context<'_>, key: BoxKey) -> OrderId {
         if let Some(node) = self.nodes.get(&key) {
             return node.id;
         }
+        self.scratch.visited.insert(key);
         let id = context.tx.create_order(OrderNode::default());
         self.nodes.insert(
             key,
