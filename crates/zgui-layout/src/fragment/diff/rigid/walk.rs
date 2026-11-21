@@ -167,6 +167,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             return clip;
         }
         let by = self.by;
+        self.store.note_moved(frag);
         let Some(fragment) = self.store.fragment_mut(frag) else {
             return clip;
         };
@@ -227,6 +228,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
                 }
                 continue;
             }
+            self.store.note_moved(frag);
             let Some(fragment) = self.store.fragment_mut(frag) else {
                 continue;
             };

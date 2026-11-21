@@ -1765,6 +1765,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             !self.proven || change == Change::Identical,
             "the repaint walk kept a fragment its composition changed: {kind:?}",
         );
+        if previous
+            .as_ref()
+            .is_some_and(|previous| previous.border_box != next.border_box)
+        {
+            self.store.note_moved(frag);
+        }
 
         // An extra equal to the one held under the same transform packs to the same record.
         let repack = previous

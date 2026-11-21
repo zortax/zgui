@@ -16,7 +16,6 @@
 
 pub mod corners;
 pub mod decorate;
-mod displaced;
 pub mod fill;
 pub mod order;
 pub mod replay;
@@ -360,11 +359,10 @@ impl Painter {
             };
         };
         self.cache.begin_frame();
-        let writes = input.store.fragment_writes();
-        let mut laid_out = false;
+        let mut moved = false;
         if let Some(sync) = &mut self.sync {
             sync.mirror_tables(tables);
-            laid_out = sync.fragments_changed(writes);
+            moved = sync.read_moves(input.store);
         }
         let scratch = std::mem::take(&mut self.scratch);
         let mut pass = Pass {
@@ -377,7 +375,7 @@ impl Painter {
                 ..PaintReport::default()
             },
             root,
-            laid_out,
+            moved,
             alpha: scratch.alpha,
             opaque: scratch.opaque,
             outlines: scratch.outlines,
@@ -408,6 +406,10 @@ impl Painter {
             spaces,
         };
         self.scratch.clear();
+        if let Some(sync) = &mut self.sync {
+            let cache = &self.cache;
+            sync.withdraw_moved(input.store, |fragment| cache.moved_from(fragment).is_some());
+        }
         // After the walk, which notes where the tiles of large drawings are shown: the frame's
         // whole need is known only here.
         if let Some(layers) = input.vector_masks.layers() {
@@ -472,8 +474,8 @@ struct Pass<'a, 'b> {
     ///
     /// [`Visitor::descends`]: stacking::Visitor::descends
     root: BoxKey,
-    /// Whether a fragment can have changed since the last walk.
-    laid_out: bool,
+    /// Whether a fragment can have moved since the last walk.
+    moved: bool,
     /// The folded alpha in force, innermost last.
     alpha: Vec<f32>,
     /// Whether the target in force is opaque, innermost last.
@@ -602,29 +604,16 @@ impl Pass<'_, '_> {
     /// A fragment that moved out of the damage is visited while the damage reaches the place its
     /// chunk is drawn at, so the chunk follows it there.
     fn retained(&self, fragment: &Fragment) -> Option<Rect<DevicePx, Device>> {
+        // Every chunk stands where its record was drawn when nothing moved since the last walk.
+        if !self.moved {
+            return None;
+        }
         let sync = self.painter.sync.as_ref()?;
         if !sync.knows(fragment.key) {
             return None;
         }
         let drawn = self.painter.cache.moved_from(fragment)?;
         Some(self.where_drawn(fragment, drawn))
-    }
-
-    /// Withdraws the chunks under the skipped subtree of `key` that their fragments moved away
-    /// from, when layout changed the subtree since the walk last reached it.
-    fn culled(&mut self, store: &LayoutStore, key: BoxKey) {
-        let Some(sync) = &mut self.painter.sync else {
-            return;
-        };
-        // Without a fragment write since the last walk, nothing under the subtree moved.
-        if !self.laid_out {
-            return;
-        }
-        if let Some((first, ink)) = displaced::laid_out(store, key)
-            && sync.subtree_moved(first, ink)
-        {
-            displaced::sweep(store, key, &self.painter.cache, sync);
-        }
     }
 
     /// What `key`'s element is currently animating, if anything.
@@ -1003,9 +992,6 @@ impl Pass<'_, '_> {
                 .retained(fragment)
                 .is_some_and(|drawn| self.reaches(drawn));
         if !reached {
-            if let Some(sync) = &mut self.painter.sync {
-                displaced::withdraw_if_moved(fragment, &self.painter.cache, sync);
-            }
             return;
         }
         // Measured in the fragment's anchor, so the place stays right while that anchor moves.
@@ -1233,7 +1219,7 @@ fn inline_slices<'s>(
 }
 
 impl stacking::Visitor for Pass<'_, '_> {
-    fn descends(&mut self, store: &LayoutStore, key: BoxKey) -> bool {
+    fn descends(&mut self, _store: &LayoutStore, key: BoxKey) -> bool {
         // The refusal `enter` makes for the root, asked before the box is ranked among its
         // siblings so a skipped subtree costs its ink test and nothing else. `enter` trusts a
         // pass and does not test again.
@@ -1242,7 +1228,6 @@ impl stacking::Visitor for Pass<'_, '_> {
             return false;
         };
         if !self.reaches(ink) {
-            self.culled(store, key);
             counter::bump(Counter::NodesVisited);
             self.report.skipped_subtrees += 1;
             counter::bump(Counter::PaintSubtreesCulled);
@@ -1261,7 +1246,6 @@ impl stacking::Visitor for Pass<'_, '_> {
                 return false;
             };
             if !self.reaches(ink) {
-                self.culled(store, key);
                 self.report.skipped_subtrees += 1;
                 counter::bump(Counter::PaintSubtreesCulled);
                 return false;
@@ -1271,12 +1255,6 @@ impl stacking::Visitor for Pass<'_, '_> {
                 self.subtree_ink(key).is_some_and(|ink| self.reaches(ink)),
                 "the walk entered {key:?} without `descends` letting it",
             );
-        }
-        // Read by `culled` on a later frame that skips the subtree.
-        if let Some(sync) = &mut self.painter.sync
-            && let Some((first, ink)) = displaced::laid_out(store, key)
-        {
-            sync.subtree_moved(first, ink);
         }
         let Some(node) = store.get(key) else {
             return false;

@@ -53,7 +53,7 @@ fn isolated() -> ComputedStyle {
 /// The boxes marked since `version`, each once.
 fn marked(
     store: &LayoutStore,
-    version: zgui_layout::OrderVersion,
+    version: zgui_layout::JournalVersion,
 ) -> (ChangeCoverage, Vec<BoxKey>) {
     let mut marked = Vec::new();
     let coverage = store.order_dirty_since(version, &mut marked);

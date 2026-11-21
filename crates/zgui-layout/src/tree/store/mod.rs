@@ -9,14 +9,16 @@
 //! | `scroll` | which axes reserve a scrollbar gutter |
 //! | `laid_out` | the viewport the results now held were produced for |
 //! | `roster` | the boxes whose style puts them in a class some pass has to visit |
-//! | `order_dirty` | the boxes whose children may paint in a different order |
+//! | `journal` | bounded histories of marks, such as the boxes whose children may paint in a different order |
+//! | `moved` | the fragments layout moved |
 
 pub(crate) mod content;
 pub(crate) mod engine_styles;
 mod fragments;
 mod inline;
+mod journal;
 pub mod laid_out;
-mod order_dirty;
+mod moved;
 mod resolved;
 pub(crate) mod roster;
 mod scroll;
@@ -31,7 +33,7 @@ use zgui_dom::side::{BoxKey, BoxList};
 use zgui_profile::{Counter, counter};
 use zgui_space::ChangeCoverage;
 
-pub use self::order_dirty::OrderVersion;
+pub use self::journal::JournalVersion;
 
 use crate::boxtree::absolute::Declared;
 use crate::fragment::custom_properties::CustomProperties;
@@ -168,10 +170,10 @@ pub struct LayoutStore {
     /// Without this the names of deleted boxes are never given back, and the dense buffer they are
     /// the index of grows for the life of the process.
     retired_boxes: Vec<BoxKey>,
-    /// How many times a fragment was added, written or removed.
-    fragment_writes: u64,
     /// The boxes whose children may paint in a different order than they did.
-    order_dirty: order_dirty::OrderJournal,
+    order_dirty: journal::Journal<BoxKey>,
+    /// The fragments whose border box layout moved or resized.
+    moved: journal::Journal<FragKey>,
     /// Every fragment whose filter chain reads pixels outside every rectangle it writes.
     ///
     /// Sparse: empty in almost every document, a handful of entries in one with a blurred dialog
@@ -266,8 +268,8 @@ impl LayoutStore {
             retired: Vec::new(),
             retired_paint: Vec::new(),
             retired_boxes: Vec::new(),
-            fragment_writes: 0,
-            order_dirty: order_dirty::OrderJournal::new(),
+            order_dirty: journal::Journal::new(),
+            moved: journal::Journal::new(),
             read_extents: Vec::new(),
             flattenings: 0,
             laid_out: None,
@@ -678,7 +680,7 @@ impl LayoutStore {
     }
 
     /// Returns the current version of the order journal.
-    pub fn order_version(&self) -> OrderVersion {
+    pub fn order_version(&self) -> JournalVersion {
         self.order_dirty.version()
     }
 
@@ -692,7 +694,7 @@ impl LayoutStore {
     /// for a version of another store, and for a version older than the history the store keeps.
     pub fn order_dirty_since(
         &self,
-        version: OrderVersion,
+        version: JournalVersion,
         marked: &mut Vec<BoxKey>,
     ) -> ChangeCoverage {
         self.order_dirty.since(version, marked)

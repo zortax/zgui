@@ -269,3 +269,46 @@ fn a_chunk_left_where_layout_moved_its_box_away_is_not_drawn() {
         "the mark is drawn where it was before the reflow"
     );
 }
+
+#[test]
+fn a_chunk_left_where_layout_moved_it_inside_a_skipped_box_is_not_drawn() {
+    // The mark moves inside the panel, whose own ink covers both places, so the panel's subtree
+    // ink stays the same while the walk skips it. A band of damage then reaches the place the
+    // mark was recorded at, and only the panel's own fragment there.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![
+            Element::new("spacer"),
+            Element::new("panel").children(vec![
+                Element::new("holder").children(vec![Element::new("mark")]),
+            ]),
+        ]),
+        "root { display: block; width: 200px; height: 200px }
+         spacer { display: block; height: 50px }
+         panel { display: block; height: 100px; background: rgb(255, 255, 255) }
+         holder { display: block; height: 20px }
+         mark { display: block; position: relative; top: 60px; height: 20px;
+                background: rgb(255, 0, 0) }
+         .up { top: 0px }",
+        200.0,
+        200.0,
+    );
+    harness.paint_everything();
+    assert_eq!(red_quads(&mut harness), 1, "the control: the mark is drawn");
+
+    let mark = harness.element("mark");
+    harness.edit_and_restyle(|edit| edit.add_class(mark, zgui_interned::ClassName::new("up")));
+    zgui_layout::boxtree::patch::restyle(&mut harness.store, &harness.document, [mark]);
+    harness.compose_from_marks(200.0, 200.0);
+    damage(&mut harness, 0, 10);
+    harness.paint();
+    damage(&mut harness, 110, 20);
+    harness.paint();
+
+    let drawing = harness.redraw();
+    for quad in drawing.quads() {
+        if quad.color("fill") == Some([1.0, 0.0, 0.0, 1.0]) {
+            let [_, y, _, _] = quad.bounds();
+            assert!(y < 100.0, "the mark is drawn where it was: {drawing}");
+        }
+    }
+}

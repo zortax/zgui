@@ -22,7 +22,7 @@ use crate::Tables;
 use compositor_types::{OrderEntry, OrderId, OrderNode, OutputId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
-use zgui_layout::{LayoutStore, OrderVersion};
+use zgui_layout::{JournalVersion, LayoutStore};
 use zgui_space::ChangeCoverage;
 
 use crate::emit::group::GroupEffect;
@@ -43,7 +43,7 @@ pub(crate) struct Order {
     nodes: FxHashMap<BoxKey, Node>,
     placed: FxHashMap<BoxKey, Place>,
     effects: FxHashMap<BoxKey, GroupEffect>,
-    version: Option<OrderVersion>,
+    version: Option<JournalVersion>,
     dirty: FxHashSet<BoxKey>,
     restyled: FxHashSet<BoxKey>,
     /// Entries spliced into the lists of nodes created during the current sync.
