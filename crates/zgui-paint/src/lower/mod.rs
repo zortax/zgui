@@ -72,10 +72,6 @@ pub struct PaintStyle {
     /// What decorates the text inside the box.
     pub decoration: crate::emit::text::DecorationStyle,
     /// The ramp the text inside the box is painted with, when it is painted with one.
-    ///
-    /// A brush that varies across a run is not something a coverage tile can carry, so a run
-    /// carrying one leaves the atlas and is drawn as filled curves; see
-    /// [`RasterPath`](zgui_text::RasterPath).
     pub text_fill: Option<crate::lower::background::GradientSpec>,
     /// How outlines the box draws are filled and stroked.
     ///

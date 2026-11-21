@@ -86,7 +86,7 @@
 //! | [`view`](mod@view) | the view layer's own seams: the node tree, the engine, the event sink |
 //! | [`runtime`] | the frame pipeline, its windows and its timers |
 //! | [`platform`] | the windowing contract, for a backend of one's own |
-//! | [`render`], [`scene`], [`atlas`], [`bits`] | what a frame is drawn through, for a device of one's own |
+//! | [`compositor`], [`atlas`], [`bits`] | what a frame is drawn through, for a device of one's own |
 //! | [`geom`] | the pixel spaces and the geometry every stage agrees in |
 //! | [`text`] | the text seams: faces, shaping, metrics and glyph rasterisation |
 //! | [`vocab`] | events, keys, roles and states, as every layer says them |

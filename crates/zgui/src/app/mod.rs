@@ -560,10 +560,9 @@ impl App {
 
     /// Sets how precisely the default renderer holds a plain group of content.
     ///
-    /// The default is [`GroupPrecision::Compact`](crate::GroupPrecision::Compact), which holds a
-    /// plain group in eight bits per channel. That target has half the bytes of a sixteen-bit one.
-    /// [`GroupPrecision::High`](crate::GroupPrecision::High) holds every group in sixteen-bit
-    /// float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
+    /// The default is [`GroupPrecision::Compact`], which holds a plain group in eight bits per
+    /// channel. That target has half the bytes of a sixteen-bit one. [`GroupPrecision::High`]
+    /// holds every group in sixteen-bit float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
     /// value. A renderer set with [`App::with_renderer`] ignores it.
     ///
     /// ```no_run
