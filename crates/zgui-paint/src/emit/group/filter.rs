@@ -4,7 +4,6 @@
 //! of their matrices, so it becomes one matrix.
 
 use compositor_types::{Color, Filter};
-use peniko::{BlendMode, Compose};
 
 /// A 4x5 colour matrix in row-major order, the constant last in each row.
 type Matrix = [f32; 20];
@@ -50,14 +49,6 @@ pub(crate) fn convert(filters: &[zgui_layout::fragment::filter::Filter], out: &m
         }
     }
     flush(&mut run, out);
-}
-
-/// Returns the compositor's mode for `blend`.
-pub(crate) fn blend(blend: BlendMode) -> compositor_types::BlendMode {
-    if blend.compose == Compose::Plus {
-        return compositor_types::BlendMode::PLUS_LIGHTER;
-    }
-    compositor_types::BlendMode(blend.mix as u8)
 }
 
 /// Pushes the run of matrices so far, unless it changes nothing.

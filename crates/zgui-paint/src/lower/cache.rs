@@ -310,8 +310,7 @@ fn hash_of(style: &PaintStyle, scale: f32) -> u64 {
         .f32(style.group.opacity)
         .u32(u32::from(style.group.isolated))
         .u32(u32::from(style.group.isolates_blending))
-        .u64(style.group.blend.mix as u64)
-        .u64(style.group.blend.compose as u64);
+        .u32(u32::from(style.group.blend.0));
     for filter in style
         .group
         .filters

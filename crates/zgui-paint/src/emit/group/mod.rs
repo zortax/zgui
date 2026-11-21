@@ -158,7 +158,7 @@ pub fn effect(
             Some(GroupEffect {
                 clip: fragment.clip,
                 opacity: style.group.opacity,
-                blend: filter::blend(style.group.blend),
+                blend: style.group.blend,
                 filters: filters.into(),
                 shader,
                 isolate: true,
