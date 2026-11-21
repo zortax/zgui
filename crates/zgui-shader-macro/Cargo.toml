@@ -21,7 +21,7 @@ include.workspace = true
 proc-macro = true
 
 [dependencies]
-bincode.workspace = true
+postcard.workspace = true
 naga = { workspace = true, features = ["wgsl-in", "serialize"] }
 proc-macro2.workspace = true
 quote.workspace = true
