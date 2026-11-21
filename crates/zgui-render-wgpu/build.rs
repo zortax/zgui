@@ -40,7 +40,7 @@ fn main() {
         let module = naga::front::wgsl::parse_str(&source).unwrap_or_else(|error| {
             panic!("{name}: {}", error.emit_to_string(&source));
         });
-        let ir = bincode::serialize(&module)
+        let ir = postcard::to_allocvec(&module)
             .unwrap_or_else(|error| panic!("{name}: the representation would not encode: {error}"));
 
         write(&out.join(format!("{name}.wgsl")), source.as_bytes());

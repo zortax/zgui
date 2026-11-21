@@ -12,8 +12,8 @@ use crate::ledger::tree::manifest::Dependency;
 /// Dependencies pinned to an exact patch release.
 const PINNED: [(&str, &str); 4] = [
     ("stylo", "=0.19.0"),
-    ("reactive_graph", "=0.2.14"),
-    ("reactive_stores", "=0.4.3"),
+    ("reactive_graph", "=0.2.16"),
+    ("reactive_stores", "=0.4.4"),
     ("any_spawner", "=0.3.0"),
 ];
 

@@ -182,7 +182,7 @@ fn decoded(program: &EffectProgram) -> Option<wgpu::naga::Module> {
     if program.representation.is_empty() {
         return None;
     }
-    bincode::deserialize(program.representation).ok()
+    postcard::from_bytes(program.representation).ok()
 }
 
 /// Compares the parameters the shader declares against the ones Rust declares.

@@ -14,7 +14,7 @@ include.workspace = true
 # L2 — backends. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
 web-time.workspace = true
-bincode.workspace = true
+postcard.workspace = true
 bytemuck.workspace = true
 futures.workspace = true
 # Named only to turn on the decoding of a shader representation. The type itself is reached through
@@ -36,7 +36,7 @@ zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
 # Parsing the shaders once per build rather than once per launch. The text comes from zgui-wgsl,
 # which is where an application's own shader reads it from too.
 [build-dependencies]
-bincode.workspace = true
+postcard.workspace = true
 naga = { workspace = true, features = ["wgsl-in", "serialize"] }
 zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
 
