@@ -2,8 +2,8 @@
 //!
 //! The gallery of the `styled` example, its real font engine and its real glyph rasteriser, with a
 //! renderer that accepts frames and draws nowhere. Everything from the platform event to the
-//! committed compositor frame therefore runs exactly as it does in a window, and the run is scriptable
-//! and profilable without a display server.
+//! compositor frame therefore runs exactly as it does in a window, and the run is scriptable and
+//! profilable without a display server.
 //!
 //! Run it as `cargo run -p zgui --release --example pipeline_cpu -- <phase> <repeats>`, where the
 //! phase is one of `idle`, `hover`, `click` or `resize`.
