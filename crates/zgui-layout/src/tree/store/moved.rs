@@ -13,8 +13,8 @@ impl LayoutStore {
 
     /// Appends every fragment whose border box moved or resized since `version` into `moved`.
     ///
-    /// A fragment that layout added is not appended, and a fragment moved more than once may be
-    /// appended more than once. A fragment appended may have been removed since.
+    /// A fragment layout added may be appended too, a fragment moved more than once may be appended
+    /// more than once, and a fragment appended may have been removed since.
     ///
     /// [`ChangeCoverage::All`] means the caller must treat every fragment as moved instead. It is
     /// returned for a version of another store, and for a version older than the history the

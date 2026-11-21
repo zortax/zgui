@@ -153,3 +153,56 @@ fn increasing(pairs: &[[usize; 2]]) -> Vec<[usize; 2]> {
     run.reverse();
     run
 }
+
+#[cfg(test)]
+mod tests {
+    use compositor_types::{
+        ChunkKey, ClientId, Command, IdSpace, OrderEntry, OrderNode, Transaction,
+    };
+
+    use super::shifted;
+
+    /// The list `old` becomes once the splices `shifted` writes for `new` are applied.
+    fn replayed(old: &[u32], new: &[u32]) -> Option<Vec<OrderEntry>> {
+        let entry = |owner: &u32| OrderEntry::Chunk(ChunkKey::new(u64::from(*owner), 0));
+        let (old, new): (Vec<_>, Vec<_>) = (
+            old.iter().map(entry).collect(),
+            new.iter().map(entry).collect(),
+        );
+        let mut tx = Transaction::new(IdSpace::new(ClientId(1)));
+        let node = tx.create_order(OrderNode::default());
+        shifted(&mut tx, node, 0, &old, &new)?;
+        let parts = tx.into_parts();
+        let mut list = old;
+        for command in &parts.commands {
+            if let Command::Splice {
+                at, remove, insert, ..
+            } = *command
+            {
+                let at = at as usize;
+                let inserted = &parts.entries[insert.start as usize..][..insert.len as usize];
+                list.splice(at..at + remove as usize, inserted.iter().copied());
+            }
+        }
+        Some(list)
+    }
+
+    #[test]
+    fn a_shifted_list_is_written_with_the_splices_that_make_it() {
+        let entry = |owner: &u32| OrderEntry::Chunk(ChunkKey::new(u64::from(*owner), 0));
+        for (old, new) in [
+            (&[1, 2, 3, 4][..], &[3, 4, 5][..]),
+            (&[1, 2, 3, 4][..], &[0, 1, 2][..]),
+            (&[][..], &[1, 2][..]),
+            (&[1, 2][..], &[][..]),
+        ] {
+            let expected: Vec<_> = new.iter().map(entry).collect();
+            assert_eq!(replayed(old, new), Some(expected), "{old:?} into {new:?}");
+        }
+        assert_eq!(
+            replayed(&[1, 2, 3], &[1, 5, 3]),
+            None,
+            "a change in the middle"
+        );
+    }
+}

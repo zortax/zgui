@@ -23,7 +23,7 @@ pub(super) fn placed(
     }
 }
 
-/// `rect` and `radii` moved by `by`, with the same arithmetic [`mapped`] does for a translation.
+/// Moves `rect` and `radii` by `by`, with the arithmetic [`mapped`] does for a translation.
 fn moved(
     rect: Rect<DevicePx, Device>,
     radii: Corners<Vec2<DevicePx>>,
@@ -45,7 +45,7 @@ fn moved(
     (moved, scaled(radii, scale_x, scale_y))
 }
 
-/// `rect` and `radii` put through `matrix`.
+/// Puts `rect` and `radii` through `matrix`.
 fn mapped(
     rect: Rect<DevicePx, Device>,
     radii: Corners<Vec2<DevicePx>>,
@@ -88,7 +88,7 @@ fn mapped(
     (moved, scaled(radii, scale_x, scale_y))
 }
 
-/// `radii` with each radius scaled by the length its axis maps to.
+/// Scales each radius of `radii` by the length its axis maps to.
 fn scaled(radii: Corners<Vec2<DevicePx>>, scale_x: f32, scale_y: f32) -> Corners<Vec2<DevicePx>> {
     let scaled = |radius: Vec2<DevicePx>| {
         Vec2::new(
