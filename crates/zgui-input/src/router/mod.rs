@@ -127,7 +127,7 @@ impl Router {
         // State first, listeners second: a handler that reads a computed style has to see the
         // state its own event produced, and a restyle driven from a bit written afterwards would
         // land a frame late.
-        let hover = self.hover(world, action, &chain);
+        let hover = self.hover(world, action, event, &chain);
         // A scrollbar answers before anything else does, and takes the event away from the rest of
         // the framework's behaviour when it answers at all. It has to: a press on a bar belongs to
         // the element that scrolls, so left to the ordinary path it would take focus off whatever
@@ -377,9 +377,22 @@ impl Router {
     }
 
     /// Applies what this action does to `:hover`.
-    fn hover(&mut self, world: &World<'_>, action: PointerAction, chain: &HitChain) -> Moved {
+    ///
+    /// A finger that lifts is not over anything any more, and no move or leave follows to say so:
+    /// left alone, the last control tapped keeps its hover style until the next touch lands
+    /// somewhere else.
+    fn hover(
+        &mut self,
+        world: &World<'_>,
+        action: PointerAction,
+        event: &PointerEvent,
+        chain: &HitChain,
+    ) -> Moved {
         match action {
             PointerAction::Left | PointerAction::Cancelled => {
+                self.interaction.hover.clear(world.document, world.filter)
+            }
+            PointerAction::Released if !event.kind.can_hover() => {
                 self.interaction.hover.clear(world.document, world.filter)
             }
             _ => self

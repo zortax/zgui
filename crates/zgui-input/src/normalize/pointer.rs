@@ -57,14 +57,17 @@ pub struct Pointers {
 }
 
 impl Pointers {
-    /// Records where `event`'s pointer now is, or forgets it when it has gone.
+    /// Records where `event`'s pointer now is, or forgets it when it has gone: left, cancelled,
+    /// or a pointer that cannot hover lifted.
     pub fn observe(
         &mut self,
         action: PointerAction,
         event: &PointerEvent,
         scale: Scale<Css, Device>,
     ) {
-        if matches!(action, PointerAction::Left | PointerAction::Cancelled) {
+        // A lifted finger has left the surface as surely as a mouse that left the window.
+        let lifted = action == PointerAction::Released && !event.kind.can_hover();
+        if lifted || matches!(action, PointerAction::Left | PointerAction::Cancelled) {
             self.forget(event.id);
             return;
         }

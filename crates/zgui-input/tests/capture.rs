@@ -191,3 +191,77 @@ fn a_re_test_under_a_captured_pointer_hovers_the_element_holding_it() {
         "the element under the pointer is not lit while another holds the pointer"
     );
 }
+
+#[test]
+fn a_lifted_finger_hovers_nothing_but_a_released_mouse_still_hovers() {
+    let mut session = Session::new(slider());
+    let on_thumb = session.fixture.centre_of("control");
+    let at = |kind: zgui_vocab::PointerKind| zgui_vocab::PointerEvent {
+        id: if kind == zgui_vocab::PointerKind::Touch {
+            PointerId::new(7)
+        } else {
+            PointerId::MOUSE
+        },
+        kind,
+        primary: true,
+        position: zgui_geom::Point::new(
+            zgui_geom::CssPx(on_thumb.x.0),
+            zgui_geom::CssPx(on_thumb.y.0),
+        ),
+        button: None,
+        pressure: None,
+    };
+    let send = |session: &mut Session, kind, action| {
+        let event = at(kind);
+        let filter = session.fixture.filter();
+        let world = session.fixture.world(&filter);
+        session.router.pointer(
+            &world,
+            action,
+            &event,
+            zgui_vocab::Modifiers::NONE,
+            zgui_vocab::Timestamp::ORIGIN,
+        );
+    };
+
+    send(
+        &mut session,
+        zgui_vocab::PointerKind::Touch,
+        PointerAction::Pressed,
+    );
+    assert!(session.router.interaction().hover.target().is_some());
+    send(
+        &mut session,
+        zgui_vocab::PointerKind::Touch,
+        PointerAction::Released,
+    );
+    assert_eq!(
+        session.router.interaction().hover.target(),
+        None,
+        "the control a finger tapped does not stay lit until the next tap"
+    );
+    let moved = {
+        let filter = session.fixture.filter();
+        let world = session.fixture.world(&filter);
+        session.router.rehit(&world)
+    };
+    assert!(
+        moved.is_empty(),
+        "and no re-test hovers it again under the lifted finger"
+    );
+
+    send(
+        &mut session,
+        zgui_vocab::PointerKind::Mouse,
+        PointerAction::Pressed,
+    );
+    send(
+        &mut session,
+        zgui_vocab::PointerKind::Mouse,
+        PointerAction::Released,
+    );
+    assert!(
+        session.router.interaction().hover.target().is_some(),
+        "a mouse is still over what it clicked"
+    );
+}
