@@ -3,15 +3,15 @@
 This document describes what zgui is made of and how one frame gets from a person moving a pointer
 to pixels on a screen. It is the map the other guides assume: [layering](layering.md) states the
 rules the map obeys, [the styling model](styling.md), [the reactive model](reactivity.md) and
-[writing a renderer](renderer.md) each take one region of it in detail, and [building a browser on
+[drawing through a compositor](renderer.md) each take one region of it in detail, and [building a browser on
 zgui](browser.md) names the places a consumer plugs into.
 
 ## The shape of it
 
 zgui is a **retained** framework. It keeps the document, computed styles, box tree, shaped
 paragraphs, per-fragment paint recordings, and rendered pixels. A frame rebuilds only the data that
-became invalid. The paint stage assembles a finished scene from recordings that intersect the damage
-set, and the renderer keeps pixels outside that set.
+became invalid. The paint stage records the fragments the damage reaches as compositor chunks, and
+the compositor keeps every other chunk and the pixels it drew.
 
 ```text
   components and signals            zgui-view, zgui-view-macro, zgui-elements, zgui-reactive
@@ -32,9 +32,9 @@ set, and the renderer keeps pixels outside that set.
             ▼
   paint                             zgui-paint
             │
-            │  a display list: primitives, batches, vector passes, damage
+            │  a transaction: chunks, nodes, slots and the order
             ▼
-  the renderer                      zgui-render (contract), zgui-render-wgpu (+ vector rasteriser)
+  the compositor and renderer       compositor-api (contract), compositor-core, compositor-wgpu
             │
             ▼
   a surface                         zgui-platform (contract), zgui-platform-wayland /
@@ -42,7 +42,7 @@ set, and the renderer keeps pixels outside that set.
 ```
 
 The arrows are one-way. A stage never reaches back up: layout does not mutate the document, paint
-does not consult the cascade, and the renderer knows nothing about elements. This is what makes each
+does not consult the cascade, and the compositor knows nothing about elements. This is what makes each
 stage testable on its own, and it is why every horizontal edge in the diagram is a value type rather
 than a shared object.
 
@@ -65,11 +65,12 @@ than a shared object.
    delivers geometry observations. An observation can cause at most two additional
    flush-restyle-layout passes. The runtime also updates hit targets under stationary pointers and
    plans the caret.
-5. **Paint.** The stacking-order walk replays the display-list recording for unchanged fragments.
-   It re-emits changed fragments and culls them against the damage rectangles.
-6. **Draw.** The renderer receives the finished display list and the damage set. It composes into a
-   target that it keeps between frames. Pixels outside the damage keep their values from the
-   previous frame.
+5. **Paint.** The stacking-order walk visits the fragments the damage rectangles reach. An
+   unchanged fragment keeps its compositor chunk, moved by an offset when it moved, and a changed
+   one is recorded again. The window commits the frame's transaction to the compositor.
+6. **Draw.** The compositor builds a frame from what changed, and the window's renderer draws it
+   into a target it keeps between frames. Pixels the frame does not redraw keep their values from
+   the previous frame.
 7. **Publish and schedule.** The runtime publishes the accessibility update, recycles frame-local
    document data, applies renderer pacing information, and calls the frame probe with the final
    window state.
@@ -87,17 +88,21 @@ mechanically.
 | Layer | Crates | What the layer is |
 |---|---|---|
 | L0 foundation | `zgui-geom`, `zgui-color`, `zgui-arena`, `zgui-interned`, `zgui-bits`, `zgui-profile` | Coordinate spaces, colour, storage whose addresses hold still, interned names, invalidation bits, counters. No policy. |
-| L1 contracts | `zgui-vocab`, `zgui-css`, `zgui-space`, `zgui-scene`, `zgui-render`, `zgui-atlas`, `zgui-platform`, `zgui-reactive` | The traits and value types the rest of the tree agrees on. Nothing here implements anything replaceable. |
-| L2 backends | `zgui-render-wgpu`, `zgui-render-vector-vello`, `zgui-render-vector-coverage`, `zgui-platform-wayland`, `zgui-platform-winit`, `zgui-platform-web`, `zgui-platform-headless` | Implementations of L1 contracts. Every one of them is replaceable, and every one of them has a sibling. |
+| L1 contracts | `zgui-vocab`, `zgui-css`, `zgui-space`, `zgui-platform`, `zgui-reactive` | The traits and value types the rest of the tree agrees on. Nothing here implements anything replaceable. |
+| L2 backends | `zgui-platform-wayland`, `zgui-platform-winit`, `zgui-platform-web`, `zgui-platform-headless` | Implementations of L1 contracts. Every one of them is replaceable, and every one of them has a sibling. |
 | L3 document | `zgui-dom` | One arena of nodes, safe to read from many threads while the cascade runs over it. |
-| L4 engines | `zgui-style`, `zgui-layout`, `zgui-text`, `zgui-text-style`, `zgui-text-parley`, `zgui-paint`, `zgui-svg` | The stages that turn a document into a display list. |
+| L4 engines | `zgui-style`, `zgui-layout`, `zgui-text`, `zgui-text-style`, `zgui-text-parley`, `zgui-paint`, `zgui-svg` | The stages that turn a document into compositor chunks. |
 | L5 systems | `zgui-input`, `zgui-scroll`, `zgui-a11y`, `zgui-anim`, `zgui-edit` | Behaviour over a laid-out document: hit testing and dispatch, scrolling, the accessibility projection, transitions and animations, text editing. |
 | L6 frontend | `zgui-view`, `zgui-view-dom`, `zgui-view-macro`, `zgui-elements` | How an interface is described, and the three seams it is described against. |
-| L7 runtime and tooling | `zgui-runtime`, `zgui`, `zgui-testkit-scene`, `zgui-testkit-view`, `zgui-conformance` | The frame pipeline, the umbrella crate an application depends on, and the instruments. |
+| L7 runtime and tooling | `zgui-runtime`, `zgui`, `zgui-testkit`, `zgui-testkit-compositor`, `zgui-testkit-view`, `zgui-conformance` | The frame pipeline, the umbrella crate an application depends on, and the instruments. |
 | L8 product | `zgui-ui`, `zgui-ui-primitives`, `zgui-ui-tokens`, `zgui-ui-icons`, `zgui-devtools`, `zgui-examples`, `zgui-bench` | The component library, the inspector, the worked applications, and the measurement harness. Ordinary consumers of the public API. |
 
 `zgui` is the crate an application depends on. Everything else is reachable through it, and an
 application that only wants to describe an interface never names any of the others.
+
+The compositor crates are a workspace of their own, below every zgui layer. The engine crates name
+only its interface, `compositor-types` and `compositor-api`. The umbrella, `zgui-wgpu`, the console
+and DRM crates, the bench and the compositor test kit choose its implementations.
 
 The unpublished `probe` crate is outside these product layers. It is a compile canary that verifies
 that all pinned external engines can build together.
@@ -109,8 +114,8 @@ These are the seams a consumer is most likely to meet.
 
 | Seam | Crate | What plugs in |
 |---|---|---|
-| `Renderer` | `zgui-render` | A device that puts a display list on a screen. |
-| `VectorRaster` | `zgui-render` | A path rasteriser the renderer composites the output of. |
+| `Compositor` | `compositor-api` | What holds a window's chunks and property trees and builds its frames. |
+| `Renderer` | `compositor-api` | A device that draws the compositor's frames. |
 | `Surface`, `AppHandler`, `Clock`, `Waker`, `Clipboard` | `zgui-platform` | A windowing system, or the absence of one. |
 | `Dom`, `ViewHost`, `EventSink` | `zgui-view` | The node tree, the engine that laid it out, and where a handler's commands go. |
 | `SheetLoader`, `ReplacedContent`, `LinkResolver`, `PresentationalHints` | `zgui-dom` | The four things a document language brings that a document core cannot define for itself. |
@@ -155,13 +160,13 @@ on Wayland, resizing from an edge on macOS. An application asks once and runs ev
 repaint, and their subtree halves — and each stage retires exactly the obligations it serviced as it
 walks. A stage never has to ask "did anything change?" globally; it is handed the set.
 
-**A description is a value.** The display list is a value with no renderer in it. A computed style
+**A description is a value.** A transaction is a value with no renderer in it. A computed style
 is a shared pointer two elements that cascaded alike will hold the same copy of. A fragment tree is
 data. Everything crossing a stage boundary can be printed, compared and asserted on with no device
 and no window, which is why most of this framework's tests run headless.
 
 **Cost is proportional to change.** A signal write invalidates precisely its observers. A restyle
-visits the elements that owe one. A frame emits the primitives the damage rectangles reach. There is
+visits the elements that owe one. A frame records the fragments the damage rectangles reach. There is
 no per-frame full traversal anywhere in the pipeline, and the absence of one is measured rather than
 assumed.
 
@@ -172,6 +177,7 @@ assumed.
 - [The reactive model](reactivity.md) — signals, owners, the flush, and the three `Send` escapes.
 - [Doing something that takes time](async.md) — tasks, worker threads, cancellation, and tokio.
 - [Drawing on a canvas](canvas.md) — retained scenes, the view transform, and data-space series.
-- [Writing a `Renderer`](renderer.md) — the contract, damage, and what a second renderer must not do.
+- [Drawing through a compositor](renderer.md) — what a window sends, and how to choose another
+  compositor or renderer.
 - [Running in a browser](web.md) — the WebAssembly build, its renderers, fonts and limits.
 - [Building a browser on zgui](browser.md) — the extension points, in the order a consumer meets them.
