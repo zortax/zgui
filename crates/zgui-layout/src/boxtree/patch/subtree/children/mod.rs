@@ -93,7 +93,11 @@ pub(super) fn splice(
             );
             continue;
         }
-        if let Some(node) = store.get_mut(key) {
+        // Written only when it changes, since a write marks the box's order and its parent's.
+        let placed = store
+            .get(key)
+            .is_some_and(|node| node.parent == Some(plan.container) && node.parent_fc == plan.fc);
+        if !placed && let Some(node) = store.get_mut(key) {
             node.parent = Some(plan.container);
             node.parent_fc = plan.fc;
         }

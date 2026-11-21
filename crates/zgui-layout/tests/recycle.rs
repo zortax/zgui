@@ -176,6 +176,29 @@ fn one_row_of_travel_rebuilds_one_row() {
 }
 
 #[test]
+fn one_row_of_travel_marks_the_order_of_no_row_that_stayed() {
+    let _recording = Recording::begin();
+    let mut fixture = port();
+    let mut store = fixture.box_tree();
+    let kept: Vec<BoxKey> = (1..ROWS)
+        .flat_map(|index| boxes(&store, &fixture, ROW_NAMES[index]))
+        .collect();
+
+    let pane = shift(&mut fixture, "row0", "row8");
+    let version = store.order_version();
+    patch::rebuild(&mut store, &fixture.document, &owes_children(pane))
+        .expect("a row arriving in a column of rows is confined");
+
+    let mut marked = Vec::new();
+    store.order_dirty_since(version, &mut marked);
+    let stayed: Vec<&BoxKey> = kept.iter().filter(|row| marked.contains(row)).collect();
+    assert!(
+        stayed.is_empty(),
+        "the splice marked rows that stayed: {stayed:?}"
+    );
+}
+
+#[test]
 fn eight_rows_of_travel_leave_the_tree_a_build_would_leave() {
     let _recording = Recording::begin();
     let mut fixture = port();
