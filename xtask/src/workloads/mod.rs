@@ -99,11 +99,11 @@ mod tests {
     #[test]
     fn a_criterion_with_a_verdict_beside_it_counts_as_stated() {
         assert!(states(
-            "LIST-glide ok  0.9037  (recorded 0.9200 +/-12%)",
+            "LIST-glide ok  0.1450  (recorded 0.1440 +/-67%)",
             "LIST-glide"
         ));
         assert!(states(
-            "LIST-glide REGRESSION  1.4000, recorded 0.92",
+            "LIST-glide REGRESSION  0.3000, recorded 0.144",
             "LIST-glide"
         ));
         assert!(states(
@@ -129,7 +129,7 @@ mod tests {
         let message = gone(
             "list-slope",
             &["LIST-glide"],
-            "LIST-scroll-cost ok  0.9146  (recorded 0.9200 +/-12%)\nok: 9 criteria, all inside\n",
+            "LIST-scroll-cost ok  0.1450  (recorded 0.1440 +/-67%)\nok: 9 criteria, all inside\n",
         );
         assert!(message.contains("LIST-scroll-cost"), "{message}");
         assert!(!message.contains("nothing at all"), "{message}");
