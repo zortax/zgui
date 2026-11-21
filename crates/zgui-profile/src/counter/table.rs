@@ -320,28 +320,11 @@ counters! {
     /// cache that is not being consulted.
     GlyphsRasterised => glyphs_rasterised, Group::BackendNeutral;
 
-    /// Cached rasters freed to bring the atlas back under its soft limit.
-    AtlasTilesEvicted => atlas_tiles_evicted, Group::BackendNeutral;
-
     /// Encoded bytes live `ImageBytes` registrations are holding.
     ///
     /// These sit beside the decoded texels and the tiles: an in-memory picture costs its encoded
     /// form for as long as the application holds the handle, whatever the caches do.
     EncodedImageBytes => encoded_image_bytes, Group::BackendNeutral;
-
-    /// Atlas tiles a cached primitive range took ownership of when it was recorded.
-    ///
-    /// A range that is replayed rather than encoded draws its glyphs without looking any of them
-    /// up, so nothing else tells the atlas those tiles are still being drawn. The record holds
-    /// them instead, and this counts the holds it took.
-    RecordTilesRetained => record_tiles_retained, Group::BackendNeutral;
-
-    /// Holds given up when a cached range was re-encoded or dropped.
-    ///
-    /// Its pair. Over the life of a window the two totals converge, and a gap between them that
-    /// grows is a record whose keys were never given back — which is an atlas where nothing is
-    /// ever evictable again, and no other counter here can see it.
-    RecordTilesReleased => record_tiles_released, Group::BackendNeutral;
 
     /// Surface pixels inside the damage rectangles that were redrawn.
     DamagePx => damage_px, Group::RendererSpecific;

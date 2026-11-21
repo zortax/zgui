@@ -10,9 +10,10 @@
 //! What arrives is already-decoded, already-premultiplied texels. Decoding a file format is a
 //! decision about which codecs an application links, and it happens off the frame thread.
 
-use zgui_atlas::{AtlasKey, TextureKind};
 use zgui_dom::host::ReplacedId;
 use zgui_geom::{Device, Size};
+
+use crate::emit::record::ImageKey;
 
 /// What went wrong attaching content to a replaced node.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -37,8 +38,8 @@ pub enum ImageError {
 const SHARED: u64 = 1 << 63;
 
 /// The key a loader's shared handle resolves to.
-pub(crate) fn shared_key(handle: u64) -> AtlasKey {
-    AtlasKey::new(SHARED | handle, TextureKind::Image)
+pub(crate) fn shared_key(handle: u64) -> ImageKey {
+    ImageKey(SHARED | handle)
 }
 
 /// One piece of replaced content, as the frame draws it.
@@ -47,7 +48,7 @@ pub(crate) enum Content {
     /// Texels this framework owns, which the compositor keeps as the image `key`.
     Decoded {
         /// What the texels are kept under.
-        key: AtlasKey,
+        key: ImageKey,
         /// The extent of the texels.
         size: Size<u32, Device>,
         /// The image's own extent, which the texels may be a downscale of.
@@ -63,7 +64,7 @@ pub(crate) enum Content {
     /// drawing, and whoever owns the source decodes it again.
     Uploaded {
         /// What the texels were kept under.
-        key: AtlasKey,
+        key: ImageKey,
         /// The image's own extent, which its texels may be a downscale of.
         natural: Size<u32, Device>,
     },
@@ -79,7 +80,7 @@ impl Content {
         texels: Vec<u8>,
     ) -> Result<Self, ImageError> {
         Self::under_key(
-            AtlasKey::new(handle(id), TextureKind::Image),
+            ImageKey(handle(id)),
             size,
             size,
             std::sync::Arc::new(texels),
@@ -114,14 +115,14 @@ impl Content {
     /// host texels safe; a per-node entry was attached directly and its texels are the only copy.
     pub(crate) fn is_shared(&self) -> bool {
         match self {
-            Self::Decoded { key, .. } | Self::Uploaded { key, .. } => key.handle() & SHARED != 0,
+            Self::Decoded { key, .. } | Self::Uploaded { key, .. } => key.0 & SHARED != 0,
             Self::External(_) => false,
         }
     }
 
     /// The entry both constructors build, once the bytes are checked against the extent.
     fn under_key(
-        key: AtlasKey,
+        key: ImageKey,
         size: Size<u32, Device>,
         natural: Size<u32, Device>,
         texels: std::sync::Arc<Vec<u8>>,

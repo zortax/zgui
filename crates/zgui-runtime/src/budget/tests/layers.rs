@@ -1,7 +1,6 @@
 //! What the layer budget frees, over a real content cache.
 
 use kurbo::{Affine, BezPath};
-use zgui_atlas::AtlasLimits;
 use zgui_paint::ContentCache;
 use zgui_paint::VectorId;
 use zgui_paint::content::vectors::{Drawing, LayerAnswer, LayerRequest, outlines};
@@ -40,7 +39,7 @@ fn layer(content: &mut ContentCache, owner: u32, drawing: &Drawing) -> bool {
 
 #[test]
 fn the_layer_budget_evicts_layers_the_frame_did_not_draw_oldest_first() {
-    let mut content = ContentCache::new(AtlasLimits::default());
+    let mut content = ContentCache::new();
     let drawings = [drawing(), drawing(), drawing()];
     for (owner, drawing) in drawings.iter().enumerate() {
         content.begin_frame();

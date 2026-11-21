@@ -406,7 +406,6 @@ impl Harness {
             let mut input = PaintInput {
                 vectors: &drawings,
                 vector_masks: &frame,
-                resources: &frame,
                 scale: self.scale,
                 ..PaintInput::new(&self.store, &self.damage)
             };
@@ -660,7 +659,7 @@ fn emit(
     scene: &mut Tables,
 ) -> zgui_paint::PaintReport {
     if painter.compositor().is_some() && !output.owns_sync {
-        painter.retire(retired, scene, &zgui_paint::walk::replay::hold::NoResources);
+        painter.retire(retired, scene);
         return painter.emit(input, scene);
     }
     // A painter with no sync has recorded nothing, so the compositor starts it with nothing.
@@ -672,7 +671,7 @@ fn emit(
     let transaction = output.session.transaction();
     let sync = painter.compositor().expect("attached above");
     sync.open(transaction);
-    painter.retire(retired, scene, &zgui_paint::walk::replay::hold::NoResources);
+    painter.retire(retired, scene);
     let report = painter.emit(input, scene);
     let sync = painter.compositor().expect("attached above");
     let transaction = sync.close(store, scene).expect("opened above");

@@ -7,7 +7,6 @@
 mod support;
 
 use kurbo::{self, Affine, Shape as _};
-use zgui_atlas::AtlasLimits;
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
@@ -52,7 +51,7 @@ impl Window {
         Self {
             harness: Harness::sized(tree, css, size.0, size.1),
             vectors: VectorCache::new(),
-            content: ContentCache::new(AtlasLimits::default()),
+            content: ContentCache::new(),
             extent: size,
         }
     }

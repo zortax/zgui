@@ -63,8 +63,7 @@ pub mod walk;
 
 pub use crate::content::vectors::VectorId;
 pub use crate::content::{
-    ContentCache, Drawing, FrameContent, ImageError, NoVectors, TileOwner, VectorCache,
-    VectorSource, Vectors,
+    ContentCache, Drawing, FrameContent, ImageError, NoVectors, VectorCache, VectorSource, Vectors,
 };
 pub use crate::damage::accumulate::{Expansion, expand, vacated};
 pub use crate::damage::ink::{ReadExtent, cull_rect, read_extent_of};

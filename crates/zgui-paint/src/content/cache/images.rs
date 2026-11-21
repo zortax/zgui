@@ -3,7 +3,6 @@
 use core::cell::{Cell, RefCell};
 
 use rustc_hash::{FxHashMap, FxHashSet};
-use zgui_atlas::AtlasKey;
 use zgui_dom::host::ReplacedId;
 use zgui_geom::{Device, Size};
 
@@ -29,7 +28,7 @@ pub(crate) struct ImageContent {
     /// between two moments. In a cell because the walk that resolves them is an immutable reader.
     hits: Cell<u64>,
     /// The texels a frame handed to the compositor, by key.
-    served: RefCell<FxHashSet<AtlasKey>>,
+    served: RefCell<FxHashSet<ImageKey>>,
     /// Uploaded attachments a frame found the compositor holds no image of.
     ///
     /// In a cell because the walk that finds them is an immutable reader. Drained by
@@ -237,7 +236,7 @@ impl ReplacedSource for FrameContent<'_> {
             } => {
                 images.served.borrow_mut().insert(*key);
                 Source::Decoded {
-                    key: ImageKey(key.handle()),
+                    key: *key,
                     size: *size,
                     natural: *natural,
                     texels: Some(std::sync::Arc::clone(texels)),
@@ -245,7 +244,7 @@ impl ReplacedSource for FrameContent<'_> {
                 }
             }
             Content::Uploaded { key, natural } => Source::Decoded {
-                key: ImageKey(key.handle()),
+                key: *key,
                 size: *natural,
                 natural: *natural,
                 texels: None,

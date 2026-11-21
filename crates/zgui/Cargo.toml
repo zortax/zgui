@@ -30,8 +30,7 @@ compositor-text.workspace = true
 compositor-types.workspace = true
 compositor-vello.workspace = true
 compositor-wgpu.workspace = true
-# The tile store and the damage set.
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+# The damage set.
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
 zgui-custom = { path = "../zgui-custom", version = "0.1.0" }

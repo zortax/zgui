@@ -6,7 +6,6 @@
 
 mod support;
 
-use zgui_atlas::AtlasLimits;
 use zgui_geom::{Device, Size};
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::{ContentCache, FrameContent};
@@ -55,7 +54,7 @@ fn emit_borrows_no_renderer() {
     // A whole frame, drawn through a cache that holds a picture, with no sink anywhere in the call.
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let (size, texels) = image();
     cache
         .set_image(harness.replaced_id("picture"), size, texels)

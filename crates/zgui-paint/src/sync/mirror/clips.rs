@@ -1,12 +1,10 @@
 //! Clip chains mirrored as clip nodes.
 
-use compositor_types::{ClipId, ClipNode, ClipShape, MaskMode, Transaction};
+use compositor_types::{ClipId, ClipNode, ClipShape, Transaction};
 use rustc_hash::FxHashMap;
 use zgui_space::{ChangeCoverage, ClipLink, ClipTable, SpatialTree, TableVersion};
 
-use crate::emit::record::ImageKey;
 use crate::sync::mirror::holds::Holds;
-use crate::sync::mirror::images::Images;
 use crate::sync::mirror::spaces::Spaces;
 
 /// The clip node of each mirrored clip chain, by zgui clip id.
@@ -34,7 +32,6 @@ struct Entry {
 pub(crate) struct Sources<'a> {
     pub(crate) table: &'a mut ClipTable,
     pub(crate) spaces: &'a mut Spaces,
-    pub(crate) images: &'a Images,
     pub(crate) tree: &'a SpatialTree,
 }
 
@@ -70,11 +67,7 @@ impl Clips {
         if let Some(Some(entry)) = self.entries.get(id.0 as usize) {
             return Some(entry.id);
         }
-        let node = match self.node(tx, holds, sources, id)? {
-            Ok(node) => node,
-            // Mask links need a compositor image of the coverage tile.
-            Err(parent) => return parent,
-        };
+        let node = self.node(tx, holds, sources, id)?;
         let mirrored = tx.create_clip(node.clone());
         holds.created(mirrored);
         hold_links(holds, mirrored, &node);
@@ -144,7 +137,7 @@ impl Clips {
         let Some(Some(entry)) = self.entries.get(id.0 as usize).cloned() else {
             return 0;
         };
-        let Some(Ok(node)) = self.node(tx, holds, sources, id) else {
+        let Some(node) = self.node(tx, holds, sources, id) else {
             return 0;
         };
         if node == entry.written {
@@ -160,57 +153,28 @@ impl Clips {
         1
     }
 
-    /// Returns the clip node `id` is mirrored as, or the parent's node when its link cannot be
-    /// expressed, or `None` for the root.
+    /// Returns the clip node `id` is mirrored as, or `None` for the root.
     fn node(
         &mut self,
         tx: &mut Transaction,
         holds: &mut Holds,
         sources: &mut Sources<'_>,
         id: zgui_space::ClipId,
-    ) -> Option<Result<ClipNode, Option<ClipId>>> {
+    ) -> Option<ClipNode> {
         let zgui_space::ClipNode::Link { link, parent, .. } = *sources.table.get(id)? else {
             return None;
         };
         let parent = self.mirror(tx, holds, sources, parent);
-        let (rect, radii, shape, space) = match link {
-            ClipLink::RoundedRect {
-                rect,
-                radii,
-                shape,
-                space,
-            } => (rect, radii, shape, space),
-            ClipLink::Mask {
-                tile, transform, ..
-            } => {
-                let Some(image) = sources.images.id(ImageKey::of_texture(tile.texture)) else {
-                    return Some(Err(parent));
-                };
-                let space = sources
-                    .spaces
-                    .mirror(tx, holds, sources.tree, transform.index());
-                let size = tile.bounds.size;
-                return Some(Ok(ClipNode {
-                    parent,
-                    space,
-                    shape: ClipShape::Mask {
-                        image,
-                        rect: [0.0, 0.0, size.width as f32, size.height as f32],
-                        source: [
-                            tile.bounds.origin.x as f32,
-                            tile.bounds.origin.y as f32,
-                            size.width as f32,
-                            size.height as f32,
-                        ],
-                        mode: MaskMode::ALPHA,
-                    },
-                }));
-            }
-        };
+        let ClipLink::RoundedRect {
+            rect,
+            radii,
+            shape,
+            space,
+        } = link;
         let space = sources
             .spaces
             .mirror(tx, holds, sources.tree, space.index());
-        Some(Ok(ClipNode {
+        Some(ClipNode {
             parent,
             space,
             shape: ClipShape::RoundedRect {
@@ -232,7 +196,7 @@ impl Clips {
                 ],
                 shapes: [shape.0; 4],
             },
-        }))
+        })
     }
 }
 

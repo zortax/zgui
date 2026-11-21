@@ -1269,7 +1269,7 @@ mod tests {
             "the unattached variant is the evictable part"
         );
 
-        let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+        let mut content = ContentCache::new();
         let freed = loader.evict(u64::MAX, &mut content);
         assert_eq!(freed, 128 * 4, "the attached variant is never touched");
         assert_eq!(loader.held_bytes(), 1024 * 4);
@@ -1288,7 +1288,7 @@ mod tests {
         loader.insert_ready_for_tests("second.png", &[], picture(4));
         loader.insert_ready_for_tests("third.png", &[], picture(4));
 
-        let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+        let mut content = ContentCache::new();
         let freed = loader.evict(1, &mut content);
         assert_eq!(freed, 4 * 4 * 4, "one entry was enough for one byte");
         assert!(

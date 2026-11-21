@@ -169,7 +169,6 @@ const LEDGER: &[(&str, &[&str])] = &[
         "kurbo",
         &[
             "zgui-elements",
-            "zgui-space",
             "zgui-paint",
             // The paths the runtime's vector layer budget tests draw.
             "zgui-runtime",
@@ -199,7 +198,6 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-canvas",
         ],
     ),
-    ("etagere", &["zgui-atlas"]),
     ("bytemuck", &["zgui-geom", "zgui-space"]),
     ("syn", &["zgui-view-macro", "zgui-shader-macro"]),
     ("quote", &["zgui-view-macro", "zgui-shader-macro"]),

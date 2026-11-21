@@ -193,8 +193,7 @@ impl ClipTable {
         let mut rounded = 0usize;
         // Walk towards the root instead of materialising and reversing the chain. Intersections
         // commute; up to two rounded tests are kept, and a third hands the chain to
-        // `resolve_deep`; and the first mask seen is the innermost one, which is the one the
-        // former outer-to-inner overwrite kept.
+        // `resolve_deep`.
         let mut cursor = id;
         while let Some(node) = self.get(cursor) {
             let ClipNode::Link { link, parent, .. } = node else {
@@ -224,11 +223,6 @@ impl ClipTable {
                             resolved.rounded[0] = test;
                             rounded = Self::MAX_INLINE_ROUNDED;
                         }
-                    }
-                }
-                ClipLink::Mask { tile, .. } => {
-                    if resolved.mask.is_none() {
-                        resolved.mask = Some(tile);
                     }
                 }
             }
@@ -265,11 +259,6 @@ impl ClipTable {
                     intersect(&mut resolved.aabb, rect);
                     if link.is_rounded() {
                         tests.push(test_of(rect, radii, shape.get()));
-                    }
-                }
-                ClipLink::Mask { tile, .. } => {
-                    if resolved.mask.is_none() {
-                        resolved.mask = Some(tile);
                     }
                 }
             }
@@ -355,11 +344,6 @@ impl ClipTable {
                         }
                     }
                 }
-                ClipLink::Mask { tile, .. } => {
-                    if resolved.mask.is_none() {
-                        resolved.mask = Some(tile);
-                    }
-                }
             }
             cursor = *parent;
         }
@@ -385,15 +369,7 @@ impl ClipTable {
     /// Whether `id` is deeper than one draw call can apply, and so needs its content drawn into a
     /// target of its own.
     pub fn needs_group_target(&self, id: ClipId) -> bool {
-        let mut rounded = 0;
-        let mut masks = 0;
-        let mut cursor = id;
-        while let Some(ClipNode::Link { link, parent, .. }) = self.get(cursor) {
-            rounded += usize::from(link.is_rounded());
-            masks += usize::from(matches!(link, ClipLink::Mask { .. }));
-            cursor = *parent;
-        }
-        rounded > Self::MAX_INLINE_ROUNDED || masks > 1
+        self.rounded_links(id) > Self::MAX_INLINE_ROUNDED
     }
 
     /// The clip rectangle `id` admits, as geometry rather than as shader input.
@@ -519,16 +495,6 @@ impl ClipTable {
             residual = self.push_shifted(residual, link, shift);
         }
         residual
-    }
-
-    /// Whether every link of `id` can be applied inside a vector rasteriser's own scene.
-    ///
-    /// When it cannot — a sampled raster mask — the content has to be composited through a pass
-    /// bound to its own clip, which is the one case where a clip costs a whole pass.
-    pub fn is_expressible_in_vector_scene(&self, id: ClipId) -> bool {
-        self.links(id)
-            .iter()
-            .all(ClipLink::is_expressible_in_vector_scene)
     }
 
     /// The chain `id` is applied inside, or [`ClipId::ROOT`] when there is none.

@@ -1571,12 +1571,9 @@ impl Window {
             self.painted = self.damage;
             self.tables.begin_frame(viewport);
             // No renderer is borrowed here, and none is reachable from anything the walk touches.
-            // Giving content a tile and growing the atlas to hold it are decided against this
-            // window's own state; what a device is asked to do about any of it is queued and
-            // performed at the flush below.
             let content = self.content.frame(&layout, &self.text);
             if !retired.is_empty() {
-                self.painter.retire(&retired, &mut self.tables, &content);
+                self.painter.retire(&retired, &mut self.tables);
             }
             // The device pixel ratio and what the device can do are both properties of this
             // window, and both change what is emitted: the first decides where a snapped edge
@@ -1622,12 +1619,6 @@ impl Window {
                     .router
                     .pointers()
                     .position_of(zgui_vocab::PointerId::MOUSE),
-                // The same object again, and deliberately: what it answers here is not "give me
-                // this" but "keep this". A range this frame records is replayed by later frames
-                // without any of them looking a glyph up, so the record is what tells the atlas
-                // those tiles are still on the screen.
-                resources: &content,
-                verify_replays: self.verify_replays,
                 // A translucent surface is composited over something else, and per-channel text
                 // coverage has no meaning there: the paint demotes it to ordinary coverage.
                 opaque_surface: !self.translucent,

@@ -8,7 +8,6 @@ mod support;
 use std::sync::Arc;
 
 use kurbo::{self, Affine, BezPath, Circle, Shape as _};
-use zgui_atlas::AtlasLimits;
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
@@ -52,7 +51,7 @@ impl Fixture {
             harness: Harness::new(tree, css),
             handle,
             vectors: VectorCache::new(),
-            content: ContentCache::new(AtlasLimits::default()),
+            content: ContentCache::new(),
             recording: Recording::begin(),
         }
     }

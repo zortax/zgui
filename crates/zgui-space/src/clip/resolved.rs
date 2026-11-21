@@ -1,7 +1,6 @@
 //! The flattened clip a draw call binds.
 
 use bytemuck::{Pod, Zeroable};
-use zgui_atlas::AtlasTile;
 
 /// One rounded-rectangle test, in the layout a shader reads it in.
 ///
@@ -21,8 +20,8 @@ pub struct RoundedTest {
 
 /// A whole clip chain, flattened into what one draw call can apply.
 ///
-/// A chain of any length collapses to an intersection rectangle plus at most two rounded tests plus
-/// at most one coverage mask. Rounded tests that change no pixel inside the rectangle are left out.
+/// A chain of any length collapses to an intersection rectangle plus at most two rounded tests.
+/// Rounded tests that change no pixel inside the rectangle are left out.
 /// When more than two remain, the two innermost are kept and [`ResolvedClip::dropped`] counts the
 /// others; [`ClipTable::needs_group_target`](crate::ClipTable::needs_group_target) names the chains
 /// a target of their own would draw exactly.
@@ -36,8 +35,6 @@ pub struct ResolvedClip {
     pub rounded_count: u32,
     /// How many rounded tests that change pixels could not be applied.
     pub dropped: u8,
-    /// The coverage tile the chain samples, if it has one.
-    pub mask: Option<AtlasTile>,
 }
 
 impl ResolvedClip {
@@ -60,7 +57,6 @@ impl ResolvedClip {
             rounded: [RoundedTest::default(); 2],
             rounded_count: 0,
             dropped: 0,
-            mask: None,
         }
     }
 

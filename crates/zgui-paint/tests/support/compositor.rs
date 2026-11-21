@@ -53,11 +53,7 @@ impl Recorded {
             .expect("attached above")
             .open(transaction);
         let retired = harness.store.drain_retired_paint();
-        harness.painter.retire(
-            &retired,
-            &mut harness.scene,
-            &zgui_paint::walk::replay::hold::NoResources,
-        );
+        harness.painter.retire(&retired, &mut harness.scene);
         harness.paint();
         let sync = harness.painter.compositor().expect("attached above");
         let transaction = sync

@@ -86,11 +86,6 @@ impl Images {
         self.entries.contains_key(&key)
     }
 
-    /// Returns the image mirrored for `key`, if one is.
-    pub(crate) fn id(&self, key: ImageKey) -> Option<ImageId> {
-        self.entries.get(&key).map(|entry| entry.id)
-    }
-
     /// Forgets the image `id`, which was removed.
     pub(crate) fn removed(&mut self, id: ImageId) {
         let Some(key) = self.keys.remove(&id) else {

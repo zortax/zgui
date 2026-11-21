@@ -27,7 +27,6 @@ impl CacheRegistry for Window {
         visit(&mut PaintChunksBudget::new(
             &mut self.painter,
             &mut self.tables,
-            &mut self.content,
             chunk_bytes,
             self.budgets.tracked(CacheId::PaintChunks),
         ));

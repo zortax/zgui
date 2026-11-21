@@ -7,7 +7,6 @@ use zgui_layout::{Fragment, FragmentKind};
 use zgui_space::{ClipId, SpatialId};
 
 use crate::lower::cache::PaintStyleRef;
-use crate::walk::replay::hold::NoResources;
 use crate::walk::replay::{Encoding, LayerRecord, PaintCache, Reuse};
 
 /// A minted key, for a test that needs a name and not a stored value.
@@ -73,11 +72,9 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     let swapped = crate::walk::replay::Painted {
@@ -121,11 +118,9 @@ fn a_fragment_whose_border_widths_moved_is_encoded() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     ruled.border.top = DevicePx(1.0);
@@ -148,11 +143,9 @@ fn a_fragment_replayed_where_it_stands_has_not_moved_from_its_record() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     let replayed = fragment(0.0, 14.173_738);
     cache.replayed(&replayed);
@@ -173,11 +166,9 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     // A second frame, so the range recorded is in the retained log rather than this frame's.
     tables.begin_frame(Size::new(256, 256));
@@ -205,11 +196,9 @@ fn a_fragment_moved_twice_replays_with_the_whole_distance() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     let step_one = fragment(0.0, 10.0);
@@ -246,11 +235,9 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     let dimmed = crate::walk::replay::Painted {
@@ -276,11 +263,9 @@ fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     let squared = crate::walk::replay::Painted {
@@ -309,11 +294,9 @@ fn a_fragment_whose_runs_lose_or_regain_subpixel_coverage_is_encoded_again() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     let resampled = crate::walk::replay::Painted {
@@ -337,11 +320,9 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     assert_eq!(
@@ -374,11 +355,9 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     line.kind = FragmentKind::Line {
@@ -406,11 +385,9 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     let mut wider = fragment(0.0, 0.0);
@@ -443,11 +420,9 @@ fn a_record_encoded_beyond_the_clip_replays_on_arrival() {
             minted: Vec::new(),
             items: 1,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
 
@@ -475,11 +450,9 @@ fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
     let recut = crate::walk::replay::Painted {
@@ -503,11 +476,9 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     // Many frames pass in which nothing visits the fragment — scrolled out, culled, or simply
     // outside every damage rectangle. The record owns its primitives, so it stands.
@@ -537,17 +508,15 @@ fn a_retired_fragment_loses_its_record() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     assert_eq!(cache.len(), 1);
-    cache.retire(&[gone.key], &mut tables, &NoResources);
+    cache.retire(&[gone.key], &mut tables);
     assert_eq!(cache.len(), 0);
     // Retiring a name with no record is the ordinary case and costs nothing.
-    cache.retire(&[gone.key], &mut tables, &NoResources);
+    cache.retire(&[gone.key], &mut tables);
     assert_eq!(cache.reuse(&tables, &gone, painted(0), None), Reuse::Encode);
 }
 
@@ -566,11 +535,9 @@ fn encode_minting(cache: &mut PaintCache, tables: &mut Tables, fragment: &Fragme
             minted: vec![clip],
             items: 1,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
     clip
 }
@@ -589,7 +556,7 @@ fn a_record_holds_its_minted_clips_until_it_is_dropped() {
     encode_minting(&mut cache, &mut tables, &one);
     assert_eq!(tables.clips.refs(clip), Some(1));
 
-    cache.retire(&[one.key], &mut tables, &NoResources);
+    cache.retire(&[one.key], &mut tables);
     assert_eq!(tables.clips.refs(clip), Some(0));
     assert_eq!(cache.bytes(), 0);
 }
@@ -602,12 +569,12 @@ fn eviction_takes_only_cold_records_and_is_a_clean_miss() {
     let clip = encode_minting(&mut cache, &mut tables, &one);
 
     // Selected this frame: the working set is never taken, however much was asked for.
-    assert_eq!(cache.evict_cold(u64::MAX, &mut tables, &NoResources), 0);
+    assert_eq!(cache.evict_cold(u64::MAX, &mut tables), 0);
     assert_eq!(cache.len(), 1);
 
     // A frame later it is cold, and eviction takes it and releases what it held.
     cache.begin_frame();
-    let freed = cache.evict_cold(u64::MAX, &mut tables, &NoResources);
+    let freed = cache.evict_cold(u64::MAX, &mut tables);
     assert!(freed > 0);
     assert_eq!(cache.len(), 0);
     assert_eq!(cache.bytes(), 0);
@@ -659,11 +626,9 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer: Default::default(),
         },
-        &NoResources,
     );
 
     tables.begin_frame(Size::new(256, 256));
@@ -707,11 +672,9 @@ fn an_encoding_that_could_not_place_everything_is_not_recorded() {
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: false,
             layer: Default::default(),
         },
-        &NoResources,
     );
 
     assert!(cache.is_empty(), "nothing was remembered");
@@ -740,11 +703,9 @@ fn a_record_is_given_up_when_a_later_encoding_falls_short() {
                 minted: Vec::new(),
                 items: 0,
                 drawn: Rect::default(),
-                resources: &[],
                 complete,
                 layer: Default::default(),
             },
-            &NoResources,
         );
     }
 
@@ -761,11 +722,9 @@ fn layered(cache: &mut PaintCache, tables: &mut Tables, fragment: &Fragment, lay
             minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
-            resources: &[],
             complete: true,
             layer,
         },
-        &NoResources,
     );
     tables.begin_frame(Size::new(256, 256));
 }

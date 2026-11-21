@@ -632,24 +632,11 @@ fn clipped_in(
     // usually the tightest one, so a miss is usually found soonest.
     let mut cursor = clip;
     while let Some(ClipNode::Link { link, parent, .. }) = clips.get(cursor) {
-        let inside = match *link {
-            ClipLink::RoundedRect {
-                rect, radii, space, ..
-            } => carried(space).is_some_and(|local| {
-                crate::fragment::hit::entry::covers_rounded(rect, radii, local)
-            }),
-            // A sampled mask decides coverage per pixel, which is a question for whatever holds the
-            // coverage tile. Its rectangle is the most this index can test.
-            ClipLink::Mask {
-                tile, transform, ..
-            } => carried(transform).is_some_and(|local| {
-                let bounds = tile.bounds;
-                local.x.0 >= bounds.origin.x as f32
-                    && local.y.0 >= bounds.origin.y as f32
-                    && local.x.0 <= (bounds.origin.x + bounds.size.width) as f32
-                    && local.y.0 <= (bounds.origin.y + bounds.size.height) as f32
-            }),
-        };
+        let ClipLink::RoundedRect {
+            rect, radii, space, ..
+        } = *link;
+        let inside = carried(space)
+            .is_some_and(|local| crate::fragment::hit::entry::covers_rounded(rect, radii, local));
         if !inside {
             return false;
         }

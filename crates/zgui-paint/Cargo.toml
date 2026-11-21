@@ -16,8 +16,6 @@ include.workspace = true
 web-time.workspace = true
 # Generation-checked handles, which a fragment key is one of.
 zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
-# Glyph tiles and mask tiles are named by the primitives this crate emits.
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 # The damage set this stage grows and then reads.
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }

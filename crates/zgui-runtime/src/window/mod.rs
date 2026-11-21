@@ -196,13 +196,7 @@ pub struct Window {
     tables: Tables,
     /// The paint stage's state between frames.
     painter: Painter,
-    /// Whether every replayed range is checked against the cache holding the rasters it draws.
-    ///
-    /// See [`Window::set_verify_replays`]. It is read once per frame and passed into the walk,
-    /// rather than the walk reading the environment, so that the answer is a property of this
-    /// window and a test can state it.
-    verify_replays: bool,
-    /// The glyph tiles and decoded images this window draws from.
+    /// The decoded images and the vector caches this window draws from.
     content: ContentCache,
     /// The same, for the nodes whose content is an externally rendered surface.
     replaced_surfaces: Arc<crate::replaced::IntrinsicTable>,
@@ -592,17 +586,13 @@ impl Window {
             ]),
         ));
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
-        // The atlas may create textures as large as the device allows, so a photo the device can
-        // hold is cached whole rather than clamped to the smallest supported device's limit.
-        let atlas_limits = zgui_atlas::AtlasLimits {
-            max_texture_size: i32::try_from(renderer.capabilities().max_texture_size)
-                .unwrap_or(i32::MAX),
-            ..zgui_atlas::AtlasLimits::default()
-        };
-        // The `- 2` keeps a maximal decode allocatable once the atlas pads the tile.
+        // A photo the device can hold is decoded whole rather than clamped to the smallest
+        // supported device's limit.
+        let max_texture_size =
+            i32::try_from(renderer.capabilities().max_texture_size).unwrap_or(i32::MAX);
         let images = crate::images::ImageLoader::new(
             Arc::clone(&replaced_images),
-            (atlas_limits.max_texture_size - 2).max(1) as u32,
+            (max_texture_size - 2).max(1) as u32,
         );
         let sources = images.source_queue();
         let secure_changes: Rc<RefCell<Vec<zgui_dom::NodeKey>>> = Rc::default();
@@ -713,8 +703,7 @@ impl Window {
             hold_due: None,
             tables: Tables::new(),
             painter: Painter::new(),
-            verify_replays: zgui_layout::invariants::enabled(),
-            content: ContentCache::new(atlas_limits),
+            content: ContentCache::new(),
             replaced_surfaces,
             images,
             embed: Box::new(crate::embed::NoEmbeds),
@@ -1250,16 +1239,6 @@ impl Window {
         &mut self.content
     }
 
-    /// Turns on the check that every replayed range still owns the rasters it draws.
-    ///
-    /// On by default only when `ZGUI_INVARIANTS` is set, because it costs a lookup per distinct
-    /// raster per replayed fragment — a per-frame cost proportional to what the replay saved. A
-    /// test about the check itself turns it on directly, rather than depending on how the process
-    /// was launched.
-    pub fn set_verify_replays(&mut self, verify: bool) {
-        self.verify_replays = verify;
-    }
-
     /// Turns on the check that the compositor redraws nothing the paint walk did not visit.
     ///
     /// A frame that breaks it panics, naming what was redrawn outside the region the walk was
@@ -1269,21 +1248,6 @@ impl Window {
     /// when `ZGUI_INVARIANTS` is set.
     pub fn set_check_damage_containment(&mut self, check: bool) {
         self.check_damage = check;
-    }
-
-    /// Every raster a live paint record names that the content cache no longer holds.
-    ///
-    /// Empty for a window whose records own what they draw, and that is the whole assertion: a key
-    /// here names a rectangle of a texture some fragment is going to replay out of and something
-    /// else is now free to write into. It is the state no other observation of the window can see
-    /// — the display list is what it was, the geometry never moved, and the pixels are wrong only
-    /// once the rectangle has been handed out and filled.
-    pub fn stale_replay_resources(&self) -> Vec<zgui_atlas::AtlasKey> {
-        self.painter
-            .cache()
-            .resources()
-            .filter(|key| !self.content.atlas().contains(*key))
-            .collect()
     }
 
     /// Unmounts the view and drops everything the window was holding on its behalf.

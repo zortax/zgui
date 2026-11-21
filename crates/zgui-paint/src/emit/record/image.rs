@@ -17,16 +17,6 @@ pub type ShownTiles = Arc<[(ImageKey, Rect<DevicePx, Device>)]>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ImageKey(pub u64);
 
-impl ImageKey {
-    /// The key namespace of atlas textures.
-    const TEXTURES: u64 = 0x7C00_0000_0000_0000;
-
-    /// Returns the key of the image a mask clip over a tile of `texture` samples.
-    pub fn of_texture(texture: zgui_atlas::TextureId) -> Self {
-        Self(Self::TEXTURES | u64::from(texture.kind as u8) << 32 | u64::from(texture.index))
-    }
-}
-
 /// The texels of an image, for the recorder to create or update the compositor's copy.
 #[derive(Clone, Copy, Debug)]
 pub struct ImagePixels<'a> {

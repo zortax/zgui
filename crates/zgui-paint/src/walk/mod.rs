@@ -26,7 +26,6 @@ use std::borrow::Cow;
 
 use crate::Tables;
 use compositor_types::RenderCapabilities;
-use zgui_atlas::AtlasKey;
 use zgui_bits::DamageSet;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Edges, Rect};
@@ -52,7 +51,6 @@ use crate::sync::CompositorSync;
 use crate::walk::decorate::Decorations;
 use crate::walk::fill::TextFills;
 use crate::walk::order::{Emission, NoReplaced, ReplacedSource};
-use crate::walk::replay::hold::{NoResources, ResourceOwner};
 use crate::walk::replay::{Encoding, LayerRecord, PaintCache, Painted, Reuse};
 
 pub use crate::walk::order::{NoReplaced as NoReplacedContent, ReplacedSource as ReplacedContent};
@@ -90,13 +88,6 @@ pub struct PaintInput<'a> {
     /// identically wherever the pointer is, which is what keeps a pointer move from repainting
     /// every box that carries one.
     pub pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
-    /// The cache a recorded range's rasters live in, which the record holds them in.
-    ///
-    /// Separate from [`PaintInput::glyphs`] and [`PaintInput::replaced`] even though one object
-    /// usually answers all three: those two are asked *for* content while the walk runs, and this
-    /// one is told what to keep afterwards. A source that has no atlas behind it — a fixture, a
-    /// document with no text — passes [`NoResources`] and records nothing to keep.
-    pub resources: &'a dyn ResourceOwner,
     /// What each node's running animations are currently overriding.
     ///
     /// Asked per box rather than folded into the lowering, because a lowering is shared between
@@ -120,14 +111,6 @@ pub struct PaintInput<'a> {
     /// would take the oracle with it, so the release tree would be asserting nothing where the
     /// debug tree asserts the whole thing.
     pub record_emitted: bool,
-    /// Whether every replayed range is checked against the cache its rasters live in.
-    ///
-    /// The check is what catches a range drawing a raster that has been freed underneath it — see
-    /// [`replay::hold`]. It costs a lookup per distinct raster per replayed fragment, which is a
-    /// per-frame cost proportional to what the frame *saved*, so it is off unless something asks
-    /// for it: [`PaintInput::new`] takes its default from
-    /// [`zgui_layout::invariants::enabled`], and a test that is about the check sets it directly.
-    pub verify_replays: bool,
     /// The drawn frame's resolved matrices, for putting a line's marks where they are drawn.
     ///
     /// The caret and selection rectangles a line reports are measured in the line's own space,
@@ -156,14 +139,12 @@ impl<'a> PaintInput<'a> {
             custom: &crate::content::custom::NoCustom,
             shaders: &crate::content::shader::NoShaders,
             pointer: None,
-            resources: &NoResources,
             anim: &NoAnim,
             capabilities: RenderCapabilities::MINIMAL,
             opaque_surface: true,
             scale: 1.0,
             scrollbars: crate::emit::scrollbar::default_paint(),
             record_emitted: false,
-            verify_replays: zgui_layout::invariants::enabled(),
             placements: None,
         }
     }
@@ -300,7 +281,6 @@ struct WalkScratch {
     outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
     decorations: Decorations,
     text_fills: TextFills,
-    named: Vec<AtlasKey>,
     shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
     spaces: rustc_hash::FxHashMap<zgui_space::SpatialId, Option<zgui_geom::Affine2>>,
 }
@@ -313,7 +293,6 @@ impl WalkScratch {
         self.outlines.clear();
         self.decorations.clear();
         self.text_fills.clear();
-        self.named.clear();
         self.shapes.clear();
         self.spaces.clear();
     }
@@ -400,7 +379,6 @@ impl Painter {
             outlines: scratch.outlines,
             decorations: scratch.decorations,
             text_fills: scratch.text_fills,
-            named: scratch.named,
             shapes: scratch.shapes,
             spaces: scratch.spaces,
         };
@@ -412,7 +390,6 @@ impl Painter {
             outlines,
             decorations,
             text_fills,
-            named,
             shapes,
             spaces,
             ..
@@ -423,7 +400,6 @@ impl Painter {
             outlines,
             decorations,
             text_fills,
-            named,
             shapes,
             spaces,
         };
@@ -453,71 +429,27 @@ impl Painter {
     /// Called once per painted frame, before [`Painter::emit`], with the drained retirement list.
     /// Together with the budget's eviction this is what removes a record: a fragment's painting
     /// lives as long as the fragment, or until memory pressure takes it as a clean miss.
-    pub fn retire(
-        &mut self,
-        keys: &[zgui_layout::FragKey],
-        tables: &mut Tables,
-        owner: &dyn ResourceOwner,
-    ) {
+    pub fn retire(&mut self, keys: &[zgui_layout::FragKey], tables: &mut Tables) {
         if let Some(sync) = &mut self.sync {
             sync.retire(keys);
         }
-        self.cache.retire(keys, tables, owner);
+        self.cache.retire(keys, tables);
     }
 
     /// Drops the coldest records until `bytes` chunk bytes have gone, and reports how many went.
-    pub fn evict_cold_chunks(
-        &mut self,
-        bytes: u64,
-        tables: &mut Tables,
-        owner: &dyn ResourceOwner,
-    ) -> u64 {
-        self.cache.evict_cold(bytes, tables, owner)
-    }
-
-    /// Drops the coldest records holding a raster `holds` names until their rasters sum to
-    /// `bytes`, as `bytes_of` weighs each, and reports how many records went.
-    ///
-    /// Records selected this frame are never taken. A raster several records hold is weighed once.
-    pub fn evict_cold_holding(
-        &mut self,
-        bytes: u64,
-        bytes_of: &dyn Fn(AtlasKey) -> Option<u64>,
-        tables: &mut Tables,
-        owner: &dyn ResourceOwner,
-    ) -> usize {
-        let cold = self.cache.cold_holding(&|key| bytes_of(key).is_some());
-        let mut picked = Vec::new();
-        let mut weighed = rustc_hash::FxHashSet::default();
-        let mut sum = 0;
-        for (fragment, held) in cold {
-            if sum >= bytes {
-                break;
-            }
-            picked.push(fragment);
-            for key in held {
-                if weighed.insert(key) {
-                    sum += bytes_of(key).unwrap_or(0);
-                }
-            }
-        }
-        self.cache.evict(&picked, tables, owner)
+    pub fn evict_cold_chunks(&mut self, bytes: u64, tables: &mut Tables) -> u64 {
+        self.cache.evict_cold(bytes, tables)
     }
 
     /// Drops the records of `fragments`, so the next frame whose damage reaches them encodes them
     /// again, and reports how many went.
-    pub fn evict_records(
-        &mut self,
-        fragments: &[FragKey],
-        tables: &mut Tables,
-        owner: &dyn ResourceOwner,
-    ) -> usize {
-        self.cache.evict(fragments, tables, owner)
+    pub fn evict_records(&mut self, fragments: &[FragKey], tables: &mut Tables) -> usize {
+        self.cache.evict(fragments, tables)
     }
 
     /// Drops every record, releasing everything each one held into caches that survive.
-    pub fn clear_records(&mut self, tables: &mut Tables, owner: &dyn ResourceOwner) {
-        self.cache.clear_releasing(tables, owner);
+    pub fn clear_records(&mut self, tables: &mut Tables) {
+        self.cache.clear_releasing(tables);
     }
 }
 
@@ -547,8 +479,6 @@ struct Pass<'a, 'b> {
     decorations: Decorations,
     /// The ramps contributed by the boxes still on the walk, for the text inside them.
     text_fills: TextFills,
-    /// The rasters the fragment currently being encoded has named, reused between fragments.
-    named: Vec<AtlasKey>,
     /// The fingerprint of what each coordinate system does to shapes, by name, for this frame.
     shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
     /// What each coordinate system resolves to in the plane, by name, for this frame.
@@ -954,33 +884,6 @@ impl Pass<'_, '_> {
         (u64::from(at.x.0.to_bits()) << 32) | u64::from(at.y.0.to_bits()) | 1
     }
 
-    /// Fails if the range about to be replayed draws a raster that has been freed underneath it.
-    ///
-    /// # Panics
-    ///
-    /// Naming the fragment and the keys, when [`PaintInput::verify_replays`] is set and the record
-    /// holds a key its cache no longer has. Nothing further along can produce a better message:
-    /// the display list is exactly what it was last frame, the geometry never moved, and the only
-    /// evidence downstream is a letter that is the wrong letter.
-    fn verify_replay(&self, fragment: &Fragment) {
-        if !self.input.verify_replays {
-            return;
-        }
-        let stale = self
-            .painter
-            .cache
-            .stale_resources(fragment, self.input.resources);
-        assert!(
-            stale.is_empty(),
-            "fragment {:?} is about to replay a range naming {} raster(s) its cache no longer \
-             holds, the first of them {:?}: the rectangles they name are free to be handed to \
-             other content, so the replay draws whatever took their place",
-            fragment.key,
-            stale.len(),
-            stale.first(),
-        );
-    }
-
     /// Emits the outline of the box `key`, whose first fragment is `frag`, into its own chunk
     /// when the damage reaches it.
     fn outline(
@@ -1182,7 +1085,6 @@ impl Pass<'_, '_> {
         };
         match reuse {
             Reuse::Replay(offset) => {
-                self.verify_replay(fragment);
                 let items = self
                     .painter
                     .cache
@@ -1207,16 +1109,6 @@ impl Pass<'_, '_> {
                     self.emission(fragment, &style, &decorations, text_fill.as_ref(), &inline);
                 emission.box_placement.owned =
                     owned.map(|owned| (PropertyOwner::of(fragment.box_), owned));
-                // Emptied immediately before the encoding rather than after it, so that whatever a
-                // source placed for somebody else — a run visited and then declined, a fragment
-                // that returned early above — cannot be attributed to this fragment and held for
-                // as long as this fragment lives.
-                self.named.clear();
-                self.input.resources.take_named(&mut self.named);
-                // Read either side of the encoding: a refusal in between is a raster the fragment
-                // draws that had nowhere to go, and it leaves a hole in the chunk that nothing
-                // downstream can see.
-                let refusals = self.input.resources.refusals();
                 self.tables.begin_minting();
                 let painter = &mut *self.painter;
                 let mut rec = Recorder::new(
@@ -1241,8 +1133,6 @@ impl Pass<'_, '_> {
                         routes: emitted.vector_routes,
                     });
                 }
-                self.named.clear();
-                self.input.resources.take_named(&mut self.named);
                 if let Some(owed) = emitted.layer.owed {
                     self.report.layers_owed.push(owed);
                 }
@@ -1254,10 +1144,8 @@ impl Pass<'_, '_> {
                         minted,
                         items,
                         drawn,
-                        resources: &self.named,
                         // A deferred drawing drew nothing this frame, which a record would replay.
-                        complete: self.input.resources.refusals() == refusals
-                            && !emitted.layer.deferred,
+                        complete: !emitted.layer.deferred,
                         layer: LayerRecord {
                             phase: phase.filter(|_| emitted.layer.sprite),
                             provisional: emitted.layer.provisional,
@@ -1267,7 +1155,6 @@ impl Pass<'_, '_> {
                             window: emitted.layer.window,
                         },
                     },
-                    self.input.resources,
                 );
             }
         }

@@ -8,7 +8,6 @@
 
 mod support;
 
-use zgui_atlas::AtlasLimits;
 use zgui_geom::Size;
 use zgui_paint::ContentCache;
 use zgui_testkit_compositor::{Drawing, Instance};
@@ -44,7 +43,7 @@ fn an_attached_image_becomes_an_image_over_the_content_box() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let (size, texels) = image();
     cache
         .set_image(harness.replaced_id("picture"), size, texels)
@@ -88,7 +87,7 @@ fn a_replaced_box_with_no_content_draws_no_image() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     harness.paint_content(&mut cache);
 
     assert!(
@@ -104,7 +103,7 @@ fn one_image_drawn_twice_is_written_once() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let id = harness.replaced_id("picture");
     let (size, texels) = image();
     cache.set_image(id, size, texels).expect("well formed");
@@ -124,7 +123,7 @@ fn a_detached_picture_releases_its_image() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let id = harness.replaced_id("picture");
     let (size, texels) = image();
     cache.set_image(id, size, texels).expect("well formed");
@@ -149,7 +148,7 @@ fn a_settled_attachment_is_served_by_its_image_and_reported_when_the_image_goes(
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let id = harness.replaced_id("picture");
     let (size, texels) = image();
     cache
@@ -210,7 +209,7 @@ fn two_nodes_sharing_a_handle_share_one_image() {
     let mut harness = Harness::new(tree, CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let (size, texels) = image();
     let texels = std::sync::Arc::new(texels);
     let ids = harness.replaced_ids("picture");

@@ -30,7 +30,6 @@ tracing.workspace = true
 # and both are frame-loop concerns: only the loop knows when the document and its geometry agree,
 # and an action has to be dispatched where listeners can be called.
 zgui-a11y = { path = "../zgui-a11y", version = "0.1.0" }
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-anim = { path = "../zgui-anim", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }

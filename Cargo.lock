@@ -5840,7 +5840,6 @@ dependencies = [
  "compositor-wgpu",
  "tracing",
  "web-time",
- "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
  "zgui-custom",
@@ -5900,18 +5899,6 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "proptest",
-]
-
-[[package]]
-name = "zgui-atlas"
-version = "0.1.0"
-dependencies = [
- "etagere",
- "proptest",
- "rustc-hash 2.1.3",
- "thiserror 2.0.19",
- "zgui-bits",
- "zgui-geom",
 ]
 
 [[package]]
@@ -6255,7 +6242,6 @@ dependencies = [
  "web-time",
  "zeno",
  "zgui-arena",
- "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
  "zgui-color",
@@ -6443,7 +6429,6 @@ dependencies = [
  "zgui-a11y",
  "zgui-anim",
  "zgui-arena",
- "zgui-atlas",
  "zgui-bits",
  "zgui-color",
  "zgui-css",
@@ -6536,12 +6521,10 @@ name = "zgui-space"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
- "kurbo",
  "proptest",
  "rustc-hash 2.1.3",
  "smallvec",
  "zgui-arena",
- "zgui-atlas",
  "zgui-bits",
  "zgui-geom",
  "zgui-profile",

@@ -6,7 +6,6 @@
 mod support;
 
 use kurbo::{self, BezPath, Circle, Shape as _};
-use zgui_atlas::AtlasLimits;
 use zgui_canvas::{Brush, SceneHandle, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{PaintReport, VectorCache, VectorRoute};
@@ -34,10 +33,7 @@ fn canvas(shapes: Vec<zgui_canvas::Shape>, css: &str) -> (Harness, SceneHandle) 
 
 /// Paints one frame through the shared atlas with fresh caches.
 fn paint(harness: &mut Harness) -> PaintReport {
-    harness.paint_cached_vectors(
-        &VectorCache::new(),
-        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-    )
+    harness.paint_cached_vectors(&VectorCache::new(), &mut zgui_paint::ContentCache::new())
 }
 
 /// Whether the one element painted took the marks route and no other.
@@ -324,7 +320,7 @@ fn a_marks_canvas_replays_when_it_moves() {
     ]);
     let mut harness = Harness::new(tree, css);
     let vectors = VectorCache::new();
-    let mut content = zgui_paint::ContentCache::new(AtlasLimits::default());
+    let mut content = zgui_paint::ContentCache::new();
     let first = harness.paint_cached_vectors_ready(&vectors, &mut content, true);
     assert!(first.vector_routes[0].routes.contains(VectorRoute::Marks));
     let place = |drawing: &Drawing| {

@@ -1,9 +1,8 @@
 //! The clip trie's structural promises.
 
-use zgui_atlas::{AtlasKey, AtlasTile, TextureId, TextureKind, TileId};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size, Vec2};
 
-use crate::clip::{ClipLink, ClipTable, MaskSource};
+use crate::clip::{ClipLink, ClipTable};
 use crate::id::ClipId;
 use crate::spatial::SpatialId;
 
@@ -13,16 +12,6 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
         Point::new(DevicePx(x), DevicePx(y)),
         Size::new(DevicePx(width), DevicePx(height)),
     )
-}
-
-/// A coverage tile, for the mask links.
-fn tile() -> AtlasTile {
-    let _ = AtlasKey::new(0, TextureKind::Mono);
-    AtlasTile {
-        texture: TextureId::new(TextureKind::Mono, 0),
-        tile: TileId(1),
-        bounds: Rect::new(Point::new(0, 0), Size::new(8, 8)),
-    }
 }
 
 #[test]
@@ -172,32 +161,12 @@ fn an_empty_intersection_is_visible_as_such() {
 }
 
 #[test]
-fn a_raster_mask_is_the_one_link_a_vector_scene_cannot_express() {
-    let mut clips = ClipTable::rooted();
-    let path_mask = clips.only(ClipLink::Mask {
-        tile: tile(),
-        transform: SpatialId::VIEWPORT,
-        source: MaskSource::Path,
-    });
-    let raster_mask = clips.only(ClipLink::Mask {
-        tile: tile(),
-        transform: SpatialId::VIEWPORT,
-        source: MaskSource::Raster,
-    });
-
-    assert!(clips.is_expressible_in_vector_scene(path_mask));
-    assert!(!clips.is_expressible_in_vector_scene(raster_mask));
-    assert!(clips.is_expressible_in_vector_scene(ClipId::ROOT));
-}
-
-#[test]
 fn the_unbounded_clip_admits_a_surface_sized_rectangle() {
     let clips = ClipTable::rooted();
     let root = clips.resolve(ClipId::ROOT);
     assert!(!root.is_empty());
     assert!(root.left() < 0.0 && root.right() > 8192.0);
     assert_eq!(root.rounded_count, 0);
-    assert_eq!(root.mask, None);
 }
 
 #[test]

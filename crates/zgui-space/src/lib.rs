@@ -35,9 +35,7 @@ pub mod id;
 pub mod spatial;
 pub mod table;
 
-pub use crate::clip::{
-    ClipLink, ClipNode, ClipTable, KeptClip, MaskSource, ResolvedClip, RoundedTest,
-};
+pub use crate::clip::{ClipLink, ClipNode, ClipTable, KeptClip, ResolvedClip, RoundedTest};
 pub use crate::content::{Content, ContentHash};
 pub use crate::corner::CornerShape;
 pub use crate::id::{ClipId, PaintId, PaintSlot, ScrollFrameId, StackingContextId};

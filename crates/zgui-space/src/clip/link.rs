@@ -1,25 +1,10 @@
 //! One link of a clip chain.
 
-use zgui_atlas::AtlasTile;
 use zgui_geom::{Corners, Device, DevicePx, Rect, Size, Vec2};
 
 use crate::content::{Content, ContentHash};
 use crate::id::ClipId;
 use crate::spatial::SpatialId;
-
-/// Where a clipping mask's shape came from.
-///
-/// It decides one thing, and the decision is worth a whole rasterisation pass: a mask that is still
-/// a path can be drawn *inside* a vector rasteriser's own scene, and a mask that has already become
-/// a raster tile cannot, so an item carrying one has to be composited through a pass of its own.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum MaskSource {
-    /// The mask is a path, and any rasteriser can apply it as a clip layer of its own.
-    Path,
-    /// The mask is a sampled raster tile — a bitmap `mask-image` — and can only be applied by
-    /// something that can sample a texture.
-    Raster,
-}
 
 /// One clipping test.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -50,15 +35,6 @@ pub enum ClipLink {
         /// where the clip is now. [`SpatialId::VIEWPORT`] — the identity — is every clip outside a
         /// transform, which is nearly all of them.
         space: SpatialId,
-    },
-    /// An arbitrary shape, rasterised into a coverage tile and sampled.
-    Mask {
-        /// The coverage tile.
-        tile: AtlasTile,
-        /// How the tile maps onto the content.
-        transform: SpatialId,
-        /// Whether the shape is still a path, which decides where the clip can be applied.
-        source: MaskSource,
     },
 }
 
@@ -118,7 +94,6 @@ impl ClipLink {
             ]
             .iter()
             .any(|radius| radius.x.0 != 0.0 || radius.y.0 != 0.0),
-            Self::Mask { .. } => false,
         }
     }
 
@@ -144,19 +119,6 @@ impl ClipLink {
                 shape,
                 space,
             },
-            other => other,
-        }
-    }
-
-    /// Whether a vector rasteriser can apply this link inside its own scene.
-    ///
-    /// Everything expressible is absorbed into the vector content that carries it, which costs a
-    /// clip layer; everything else costs a whole rasterisation pass. That is the entire reason this
-    /// distinction is on the link rather than being re-derived by each consumer.
-    pub fn is_expressible_in_vector_scene(&self) -> bool {
-        match self {
-            Self::RoundedRect { .. } => true,
-            Self::Mask { source, .. } => *source == MaskSource::Path,
         }
     }
 }
@@ -195,22 +157,6 @@ impl Content for ClipLink {
                 // box issues while it moves has to be the chain it issued before it started.
                 .u32(space.index())
                 .u32(u32::from(space.generation().get()))
-                .finish(),
-            Self::Mask {
-                tile,
-                transform,
-                source,
-            } => hash
-                .u32(1)
-                .u64(tile.texture.index as u64)
-                .u32(tile.tile.0)
-                .i32(tile.bounds.origin.x)
-                .i32(tile.bounds.origin.y)
-                .i32(tile.bounds.size.width)
-                .i32(tile.bounds.size.height)
-                .u32(transform.index())
-                .u32(u32::from(transform.generation().get()))
-                .u32(u32::from(*source == MaskSource::Raster))
                 .finish(),
         }
     }

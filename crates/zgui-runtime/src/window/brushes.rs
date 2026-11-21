@@ -484,8 +484,7 @@ impl Window {
             }
         }
         drop(layout);
-        self.painter
-            .evict_records(&fragments, &mut self.tables, &self.content.tile_owner());
+        self.painter.evict_records(&fragments, &mut self.tables);
     }
 }
 

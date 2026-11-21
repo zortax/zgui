@@ -150,8 +150,6 @@ pub use zgui_view_macro::{component, css, slot, style, variants, view};
 /// `::zgui::expansion::…`, which is what lets a crate that writes views depend on this one alone.
 pub use zgui_elements::expansion;
 
-/// Where a glyph tile or a decoded image is kept, and how it reaches a device.
-pub use zgui_atlas as atlas;
 /// The damage a frame has to redraw.
 pub use zgui_bits as bits;
 /// What a `canvas` element is drawn with: scenes, shapes and brushes.

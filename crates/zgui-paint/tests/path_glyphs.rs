@@ -6,7 +6,6 @@
 mod support;
 
 use std::sync::Arc;
-use zgui_atlas::AtlasLimits;
 
 use kurbo::{Affine, BezPath};
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
@@ -46,7 +45,7 @@ impl Window {
             harness: Harness::new(tree, &format!("{CSS}\n{style}")),
             handle,
             vectors: VectorCache::new(),
-            content: ContentCache::new(AtlasLimits::default()),
+            content: ContentCache::new(),
         }
     }
 

@@ -12,7 +12,6 @@
 
 mod support;
 
-use zgui_atlas::AtlasLimits;
 use zgui_paint::Tables;
 use zgui_paint::VectorCache;
 use zgui_paint::emit::record::Recording;
@@ -37,10 +36,7 @@ fn tree() -> Element {
 
 /// Paints one frame through a content cache, so the shapes take the routes a window gives them.
 fn paint_cached(harness: &mut Harness) -> zgui_paint::PaintReport {
-    harness.paint_cached_vectors(
-        &VectorCache::new(),
-        &mut zgui_paint::ContentCache::new(AtlasLimits::default()),
-    )
+    harness.paint_cached_vectors(&VectorCache::new(), &mut zgui_paint::ContentCache::new())
 }
 
 /// The mono masks and paths of `drawing`, in draw order.

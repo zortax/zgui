@@ -134,18 +134,14 @@ impl<'a> Recorder<'a> {
     /// Adds a clip of `link` inside the clip `parent` refers to, which moves with the chunk, and
     /// returns the reference items drawn through it hold.
     ///
-    /// Returns `None` for a link that is no rounded rectangle measured in the chunk's default
-    /// coordinate system.
+    /// Returns `None` for a link measured in another coordinate system than the chunk's default.
     pub fn local_clip_in(&mut self, parent: ClipRef, link: ClipLink) -> Option<ClipRef> {
         let ClipLink::RoundedRect {
             rect,
             radii,
             shape,
             space,
-        } = link
-        else {
-            return None;
-        };
+        } = link;
         if space != self.items.space {
             return None;
         }

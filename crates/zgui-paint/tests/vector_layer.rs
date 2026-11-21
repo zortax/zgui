@@ -9,7 +9,6 @@ mod support;
 
 use std::collections::HashMap;
 
-use zgui_atlas::AtlasLimits;
 use zgui_color::Color;
 use zgui_dom::{Document, NodeKind};
 use zgui_geom::{Affine2, DevicePx, Point, Rect, Size};
@@ -275,7 +274,7 @@ fn a_layer_matches_the_general_route_on_the_conformance_set() {
     let mut failures = Vec::new();
     for (name, source) in conformance_set() {
         for case in CASES {
-            let mut content = ContentCache::new(AtlasLimits::default());
+            let mut content = ContentCache::new();
             let by_layer = layered(&mut gpu, &source, case, &mut content).pixels;
             let by_paths = general(&mut gpu, &source, case).pixels;
             let (mean, worst, at, count) = difference(&by_layer, &by_paths);
@@ -323,7 +322,7 @@ fn tiles_of_a_huge_drawing_match_the_general_route() {
         };
         let (mut scene, transform) = ground(case);
         let (drawing, revision) = drawing_of(HUGE, case);
-        let mut content = ContentCache::new(AtlasLimits::default());
+        let mut content = ContentCache::new();
         content.begin_frame();
         let answer = content.layer(LayerRequest {
             owner: VectorId(1),

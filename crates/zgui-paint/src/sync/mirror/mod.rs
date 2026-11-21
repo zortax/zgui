@@ -59,7 +59,6 @@ impl Mirror {
             Sources {
                 table: &mut tables.clips,
                 spaces: &mut self.spaces,
-                images: &self.images,
                 tree: &tables.spatial,
             },
         );
@@ -89,7 +88,6 @@ impl Mirror {
         let sources = Sources {
             table: &mut tables.clips,
             spaces: &mut self.spaces,
-            images: &self.images,
             tree: &tables.spatial,
         };
         self.clips.ensure(tx, &mut self.holds, sources, id)
@@ -105,7 +103,6 @@ impl Mirror {
         let mut sources = Sources {
             table: &mut tables.clips,
             spaces: &mut self.spaces,
-            images: &self.images,
             tree: &tables.spatial,
         };
         self.clips.mirror(tx, &mut self.holds, &mut sources, id)
