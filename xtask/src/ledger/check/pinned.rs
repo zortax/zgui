@@ -48,9 +48,7 @@ const NEVER_VISIBLE: &[&str] = &[
     "zgui-dom",
     "zgui-layout",
     "zgui-style",
-    "zgui-render",
     "zgui-space",
-    "zgui-scene",
     "zgui-platform",
 ];
 
@@ -70,8 +68,6 @@ const BELOW_THE_VIEW_LAYER: &[&str] = &[
     "zgui-text",
     "zgui-paint",
     "zgui-space",
-    "zgui-scene",
-    "zgui-render",
     "zgui-platform",
 ];
 

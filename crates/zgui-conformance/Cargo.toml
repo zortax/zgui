@@ -32,7 +32,7 @@ zgui-space = { path = "../zgui-space", version = "0.1.0" }
 # The deterministic shaper and the golden-comparison machinery every rendering here is checked
 # with. A conformance run that depended on the fonts installed on the machine would measure the
 # machine.
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 

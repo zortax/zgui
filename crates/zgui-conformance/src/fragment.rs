@@ -23,7 +23,7 @@ use core::fmt::Write as _;
 use zgui_geom::{Device, DevicePx, Point, Rect};
 use zgui_layout::tree::store::LayoutStore;
 use zgui_layout::{BoxKey, Fragment, FragmentKind};
-use zgui_testkit_scene::text::number;
+use zgui_testkit::text::number;
 
 /// The whole fragment tree of a laid-out document, rendered.
 ///

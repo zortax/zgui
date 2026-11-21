@@ -81,9 +81,7 @@ where
         .with_compositor(compositor())
         .with_renderer(Box::new(screen))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
         .into_handler(view)
         .expect("the reactive runtime installs")

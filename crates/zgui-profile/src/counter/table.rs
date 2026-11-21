@@ -240,19 +240,6 @@ counters! {
     /// faded to nothing.
     PaintSubtreesCulled => paint_subtrees_culled, Group::Skip { done: Counter::NodesVisited };
 
-    /// Sprites whose resource had to be looked up again after the whole frame had been pushed.
-    ///
-    /// A sprite names the content it samples; where that content landed in a texture is a separate
-    /// answer, and a sprite pushed before the answer exists carries a placeholder until a pass over
-    /// the frame fills it in. The pass is per instance and only over the instances that need it,
-    /// which is why the alternative — reading the placement in the shader — was refused: that is one
-    /// more load per *pixel* of the commonest primitive there is.
-    SpritesFixedUp => sprites_fixed_up, Group::BackendNeutral;
-
-    /// Sprites whose resource was already placed when they were pushed.
-    SpritesResolvedAtPush => sprites_resolved_at_push,
-        Group::Skip { done: Counter::SpritesFixedUp };
-
     /// Insertions into the structure that assigns draw order.
     ///
     /// Nothing else observes how large the scene the paint stage builds actually is, which is what
@@ -322,13 +309,6 @@ counters! {
     /// nothing at all.
     VelloPasses => vello_passes, Group::BackendNeutral;
 
-    /// Clip layers folded into vector passes so that differently clipped items could share one.
-    ///
-    /// It sits beside [`Counter::VelloPasses`] because folding a clip *moves* the cost of a
-    /// distinctly clipped item rather than deleting it, and a suite watching only the pass count
-    /// would read that trade as a free win.
-    VectorClipLayers => vector_clip_layers, Group::BackendNeutral;
-
     /// Glyphs recorded into glyph runs.
     GlyphsPlaced => glyphs_placed, Group::BackendNeutral;
 
@@ -383,9 +363,6 @@ counters! {
     /// Individual atlas rectangles copied to GPU textures.
     AtlasTextureWrites => atlas_texture_writes, Group::RendererSpecific;
 
-    /// Non-empty staged atlas upload batches submitted to the queue.
-    AtlasUploadBatches => atlas_upload_batches, Group::RendererSpecific;
-
     /// Side-table slots flattened again for a renderer.
     ///
     /// Read beside upload bytes: this stays at zero for unchanged tables and exposes a CPU-side
@@ -397,18 +374,6 @@ counters! {
     /// Ordinarily non-zero only while the belt grows to its working set. A recurring value points
     /// directly at GPU backlog or a workload that repeatedly exceeds that working set.
     UploadChunksAllocated => upload_chunks_allocated, Group::RendererSpecific;
-
-    /// Mapped staging bytes the upload belt keeps warm for reuse.
-    ///
-    /// The belt's steady working set. A figure far above what ordinary frames write means a burst
-    /// grew the belt and the retention period has not yet let it go.
-    StagingWarmBytes => staging_warm_bytes, Group::RendererSpecific;
-
-    /// Staging bytes in one-shot chunks: oversized transfers that leave with their frame.
-    ///
-    /// Read as a high-water sign of image and scene bursts. It falls to zero on its own; a value
-    /// that persists means large uploads on every frame.
-    StagingOneShotBytes => staging_one_shot_bytes, Group::RendererSpecific;
 
     /// Nanoseconds the GPU spent in the renderer's timed passes.
     ///
@@ -462,32 +427,11 @@ counters! {
     AtlasEntriesLive => atlas_entries_live, Group::Live;
 
 
-    /// Layers the vector scratch texture is allocated with right now.
-    ScratchLayers => scratch_layers, Group::Live;
-
-    /// Bytes the vector scratch texture occupies on the device right now.
-    ScratchBytes => scratch_bytes, Group::Live;
-
     /// Frames whose vector content was refused because the scratch had no room for it.
     ///
     /// Every one of these is content the user asked for and did not get, drawn nowhere and
     /// reported nowhere else.
     VectorFramesDropped => vector_frames_dropped, Group::BackendNeutral;
-
-    /// Times a renderer built its general vector rasteriser.
-    ///
-    /// At most one per renderer. The build costs hundreds of milliseconds and a large fixed
-    /// allocation, so a document that can draw every shape from the atlas must keep this at zero.
-    VectorBackendBuilt => vector_backend_built, Group::RendererSpecific;
-
-    /// Rasterisations the general vector rasteriser performed on the device.
-    VelloRenders => vello_renders, Group::RendererSpecific;
-
-    /// Vector item encodings the general rasteriser found current and used again.
-    VectorEncodeHits => vector_encode_hits, Group::RendererSpecific;
-
-    /// Vector item encodings the general rasteriser had to make.
-    VectorEncodeMisses => vector_encode_misses, Group::RendererSpecific;
 
     /// Shapes emitted as items for the general vector rasteriser.
     VectorRouteGeneral => vector_route_general, Group::BackendNeutral;
@@ -503,9 +447,6 @@ counters! {
 
     /// Union coverage bins planned this frame.
     MarksUnionBins => marks_union_bins, Group::BackendNeutral;
-
-    /// Mark payload bytes uploaded.
-    MarksPayloadBytes => marks_payload_bytes, Group::RendererSpecific;
 
     /// Series payloads built.
     SeriesPayloadsBuilt => series_payloads_built, Group::BackendNeutral;
@@ -525,9 +466,6 @@ counters! {
     /// Recognitions and shape mark payloads kept nowhere, because every entry of their full cache
     /// was pinned.
     MarksUncached => marks_uncached, Group::BackendNeutral;
-
-    /// Vector items a chunk replay moved.
-    VectorReplaysMoved => vector_replays_moved, Group::BackendNeutral;
 
     /// Drawings emitted as one CPU layer sprite.
     VectorRouteLayer => vector_route_layer, Group::BackendNeutral;
@@ -568,14 +506,6 @@ counters! {
 
     /// Bytes of CPU layer tiles the layer cache keeps right now.
     VectorLayerBytesLive => vector_layer_bytes_live, Group::Live;
-
-    /// Primitives whose paint was re-anchored because the primitive moved.
-    ///
-    /// A ramp and a sampled image are read at the point being drawn, in the coordinates they were
-    /// resolved against, so a rectangle carried forward to a new position has to say how far it
-    /// came. Only a paint that is read at a point is counted: a flat fill is the same colour
-    /// everywhere and moving it is not re-anchoring anything.
-    PaintsReanchored => paints_reanchored, Group::BackendNeutral;
 
     /// Bytes the text engine's shaped paragraphs hold right now, as the engine estimates them.
     ///

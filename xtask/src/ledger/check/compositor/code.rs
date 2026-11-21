@@ -21,9 +21,6 @@ const DOWNCASTS: &[&str] = &[
     "is::<",
 ];
 
-/// The paths of zgui's own pipeline crates, whose types share names with the compositor's.
-const PIPELINE: &[&str] = &["zgui_render_wgpu::"];
-
 /// Returns each line of `text` that names an implementation, by line number from one, with what
 /// it names.
 ///
@@ -56,10 +53,10 @@ fn downcast_target(line: &str) -> Option<&'static str> {
     if !DOWNCASTS.iter().any(|call| line.contains(call)) {
         return None;
     }
-    CONCRETE.iter().copied().find(|name| {
-        word_at(line, name)
-            .is_some_and(|at| !PIPELINE.iter().any(|path| line[..at].ends_with(path)))
-    })
+    CONCRETE
+        .iter()
+        .copied()
+        .find(|name| word_at(line, name).is_some())
 }
 
 /// Returns where `word` first stands in `line` as a whole identifier.
@@ -95,13 +92,12 @@ mod tests {
     }
 
     #[test]
-    fn a_downcast_to_a_concrete_renderer_is_found_and_a_pipeline_one_is_not() {
+    fn a_downcast_to_a_concrete_renderer_is_found() {
         assert_eq!(
             findings("renderer.as_any_mut().and_then(|any| any.downcast_mut::<WgpuRenderer>())")
                 .len(),
             1
         );
-        assert!(findings("any.downcast_ref::<zgui_render_wgpu::WgpuRenderer>()").is_empty());
         assert!(findings("any.downcast_mut::<V::State>()").is_empty());
     }
 

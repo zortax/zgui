@@ -31,7 +31,7 @@ proptest.workspace = true
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-space = { path = "../zgui-space", version = "0.1.0" }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 # The real text engine, for the one question a fixed-metrics shaper cannot answer: what a line
 # holding two directions looks like once it has been reordered.

@@ -12,8 +12,8 @@ use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
+use zgui_testkit::counters::Recording;
 use zgui_testkit_compositor::Drawing;
-use zgui_testkit_scene::counters::Recording;
 
 use support::drawn::number;
 use support::{Element, Harness, poison, unpoisoned};

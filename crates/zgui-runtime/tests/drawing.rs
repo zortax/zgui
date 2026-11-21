@@ -15,8 +15,8 @@ use zgui_bits::DamageSet;
 use zgui_elements::kurbo::BezPath;
 use zgui_profile::{Counter, counter};
 use zgui_runtime::App;
+use zgui_testkit::counters::Recording;
 use zgui_testkit_compositor::{Drawing, Instance};
-use zgui_testkit_scene::counters::Recording;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 /// One path the compositor drew for a frame, reduced to what these cases ask about.

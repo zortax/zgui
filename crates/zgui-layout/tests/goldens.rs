@@ -9,8 +9,8 @@ mod support;
 use std::path::PathBuf;
 
 use support::{Element, Fixture, Frame, lay_out, measurer};
-use zgui_testkit_scene::dump::{TreeDump, golden};
-use zgui_testkit_scene::text::Writer;
+use zgui_testkit::dump::{TreeDump, golden};
+use zgui_testkit::text::Writer;
 
 /// A box tree and its resolved layout, as the shared tree-dump seam wants it.
 ///

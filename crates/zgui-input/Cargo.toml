@@ -47,7 +47,7 @@ zgui-text = { path = "../zgui-text", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
 # The deterministic shaper, so a hover budget measured over text measures the design and not the
 # fonts the machine happens to have installed.
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }
 
 [lints]
 workspace = true

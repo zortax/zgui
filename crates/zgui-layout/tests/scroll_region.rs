@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use support::{Element, Fixture, Frame, lay_out, measurer, relayout};
 use zgui_layout::LayoutStore;
 use zgui_layout::scroll_region::gutter;
-use zgui_testkit_scene::dump::{TreeDump, golden};
-use zgui_testkit_scene::text::Writer;
+use zgui_testkit::dump::{TreeDump, golden};
+use zgui_testkit::text::Writer;
 
 /// A rendering of a layout, as the shared tree-dump seam wants it.
 struct Rendering(String);

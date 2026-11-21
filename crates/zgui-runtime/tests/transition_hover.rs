@@ -17,7 +17,7 @@ use zgui_platform::SurfaceEvent;
 use zgui_platform_headless::Harness;
 use zgui_profile::Counter;
 use zgui_runtime::Runtime;
-use zgui_testkit_scene::counters::{Measurement, Recording};
+use zgui_testkit::counters::{Measurement, Recording};
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 

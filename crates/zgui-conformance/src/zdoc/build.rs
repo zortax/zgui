@@ -21,7 +21,7 @@ use zgui_layout::text::Paragraphs;
 use zgui_layout::tree::LayoutTree;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_style::{SheetOrigin, SheetSource, StyleEngine, Viewport};
-use zgui_testkit_scene::{FixedMetrics, MonoShaper};
+use zgui_testkit::{FixedMetrics, MonoShaper};
 
 use crate::zdoc::source::{Element, Zdoc};
 

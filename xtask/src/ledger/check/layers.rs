@@ -18,12 +18,11 @@
 //! `[dependencies]` and `[build-dependencies]`. Both reach whoever builds this framework, so both
 //! carry the shape the guide describes.
 //!
-//! `[dev-dependencies]` are left out, on the evidence of the tree. Fifteen development edges point
-//! upward today and every one is the same shape: a crate drives its own subject through the stack
-//! above it. Six crates between L2 and L6 take `zgui-testkit-scene` at L7 for the golden-image
-//! comparison they are checked with, `zgui-render-vector-vello` at L2 takes the L3 and L4 engines
-//! whose output it rasterises, and `zgui-platform-winit` at L2 takes `zgui-runtime` at L7 to drive
-//! a real window round a real frame loop. A test binary links none of that into a consumer's
+//! `[dev-dependencies]` are left out, on the evidence of the tree. Every development edge that
+//! points upward has the same shape: a crate drives its own subject through the stack above it.
+//! Crates between L2 and L6 take `zgui-testkit` at L7 for its fixed-metrics shaper and counter
+//! assertions, and `zgui-platform-winit` at L2 takes `zgui-runtime` at L7 to drive a real window
+//! round a real frame loop. A test binary links none of that into a consumer's
 //! build, so those edges leave the shipped graph as layered as it reads. Where a development edge
 //! does have to be forbidden the seam itself is the point, and [`pinned`](super::pinned) names it
 //! there: `zgui-view` and `zgui-vocab` are pinned across every section, development dependencies

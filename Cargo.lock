@@ -5933,7 +5933,7 @@ dependencies = [
  "zgui-platform-headless",
  "zgui-platform-winit",
  "zgui-profile",
- "zgui-scene",
+ "zgui-space",
  "zgui-testkit-compositor",
  "zgui-text-parley",
  "zgui-ui",
@@ -5987,7 +5987,7 @@ dependencies = [
  "zgui-runtime",
  "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-style",
 ]
@@ -6045,8 +6045,8 @@ dependencies = [
  "zgui-profile",
  "zgui-reactive",
  "zgui-runtime",
+ "zgui-testkit",
  "zgui-testkit-compositor",
- "zgui-testkit-scene",
  "zgui-view",
  "zgui-vocab",
 ]
@@ -6117,7 +6117,7 @@ dependencies = [
  "zgui-interned",
  "zgui-profile",
  "zgui-space",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-parley",
  "zgui-text-style",
@@ -6194,7 +6194,7 @@ dependencies = [
  "zgui-profile",
  "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-style",
  "zgui-vocab",
@@ -6225,10 +6225,9 @@ dependencies = [
  "zgui-geom",
  "zgui-interned",
  "zgui-profile",
- "zgui-scene",
  "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-style",
  "zgui-vocab",
@@ -6247,6 +6246,8 @@ version = "0.1.0"
 dependencies = [
  "compositor-api",
  "compositor-types",
+ "kurbo",
+ "peniko",
  "rustc-hash 2.1.3",
  "smallvec",
  "thiserror 2.0.19",
@@ -6264,12 +6265,11 @@ dependencies = [
  "zgui-interned",
  "zgui-layout",
  "zgui-profile",
- "zgui-render",
- "zgui-scene",
+ "zgui-space",
  "zgui-style",
  "zgui-svg",
+ "zgui-testkit",
  "zgui-testkit-compositor",
- "zgui-testkit-scene",
  "zgui-text",
  "zgui-text-style",
  "zgui-vocab",
@@ -6429,88 +6429,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "zgui-render"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.19",
- "web-time",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
- "zgui-geom",
- "zgui-scene",
-]
-
-[[package]]
-name = "zgui-render-vector-coverage"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "kurbo",
- "peniko",
- "rustc-hash 2.1.3",
- "tracing",
- "wgpu",
- "zgui-color",
- "zgui-geom",
- "zgui-profile",
- "zgui-render",
- "zgui-render-wgpu",
- "zgui-scene",
-]
-
-[[package]]
-name = "zgui-render-vector-vello"
-version = "0.1.0"
-dependencies = [
- "kurbo",
- "peniko",
- "rustc-hash 2.1.3",
- "tracing",
- "vello",
- "wgpu",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
- "zgui-geom",
- "zgui-profile",
- "zgui-render",
- "zgui-render-vector-coverage",
- "zgui-render-wgpu",
- "zgui-scene",
-]
-
-[[package]]
-name = "zgui-render-wgpu"
-version = "0.1.0"
-dependencies = [
- "ash",
- "bincode",
- "bytemuck",
- "futures",
- "naga",
- "rustc-hash 2.1.3",
- "tracing",
- "web-time",
- "wgpu",
- "windows",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
- "zgui-geom",
- "zgui-profile",
- "zgui-render",
- "zgui-scene",
- "zgui-wgsl",
-]
-
-[[package]]
 name = "zgui-runtime"
 version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
  "compositor-api",
  "compositor-types",
+ "kurbo",
  "rustc-hash 2.1.3",
  "thiserror 2.0.19",
  "tracing",
@@ -6535,36 +6460,16 @@ dependencies = [
  "zgui-platform-headless",
  "zgui-profile",
  "zgui-reactive",
- "zgui-scene",
  "zgui-scroll",
  "zgui-space",
  "zgui-style",
+ "zgui-testkit",
  "zgui-testkit-compositor",
- "zgui-testkit-scene",
  "zgui-text",
  "zgui-text-style",
  "zgui-view",
  "zgui-view-dom",
  "zgui-vocab",
-]
-
-[[package]]
-name = "zgui-scene"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "kurbo",
- "peniko",
- "proptest",
- "rustc-hash 2.1.3",
- "smallvec",
- "web-time",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
- "zgui-geom",
- "zgui-profile",
- "zgui-space",
 ]
 
 [[package]]
@@ -6608,8 +6513,8 @@ dependencies = [
  "zgui-profile",
  "zgui-runtime",
  "zgui-shader-macro",
+ "zgui-testkit",
  "zgui-testkit-compositor",
- "zgui-testkit-scene",
  "zgui-view",
 ]
 
@@ -6683,6 +6588,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zgui-testkit"
+version = "0.1.0"
+dependencies = [
+ "smallvec",
+ "zgui-geom",
+ "zgui-profile",
+ "zgui-space",
+ "zgui-text",
+ "zgui-text-style",
+]
+
+[[package]]
 name = "zgui-testkit-compositor"
 version = "0.1.0"
 dependencies = [
@@ -6697,18 +6614,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "zgui-testkit-scene"
-version = "0.1.0"
-dependencies = [
- "smallvec",
- "zgui-geom",
- "zgui-profile",
- "zgui-space",
- "zgui-text",
- "zgui-text-style",
-]
-
-[[package]]
 name = "zgui-testkit-view"
 version = "0.1.0"
 dependencies = [
@@ -6717,7 +6622,7 @@ dependencies = [
  "zgui-geom",
  "zgui-interned",
  "zgui-reactive",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-view",
  "zgui-vocab",
 ]
@@ -6855,7 +6760,6 @@ dependencies = [
  "zgui-interned",
  "zgui-paint",
  "zgui-reactive",
- "zgui-scene",
  "zgui-space",
  "zgui-style",
  "zgui-svg",
@@ -6906,17 +6810,10 @@ dependencies = [
  "zgui-platform-headless",
  "zgui-reactive",
  "zgui-runtime",
+ "zgui-testkit",
  "zgui-testkit-compositor",
- "zgui-testkit-scene",
  "zgui-view",
  "zgui-vocab",
-]
-
-[[package]]
-name = "zgui-wgsl"
-version = "0.1.0"
-dependencies = [
- "zgui-scene",
 ]
 
 [[package]]

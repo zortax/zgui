@@ -79,7 +79,7 @@ impl Transcript {
     ///
     /// Panics when the rendered transcript differs from the golden, or when the golden is missing.
     pub fn assert_matches(&self, path: impl AsRef<std::path::Path>) {
-        zgui_testkit_scene::dump::golden::assert_matches(path.as_ref(), &self.to_string());
+        zgui_testkit::dump::golden::assert_matches(path.as_ref(), &self.to_string());
     }
 }
 

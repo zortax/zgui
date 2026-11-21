@@ -9,7 +9,7 @@ mod support;
 
 use support::{Element, Harness};
 use zgui_profile::Counter;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 
 /// A root with `count` identically classed children.
 fn rows(count: usize) -> Element {

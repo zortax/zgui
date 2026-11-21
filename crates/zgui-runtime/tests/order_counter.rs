@@ -7,7 +7,7 @@ mod support;
 use zgui_profile::{COUNTERS_ENABLED, Counter};
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 use zgui_view::{BuildCx, ClassName, IntoView, View};
 
 /// A column of swatches, one of which can be lit.

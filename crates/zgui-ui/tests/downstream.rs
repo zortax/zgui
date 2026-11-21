@@ -81,8 +81,6 @@ fn no_component_names_a_crate_below_the_public_api() {
         "zgui_css",
         "zgui_interned",
         "zgui_space",
-        "zgui_scene",
-        "zgui_render",
     ];
     for (path, text) in sources() {
         for name in hidden {

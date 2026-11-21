@@ -63,9 +63,7 @@ impl Churn {
             .with_compositor(compositor)
             .with_renderer(Box::new(device))
             .with_text_engine(Box::new(|| {
-                Box::new(zgui_layout::Paragraphs::new(
-                    zgui_testkit_scene::MonoShaper::new(),
-                ))
+                Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
             }))
             .into_handler(move |cx: &mut BuildCx<'_>| {
                 Box::new(

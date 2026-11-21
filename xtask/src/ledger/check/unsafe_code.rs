@@ -26,15 +26,6 @@ const ALLOWLIST: &[(&str, &str)] = &[
         "plain-old-data impls for the types that cross to the GPU",
     ),
     (
-        "zgui-render-wgpu",
-        "loading a pipeline cache from a stored blob, and creating a device through wgpu's hal so \
-         that it enables the Vulkan device extensions a caller asked for",
-    ),
-    (
-        "zgui-render-vector-vello",
-        "creating a pipeline cache from a stored blob",
-    ),
-    (
         "zgui-platform-winit",
         "the Wayland clipboard's unsafe constructor, and the AppKit calls behind the macOS \
          application menu, reopen request and title-bar buttons",

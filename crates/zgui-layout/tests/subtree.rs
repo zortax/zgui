@@ -26,7 +26,7 @@ use zgui_layout::boxtree::patch;
 use zgui_layout::tree::print::to_text;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_profile::Counter;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 
 /// The element named `name`, which every fixture below gives a distinct name.
 ///

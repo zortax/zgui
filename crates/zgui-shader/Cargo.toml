@@ -41,4 +41,4 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }

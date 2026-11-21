@@ -53,27 +53,21 @@ const LEDGER: &[(&str, &[&str])] = &[
     // is made of. Sharing the atlas is what makes recolouring an icon cost a sprite instance rather
     // than a second rasterisation, and it only works while both name the one rasteriser.
     ("zeno", &["zgui-text-parley", "zgui-paint"]),
-    ("vello", &["zgui-render-vector-vello"]),
+    // The path rasteriser is the compositor's, so no zgui crate names it.
+    ("vello", &[]),
     (
         "wgpu",
         &[
-            "zgui-render-wgpu",
-            "zgui-render-vector-vello",
-            "zgui-render-vector-coverage",
             "zgui-platform-winit",
-            // A frame reaches a display here through the renderer: a copied frame arrives as
-            // `zgui-render-wgpu`'s readback type, and a drawn one is composed into the `wgpu`
-            // textures the display hands out. A wgpu release that breaks either reaches this crate.
+            // A drawn frame is composed into the `wgpu` textures the display hands out.
             "zgui-platform-drm",
         ],
     ),
-    // Vulkan itself, and two crates name it. A buffer a display controller scans out of is a
-    // Vulkan image created with a DRM format modifier, backed by exportable memory and handed to
-    // the kernel as a dma-buf, and wgpu's API has a word for none of that. The renderer makes a
-    // swap chain of its own, because wgpu discards what a swap chain image held and presents with
-    // no damage. Any other crate reaching past wgpu into the driver would be one more place a
-    // device can be left holding an image nothing gives back.
-    ("ash", &["zgui-platform-drm", "zgui-render-wgpu"]),
+    // Vulkan itself. A buffer a display controller scans out of is a Vulkan image created with a
+    // DRM format modifier, backed by exportable memory and handed to the kernel as a dma-buf, and
+    // wgpu's API has a word for none of that. Any other crate reaching past wgpu into the driver
+    // would be one more place a device can be left holding an image nothing gives back.
+    ("ash", &["zgui-platform-drm"]),
     ("winit", &["zgui-platform-winit"]),
     ("accesskit_winit", &["zgui-platform-winit"]),
     ("arboard", &["zgui-platform-winit"]),
@@ -176,8 +170,9 @@ const LEDGER: &[(&str, &[&str])] = &[
         &[
             "zgui-elements",
             "zgui-space",
-            "zgui-scene",
             "zgui-paint",
+            // The paths the runtime's vector layer budget tests draw.
+            "zgui-runtime",
             // A vector document's outlines are Béziers and its clips are Béziers, and they cross
             // from the parse boundary to the rasteriser as the same type with no conversion.
             "zgui-svg",
@@ -186,24 +181,17 @@ const LEDGER: &[(&str, &[&str])] = &[
             // crosses from the engine to the path renderer with no conversion.
             "zgui-text",
             "zgui-text-parley",
-            "zgui-render-wgpu",
-            "zgui-render-vector-vello",
-            "zgui-render-vector-coverage",
             "zgui-ui-icons",
             "zgui-ui-primitives",
             // A canvas scene's shapes are Béziers in the same vocabulary a document resolves to,
-            // which is what lets a canvas ride the whole vector pipeline unchanged.
+            // which is what lets a canvas take every vector route unchanged.
             "zgui-canvas",
         ],
     ),
     (
         "peniko",
         &[
-            "zgui-scene",
             "zgui-paint",
-            "zgui-render-wgpu",
-            "zgui-render-vector-vello",
-            "zgui-render-vector-coverage",
             "zgui-svg",
             "zgui-ui-icons",
             "zgui-ui-primitives",
@@ -212,17 +200,7 @@ const LEDGER: &[(&str, &[&str])] = &[
         ],
     ),
     ("etagere", &["zgui-atlas"]),
-    (
-        "bytemuck",
-        &[
-            "zgui-geom",
-            "zgui-space",
-            "zgui-scene",
-            "zgui-render-wgpu",
-            "zgui-render-vector-vello",
-            "zgui-render-vector-coverage",
-        ],
-    ),
+    ("bytemuck", &["zgui-geom", "zgui-space"]),
     ("syn", &["zgui-view-macro", "zgui-shader-macro"]),
     ("quote", &["zgui-view-macro", "zgui-shader-macro"]),
     ("proc-macro2", &["zgui-view-macro", "zgui-shader-macro"]),

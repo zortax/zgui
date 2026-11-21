@@ -71,7 +71,7 @@ fn app() -> Option<(Harness<Runtime>, Shown)> {
         ))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
+                zgui_testkit::MonoShaper::new(),
             ))
         }))
         .into_handler(|cx: &mut BuildCx<'_>| {

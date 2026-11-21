@@ -9,19 +9,14 @@ use compositor_types::{FrameCounters, FrameOutcome};
 use zgui_paint::SyncReport;
 use zgui_profile::{Counter, counter};
 
-/// The renderer's running totals that zgui counts, by the name the renderer reports them under.
-const TOTALS: [(&str, Counter); 4] = [
-    ("vector_frames_dropped", Counter::VectorFramesDropped),
-    ("table_slots_prepared", Counter::SideTableSlotsPrepared),
-    ("upload_allocations", Counter::UploadChunksAllocated),
-    ("page_writes", Counter::AtlasTextureWrites),
-];
-
 /// What one window last read of its renderer's running totals.
+///
+/// The totals are the renderer's `vector_frames_dropped`, `table_slots_prepared`,
+/// `upload_allocations` and `page_writes` statistics, in that order.
 #[derive(Debug, Default)]
 pub(crate) struct Totals {
-    /// The last value of each of [`TOTALS`], in the same order.
-    seen: [u64; TOTALS.len()],
+    /// The last value of each total.
+    seen: [u64; 4],
 }
 
 /// Adds what a commit did to the counters.
@@ -74,13 +69,20 @@ impl Totals {
             counter::add(Counter::GpuTimeNs, stats.gpu_time_ns.unwrap_or(0));
             counter::set(Counter::ChunksResident, u64::from(stats.chunks_resident));
         }
+        let seen = &mut self.seen;
         renderer.extra_stats(&mut |name, value| {
-            let Some(index) = TOTALS.iter().position(|(total, _)| *total == name) else {
-                return;
+            let mut moved = |index: usize| {
+                let moved = value.saturating_sub(seen[index]);
+                seen[index] = value;
+                moved
             };
-            let moved = value.saturating_sub(self.seen[index]);
-            self.seen[index] = value;
-            counter::add(TOTALS[index].1, moved);
+            match name {
+                "vector_frames_dropped" => counter::add(Counter::VectorFramesDropped, moved(0)),
+                "table_slots_prepared" => counter::add(Counter::SideTableSlotsPrepared, moved(1)),
+                "upload_allocations" => counter::add(Counter::UploadChunksAllocated, moved(2)),
+                "page_writes" => counter::add(Counter::AtlasTextureWrites, moved(3)),
+                _ => {}
+            }
         });
     }
 }

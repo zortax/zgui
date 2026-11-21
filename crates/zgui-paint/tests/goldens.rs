@@ -10,7 +10,7 @@ mod support;
 use std::path::PathBuf;
 
 use support::{Element, Harness};
-use zgui_testkit_scene::dump::golden;
+use zgui_testkit::dump::golden;
 
 /// The golden for one named scene.
 fn path(name: &str) -> PathBuf {

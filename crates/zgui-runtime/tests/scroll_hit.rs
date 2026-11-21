@@ -26,7 +26,7 @@ use std::rc::Rc;
 use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::SurfaceEvent;
 use zgui_profile::Counter;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{
     Modifiers, PointerAction, PointerEvent, ScrollDelta, ScrollPhase, Timestamp, WheelEvent,
@@ -267,7 +267,7 @@ fn built(
     kind: Port,
 ) -> (
     zgui_platform_headless::Harness<zgui_runtime::Runtime>,
-    zgui_testkit_scene::counters::Control,
+    zgui_testkit::counters::Control,
 ) {
     let mut harness = listing_in(clicked, kind);
 

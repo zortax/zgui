@@ -15,7 +15,7 @@ use zgui_profile::Counter;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
 use zgui_runtime::App;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 /// One frame, reduced to what these cases ask about.

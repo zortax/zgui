@@ -17,7 +17,7 @@ mod support;
 use zgui_geom::{Device, DevicePx, Size};
 use zgui_platform::SurfaceEvent;
 use zgui_profile::{COUNTERS_ENABLED, Counter};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 
 /// How many rows the document holds.
 ///

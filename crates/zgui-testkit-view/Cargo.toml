@@ -31,7 +31,7 @@ zgui-edit = { path = "../zgui-edit", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 # The shape of a dump, its golden comparison and its blessing: a transcript is a tree dump, and a
 # second implementation of "how a golden is compared" would eventually disagree with the first.
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }
 
 [lints]
 workspace = true

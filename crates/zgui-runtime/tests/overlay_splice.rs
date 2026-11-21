@@ -19,7 +19,7 @@ use zgui_profile::Counter;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
 use zgui_runtime::{App, FrameProbe, Runtime, Window};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 use zgui_view::{AnyView, BuildCx, IntoView, Show, View};
 
 /// The application column is moved off the origin, so a box laid out against it lands somewhere
@@ -75,9 +75,7 @@ fn window(
         .with_compositor(support::compositor())
         .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let mut list = zgui_elements::column().class("list");
@@ -189,7 +187,7 @@ fn contains(outer: Rect<i32, Device>, inner: Rect<i32, Device>) -> bool {
 }
 
 /// Fails unless a change spliced the box tree: no whole build, and a bounded number of new boxes.
-fn assert_spliced(what: &str, moved: &zgui_testkit_scene::counters::Measurement, most: u64) {
+fn assert_spliced(what: &str, moved: &zgui_testkit::counters::Measurement, most: u64) {
     let builds = moved.get(Counter::BoxTreeBuilds);
     assert_eq!(
         builds, 0,

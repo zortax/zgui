@@ -1,6 +1,7 @@
 //! The side tables fragments are painted through.
 
 use zgui_geom::{Device, Size};
+use zgui_profile::{Counter, counter};
 use zgui_space::{ClipId, ClipTable, SpatialTree};
 
 use crate::paints::PaintTable;
@@ -44,11 +45,17 @@ impl Tables {
     /// Starts a frame painted onto a surface of `viewport`.
     ///
     /// The clip and paint tables start a new generation, which their eviction counts entries
-    /// unused by.
+    /// unused by. The sizes the frame inherited are published as live counters.
     pub fn begin_frame(&mut self, viewport: Size<i32, Device>) {
         self.viewport = viewport;
         self.clips.begin_frame();
         self.paints.begin_frame();
+
+        counter::set(Counter::ClipEntriesLive, self.clips.len() as u64);
+        counter::set(Counter::ClipSlotsReach, self.clips.slots() as u64);
+        counter::set(Counter::PaintEntriesLive, self.paints.len() as u64);
+        counter::set(Counter::PaintSlotsReach, self.paints.slots() as u64);
+        counter::set(Counter::SpatialNodesLive, self.spatial.names() as u64);
     }
 
     /// Returns the surface extent of the frame being painted.

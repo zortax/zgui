@@ -89,9 +89,7 @@ fn listing(
         .with_compositor(support::compositor())
         .with_renderer(Box::new(renderer))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             use zgui_view::{IntoView, View};

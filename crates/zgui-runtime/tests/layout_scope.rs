@@ -28,7 +28,7 @@ use zgui_platform::SurfaceEvent;
 use zgui_profile::Counter;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 
