@@ -58,6 +58,8 @@ zeno = "0.3.3"
 # The interface: every engine crate names these two and nothing else of the compositor.
 compositor-types = { path = "../compositor/compositor/crates/types", version = "0.1.0" }
 compositor-api = { path = "../compositor/compositor/crates/api", version = "0.1.0" }
+# The colour foundation zgui-color re-exports, so a zgui colour is the compositor's.
+compositor-color = { path = "../compositor/compositor/crates/color", version = "0.1.0" }
 # The implementations, named only by the crates `cargo xtask ledger compositor` allows.
 compositor-core = { path = "../compositor/compositor/crates/core", version = "0.1.0" }
 compositor-wgpu = { path = "../compositor/compositor/crates/wgpu", version = "0.1.0" }
