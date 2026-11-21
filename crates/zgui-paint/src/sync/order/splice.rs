@@ -49,8 +49,13 @@ pub(super) fn splice(
     spliced
 }
 
-/// Writes `new` over `old` at `at` when `new` drops entries at one end of `old` and adds entries at
-/// the other, and returns the number of entries removed and inserted.
+/// Writes `new` over `old` at `at` with at most two splices, and returns the number of entries
+/// removed and inserted.
+///
+/// The change has to be one of these:
+///
+/// - One of the lists is empty.
+/// - `new` drops entries at one end of `old` and adds entries at the other.
 ///
 /// Returns `None` and writes nothing for any other change.
 fn shifted(
@@ -64,7 +69,7 @@ fn shifted(
         tx.splice(node, at, old.len() as u32, new);
         return Some(old.len() + new.len());
     }
-    // The entries left at the front, then the entries added at the back.
+    // Entries dropped at the front and added at the back.
     if let Some(dropped) = new
         .first()
         .and_then(|first| old.iter().position(|e| e == first))
@@ -80,7 +85,7 @@ fn shifted(
             return Some(dropped + new.len() - kept);
         }
     }
-    // The entries added at the front, then the entries left at the back.
+    // Entries added at the front and dropped at the back.
     if let Some(added) = old
         .first()
         .and_then(|first| new.iter().position(|e| e == first))

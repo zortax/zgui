@@ -9,7 +9,7 @@
 //! | `scroll` | which axes reserve a scrollbar gutter |
 //! | `laid_out` | the viewport the results now held were produced for |
 //! | `roster` | the boxes whose style puts them in a class some pass has to visit |
-//! | `journal` | bounded histories of marks, such as the boxes whose children may paint in a different order |
+//! | `journal` | bounded histories of marks, such as the boxes whose order may have changed |
 //! | `moved` | the fragments layout moved |
 
 pub(crate) mod content;

@@ -13,7 +13,7 @@ use crate::sync::CompositorSync;
 pub(super) struct Moves {
     /// The version of the layout's move journal the last walk read.
     read: Option<JournalVersion>,
-    /// The fragments moved since the version read before it.
+    /// The fragments moved between the last two reads.
     fragments: Vec<FragKey>,
     /// Whether any fragment can have moved, beyond those listed.
     all: bool,
