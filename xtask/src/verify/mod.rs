@@ -237,7 +237,7 @@ fn steps(field: &str) -> Vec<usize> {
 
 #[cfg(test)]
 mod tests {
-    use super::{KNOWN, Verdict, silent};
+    use super::{Verdict, silent};
 
     /// A verdict line as the harness prints one.
     const LINE: &str = "VERIFY size=s13 boxes=1865 fragments=2399 steps_checked=95 \
@@ -340,43 +340,42 @@ mod tests {
         assert!(message.contains("exited non-zero"), "{message}");
     }
 
+    /// A budget entry with an unstable span in it, held apart from [`KNOWN`] for the reason
+    /// [`s13`] is.
+    fn unstable() -> &'static super::Known {
+        &super::Known {
+            size: "s1",
+            steps: 108,
+            faults: &[],
+            roundings: &[],
+            unstable: &[37, 38, 39, 40, 41, 60, 61, 70, 71, 72, 73],
+            because: "the fixture these tests are held to",
+            unstable_because: "the fixture's intermittent steps",
+        }
+    }
+
     #[test]
     fn an_unstable_step_passes_whether_it_faulted_or_not() {
-        let s1 = KNOWN
-            .iter()
-            .find(|known| known.size == "s1")
-            .expect("s1 is budgeted");
-        assert!(
-            !s1.unstable.is_empty(),
-            "s1 is the size with the open Theme defect"
-        );
-        // Step 67 is a fault `s1` is known for, so every run carries it.
         for faults in [
-            "faults=67",
-            "faults=37,38,67",
-            "faults=39,40,41,60,61,67",
-            "faults=67,70,71",
+            "faults=none",
+            "faults=37,38",
+            "faults=39,40,41,60,61",
+            "faults=70,71",
         ] {
             let line = LINE
                 .replace("size=s13", "size=s1")
-                // The real `s1` entry counts the whole script, while `LINE` carries the local
-                // fixture's shorter count.
                 .replace("steps_checked=95", "steps_checked=108")
                 .replace("faults=62,63", faults)
                 .replace("rounded=80", "rounded=none");
             Verdict::read(&line)
                 .expect("the line is read")
-                .hold_to(s1)
+                .hold_to(unstable())
                 .unwrap_or_else(|error| panic!("{faults} is inside the unstable span: {error}"));
         }
     }
 
     #[test]
     fn a_fault_outside_the_unstable_span_still_fails_at_that_size() {
-        let s1 = KNOWN
-            .iter()
-            .find(|known| known.size == "s1")
-            .expect("s1 is budgeted");
         let line = LINE
             .replace("size=s13", "size=s1")
             .replace("steps_checked=95", "steps_checked=108")
@@ -384,7 +383,7 @@ mod tests {
             .replace("rounded=80", "rounded=none");
         let message = Verdict::read(&line)
             .expect("the line is read")
-            .hold_to(s1)
+            .hold_to(unstable())
             .expect_err("step 36 is outside the span")
             .to_string();
         assert!(message.contains("36"), "{message}");
