@@ -49,7 +49,7 @@ pub(crate) struct Order {
     /// Entries spliced into the lists of nodes created during the current sync.
     created: usize,
     /// The boxes whose list holds a child that sorts by other boxes than itself, which no mark
-    /// covers, so they are rebuilt on every sync.
+    /// covers, so a sync after any order mark checks the order of their children.
     volatile: FxHashSet<BoxKey>,
     scratch: Scratch,
 }
@@ -159,15 +159,28 @@ impl Order {
         if coverage == ChangeCoverage::All {
             work.extend(self.nodes.keys().copied());
         }
+        // Without an order mark anywhere, no box moved among its siblings, so no child sorts
+        // differently by the place of other boxes.
+        let volatile: Vec<BoxKey> = if work.is_empty() {
+            Vec::new()
+        } else {
+            self.volatile.iter().copied().collect()
+        };
         work.extend(self.dirty.drain());
-        work.extend(self.volatile.iter().copied());
 
         let mut entries = self.sync_root(context, root);
         let mut visited = FxHashSet::default();
-        while let Some(key) = work.pop() {
-            if visited.insert(key) {
-                entries += self.visit(context, key, &mut work);
+        entries += self.drain(context, &mut work, &mut visited);
+        for key in volatile {
+            if visited.contains(&key) {
+                continue;
             }
+            if self.keeps_children(context.store, key) {
+                visited.insert(key);
+                continue;
+            }
+            work.push(key);
+            entries += self.drain(context, &mut work, &mut visited);
         }
         entries += std::mem::take(&mut self.created);
         let effects = self.write_effects(context);
@@ -200,6 +213,33 @@ impl Order {
         let spliced = splice(context.tx, root, &self.root_entries, &entries);
         self.root_entries = entries;
         spliced
+    }
+
+    /// Visits every box in `work` not yet `visited`, and returns the entries spliced.
+    fn drain(
+        &mut self,
+        context: &mut Context<'_>,
+        work: &mut Vec<BoxKey>,
+        visited: &mut FxHashSet<BoxKey>,
+    ) -> usize {
+        let mut entries = 0;
+        while let Some(key) = work.pop() {
+            if visited.insert(key) {
+                entries += self.visit(context, key, work);
+            }
+        }
+        entries
+    }
+
+    /// Reports whether the box `key` keeps its node and lists its children in the order its
+    /// node was built with.
+    fn keeps_children(&self, store: &LayoutStore, key: BoxKey) -> bool {
+        let Some(node) = self.nodes.get(&key) else {
+            return false;
+        };
+        store.get(key).is_some()
+            && (self.top == Some(key) || self.needs_node(store, key))
+            && *stacking::children_in_paint_order(store, key) == *node.children
     }
 
     /// Brings the list that holds the box `key` up to date, and returns the entries spliced.
