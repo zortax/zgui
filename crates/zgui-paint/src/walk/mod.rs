@@ -956,6 +956,7 @@ impl Pass<'_, '_> {
         style_ref: PaintStyleRef,
         anim: u64,
         owned: Option<OwnedPaints>,
+        box_draws: bool,
     ) {
         // The store outlives the walk, so the fragment is *borrowed* for as long as this needs it
         // rather than copied out of the way of the mutable borrow below. Copying it was two hundred
@@ -1045,6 +1046,10 @@ impl Pass<'_, '_> {
                 .layers()
                 .is_some_and(|layers| layers.tiles_alive(id))
         });
+        let resized = self
+            .painter
+            .cache
+            .size_changed(fragment.key, fragment.border_box.size);
         let reuse = if tiles_gone {
             Reuse::Encode
         } else {
@@ -1052,17 +1057,33 @@ impl Pass<'_, '_> {
                 .cache
                 .reuse(self.scene, fragment, painted, phase)
         };
+        let reuse = match reuse {
+            // An application shader or animated colour on an otherwise clear box draws even where
+            // layout's own `PAINTS_NOTHING` flag was set, so a size change there still encodes.
+            Reuse::Replay(_) if resized && box_draws => Reuse::Encode,
+            other => other,
+        };
         match reuse {
             Reuse::Replay(offset) => {
+                debug_assert!(
+                    !resized
+                        || (fragment.kind == FragmentKind::Box
+                            && fragment.flags.contains(FragmentFlags::PAINTS_NOTHING)
+                            && !box_draws),
+                    "a resized fragment replayed while carrying own box painting: {:?}",
+                    fragment.key,
+                );
                 self.verify_replay(fragment);
                 let (source, chunk) = self
                     .painter
                     .cache
                     .chunk(fragment.key)
                     .expect("a replayable fragment has a recorded chunk");
-                let range = self.scene.replay_chunk(chunk, offset, source);
-                let pushed = (range.end - range.start) as usize;
-                self.report.primitives += pushed;
+                if !chunk.is_empty() || !chunk.minted.is_empty() {
+                    let range = self.scene.replay_chunk(chunk, offset, source);
+                    let pushed = (range.end - range.start) as usize;
+                    self.report.primitives += pushed;
+                }
                 self.painter.cache.replayed(fragment);
             }
             Reuse::Encode => {
@@ -1301,8 +1322,14 @@ impl stacking::Visitor for Pass<'_, '_> {
         // declared on the heading and the line boxes belong to an anonymous box under it.
         self.text_fills.enter(&node.style, style.text_fill.as_ref());
 
+        let box_draws = !node.is_nested_inline()
+            && match owned {
+                Some(owned) if owned.forces_box() => style.visible,
+                _ => !style.paints_nothing(),
+            };
+
         for &frag in store.fragments_of_box(key) {
-            self.paint(frag, style_ref, anim, owned);
+            self.paint(frag, style_ref, anim, owned, box_draws);
         }
         true
     }
