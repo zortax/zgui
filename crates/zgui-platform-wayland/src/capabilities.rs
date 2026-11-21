@@ -49,6 +49,8 @@ pub fn of(offered: Offered) -> PlatformCapabilities {
     } else {
         DecorationSource::Application
     };
+    capabilities.minimize = true;
+    capabilities.maximize = true;
     // The protocol for both exists and this compositor may well have it, but the contract has no
     // request that would use either: there is no method to lock a pointer and no event that would
     // carry the raw motion a lock produces. Declared absent because that is what a component
@@ -184,5 +186,7 @@ mod tests {
             of(Offered::default()).decorations,
             DecorationSource::Application
         );
+        assert!(of(Offered::default()).minimize);
+        assert!(of(Offered::default()).maximize);
     }
 }

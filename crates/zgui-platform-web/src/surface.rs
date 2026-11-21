@@ -9,7 +9,8 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use accesskit::TreeUpdate;
 use zgui_geom::{Css, CssPx, Device, DevicePx, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, PresentationTiming, Surface, SurfaceId, TextInput,
+    CursorStyle, DecorationSource, Decorations, FullscreenMode, PresentationTiming, Surface,
+    SurfaceId, TextInput,
 };
 
 use crate::driver;
@@ -140,6 +141,10 @@ impl Surface for CanvasSurface {
         driver::with(|driver| driver.is_fullscreen(self.id))
             .unwrap_or(false)
             .then_some(FullscreenMode::Borderless)
+    }
+
+    fn decoration_source(&self) -> DecorationSource {
+        DecorationSource::Platform
     }
 
     fn focus(&self) {

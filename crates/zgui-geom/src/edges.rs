@@ -86,6 +86,24 @@ impl<T: Copy> Edges<T> {
     }
 }
 
+impl Edges<bool> {
+    /// No side set.
+    pub const NONE: Self = Self::uniform(false);
+
+    /// Every side set.
+    pub const ALL: Self = Self::uniform(true);
+
+    /// Whether any side is `true`.
+    pub const fn any(self) -> bool {
+        self.top || self.right || self.bottom || self.left
+    }
+
+    /// Whether every side is `true`.
+    pub const fn all(self) -> bool {
+        self.top && self.right && self.bottom && self.left
+    }
+}
+
 impl<T: Unit> Edges<T> {
     /// No length on any side.
     pub const ZERO: Self = Self {
@@ -203,5 +221,16 @@ mod tests {
         let edges = Edges::uniform(CssPx(3.0));
         let total: Size<CssPx, Css> = edges.total();
         assert_eq!(total, Size::new(CssPx(6.0), CssPx(6.0)));
+    }
+
+    #[test]
+    fn boolean_edges_report_when_any_or_every_side_is_set() {
+        assert!(!Edges::NONE.any());
+        assert!(!Edges::NONE.all());
+        assert!(Edges::ALL.any());
+        assert!(Edges::ALL.all());
+        let left_only = Edges::new(false, false, false, true);
+        assert!(left_only.any());
+        assert!(!left_only.all());
     }
 }

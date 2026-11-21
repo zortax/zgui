@@ -76,6 +76,13 @@ pub struct PlatformCapabilities {
     pub session_lock: bool,
     /// Who draws the title bar and the frame.
     pub decorations: DecorationSource,
+    /// Whether an ordinary window can be minimised.
+    ///
+    /// A tiling compositor with no minimised workspace omits this capability, so client-side
+    /// window controls can hide the minimise button when the desktop ignores it.
+    pub minimize: bool,
+    /// Whether an ordinary window can be maximised and restored.
+    pub maximize: bool,
     /// Whether the pointer can be confined to a region.
     pub pointer_confine: bool,
     /// Whether the pointer can be locked in place and read as pure motion.
@@ -128,6 +135,8 @@ impl PlatformCapabilities {
             focus_grab: false,
             session_lock: false,
             decorations: DecorationSource::Platform,
+            minimize: false,
+            maximize: false,
             pointer_confine: false,
             pointer_lock: false,
             native_gestures: false,
@@ -181,6 +190,8 @@ mod tests {
         assert!(!capabilities.ime);
         assert!(!capabilities.system_color_scheme);
         assert_eq!(capabilities.decorations, DecorationSource::Platform);
+        assert!(!capabilities.minimize);
+        assert!(!capabilities.maximize);
         assert_eq!(capabilities.clipboard_formats, [ClipboardFormat::Text]);
     }
 

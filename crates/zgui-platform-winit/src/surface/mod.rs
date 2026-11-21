@@ -11,12 +11,14 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use accesskit::TreeUpdate;
+use raw_window_handle::{HasWindowHandle as _, RawWindowHandle};
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::window::Window;
+use winit::window::{Window, WindowButtons};
 use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Size};
 use zgui_platform::{
-    ColorScheme, CursorStyle, Decorations, FullscreenMode, GpuSurface, ResizeEdge, Surface,
-    SurfaceId, TextInput, TitleButtons, Unsupported, WindowIcon, WindowLevel,
+    ColorScheme, CursorStyle, DecorationSource, Decorations, FullscreenMode, GpuSurface,
+    ResizeEdge, Surface, SurfaceId, TextInput, TitleButtons, Unsupported, WakeReason, Waker as _,
+    WindowIcon, WindowLevel,
 };
 
 use crate::waker::ProxyWaker;
@@ -49,23 +51,49 @@ pub struct WinitSurface {
     waker: Arc<ProxyWaker>,
     /// Whether the window was shown at least once.
     shown: AtomicBool,
+    /// Whether the window asked for platform decorations.
+    requested_decorated: AtomicBool,
+    /// Whether the window has received at least one configure on Wayland (always `true` elsewhere).
+    configured: AtomicBool,
+    /// Last effective decoration state observed, used to detect configure-time SSD overrides.
+    last_decorated: AtomicBool,
 }
 
 impl WinitSurface {
     /// A surface over `window`, numbered `id`, with nothing listening to it yet.
-    pub(crate) const fn new(
+    pub(crate) fn new(
         id: SurfaceId,
         window: Arc<Window>,
+        decorations: Decorations,
         title_buttons: Option<TitleButtons>,
         waker: Arc<ProxyWaker>,
     ) -> Self {
+        let is_wayland = window
+            .window_handle()
+            .is_ok_and(|handle| matches!(handle.as_raw(), RawWindowHandle::Wayland(_)));
+        let requested_decorated = chrome::decorated(decorations);
+        let initial_decorated = if is_wayland {
+            requested_decorated
+        } else {
+            window.is_decorated()
+        };
         Self {
             id,
             window,
             title_buttons,
             waker,
             shown: AtomicBool::new(false),
+            requested_decorated: AtomicBool::new(requested_decorated),
+            configured: AtomicBool::new(!is_wayland),
+            last_decorated: AtomicBool::new(initial_decorated),
         }
+    }
+
+    /// Marks the window configured and reports whether negotiated decorations flipped.
+    pub(crate) fn note_configured(&self) -> bool {
+        self.configured.store(true, Ordering::Release);
+        let current = self.window.is_decorated();
+        self.last_decorated.swap(current, Ordering::AcqRel) != current
     }
 
     /// Puts the window buttons where the application placed them.
@@ -176,7 +204,17 @@ impl Surface for WinitSurface {
     }
 
     fn set_decorations(&self, decorations: Decorations) {
-        self.window.set_decorations(chrome::decorated(decorations));
+        let decorated = chrome::decorated(decorations);
+        self.requested_decorated.store(decorated, Ordering::Relaxed);
+        self.window.set_decorations(decorated);
+        let effective = if self.configured.load(Ordering::Acquire) {
+            self.window.is_decorated()
+        } else {
+            decorated
+        };
+        if self.last_decorated.swap(effective, Ordering::AcqRel) != effective {
+            self.waker.wake(WakeReason::SurfaceStateChanged(self.id));
+        }
     }
 
     fn set_resizable(&self, resizable: bool) {
@@ -224,6 +262,35 @@ impl Surface for WinitSurface {
             winit::window::Fullscreen::Exclusive(_) => FullscreenMode::Exclusive,
             winit::window::Fullscreen::Borderless(_) => FullscreenMode::Borderless,
         })
+    }
+
+    fn decoration_source(&self) -> DecorationSource {
+        let decorated = if self.configured.load(Ordering::Acquire) {
+            self.window.is_decorated()
+        } else {
+            self.requested_decorated.load(Ordering::Relaxed)
+        };
+        if decorated {
+            DecorationSource::Platform
+        } else {
+            DecorationSource::Application
+        }
+    }
+
+    fn can_minimize(&self) -> Option<bool> {
+        Some(
+            self.window
+                .enabled_buttons()
+                .contains(WindowButtons::MINIMIZE),
+        )
+    }
+
+    fn can_maximize(&self) -> Option<bool> {
+        Some(
+            self.window
+                .enabled_buttons()
+                .contains(WindowButtons::MAXIMIZE),
+        )
     }
 
     fn set_window_level(&self, level: WindowLevel) {

@@ -14,7 +14,7 @@ use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{DecorationSource, Surface as _, SurfaceEvent, SurfaceId};
 
 use crate::driver::WaylandState;
-use crate::surface::role::xdg::configure::Pending;
+use crate::surface::role::xdg::configure::{Pending, ToplevelCapabilities};
 
 impl WaylandState {
     /// Records what a window's role asked for, without acting on it.
@@ -38,13 +38,31 @@ impl WaylandState {
     /// Records who the compositor decided draws the frame.
     ///
     /// The request may be refused, and an application that assumed a server-drawn frame was granted
-    /// shows a window with no title bar at all. So the answer is what the capability reports.
+    /// shows a window with no title bar at all — while one whose request for a client-drawn frame
+    /// was overridden by a compositor rule would draw a second title bar under the server's. The
+    /// answer is stashed on the surface until `xdg_surface.configure` seals the batch.
     pub(crate) fn decorated_by(&mut self, id: SurfaceId, source: DecorationSource) {
-        let _ = id;
+        if let Some(surface) = self.live.surface(id) {
+            surface.shared().pending_decorations = Some(source);
+        }
         if self.live.capabilities.decorations != source {
             self.live.capabilities.decorations = source;
             tracing::debug!(?source, "the compositor settled who draws window frames");
         }
+    }
+
+    /// Stashes the window-management actions the compositor advertised for `id` until
+    /// `xdg_surface.configure` seals the batch.
+    pub(crate) fn stash_wm_capabilities(
+        &mut self,
+        id: SurfaceId,
+        capabilities: ToplevelCapabilities,
+    ) {
+        if let Some(surface) = self.live.surface(id) {
+            surface.shared().pending_wm_capabilities = Some(capabilities);
+        }
+        self.live.capabilities.minimize = capabilities.minimize;
+        self.live.capabilities.maximize = capabilities.maximize;
     }
 
     /// Applies the configure that has arrived, acknowledges it, and reports what changed.
@@ -68,9 +86,16 @@ impl WaylandState {
             return;
         }
         let Some(pending) = pending else {
-            // A surface acknowledging a description it never received would be acknowledging
-            // nothing; the compositor sends the two halves together.
+            // Decoration and capability changes may arrive followed directly by
+            // `xdg_surface.configure` with no `xdg_toplevel.configure` in between.
+            let metadata_flipped = surface.shared().apply_pending_metadata();
             surface.role().ack(serial);
+            if metadata_flipped {
+                zgui_platform::Waker::wake(
+                    self.live.waker.as_ref(),
+                    zgui_platform::WakeReason::SurfaceStateChanged(id),
+                );
+            }
             return;
         };
 

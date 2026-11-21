@@ -34,7 +34,7 @@ pub use crate::surface::timing::{ComposeAhead, PresentPacing, PresentationTiming
 pub use crate::surface::watchdog::Watchdog;
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Point, Rect, Size};
 
 use crate::error::Unsupported;
 use crate::theme::ColorScheme;
@@ -232,6 +232,38 @@ pub trait Surface: Send + Sync + 'static {
 
     /// How the surface fills the screen, if it does.
     fn fullscreen(&self) -> Option<FullscreenMode> {
+        None
+    }
+
+    /// Which edges of the surface are tiled against a desktop grid.
+    ///
+    /// On a tiling Wayland compositor, tiled edges tell a client-drawn frame where to drop outer
+    /// rounding and borders so adjacent tiles meet flush.
+    fn tiled(&self) -> Edges<bool> {
+        Edges::NONE
+    }
+
+    /// Who draws the title bar and the frame for this surface.
+    ///
+    /// Where the desktop negotiates frames per window (such as Wayland's `xdg-decoration`), this
+    /// reports the mode the compositor settled on at configure time.
+    fn decoration_source(&self) -> DecorationSource {
+        DecorationSource::Application
+    }
+
+    /// Whether this surface can be minimised, when the surface knows for itself.
+    ///
+    /// `None` leaves the answer to
+    /// [`PlatformCapabilities::minimize`](crate::PlatformCapabilities::minimize).
+    fn can_minimize(&self) -> Option<bool> {
+        None
+    }
+
+    /// Whether this surface can be maximised and restored, when the surface knows for itself.
+    ///
+    /// `None` leaves the answer to
+    /// [`PlatformCapabilities::maximize`](crate::PlatformCapabilities::maximize).
+    fn can_maximize(&self) -> Option<bool> {
         None
     }
 

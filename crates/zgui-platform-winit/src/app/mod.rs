@@ -275,6 +275,11 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
         a11y::observe(Surface::id(surface.as_ref()), surface.window(), &event);
 
         let destroyed = matches!(event, winit::event::WindowEvent::Destroyed);
+        let configured = matches!(
+            event,
+            winit::event::WindowEvent::Resized(_)
+                | winit::event::WindowEvent::ScaleFactorChanged { .. }
+        );
         let relayout = relays_out_title_bar(&event);
         let timestamp = self.shared.clock().timestamp();
         let state = self.windows.entry(window_id).or_default();
@@ -286,6 +291,7 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
             event,
         );
 
+        let decoration_flipped = configured && surface.note_configured();
         if let Some(translated) = translated {
             if let SurfaceEvent::ColorSchemeChanged(scheme) = translated {
                 self.shared.set_scheme(scheme);
@@ -293,6 +299,13 @@ impl<A: AppHandler> ApplicationHandler<UserEvent> for WinitApp<A> {
             let cx = WinitCx::new(&self.shared, event_loop);
             self.handler
                 .surface_event(&cx, Surface::id(surface.as_ref()), translated);
+        }
+        if decoration_flipped {
+            let cx = WinitCx::new(&self.shared, event_loop);
+            self.handler.wake(
+                &cx,
+                WakeReason::SurfaceStateChanged(Surface::id(surface.as_ref())),
+            );
         }
 
         if relayout {

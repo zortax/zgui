@@ -213,6 +213,7 @@ impl PlatformCx for WinitCx<'_> {
         let surface = Arc::new(WinitSurface::new(
             id,
             Arc::clone(&window),
+            attributes.decorations,
             title_buttons(attributes),
             Arc::clone(&self.shared.waker),
         ));
@@ -387,6 +388,8 @@ fn capabilities(event_loop: &ActiveEventLoop, knows_scheme: bool) -> PlatformCap
     capabilities.absolute_window_position = placed_by_the_application;
     capabilities.window_levels = placed_by_the_application;
     capabilities.decorations = DecorationSource::Platform;
+    capabilities.minimize = true;
+    capabilities.maximize = true;
     capabilities.system_color_scheme = knows_scheme;
     capabilities.app_menu = cfg!(target_os = "macos");
     capabilities.reopen = cfg!(target_os = "macos");
