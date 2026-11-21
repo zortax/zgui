@@ -34,6 +34,8 @@ pub type PreparedVectorFactory = fn(&Arc<Gpu>, Size<i32, Device>) -> Box<dyn Vec
 use crate::gpu::device::Gpu;
 use crate::gpu::timing::{GpuTimer, GpuTiming};
 use crate::pipeline::Pipelines;
+#[cfg(target_os = "android")]
+use crate::pipeline::kind::PipelineKind;
 use crate::renderer::frame::FrameBuffers;
 use crate::renderer::readback::Pixels;
 use crate::renderer::shared::{DeviceState, SharedGraphics};
