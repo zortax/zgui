@@ -83,9 +83,7 @@ fn app(css: &str) -> Option<(Harness<Runtime>, Composed)> {
             },
         ))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::r#box().class("card").into_view().build(cx))

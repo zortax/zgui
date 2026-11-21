@@ -31,9 +31,7 @@ where
             },
         ))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
         .with_custom(Box::new(|_document| zgui_custom::sources()))
         .into_handler(view)
