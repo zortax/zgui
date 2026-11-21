@@ -152,6 +152,11 @@ impl Toplevel {
     pub fn begin_resize(&self, seat: &WlSeat, serial: u32, edge: ResizeEdge) {
         self.toplevel.resize(seat, serial, edge);
     }
+
+    /// Asks the compositor to show the native window menu at surface-local `(x, y)`.
+    pub fn show_window_menu(&self, seat: &WlSeat, serial: u32, x: i32, y: i32) {
+        self.toplevel.show_window_menu(seat, serial, x, y);
+    }
 }
 
 impl Drop for Toplevel {

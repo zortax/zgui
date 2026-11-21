@@ -26,7 +26,7 @@ use smithay_client_toolkit::reexports::client::{Connection, QueueHandle};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_surface::WlSurface;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 use zgui_platform::{
     CursorStyle, Decorations, FullscreenMode, GpuSurface, PresentPacing, PresentationTiming,
     Surface, SurfaceId, TextInput, Unsupported,
@@ -675,6 +675,10 @@ impl Surface for WaylandSurface {
         if urgent {
             self.seat.activate(self.id, false);
         }
+    }
+
+    fn show_window_menu(&self, position: Point<CssPx, Css>) -> Result<(), Unsupported> {
+        chrome::show_window_menu(self, position)
     }
 
     fn set_cursor(&self, cursor: CursorStyle) {

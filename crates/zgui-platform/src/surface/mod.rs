@@ -273,6 +273,16 @@ pub trait Surface: Send + Sync + 'static {
         let _ = urgent;
     }
 
+    /// Opens the desktop's native window menu at surface-local `position`, in CSS pixels.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Unsupported`] when the surface or desktop has no native window menu.
+    fn show_window_menu(&self, position: Point<CssPx, Css>) -> Result<(), Unsupported> {
+        let _ = position;
+        Err(Unsupported)
+    }
+
     /// Does what a double press on a title bar does.
     ///
     /// The default maximises the surface, or restores it. A desktop with a preference for this
