@@ -132,6 +132,31 @@ fn a_fragment_whose_border_widths_moved_is_encoded() {
 }
 
 #[test]
+fn a_fragment_replayed_where_it_stands_has_not_moved_from_its_record() {
+    // `46.929794 + (14.173738 - 46.929794)` is not `14.173738` in `f32`.
+    let mut cache = PaintCache::new();
+    let mut scene = scene();
+    cache.encoded(
+        &mut scene,
+        &fragment(0.0, 46.929_794),
+        painted(0),
+        Encoding {
+            chunk: zgui_scene::ChunkPrims::default(),
+            items: 0,
+            drawn: Rect::default(),
+            resources: &[],
+            complete: true,
+            layer: Default::default(),
+        },
+        &NoResources,
+    );
+    let replayed = fragment(0.0, 14.173_738);
+    cache.replayed(&replayed);
+
+    assert_eq!(cache.moved_from(&replayed), None);
+}
+
+#[test]
 fn a_moved_fragment_replays_with_the_distance_it_moved() {
     let mut cache = PaintCache::new();
     let mut scene = scene();
