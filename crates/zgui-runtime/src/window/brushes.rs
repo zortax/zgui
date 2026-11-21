@@ -420,14 +420,29 @@ pub(crate) fn apply(
 
 /// The boxes whose lines draw the text of `nodes` for them.
 ///
-/// A nested inline box has no rectangle of its own size, so its colour is in no paint record of
-/// its own. The lines of the box that holds it paint its glyphs, with the colour of the slot as the
-/// record encoded it. A box with a rectangle of its own needs nothing here: its own record misses
-/// when its style moves.
+/// The lines paint the glyphs with the colour of the slot as their records encoded it. They are
+/// found as follows:
+///
+/// - A nested inline box has no rectangle of its own size. Its text is on the lines of the box
+///   that holds it.
+/// - Any other box has its own text on the anonymous boxes below it, which have no element whose
+///   restyle would damage them.
 fn inline_text_holders(nodes: &[NodeKey], layout: &LayoutStore) -> FxHashSet<BoxKey> {
     let mut holders = FxHashSet::default();
     for node in nodes {
         for key in layout.boxes_of(*node) {
+            let Some(box_) = layout.get(*key) else {
+                continue;
+            };
+            if !box_.is_nested_inline() {
+                let anonymous = box_.children.iter().filter(|child| {
+                    layout
+                        .get(**child)
+                        .is_some_and(|child| child.kind.is_anonymous())
+                });
+                holders.extend(anonymous);
+                continue;
+            }
             let mut at = *key;
             while let Some(box_) = layout.get(at)
                 && box_.is_nested_inline()
@@ -435,9 +450,7 @@ fn inline_text_holders(nodes: &[NodeKey], layout: &LayoutStore) -> FxHashSet<Box
             {
                 at = parent;
             }
-            if at != *key {
-                holders.insert(at);
-            }
+            holders.insert(at);
         }
     }
     holders

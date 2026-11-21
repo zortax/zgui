@@ -21,6 +21,8 @@ use std::time::Duration;
 
 use zgui_geom::{CssPx, Point};
 use zgui_platform::SurfaceEvent;
+use zgui_reactive::RwSignal;
+use zgui_reactive::prelude::*;
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 
@@ -150,6 +152,57 @@ fn every_frame_of_a_colour_transition_reaches_the_glyphs() {
     assert!(
         keys <= 8,
         "the brush table answers to {keys} cascade results after 25 frames of one transition"
+    );
+}
+
+/// A label whose colour transitions when a theme variable above it flips, beside a child in a
+/// colour of its own.
+const THEMED: &str = ".root { display: block; width: 400px; height: 300px; --fg: rgb(16, 16, 16) }
+                      .root.dark { --fg: rgb(240, 240, 240) }
+                      .label { display: flex; color: var(--fg); transition: color 400ms linear }
+                      .mark { display: block; color: rgb(16, 16, 16) }";
+
+/// The label's own lines take the colour its transition ends at with nothing else damaging them.
+#[test]
+fn a_colour_transition_draws_the_lines_it_recolours_again() {
+    let dark = RwSignal::new(false);
+    let mut harness = support::app_with_text(THEMED, move |cx: &mut BuildCx<'_>| {
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .class_toggle(zgui_interned::ClassName::new("dark"), move || dark.get())
+                .child(
+                    zgui_elements::control()
+                        .class("label")
+                        .child("abc")
+                        .child(zgui_elements::text().class("mark").child("def")),
+                )
+                .into_view()
+                .build(cx),
+        )
+    });
+    harness.settle(8);
+    assert_eq!(
+        drawn_grey(&harness),
+        Some(16),
+        "the control: the light theme"
+    );
+
+    dark.set(true);
+    for _ in 0..30 {
+        harness.advance(FRAME);
+        harness.pump();
+    }
+
+    let mut greys: Vec<u8> = glyphs(&harness)
+        .iter()
+        .map(|colour| (colour[0] * 255.0).round() as u8)
+        .collect();
+    greys.sort_unstable();
+    assert_eq!(
+        greys,
+        [16, 16, 16, 240, 240, 240],
+        "the label's lines keep a colour the transition has moved past"
     );
 }
 
