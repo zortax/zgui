@@ -105,9 +105,7 @@ impl Window {
 
     /// Changes the levels this window's entry-counted caches are held to.
     ///
-    /// Nothing is freed here; the new levels take effect at the end of the next frame. The atlas's
-    /// own level is not among them — it is a byte figure held by the atlas and set through
-    /// [`ContentCache::set_soft_bytes`](zgui_paint::ContentCache::set_soft_bytes).
+    /// Nothing is freed here; the new levels take effect at the end of the next frame.
     pub fn set_cache_limits(&mut self, limits: CacheLimits) {
         self.budgets.set_limits(limits);
     }

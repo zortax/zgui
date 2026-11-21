@@ -35,10 +35,10 @@ compositor` fails any other crate that names an implementation or downcasts to o
 
 ## Where the implementations are chosen
 
-`zgui::app()` chooses them, in the module `zgui::app::compositor`:
+`zgui::app()` chooses them:
 
 - The compositor is the reference implementation, `compositor-core`, with glyphs rasterised by
-  swash and its atlas held to a budget.
+  swash and its atlas held to a budget. `zgui::app::compositor` returns it.
 - Each window gets a `compositor-wgpu` renderer that presents into its surface. All windows share
   one device and one pipeline cache, kept in `ZGUI_CACHE_DIR` or in `~/.cache/zgui/pipelines`.
 - Paths are rasterised by vello on the same device.
@@ -65,8 +65,8 @@ zgui::app()
 
 The factory is a `zgui_runtime::RendererFactory`. It is called once per window, with the window's
 surface and its first render target, and returns the window's renderer or an `AppError`.
-`App::with_compositor_renderer` installs a renderer that draws off screen instead, built for the
-window's first size. The runtime's `App::with_compositor` installs the compositor.
+`App::with_compositor_renderer` instead draws the frames of each window with the renderer a
+`CompositorRendererMaker` returns for the window's first size. The runtime's `App::with_compositor` installs the compositor.
 
 A renderer follows the renderer half of the specification. Three of its rules decide whether
 zgui's frames come out right:
