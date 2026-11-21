@@ -16,6 +16,7 @@ mod containment;
 mod counters;
 mod crossing;
 mod cursor;
+mod declared;
 mod drag;
 pub mod frame;
 pub mod input;

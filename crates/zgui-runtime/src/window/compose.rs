@@ -60,10 +60,33 @@ impl Window {
     ///
     /// A rejected transaction leaves the compositor with nothing of this window, so the sync
     /// forgets what it recorded and the next frame records the whole surface again.
-    pub(super) fn submit_transaction(&mut self, transaction: compositor_types::Transaction) {
+    ///
+    /// A transaction that writes no node, slot or parameter block declares the damage the frame's
+    /// paint walk drew, which holds every pixel the walk's recordings and offsets change. With
+    /// invariants checked, a declaration the compositor's verification finds short is a defect.
+    pub(super) fn submit_transaction(&mut self, mut transaction: compositor_types::Transaction) {
         let report = self.painter.compositor().map(|sync| sync.report());
+        // Table writes, such as a transform or a colour an animation moves, change pixels the
+        // walk's damage does not hold.
+        let declares = report.is_some_and(|report| {
+            report.table_writes == 0 && report.params_written == 0 && report.released == 0
+        });
+        if declares {
+            transaction.declare_damage(
+                self.compositor.output(),
+                crate::window::declared::declared(&self.painted),
+            );
+        }
+        let violations = self.compositor.compositor().counters().damage_violations;
         match self.compositor.commit(transaction) {
             Ok(committed) => {
+                if self.check_damage {
+                    let after = self.compositor.compositor().counters().damage_violations;
+                    assert_eq!(
+                        after, violations,
+                        "the frame's paint damage misses pixels its transaction changes"
+                    );
+                }
                 if let Some(report) = &report {
                     crate::window::counters::committed(&committed, report);
                 }
