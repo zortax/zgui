@@ -145,7 +145,7 @@ fn every_tab_shows_its_own_answer() {
     tools.set_open(true);
 
     for (tab, expected) in [
-        (Tab::Frame, "batches"),
+        (Tab::Frame, "draw calls"),
         (Tab::Timeline, "whole frame"),
         (Tab::Parity, "implemented"),
         (Tab::Memory, "what the renderer holds"),
