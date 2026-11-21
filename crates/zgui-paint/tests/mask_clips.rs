@@ -5,8 +5,9 @@ mod support;
 use compositor_types::{ImageDesc, ImageFormat};
 use zgui_atlas::{AtlasTile, TextureId, TextureKind, TileId};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+use zgui_paint::Tables;
 use zgui_paint::emit::record::{ImageKey, ImagePixels, filled};
-use zgui_scene::{ClipId, ClipLink, MaskSource, Scene, SpatialId};
+use zgui_space::{ClipId, ClipLink, MaskSource, SpatialId};
 
 use support::chunk::Lone;
 
@@ -30,7 +31,7 @@ fn rect(x: f32, y: f32, width: f32, height: f32) -> Rect<DevicePx, Device> {
 /// Records a red quad through a clip whose mask link samples `tile()`, with the image of the
 /// tile's texture recorded first when `texture` is true, and returns the quad's line.
 fn masked(texture: bool) -> String {
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     scene.begin_frame(zgui_geom::Size::new(256, 256));
     let chain = scene.clips.push(
         ClipId::ROOT,

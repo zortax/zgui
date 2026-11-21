@@ -3,9 +3,9 @@
 use core::cell::{Cell, RefCell};
 use std::sync::{Arc, Weak};
 
+use kurbo::Affine;
 use rustc_hash::FxHashMap;
 use zgui_dom::{Document, NodeKey};
-use zgui_scene::kurbo::Affine;
 use zgui_vocab::SharedString;
 
 use crate::content::vectors::{Drawing, Placement, VectorSource, parse};
@@ -181,7 +181,7 @@ impl VectorCache {
     ///
     /// `None` for a document that cannot be read.
     fn parsed(&self, kind: Kind, source: &SharedString) -> Option<Arc<Parsed>> {
-        let key = zgui_scene::ContentHash::new()
+        let key = zgui_space::ContentHash::new()
             .u32(kind.tag())
             .bytes(source.as_bytes())
             .finish();
@@ -348,7 +348,7 @@ impl VectorCache {
         }
         #[cfg(test)]
         self.hashes.set(self.hashes.get() + 1);
-        let mut hash = zgui_scene::ContentHash::new();
+        let mut hash = zgui_space::ContentHash::new();
         if let Some(view_box) = view_box {
             hash = hash.f32s(&view_box);
         }
@@ -393,7 +393,7 @@ impl VectorSource for Vectors<'_> {
         let store = self.document.store();
         let view_box = zgui_dom::side::drawing::view_box(store, node);
         if let Some((token, revision)) = zgui_dom::side::drawing::canvas(store, node) {
-            let mut hash = zgui_scene::ContentHash::new();
+            let mut hash = zgui_space::ContentHash::new();
             if let Some(view_box) = view_box {
                 hash = hash.f32s(&view_box);
             }
@@ -439,10 +439,10 @@ impl VectorSource for Vectors<'_> {
 
 #[cfg(test)]
 mod tests {
+    use kurbo::Shape;
     use zgui_dom::{Document, NodeKind};
     use zgui_geom::{DevicePx, Point, Rect, Size};
     use zgui_interned::ElementName;
-    use zgui_scene::kurbo::Shape;
     use zgui_vocab::{PropKey, PropValue, prop::drawing};
 
     use super::VectorCache;
@@ -496,7 +496,7 @@ mod tests {
             .drawing(node, placement(48.0))
             .expect("the element draws");
         assert_eq!(drawing.shapes.len(), 1);
-        assert_eq!(drawing.fit, zgui_scene::kurbo::Affine::scale(2.0));
+        assert_eq!(drawing.fit, kurbo::Affine::scale(2.0));
         assert_eq!(
             drawing.placed(0).path.bounding_box().width(),
             48.0,
@@ -718,7 +718,7 @@ mod tests {
 
     /// An eight-unit triangle with its own solid fill.
     fn triangle() -> zgui_canvas::Shape {
-        let mut path = zgui_scene::kurbo::BezPath::new();
+        let mut path = kurbo::BezPath::new();
         path.move_to((0.0, 0.0));
         path.line_to((8.0, 0.0));
         path.line_to((4.0, 8.0));
@@ -836,13 +836,9 @@ mod tests {
         let mut box_ = placement(24.0);
         box_.content_box.origin.x = DevicePx(10.0);
         let before = cache.frame(&document).drawing(node, box_).expect("draws");
-        assert_eq!(
-            before.fit,
-            zgui_scene::kurbo::Affine::translate((10.0, 0.0))
-        );
+        assert_eq!(before.fit, kurbo::Affine::translate((10.0, 0.0)));
 
-        let view = zgui_scene::kurbo::Affine::translate((3.0, 4.0))
-            * zgui_scene::kurbo::Affine::scale(2.0);
+        let view = kurbo::Affine::translate((3.0, 4.0)) * kurbo::Affine::scale(2.0);
         let revision = handle.revision();
         assert!(handle.set_transform(view));
         assert_eq!(handle.revision(), revision, "a view moves no revision");
@@ -857,7 +853,7 @@ mod tests {
         let after = cache.frame(&document).drawing(node, box_).expect("draws");
         assert_eq!(
             after.fit,
-            zgui_scene::kurbo::Affine::translate((10.0, 0.0)) * view,
+            kurbo::Affine::translate((10.0, 0.0)) * view,
             "the fit is the box fit times the view"
         );
         assert!(
@@ -874,7 +870,7 @@ mod tests {
             scene.push(triangle());
             scene.push_series(zgui_canvas::Series::Points {
                 data: std::sync::Arc::clone(&data),
-                to_canvas: zgui_scene::kurbo::Affine::IDENTITY,
+                to_canvas: kurbo::Affine::IDENTITY,
                 marker: zgui_canvas::Marker::Circle { radius: 2.0 },
                 fill: Some(zgui_canvas::Brush::Inherited { alpha: 1.0 }),
                 stroke: None,

@@ -1,11 +1,11 @@
 use std::sync::Arc;
 
+use crate::VectorId;
+use kurbo::{self, Affine, Shape as _};
 use zgui_bits::DamageSet;
 use zgui_color::Color;
 use zgui_geom::{Affine2, Device, DevicePx, Point, Rect, Size};
 use zgui_profile::Counter;
-use zgui_scene::kurbo::{self, Affine, Shape as _};
-use zgui_scene::{VectorId, peniko};
 
 use super::super::{LayerAnswer, LayerRequest, VectorLayerCache};
 use super::{TILE, TiledSource, Tiles, handle_of};

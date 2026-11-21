@@ -8,8 +8,9 @@ use zgui_css::StyleDraft;
 use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
 use zgui_paint::GlyphSource;
+use zgui_paint::Tables;
 use zgui_paint::emit::text::{self, EllipsisPaint, TextPlacement};
-use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId};
+use zgui_space::{ClipId, OwnSpace, PropertyOwner, SpatialId};
 use zgui_testkit_compositor::{Drawing, Instance};
 
 use support::chunk::Lone;
@@ -42,7 +43,7 @@ impl GlyphSource for Asked {
             coords: &[],
             synthetic_bold: 0.0,
             synthetic_slant: 0.0,
-            brush: zgui_scene::PaintSlot(0),
+            brush: zgui_space::PaintSlot(0),
             glyphs: &GLYPHS,
             text_start: 0,
         });
@@ -86,7 +87,7 @@ fn cut() -> EllipsisPaint {
 
 /// Records one line drawn through `placement` into a compositor, and reports what the source was
 /// asked for.
-fn record(scene: &mut Scene, placement: TextPlacement) -> (Lone, Vec<(u32, u16)>) {
+fn record(scene: &mut Tables, placement: TextPlacement) -> (Lone, Vec<(u32, u16)>) {
     let style = zgui_paint::lower(&StyleDraft::initial().build(), 1.0);
     let source = Asked::default();
     let lone = Lone::record(scene, (placement.transform, ClipId::ROOT), |rec| {
@@ -106,7 +107,7 @@ fn record(scene: &mut Scene, placement: TextPlacement) -> (Lone, Vec<(u32, u16)>
 
 /// What a line drawn under `ellipsis` draws, and what the source was asked for.
 fn draw(ellipsis: Option<EllipsisPaint>) -> (Drawing, Vec<(u32, u16)>) {
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     let (mut lone, asked) = record(&mut scene, placement(ellipsis));
     (lone.redraw(), asked)
 }
@@ -168,7 +169,7 @@ fn the_cut_clips_the_line_and_not_the_mark() {
 ///
 /// What a dialog is: laid out in one place and drawn in another, so everything inside it measures
 /// its rectangles in the panel's own system while the device sees them through the panel's matrix.
-fn panel(scene: &mut Scene, by: f32) -> SpatialId {
+fn panel(scene: &mut Tables, by: f32) -> SpatialId {
     let viewport = scene.spatial.viewport();
     let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
     scene.spatial.space_of(
@@ -186,7 +187,7 @@ fn panel(scene: &mut Scene, by: f32) -> SpatialId {
 /// in, and the window is drawn through the panel's matrix like the glyphs.
 #[test]
 fn a_cut_line_in_a_transformed_panel_is_cut_where_it_is_drawn() {
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     let panel = panel(&mut scene, 120.0);
     let (mut lone, _) = record(
         &mut scene,
@@ -213,7 +214,7 @@ fn a_cut_line_in_a_transformed_panel_is_cut_where_it_is_drawn() {
 /// past one line height only the mark is left.
 #[test]
 fn the_cut_window_travels_with_a_moved_line() {
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     let (mut lone, _) = record(&mut scene, placement(Some(cut())));
     lone.offset([0.0, 24.0]);
 

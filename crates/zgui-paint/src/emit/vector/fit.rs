@@ -14,8 +14,8 @@
 //! another name, and it is the only behaviour here because the alternatives are a property nothing
 //! in this framework's vocabulary sets.
 
+use kurbo::Affine;
 use zgui_geom::{Device, DevicePx, Rect};
-use zgui_scene::kurbo::Affine;
 
 /// The transform mapping a drawing's own coordinates onto the box it is drawn in.
 ///
@@ -30,7 +30,7 @@ use zgui_scene::kurbo::Affine;
 /// ```
 /// use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 /// use zgui_paint::emit::vector::fit::onto;
-/// use zgui_scene::kurbo::Point as KurboPoint;
+/// use kurbo::Point as KurboPoint;
 ///
 /// let box_ = Rect::new(
 ///     Point::new(DevicePx(10.0), DevicePx(20.0)),
@@ -73,8 +73,8 @@ pub fn onto(content_box: Rect<DevicePx, Device>, view_box: Option<[f32; 4]>, sca
 
 #[cfg(test)]
 mod tests {
+    use kurbo::Point as KurboPoint;
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-    use zgui_scene::kurbo::Point as KurboPoint;
 
     use super::onto;
 

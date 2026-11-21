@@ -5,11 +5,11 @@
 //! layout recorded on the line. A box broken across lines is sliced: a part the box continues past
 //! has no border and no rounded corners on that side (`box-decoration-break: slice`).
 
-use compositor_types::{ClipRef, Color as Premultiplied, Line, LineStyle};
+use compositor_types::{ClipRef, Color as Premultiplied, Line};
 use zgui_css::ComputedStyle;
 use zgui_geom::{Corners, Device, DevicePx, Edges, Rect, Vec2};
 use zgui_layout::inline::slices::{InlineSlice, device_rect};
-use zgui_scene::{ClipId, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::box_::{self, BoxPlacement};
 use crate::emit::record::Recorder;
@@ -201,7 +201,7 @@ pub fn decorations(
                 thickness: style.thickness,
                 clip,
                 space,
-                style: LineStyle(style.style as u8),
+                style: style.style,
                 _pad: [0; 3],
             });
             pushed += 1;
@@ -230,7 +230,7 @@ mod tests {
     use zgui_css::StyleDraft;
     use zgui_geom::{Corners, DevicePx, Point, Rect, Size, Vec2};
     use zgui_layout::inline::slices::InlineSlice;
-    use zgui_scene::{ClipId, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     use super::{InlinePaint, sliced};
 

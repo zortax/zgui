@@ -8,11 +8,11 @@ mod support;
 use std::sync::Arc;
 use zgui_atlas::AtlasLimits;
 
+use kurbo::{Affine, BezPath};
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
-use zgui_scene::kurbo::{Affine, BezPath};
 use zgui_testkit_compositor::{Drawing, Instance};
 use zgui_testkit_scene::counters::Recording;
 

@@ -18,7 +18,8 @@ use zgui_paint::content::vectors::{LayerAnswer, LayerPixels, LayerRequest};
 use zgui_paint::content::{VectorMaskSource as _, VectorPlacement as Placement};
 use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, layer_image};
 use zgui_paint::{ContentCache, VectorCache, VectorSource};
-use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId, VectorId};
+use zgui_paint::{Tables, VectorId};
+use zgui_space::{ClipId, OwnSpace, PropertyOwner, SpatialId};
 use zgui_testkit_compositor::Pixels;
 use zgui_vocab::{PropKey, PropValue, prop::drawing};
 
@@ -59,7 +60,7 @@ const CASES: [Case; 3] = [
 ];
 
 /// The scene a case is drawn in, and the transform the drawing is placed under.
-fn ground(case: Case) -> (Scene, SpatialId) {
+fn ground(case: Case) -> (Tables, SpatialId) {
     let mut scene = scene_at(SIDE as u32);
     let transform = if case.scale == 1.0 {
         SpatialId::VIEWPORT

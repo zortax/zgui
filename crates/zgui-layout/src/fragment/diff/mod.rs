@@ -661,9 +661,8 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// What a fragment's clip chain admits, in device pixels.
     ///
     /// Damage is what has to be *drawn again*, and a box cannot draw outside the chain it is drawn
-    /// under: [`Scene::assign_order`](zgui_scene::Scene) refuses a primitive its chain admits
-    /// nothing of, so a damage rectangle beyond the chain names pixels no frame will ever put
-    /// anything into.
+    /// under, so a damage rectangle beyond the chain names pixels no frame will ever put anything
+    /// into.
     ///
     /// This is not a refinement. It is the difference between damage bounded by the window and
     /// damage bounded by the *document*: a virtualised list stands two spacers in for the rows it

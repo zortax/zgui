@@ -10,7 +10,6 @@ use zgui_css::parity::Support;
 use zgui_css::values::effect::{IsolationValue, MixBlendModeValue};
 use zgui_css::{ComputedStyle, register_properties};
 use zgui_layout::fragment::filter::FilterChain;
-use zgui_scene::peniko;
 
 register_properties! {
     opacity         => Support::Implemented("zgui-paint::lower::filter"),
@@ -96,7 +95,6 @@ pub fn blend_of(mode: MixBlendModeValue) -> peniko::BlendMode {
 #[cfg(test)]
 mod tests {
     use zgui_css::values::effect::MixBlendModeValue;
-    use zgui_scene::peniko;
 
     use super::blend_of;
 

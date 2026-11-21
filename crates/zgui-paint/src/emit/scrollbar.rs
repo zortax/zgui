@@ -13,7 +13,7 @@
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_layout::fragment::ScrollbarPart;
-use zgui_scene::{ClipId, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::{self, Recorder};
 
@@ -193,9 +193,10 @@ pub fn hidden_paint() -> ScrollbarPaint {
 
 #[cfg(test)]
 mod tests {
+    use crate::Tables;
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
     use zgui_layout::fragment::ScrollbarPart;
-    use zgui_scene::{ClipId, Scene, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     use super::{dark_paint, default_paint, emit, hidden_paint, resolve, slim};
     use crate::emit::record::Recording;
@@ -263,9 +264,9 @@ mod tests {
 
     #[test]
     fn the_thumb_is_recorded_and_the_transparent_track_is_not() {
-        let mut scene = Scene::new();
+        let mut tables = Tables::new();
         let mut recording = Recording::new();
-        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         let mut part = |part, paint| {
             emit(
                 &mut rec,

@@ -1,10 +1,9 @@
 use std::sync::Arc;
 
+use crate::VectorId;
+use kurbo::{Affine, BezPath, Rect, Shape as _};
 use zgui_color::Color;
 use zgui_geom::Affine2;
-use zgui_scene::VectorId;
-use zgui_scene::kurbo::{Affine, BezPath, Rect, Shape as _};
-use zgui_scene::peniko;
 
 use super::{LayerAnswer, LayerFallback, LayerRequest, VectorLayerCache};
 use crate::content::vectors::Drawing;

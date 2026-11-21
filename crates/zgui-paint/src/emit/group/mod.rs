@@ -29,7 +29,7 @@ use std::sync::Arc;
 
 use compositor_types::Backdrop;
 use zgui_layout::{Fragment, FragmentFlags};
-use zgui_scene::{ClipId, ClipLink};
+use zgui_space::{ClipId, ClipLink};
 
 use crate::emit::record::{Recorder, local_rect};
 use crate::lower::PaintStyle;
@@ -327,7 +327,10 @@ mod tests {
     #[test]
     fn a_filter_takes_a_target_at_full_opacity() {
         let mut style = translucent(1.0);
-        style.group.filters.push(zgui_scene::Filter::Blur(2.0));
+        style
+            .group
+            .filters
+            .push(zgui_layout::fragment::filter::Filter::Blur(2.0));
         assert_eq!(isolation(&style, &fragment(true, false)), Isolation::Target);
     }
 
@@ -357,7 +360,10 @@ mod tests {
     /// The style of a box with a `backdrop-filter`.
     fn frosted() -> PaintStyle {
         let mut style = translucent(1.0);
-        style.group.backdrop.push(zgui_scene::Filter::Blur(4.0));
+        style
+            .group
+            .backdrop
+            .push(zgui_layout::fragment::filter::Filter::Blur(4.0));
         style.group.isolates_blending = true;
         style
     }
@@ -402,22 +408,25 @@ mod tests {
     #[test]
     fn a_backdrop_filters_the_border_box_with_its_chain() {
         let mut style = translucent(1.0);
-        style.group.backdrop.push(zgui_scene::Filter::Blur(4.0));
+        style
+            .group
+            .backdrop
+            .push(zgui_layout::fragment::filter::Filter::Blur(4.0));
         let mut fragment = fragment(true, false);
         fragment.border_box = rect(10.0, 10.0, 40.0, 30.0);
-        let mut scene = zgui_scene::Scene::new();
-        scene.begin_frame(zgui_geom::Size::new(200, 200));
-        let owner = zgui_scene::PropertyOwner::new(7).expect("a handle");
-        let own = zgui_scene::OwnSpace::of(
+        let mut tables = crate::Tables::new();
+        tables.begin_frame(zgui_geom::Size::new(200, 200));
+        let owner = zgui_space::PropertyOwner::new(7).expect("a handle");
+        let own = zgui_space::OwnSpace::of(
             Some(zgui_geom::Matrix4::translation(100.0, 0.0, 0.0)),
             None,
             false,
         );
-        let viewport = scene.spatial.viewport();
-        let space = scene.spatial.space_of(viewport, owner, own);
+        let viewport = tables.spatial.viewport();
+        let space = tables.spatial.space_of(viewport, owner, own);
         fragment.transform = Some(space);
         let mut recording = crate::emit::record::Recording::new();
-        let mut rec = recording.recorder(&mut scene, space, zgui_scene::ClipId::ROOT);
+        let mut rec = recording.recorder(&mut tables, space, zgui_space::ClipId::ROOT);
         let pushed = super::backdrop(
             &mut rec,
             &style,

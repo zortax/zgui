@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use compositor_types::{AnyId, EffectId, EffectNode, Filter, OrderId, Transaction};
 
-use zgui_scene::Scene;
+use crate::Tables;
 
 use crate::emit::group::GroupEffect;
 use crate::sync::mirror::Mirror;
@@ -23,7 +23,7 @@ pub(crate) struct Written {
 pub(crate) fn write(
     tx: &mut Transaction,
     mirror: &mut Mirror,
-    scene: &mut Scene,
+    tables: &mut Tables,
     order: OrderId,
     written: Option<Written>,
     wanted: Option<&GroupEffect>,
@@ -36,7 +36,7 @@ pub(crate) fn write(
         remove(tx, mirror, written);
         return (None, 1);
     };
-    let clip = mirror.held_clip(tx, scene, wanted.clip);
+    let clip = mirror.held_clip(tx, tables, wanted.clip);
     let node = EffectNode {
         clip,
         opacity: wanted.opacity,

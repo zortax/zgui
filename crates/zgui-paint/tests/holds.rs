@@ -40,7 +40,7 @@ fn restyle(harness: &mut Harness, name: &str, from: &str, to: &str) {
 /// The holds the paint table counts over every paint.
 fn paint_holds(harness: &Harness) -> u32 {
     (0..harness.scene.paints.slots() as u32)
-        .filter_map(|raw| harness.scene.paints.refs(zgui_scene::PaintId(raw)))
+        .filter_map(|raw| harness.scene.paints.refs(zgui_space::PaintId(raw)))
         .sum()
 }
 

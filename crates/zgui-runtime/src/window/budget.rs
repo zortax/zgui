@@ -26,7 +26,7 @@ impl CacheRegistry for Window {
         let chunk_bytes = self.budgets.limits().paint_chunk_bytes;
         visit(&mut PaintChunksBudget::new(
             &mut self.painter,
-            &mut self.scene,
+            &mut self.tables,
             &mut self.content,
             chunk_bytes,
             self.budgets.tracked(CacheId::PaintChunks),
@@ -156,7 +156,7 @@ impl Window {
             .extend(self.diff_scratch.take_retired_clips());
         let layout = self.layout.borrow();
         let walked = self
-            .scene
+            .tables
             .clips
             .slots()
             .max(layout.fragment_count() as usize / FRAGMENTS_PER_SLOT);
@@ -164,12 +164,12 @@ impl Window {
             return;
         }
         // A fragment re-encoded later emits under the chain it stored at build.
-        let scene = &mut self.scene;
+        let tables = &mut self.tables;
         layout.each_fragment(|fragment| {
-            scene.clips.use_of(fragment.clip);
+            tables.clips.use_of(fragment.clip);
         });
         drop(layout);
-        scene.clips.evict_retired_chains(&mut self.retired_clips);
+        tables.clips.evict_retired_chains(&mut self.retired_clips);
     }
 
     /// Frees the clip chains nothing can reach any more, on a stride of frames.
@@ -195,16 +195,16 @@ impl Window {
         /// The most chains one sweep frees, so the change journal stays a delta for its readers.
         const CAP: usize = 2_048;
 
-        if !epoch.get().is_multiple_of(STRIDE) || self.scene.clips.slots() < FLOOR {
+        if !epoch.get().is_multiple_of(STRIDE) || self.tables.clips.slots() < FLOOR {
             return;
         }
-        let scene = &mut self.scene;
+        let tables = &mut self.tables;
         let layout = self.layout.borrow();
         layout.each_fragment(|fragment| {
-            scene.clips.use_of(fragment.clip);
+            tables.clips.use_of(fragment.clip);
         });
         drop(layout);
-        scene.clips.evict_unreachable_chains(KEEP_GENERATIONS, CAP);
+        tables.clips.evict_unreachable_chains(KEEP_GENERATIONS, CAP);
     }
 
     /// Frees the paint entries nothing holds and no recent frame drew, on a stride of frames.
@@ -227,10 +227,10 @@ impl Window {
         /// The most entries one sweep frees, so the change journal stays a delta for its readers.
         const CAP: usize = 2_048;
 
-        if !epoch.get().is_multiple_of(STRIDE) || self.scene.paints.slots() < FLOOR {
+        if !epoch.get().is_multiple_of(STRIDE) || self.tables.paints.slots() < FLOOR {
             return;
         }
-        self.scene.paints.evict_unreachable(KEEP_GENERATIONS, CAP);
+        self.tables.paints.evict_unreachable(KEEP_GENERATIONS, CAP);
     }
 
     /// Drops everything every budgeted cache holds.

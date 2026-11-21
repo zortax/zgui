@@ -25,8 +25,8 @@ use zgui_layout::style::DeviceStyle;
 use zgui_layout::tree::LayoutTree;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_layout::{BoxKey, FragKey};
+use zgui_paint::Tables;
 use zgui_paint::{CompositorSync, PaintInput, Painter, SyncReport};
-use zgui_scene::Scene;
 use zgui_style::{SheetOrigin, SheetSource, StyleEngine, Viewport};
 use zgui_testkit_compositor::{Drawing, Session};
 use zgui_text::{BreakRequest, BrokenParagraph, ParagraphContent, ParagraphKey, StrutMetrics};
@@ -36,12 +36,12 @@ use zgui_text_style::TextStyle;
 pub(crate) mod compositor;
 pub(crate) mod drawn;
 
-/// The poison test mode's offset. See [`zgui_scene::spatial::poison`].
+/// The poison test mode's offset. See [`zgui_space::spatial::poison`].
 ///
 /// Primitives are recorded in their own space, and the poison mode lays the document out at
 /// `(P, P)`. A test that reads primitive coordinates subtracts this to read them as at the origin.
 pub(crate) fn poison() -> f32 {
-    zgui_scene::spatial::poison::origin()
+    zgui_space::spatial::poison::origin()
 }
 
 /// `bounds` with the poison offset taken off its origin.
@@ -135,7 +135,7 @@ pub(crate) struct Harness {
     /// The boxes, their layout results and their fragments.
     pub(crate) store: LayoutStore,
     /// The display list.
-    pub(crate) scene: Scene,
+    pub(crate) scene: Tables,
     /// The paint stage's state between frames.
     pub(crate) painter: Painter,
     /// What the last fragment pass said must be redrawn.
@@ -190,7 +190,7 @@ impl Harness {
             document,
             root,
             store,
-            scene: Scene::new(),
+            scene: Tables::new(),
             painter: Painter::new(),
             damage: DamageSet::new(),
             compositor: Output::new([width as u32, height as u32]),
@@ -220,7 +220,7 @@ impl Harness {
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.scene.clips,
             spatial: &mut self.scene.spatial,
-            drawn: &zgui_scene::Placements::EMPTY,
+            drawn: &zgui_space::Placements::EMPTY,
             device: DeviceStyle::default(),
             scroll: &self.scroll,
             placements: &[],
@@ -253,7 +253,7 @@ impl Harness {
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.scene.clips,
             spatial: &mut self.scene.spatial,
-            drawn: &zgui_scene::Placements::EMPTY,
+            drawn: &zgui_space::Placements::EMPTY,
             device: DeviceStyle::default(),
             scroll: &self.scroll,
             placements: &[],
@@ -294,7 +294,7 @@ impl Harness {
 
     /// Grows the damage over the read-extent registry, exactly as a frame does before emitting.
     pub(crate) fn expand(&mut self) -> zgui_paint::Expansion {
-        let placements = zgui_scene::Placements::of(&self.scene.spatial);
+        let placements = zgui_space::Placements::of(&self.scene.spatial);
         zgui_paint::expand(
             &self.store,
             &mut self.damage,
@@ -311,19 +311,17 @@ impl Harness {
         // Recorded in every profile. The tests below compare what was emitted against what the
         // damage reaches, so a recording that only happened in one profile would leave the other
         // asserting nothing at all.
-        let placements = zgui_scene::Placements::of(&self.scene.spatial);
+        let placements = zgui_space::Placements::of(&self.scene.spatial);
         let mut input = PaintInput::new(&self.store, &self.damage);
         input.record_emitted = true;
         input.placements = Some(&placements);
-        let report = emit(
+        emit(
             &mut self.painter,
             &mut self.compositor,
             (&self.store, &retired),
             &input,
             &mut self.scene,
-        );
-        self.scene.finish(&self.damage);
-        report
+        )
     }
 
     /// Emits a frame drawing its glyphs and its images through `content`.
@@ -338,23 +336,19 @@ impl Harness {
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
         content.begin_frame();
-        let report = {
-            let frame = content.frame(&self.store, &NoGlyphs);
-            let input = PaintInput {
-                glyphs: &frame,
-                replaced: &frame,
-                ..PaintInput::new(&self.store, &self.damage)
-            };
-            emit(
-                &mut self.painter,
-                &mut self.compositor,
-                (&self.store, &retired),
-                &input,
-                &mut self.scene,
-            )
+        let frame = content.frame(&self.store, &NoGlyphs);
+        let input = PaintInput {
+            glyphs: &frame,
+            replaced: &frame,
+            ..PaintInput::new(&self.store, &self.damage)
         };
-        self.scene.finish(&self.damage);
-        report
+        emit(
+            &mut self.painter,
+            &mut self.compositor,
+            (&self.store, &retired),
+            &input,
+            &mut self.scene,
+        )
     }
 
     /// Emits a frame drawing the outlines its elements carry, with the whole surface damaged.
@@ -368,24 +362,20 @@ impl Harness {
         let retired = self.store.drain_retired_paint();
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
-        let report = {
-            let frame = vectors.frame(&self.document);
-            let mut input = PaintInput {
-                vectors: &frame,
-                scale: self.scale,
-                ..PaintInput::new(&self.store, &self.damage)
-            };
-            input.record_emitted = true;
-            emit(
-                &mut self.painter,
-                &mut self.compositor,
-                (&self.store, &retired),
-                &input,
-                &mut self.scene,
-            )
+        let frame = vectors.frame(&self.document);
+        let mut input = PaintInput {
+            vectors: &frame,
+            scale: self.scale,
+            ..PaintInput::new(&self.store, &self.damage)
         };
-        self.scene.finish(&self.damage);
-        report
+        input.record_emitted = true;
+        emit(
+            &mut self.painter,
+            &mut self.compositor,
+            (&self.store, &retired),
+            &input,
+            &mut self.scene,
+        )
     }
 
     /// Emits drawings through the real shared atlas, enabling the small-vector mask route.
@@ -429,7 +419,6 @@ impl Harness {
                 &mut self.scene,
             )
         };
-        self.scene.finish(&self.damage);
         content.end_frame();
         report
     }
@@ -458,7 +447,7 @@ impl Harness {
     }
 
     /// The scene the last paint produced.
-    pub(crate) fn scene(&self) -> &Scene {
+    pub(crate) fn scene(&self) -> &Tables {
         &self.scene
     }
 
@@ -504,7 +493,7 @@ impl Harness {
         let retired = self.store.drain_retired_paint();
         self.damage = DamageSet::full();
         self.scene.begin_frame(self.viewport);
-        let placements = zgui_scene::Placements::of(&self.scene.spatial);
+        let placements = zgui_space::Placements::of(&self.scene.spatial);
         let mut input = PaintInput::new(&self.store, &self.damage);
         input.record_emitted = true;
         input.placements = Some(&placements);
@@ -512,15 +501,13 @@ impl Harness {
             zgui_geom::Point::new(0, 0),
             self.viewport,
         ));
-        let report = emit(
+        emit(
             &mut self.painter,
             &mut self.compositor,
             (&self.store, &retired),
             &input,
             &mut self.scene,
-        );
-        self.scene.finish(&self.damage);
-        report
+        )
     }
 
     /// Emits a frame against the damage the fragment pass accumulated, with `anim` overriding
@@ -531,19 +518,17 @@ impl Harness {
     ) -> zgui_paint::PaintReport {
         let retired = self.store.drain_retired_paint();
         self.scene.begin_frame(self.viewport);
-        let placements = zgui_scene::Placements::of(&self.scene.spatial);
+        let placements = zgui_space::Placements::of(&self.scene.spatial);
         let mut input = PaintInput::new(&self.store, &self.damage);
         input.anim = anim;
         input.placements = Some(&placements);
-        let report = emit(
+        emit(
             &mut self.painter,
             &mut self.compositor,
             (&self.store, &retired),
             &input,
             &mut self.scene,
-        );
-        self.scene.finish(&self.damage);
-        report
+        )
     }
 
     /// Emits a frame with the whole surface damaged.
@@ -672,7 +657,7 @@ fn emit(
     output: &mut Output,
     (store, retired): (&LayoutStore, &[FragKey]),
     input: &PaintInput<'_>,
-    scene: &mut Scene,
+    scene: &mut Tables,
 ) -> zgui_paint::PaintReport {
     if painter.compositor().is_some() && !output.owns_sync {
         painter.retire(retired, scene, &zgui_paint::walk::replay::hold::NoResources);
@@ -745,7 +730,7 @@ impl MeasureContent for Measurer {
     }
 
     fn paint_slot(&mut self, _paint: &TextPaint) -> zgui_text::Brush {
-        zgui_scene::PaintSlot(0)
+        zgui_space::PaintSlot(0)
     }
 }
 

@@ -6,9 +6,10 @@
 //! with the same gradient share one entry, which is what a table of a thousand identical rows
 //! depends on.
 
+use crate::Tables;
+use crate::paints::{GradientKind, Paint, PaintRef};
 use zgui_color::ColorSpace;
 use zgui_geom::{CssPx, Device, DevicePx, Point, Rect};
-use zgui_scene::{GradientKind, Paint, PaintRef, Scene};
 
 use zgui_css::values::length::evaluate_at;
 
@@ -21,7 +22,7 @@ use crate::lower::background::{
 /// A gradient with a single stop is a flat colour and is interned as one, because a rasteriser
 /// handed a one-stop ramp has no interval to interpolate over.
 pub fn gradient_paint(
-    scene: &mut Scene,
+    tables: &mut Tables,
     spec: &GradientSpec,
     bounds: Rect<DevicePx, Device>,
     scale: f32,
@@ -33,8 +34,8 @@ pub fn gradient_paint(
     }
     match stops.len() {
         0 => None,
-        1 => Some(scene.paints.add(Paint::Solid(stops[0].color))),
-        _ => Some(scene.paints.add(Paint::Gradient {
+        1 => Some(tables.paints.add(Paint::Solid(stops[0].color))),
+        _ => Some(tables.paints.add(Paint::Gradient {
             kind,
             stops,
             space: spec.interpolation.space,
@@ -247,9 +248,9 @@ pub fn needs_densifying(spec: &GradientSpec) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use crate::paints::GradientKind;
     use zgui_color::{ColorSpace, HueInterpolation, Interpolation};
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-    use zgui_scene::GradientKind;
 
     use zgui_css::values::length::{Length, LengthPercentage, percent};
     use zgui_geom::CssPx;

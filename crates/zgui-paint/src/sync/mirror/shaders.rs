@@ -10,7 +10,7 @@ use rustc_hash::{FxHashMap, FxHashSet};
 /// client.
 #[derive(Debug, Default)]
 pub(crate) struct Shaders {
-    ids: FxHashMap<zgui_scene::ShaderId, ShaderId>,
+    ids: FxHashMap<zgui_css::shader::ShaderId, ShaderId>,
     timed: FxHashSet<ShaderId>,
 }
 
@@ -21,7 +21,7 @@ impl Shaders {
     pub(crate) fn ensure(
         &mut self,
         tx: &mut Transaction,
-        id: zgui_scene::ShaderId,
+        id: zgui_css::shader::ShaderId,
     ) -> Option<ShaderId> {
         if let Some(shader) = self.ids.get(&id) {
             return Some(*shader);

@@ -99,28 +99,6 @@ fn every_registered_cache_is_empty_after_forget() {
     );
 }
 
-/// How many scene primitives of each kind the window's last frame held.
-///
-/// Every kind, because the route a drawing takes decides the kind it arrives as: the triangle here
-/// is a coverage sprite, and a larger one would be a vector item.
-fn primitives(window: &zgui_runtime::Window) -> [usize; 12] {
-    let held = &window.scene().primitives;
-    [
-        held.quads.len(),
-        held.shaded.len(),
-        held.shadows.len(),
-        held.decorations.len(),
-        held.mono_sprites.len(),
-        held.subpixel_sprites.len(),
-        held.color_sprites.len(),
-        held.marks.len(),
-        held.vectors.len(),
-        held.externals.len(),
-        held.backdrops.len(),
-        held.groups.len(),
-    ]
-}
-
 /// Every route the document's drawings took.
 fn routes(window: &zgui_runtime::Window) -> zgui_paint::VectorRoutes {
     let root = {
@@ -145,9 +123,9 @@ fn a_window_that_has_forgotten_everything_fills_its_caches_again() {
     let mut app = window();
     app.settle(8);
 
-    let (held, shown, drawn) = {
+    let (shown, drawn) = {
         let window = &app.app().windows()[0];
-        (primitives(window), support::drawing(window), routes(window))
+        (support::drawing(window), routes(window))
     };
     let glyphs = shown.glyphs().len();
     assert!(
@@ -161,14 +139,9 @@ fn a_window_that_has_forgotten_everything_fills_its_caches_again() {
 
     let window = &app.app().windows()[0];
     assert_eq!(
-        primitives(window),
-        held,
-        "the same document must draw the same primitives after its caches were dropped"
-    );
-    assert_eq!(
         support::drawing(window),
         shown,
-        "and the compositor must show the same boxes and text"
+        "the compositor must show the same boxes and text after the caches were dropped"
     );
     assert_eq!(
         routes(window),

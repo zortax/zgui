@@ -7,12 +7,12 @@ mod support;
 
 use std::sync::Arc;
 
+use kurbo::{self, Affine, BezPath, Circle, Shape as _};
 use zgui_atlas::AtlasLimits;
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
-use zgui_scene::kurbo::{self, Affine, BezPath, Circle, Shape as _};
 use zgui_testkit_compositor::{Drawing, Instance};
 use zgui_testkit_scene::counters::Recording;
 

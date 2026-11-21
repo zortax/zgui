@@ -2,11 +2,12 @@
 
 use std::sync::Arc;
 
+use crate::Tables;
 use compositor_types::{
     Backdrop, ExternalQuad, Filter, Glyph, GlyphRun, Image, ItemOp, Line, MarkPayload, Marks,
     PathItem, Quad, ShaderQuad, Shadow,
 };
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::{Items, Recorder};
 
@@ -30,11 +31,11 @@ impl Recording {
     /// as the chunk's defaults.
     pub fn recorder<'a>(
         &'a mut self,
-        scene: &'a mut Scene,
+        tables: &'a mut Tables,
         space: SpatialId,
         clip: ClipId,
     ) -> Recorder<'a> {
-        Recorder::new(scene, &mut self.items, None, space, clip)
+        Recorder::new(tables, &mut self.items, None, space, clip)
     }
 
     /// Returns every item's kind and index into its kind's list, in record order.

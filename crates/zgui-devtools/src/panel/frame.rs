@@ -19,8 +19,7 @@ pub(crate) fn FramePanel(
     view! {
         column(class = "zgui-devtools__body") {
             text(class = "zgui-devtools__head") {"the frame just painted"}
-            Line(name = "primitives", value = move || frame.get().primitives.to_string())
-            Line(name = "batches", value = move || frame.get().batches.to_string())
+            Line(name = "draw calls", value = move || frame.get().draw_calls.to_string())
             Line(name = "vector passes", value = move || frame.get().passes.to_string())
             Line(
                 name = "vector backend",

@@ -4,7 +4,7 @@
 use std::sync::{OnceLock, RwLock};
 
 use compositor_types::ShaderDesc;
-use zgui_scene::{ShaderField, ShaderId, ShaderMode, ShaderReads};
+use zgui_css::shader::{ShaderField, ShaderId, ShaderMode, ShaderReads};
 
 /// One application shader as an application declares it.
 #[derive(Clone, Debug, PartialEq)]
@@ -30,7 +30,7 @@ pub struct Declaration {
 /// Every window's compositor client creates the shader from its program the first time an item
 /// draws with it. Handles are never reused.
 pub fn declare(declaration: Declaration) -> ShaderId {
-    let id = zgui_scene::declare_shader(
+    let id = zgui_css::shader::declare(
         declaration.name,
         declaration.mode,
         declaration.reads,

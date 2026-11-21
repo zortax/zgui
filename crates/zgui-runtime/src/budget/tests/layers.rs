@@ -1,11 +1,11 @@
 //! What the layer budget frees, over a real content cache.
 
+use kurbo::{Affine, BezPath};
 use zgui_atlas::AtlasLimits;
 use zgui_paint::ContentCache;
+use zgui_paint::VectorId;
 use zgui_paint::content::vectors::{Drawing, LayerAnswer, LayerRequest, outlines};
 use zgui_paint::emit::vector::ShapePaint;
-use zgui_scene::VectorId;
-use zgui_scene::kurbo::{Affine, BezPath};
 
 use crate::budget::caches::VectorLayersBudget;
 use crate::budget::manager::{Budgeted, Tracked};

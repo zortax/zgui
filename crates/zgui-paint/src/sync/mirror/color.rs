@@ -2,16 +2,16 @@
 
 use std::sync::Arc;
 
+use crate::paints::GradientKind;
 use compositor_types::compositor_color as target;
 use compositor_types::{Color, Gradient, GradientShape, GradientStop, Interpolation, Paint};
-use zgui_scene::GradientKind;
 
 /// Returns `paint` as a compositor paint, or `None` for an image paint.
-pub(crate) fn paint(paint: &zgui_scene::Paint) -> Option<Paint> {
+pub(crate) fn paint(paint: &crate::paints::Paint) -> Option<Paint> {
     match paint {
-        zgui_scene::Paint::Solid(color) => Some(Paint::Solid(premultiplied(*color))),
-        zgui_scene::Paint::Sides(colors) => Some(Paint::Sides(colors.map(premultiplied))),
-        zgui_scene::Paint::Gradient {
+        crate::paints::Paint::Solid(color) => Some(Paint::Solid(premultiplied(*color))),
+        crate::paints::Paint::Sides(colors) => Some(Paint::Sides(colors.map(premultiplied))),
+        crate::paints::Paint::Gradient {
             kind,
             stops,
             space,
@@ -32,7 +32,6 @@ pub(crate) fn paint(paint: &zgui_scene::Paint) -> Option<Paint> {
             },
             repeat: *repeating,
         })),
-        zgui_scene::Paint::Image { .. } => None,
     }
 }
 

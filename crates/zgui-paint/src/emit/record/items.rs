@@ -7,7 +7,7 @@ use compositor_types::{
     Line, LocalClip, MarkPayload, Marks, PaintId, PaintKind, ParamsId, PathItem, Quad, ShaderId,
     ShaderQuad, Shadow, TextureId, TransformId,
 };
-use zgui_scene::{ClipId as SceneClip, SpatialId};
+use zgui_space::{ClipId as SceneClip, SpatialId};
 
 /// The items of one chunk in record order, with the ids they refer to.
 ///

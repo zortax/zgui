@@ -25,6 +25,7 @@ mod run;
 
 pub(crate) use self::run::{RunDraw, flags, record};
 
+use crate::Tables;
 use compositor_types::{ClipRef, Color as Premultiplied, Line, LineStyle, PaintKind, PaintRef};
 use zgui_color::Color;
 use zgui_css::parity::Support;
@@ -32,8 +33,7 @@ use zgui_css::values::color::{current, resolve};
 use zgui_css::{ComputedStyle, register_properties};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
-use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
-use zgui_scene::{ClipId, ClipLink, PaintSlot, Scene, SpatialId};
+use zgui_space::{ClipId, ClipLink, PaintSlot, SpatialId};
 use zgui_text::{Brush, FaceId, ShapedRun, TextPaint};
 
 use crate::emit::record::Recorder;
@@ -96,7 +96,7 @@ pub struct DecorationStyle {
     /// Whether a line is drawn through it.
     pub line_through: bool,
     /// How the lines are drawn.
-    pub style: SceneDecorationStyle,
+    pub style: LineStyle,
     /// The lines' colour.
     pub color: Color,
     /// The lines' thickness in device pixels.
@@ -109,7 +109,7 @@ impl Default for DecorationStyle {
             underline: false,
             overline: false,
             line_through: false,
-            style: SceneDecorationStyle::Solid,
+            style: LineStyle::SOLID,
             color: Color::BLACK,
             thickness: 1.0,
         }
@@ -150,7 +150,7 @@ impl DecorationStyle {
             return 0.0;
         }
         match self.style {
-            SceneDecorationStyle::Wavy | SceneDecorationStyle::Double => self.thickness,
+            LineStyle::WAVY | LineStyle::DOUBLE => self.thickness,
             _ => 0.0,
         }
     }
@@ -168,11 +168,11 @@ impl DecorationStyle {
     }
 
     /// Folds this into a content hash, for the lowering cache's fallback lookup.
-    pub fn fold_into(&self, hash: zgui_scene::ContentHash) -> zgui_scene::ContentHash {
+    pub fn fold_into(&self, hash: zgui_space::ContentHash) -> zgui_space::ContentHash {
         hash.u32(u32::from(self.underline))
             .u32(u32::from(self.overline))
             .u32(u32::from(self.line_through))
-            .u32(self.style as u32)
+            .u32(u32::from(self.style.0))
             .u32(self.color.space() as u32)
             .f32s(&self.color.components())
             .f32(self.color.alpha())
@@ -180,16 +180,16 @@ impl DecorationStyle {
     }
 }
 
-/// The scene's spelling of a `text-decoration-style` keyword.
-fn line_style(style: zgui_css::values::text::TextDecorationStyleValue) -> SceneDecorationStyle {
+/// Returns the compositor's line style for a `text-decoration-style` keyword.
+fn line_style(style: zgui_css::values::text::TextDecorationStyleValue) -> LineStyle {
     use zgui_css::values::text::TextDecorationStyleValue as Value;
     match style {
-        Value::Solid => SceneDecorationStyle::Solid,
-        Value::Double => SceneDecorationStyle::Double,
-        Value::Dotted => SceneDecorationStyle::Dotted,
-        Value::Dashed => SceneDecorationStyle::Dashed,
-        Value::Wavy => SceneDecorationStyle::Wavy,
-        Value::MozNone => SceneDecorationStyle::Solid,
+        Value::Solid => LineStyle::SOLID,
+        Value::Double => LineStyle::DOUBLE,
+        Value::Dotted => LineStyle::DOTTED,
+        Value::Dashed => LineStyle::DASHED,
+        Value::Wavy => LineStyle::WAVY,
+        Value::MozNone => LineStyle::SOLID,
     }
 }
 
@@ -235,9 +235,9 @@ impl TextPlacement {
     /// has no pipeline to draw one with, a destination that is not opaque has no meaning for
     /// per-channel coverage whatever the device can do, and a run off the pixel grid is resampled
     /// out of the grid its stripes were measured against.
-    pub fn keeps_subpixel(&self, scene: &Scene) -> bool {
+    pub fn keeps_subpixel(&self, tables: &Tables) -> bool {
         keeps_subpixel(
-            scene,
+            tables,
             self.transform,
             self.subpixel_capable,
             self.opaque_target,
@@ -249,8 +249,8 @@ impl TextPlacement {
 /// (`capable`), the target it lands in is opaque (`opaque`), and the run sits on the pixel grid.
 ///
 /// See [`TextPlacement::keeps_subpixel`] for why each of the three is needed.
-pub fn keeps_subpixel(scene: &Scene, transform: SpatialId, capable: bool, opaque: bool) -> bool {
-    capable && opaque && on_pixel_grid(scene, transform)
+pub fn keeps_subpixel(tables: &Tables, transform: SpatialId, capable: bool, opaque: bool) -> bool {
+    capable && opaque && on_pixel_grid(tables, transform)
 }
 
 /// Whether the matrix `transform` resolves to moves a run by whole device pixels and does nothing
@@ -261,8 +261,8 @@ pub fn keeps_subpixel(scene: &Scene, transform: SpatialId, capable: bool, opaque
 /// fractionally moved run is resampled on its way to the surface, which smears the per-channel
 /// stripes into coloured fringes, so it is drawn with whole-pixel coverage instead. A name the
 /// frame no longer resolves answers no.
-fn on_pixel_grid(scene: &Scene, transform: SpatialId) -> bool {
-    scene
+fn on_pixel_grid(tables: &Tables, transform: SpatialId) -> bool {
+    tables
         .spatial
         .resolve(transform)
         .as_ref()
@@ -331,7 +331,7 @@ pub fn emit(
     let brush = match text_fill {
         Some(spec) => {
             match crate::emit::vector::gradient_for_vector(
-                rec.scene(),
+                rec.tables(),
                 spec,
                 placement.line,
                 placement.scale,
@@ -504,7 +504,7 @@ fn runs(
 ) -> usize {
     // A shadowed copy is coverage tinted with one colour, so it is never asked for per-channel
     // coverage: subpixel antialiasing of a blurred silhouette is fringing.
-    let subpixel = drawn.placement.keeps_subpixel(rec.scene_ref()) && !painting.force_mono;
+    let subpixel = drawn.placement.keeps_subpixel(rec.tables_ref()) && !painting.force_mono;
     let emitted = collect(glyphs, at);
     let mut pushed = 0;
     for run in &emitted {
@@ -516,7 +516,7 @@ fn runs(
 /// The shaped runs of one line.
 fn collect(glyphs: &dyn GlyphSource, (paragraph, line): (ParagraphId, u16)) -> Vec<Emitted> {
     // Collected rather than recorded as they are visited: a source holds its caches open for the
-    // length of the visit, and recording inside it would need them and the scene at once.
+    // length of the visit, and recording inside it would need them and the tables at once.
     let mut emitted: Vec<Emitted> = Vec::new();
     glyphs.visit_line(paragraph, line, &mut |shaped| {
         emitted.push(Emitted {
@@ -634,7 +634,7 @@ fn emit_parted(
         drawn.clip,
         drawn.placement.transform,
     );
-    let subpixel = drawn.placement.keeps_subpixel(rec.scene_ref());
+    let subpixel = drawn.placement.keeps_subpixel(rec.tables_ref());
     let emitted = collect(glyphs, at);
     for run in &emitted {
         let painting = Painting {
@@ -722,7 +722,7 @@ fn lines(rec: &mut Recorder<'_>, style: &DecorationStyle, drawn: Drawn) -> usize
             thickness: style.thickness,
             clip: drawn.clip,
             space,
-            style: LineStyle(style.style as u8),
+            style: style.style,
             _pad: [0; 3],
         });
         pushed += 1;
@@ -741,15 +741,13 @@ fn lines(rec: &mut Recorder<'_>, style: &DecorationStyle, drawn: Drawn) -> usize
 
 #[cfg(test)]
 mod tests {
+    use compositor_types::{GlyphFlags, LineStyle};
     use zgui_css::StyleDraft;
-    use zgui_scene::prim::decoration::DecorationStyle as SceneDecorationStyle;
-
-    use compositor_types::GlyphFlags;
 
     use super::{DecorationStyle, TextPlacement};
     use crate::emit::record::Recording;
     use zgui_geom::{DevicePx, Point, Rect, Size};
-    use zgui_scene::{ClipId, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     /// A placement on an opaque target, on a device that can do subpixel text.
     fn placement() -> TextPlacement {
@@ -767,31 +765,31 @@ mod tests {
         }
     }
 
-    /// A scene holding one coordinate system under the viewport, at `local`.
-    fn under(local: zgui_geom::Matrix4) -> (zgui_scene::Scene, SpatialId) {
-        let mut scene = zgui_scene::Scene::new();
-        let owner = zgui_scene::PropertyOwner::new(7).expect("a handle is never the empty word");
-        let space = scene.spatial.space_of(
+    /// Tables holding one coordinate system under the viewport, at `local`.
+    fn under(local: zgui_geom::Matrix4) -> (crate::Tables, SpatialId) {
+        let mut tables = crate::Tables::new();
+        let owner = zgui_space::PropertyOwner::new(7).expect("a handle is never the empty word");
+        let space = tables.spatial.space_of(
             SpatialId::VIEWPORT,
             owner,
-            Some(zgui_scene::OwnSpace {
+            Some(zgui_space::OwnSpace {
                 local,
-                anchoring: zgui_scene::Anchoring::Scrolling,
+                anchoring: zgui_space::Anchoring::Scrolling,
             }),
         );
-        (scene, space)
+        (tables, space)
     }
 
     #[test]
     fn subpixel_needs_a_capable_device_an_opaque_target_and_the_pixel_grid() {
-        let scene = zgui_scene::Scene::new();
-        assert!(placement().keeps_subpixel(&scene));
+        let tables = crate::Tables::new();
+        assert!(placement().keeps_subpixel(&tables));
         assert!(
             !TextPlacement {
                 opaque_target: false,
                 ..placement()
             }
-            .keeps_subpixel(&scene),
+            .keeps_subpixel(&tables),
             "per-channel coverage against a transparent destination is meaningless"
         );
         assert!(
@@ -799,7 +797,7 @@ mod tests {
                 subpixel_capable: false,
                 ..placement()
             }
-            .keeps_subpixel(&scene),
+            .keeps_subpixel(&tables),
             "a device with no dual-source blending has no pipeline to draw one with"
         );
     }
@@ -808,26 +806,26 @@ mod tests {
     fn a_run_moved_by_whole_pixels_keeps_subpixel_and_any_other_matrix_loses_it() {
         use zgui_geom::Matrix4;
 
-        let (scene, space) = under(Matrix4::translation(3.0, -4.0, 0.0));
+        let (tables, space) = under(Matrix4::translation(3.0, -4.0, 0.0));
         let moved = TextPlacement {
             transform: space,
             ..placement()
         };
         assert!(
-            moved.keeps_subpixel(&scene),
+            moved.keeps_subpixel(&tables),
             "a whole-pixel move lands the stripes on the pixels they were measured for"
         );
         for local in [
             Matrix4::translation(3.5, 0.0, 0.0),
             Matrix4::scale(1.5, 1.5, 1.0),
         ] {
-            let (scene, space) = under(local);
+            let (tables, space) = under(local);
             let placed = TextPlacement {
                 transform: space,
                 ..placement()
             };
             assert!(
-                !placed.keeps_subpixel(&scene),
+                !placed.keeps_subpixel(&tables),
                 "a resampled sprite smears the per-channel stripes into coloured fringes: {local:?}"
             );
         }
@@ -856,7 +854,7 @@ mod tests {
                 coords: &[],
                 synthetic_bold: 0.0,
                 synthetic_slant: 0.0,
-                brush: zgui_scene::PaintSlot(0),
+                brush: zgui_space::PaintSlot(0),
                 glyphs: &GLYPHS,
                 text_start: 0,
             });
@@ -869,9 +867,9 @@ mod tests {
 
     /// The items one line of [`OneRun`] records with `style`.
     fn emit_one(style: &crate::lower::PaintStyle, placement: TextPlacement) -> Recording {
-        let mut scene = zgui_scene::Scene::new();
+        let mut tables = crate::Tables::new();
         let mut recording = Recording::new();
-        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         super::emit(
             &mut rec,
             &OneRun,
@@ -914,16 +912,16 @@ mod tests {
     fn a_wave_and_a_doubled_line_are_given_a_band_and_a_stroke_is_not() {
         let wavy = DecorationStyle {
             underline: true,
-            style: SceneDecorationStyle::Wavy,
+            style: LineStyle::WAVY,
             thickness: 2.0,
             ..DecorationStyle::default()
         };
         let doubled = DecorationStyle {
-            style: SceneDecorationStyle::Double,
+            style: LineStyle::DOUBLE,
             ..wavy
         };
         let solid = DecorationStyle {
-            style: SceneDecorationStyle::Solid,
+            style: LineStyle::SOLID,
             ..wavy
         };
 
@@ -947,14 +945,14 @@ mod tests {
     #[test]
     fn a_band_never_reaches_outside_the_line_box_it_decorates() {
         let placement = placement();
-        let mut scene = zgui_scene::Scene::new();
+        let mut tables = crate::Tables::new();
         let mut recording = Recording::new();
-        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         let wavy = DecorationStyle {
             underline: true,
             overline: true,
             line_through: true,
-            style: SceneDecorationStyle::Wavy,
+            style: LineStyle::WAVY,
             thickness: 2.0,
             color: zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0),
         };

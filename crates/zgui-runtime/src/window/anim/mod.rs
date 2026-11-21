@@ -49,12 +49,12 @@ impl Window {
             drop(document);
             let mut document = self.document.borrow_mut();
             let layout = self.layout.borrow();
-            let surface = self.scene.viewport();
+            let surface = self.tables.viewport();
             // The display list is handed to the tick rather than consulted after it, because what
             // an element owes is decided from whether the box could be moved without composing it —
             // and that is answerable only by whatever holds the coordinate systems.
             let mut writing = place::Writing {
-                scene: &mut self.scene,
+                tables: &mut self.tables,
                 layout: &layout,
                 scale: self.scale,
                 damage: zgui_bits::DamageSet::new(),

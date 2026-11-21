@@ -195,7 +195,6 @@ pub(crate) fn sizes() -> Group {
             "paint::Record",
             size_of::<zgui_paint::walk::replay::Record>() as u64,
         ),
-        ("ChunkPrims", size_of::<zgui_scene::ChunkPrims>() as u64),
         (
             "ShapedParagraph<ShapedLayout>",
             size_of::<zgui::text::ShapedParagraph<zgui_text_parley::ShapedLayout>>() as u64,

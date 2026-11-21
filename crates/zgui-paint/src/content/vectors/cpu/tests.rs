@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
+use kurbo::{self, Affine, BezPath, Point, Rect, Shape as _};
 use smallvec::smallvec;
 use zgui_color::Color;
-use zgui_scene::kurbo::{self, Affine, BezPath, Point, Rect, Shape as _};
-use zgui_scene::peniko;
 
 use super::{LayerJob, RAMP_SAMPLES, VectorPainter, Zeno, ramp};
 use crate::emit::vector::ShapePaint;

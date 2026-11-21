@@ -2,8 +2,7 @@
 
 use std::sync::Arc;
 
-use zgui_scene::VectorId;
-use zgui_scene::peniko;
+use crate::VectorId;
 
 use super::VectorRouteCache;
 
@@ -78,10 +77,10 @@ impl crate::content::vectors::VectorMaskSource for Remembering {
 
 /// A filled circle as a shape in its own space.
 fn circle_shape() -> zgui_svg::Shape {
-    use zgui_scene::kurbo::Shape as _;
+    use kurbo::Shape as _;
 
     zgui_svg::Shape {
-        path: Arc::new(zgui_scene::kurbo::Circle::new((20.0, 20.0), 8.0).to_path(0.01)),
+        path: Arc::new(kurbo::Circle::new((20.0, 20.0), 8.0).to_path(0.01)),
         fill: Some(zgui_svg::Fill {
             paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
             rule: peniko::Fill::NonZero,

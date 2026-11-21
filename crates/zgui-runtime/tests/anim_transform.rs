@@ -129,7 +129,7 @@ fn inks(
         .expect("the application opened a window");
     let document = window.document().borrow();
     let layout = window.layout().borrow();
-    let spatial = &window.scene().spatial;
+    let spatial = &window.tables().spatial;
     let mut found = Vec::new();
     for index in 0..document.store().slot_count() {
         let index = zgui_dom::NodeIndex::new(index as u32);
@@ -400,7 +400,7 @@ fn space_of(
         .expect("the application opened a window");
     let document = window.document().borrow();
     let layout = window.layout().borrow();
-    let spatial = &window.scene().spatial;
+    let spatial = &window.tables().spatial;
     for index in 0..document.store().slot_count() {
         let index = zgui_dom::NodeIndex::new(index as u32);
         if document.store().try_core(index).is_none() {
@@ -478,7 +478,7 @@ fn spatial_ids_are_stable_across_an_animation() {
             .windows()
             .first()
             .expect("the application opened a window")
-            .scene()
+            .tables()
             .spatial
             .len()
     };

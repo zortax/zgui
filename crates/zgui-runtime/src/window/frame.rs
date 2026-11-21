@@ -305,23 +305,9 @@ impl Window {
         }
     }
 
-    /// Records the moment this frame is for, and how long the previous one took.
-    ///
-    /// The frame *moment* rather than the wall clock: it is the same one the framework's own
-    /// animations are sampled against, so an effect and a CSS animation on one element agree about
-    /// what time it is. Computed here, at the top of the frame, so every stage of the frame is
-    /// told the same moment however long the frame takes.
+    /// Records the frame moment this frame is for.
     fn note_frame_moment(&mut self, at: zgui_vocab::Timestamp) {
-        let opened = *self.opened_at.get_or_insert(at);
-        let delta = self
-            .painted_at
-            .map_or(0.0, |last| at.saturating_since(last).as_secs_f32());
         self.painted_at = Some(at);
-        self.frame_clock = zgui_scene::FrameClock {
-            seconds: at.saturating_since(opened).as_secs_f32(),
-            delta,
-            scale: self.scale,
-        };
     }
 
     /// The frame itself, with the window's scope already current.
@@ -1426,8 +1412,8 @@ impl Window {
         // pass. The walk puts their old ink on the device through these.
         let drawn = self.host.placements();
         let mut tables = zgui_layout::fragment::build::Tables {
-            clips: &mut self.scene.clips,
-            spatial: &mut self.scene.spatial,
+            clips: &mut self.tables.clips,
+            spatial: &mut self.tables.spatial,
             drawn: &drawn,
             device,
             scroll: scroll.composed(),
@@ -1472,9 +1458,9 @@ impl Window {
         // And only when the tree was written to at all: a document that is not animating,
         // not scrolling something sticky and not being restructured re-establishes every
         // coordinate system it had with the matrix it had, and nothing can have moved.
-        let watching = self.a11y.held() > 0 && self.scene.spatial.written_since_recycle();
+        let watching = self.a11y.held() > 0 && self.tables.spatial.written_since_recycle();
         self.host.publish_placements(
-            &self.scene.spatial,
+            &self.tables.spatial,
             watching.then_some(&mut self.moved_spaces),
         );
         // A content space that moved only because its container scrolled moves nothing the
@@ -1483,7 +1469,7 @@ impl Window {
         if !self.moved_spaces.is_empty() {
             let mut moved = self.moved_spaces.clone();
             moved.sort_unstable();
-            let spatial = &self.scene.spatial;
+            let spatial = &self.tables.spatial;
             self.moved_spaces.retain(|&id| {
                 spatial
                     .outside_content(id)
@@ -1507,8 +1493,8 @@ impl Window {
                 document: &document,
                 layout: &layout,
                 hit: &self.hit,
-                clips: &self.scene.clips,
-                spatial: &self.scene.spatial,
+                clips: &self.tables.clips,
+                spatial: &self.tables.spatial,
                 scale: zgui_geom::Scale::new(self.scale),
                 filter: &filter,
             };
@@ -1583,24 +1569,14 @@ impl Window {
                 );
             }
             self.painted = self.damage;
-            // No renderer reads the chunk notes, so they stay readable until the next paint.
-            self.scene.clear_chunk_notes();
-            self.scene.begin_frame(viewport);
-            // What this frame's application effects are told about it. Nothing the framework draws
-            // reads any of it, so a document with no effect in it pays three floats.
-            self.scene.set_frame_clock(self.frame_clock);
-            // After the log has been emptied and before anything is pushed into it, which is the
-            // only moment the names can begin being kept. A window that was never asked for them
-            // pays a bool and two clears of empty vectors.
-            self.scene
-                .record_spatial_dependencies(self.check_spatial_dependencies);
+            self.tables.begin_frame(viewport);
             // No renderer is borrowed here, and none is reachable from anything the walk touches.
             // Giving content a tile and growing the atlas to hold it are decided against this
             // window's own state; what a device is asked to do about any of it is queued and
             // performed at the flush below.
             let content = self.content.frame(&layout, &self.text);
             if !retired.is_empty() {
-                self.painter.retire(&retired, &mut self.scene, &content);
+                self.painter.retire(&retired, &mut self.tables, &content);
             }
             // The device pixel ratio and what the device can do are both properties of this
             // window, and both change what is emitted: the first decides where a snapped edge
@@ -1678,11 +1654,11 @@ impl Window {
             });
             mark("p.emit");
             let before = glyph_counts();
-            let report = self.painter.emit(&input, &mut self.scene);
+            let report = self.painter.emit(&input, &mut self.tables);
             transaction = self
                 .painter
                 .compositor()
-                .and_then(|sync| sync.close(&layout, &mut self.scene));
+                .and_then(|sync| sync.close(&layout, &mut self.tables));
             vector_report = report.vector_routes;
             self.layers_owed = report.layers_owed;
             let after = glyph_counts();
@@ -1767,17 +1743,6 @@ impl Window {
                 &mut self.content,
             );
         }
-        // Before the scene is finished, which is where a sprite still carrying a name rather than a
-        // placement is refused: the arrays are sorted there, and a placeholder has no texture to be
-        // sorted by. Costs an empty-list check on a frame every one of whose rasters was placed as
-        // it was reached, which is every frame that rasterises as it walks.
-        self.scene.resolve_resources(self.content.registry());
-        self.scene.finish(&self.damage);
-        // Before the renderer indexes a dense array of matrices with the numbers this list carries.
-        // A primitive whose coordinate system changed hands under it draws a real box's content
-        // through an unrelated box's matrix, and every other check the project has agrees with the
-        // result: the bytes did not move, the geometry did not move, and the pixels are plausible.
-        self.scene.check_spatial_dependencies();
         mark("p.upload");
         // A shared attachment the frame served stands in for its host texels from here on: the
         // cache gives its copies back, and the loader gives back its own for every attachment the

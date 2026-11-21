@@ -7,10 +7,10 @@ mod support;
 
 use std::sync::Arc;
 
+use kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
 use zgui_color::Color;
 use zgui_geom::Affine2;
-use zgui_scene::kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
-use zgui_scene::peniko;
+
 use zgui_svg::{Fill, Ink, Paint, Shape, Stroke};
 
 use support::conformance::opaque;

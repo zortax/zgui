@@ -29,10 +29,8 @@ zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 # Fragments, their ink, their clips and the read-extent registry this stage expands damage over.
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
-# What the device can do decides what is emitted, not only how it is drawn: without dual-source
-# blending there is no subpixel sprite to emit at all.
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# The clip chains, coordinate systems and journaled tables fragments are painted through.
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 # Vector documents. The paint stage is where a document becomes primitives, so it is where the
 # document model is named; the reader itself is behind that crate's own parse boundary.
 zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
@@ -46,6 +44,9 @@ zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
 # The compositor contract fragments are recorded into.
 compositor-types.workspace = true
+# Path geometry and fill rules, which vector documents are made of.
+kurbo.workspace = true
+peniko.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true

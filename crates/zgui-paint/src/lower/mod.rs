@@ -92,7 +92,7 @@ pub struct PaintStyle {
     /// smoothed cards cascades to one lowering and reads the property once between them. It
     /// reaches the background, the border, the shadow and the outline from here, and the clip a
     /// box gives its children from layout, which reads the same property through the same parser.
-    pub corner_shape: zgui_scene::CornerShape,
+    pub corner_shape: zgui_space::CornerShape,
     /// The application effect the box is drawn with, when a style sheet named one.
     ///
     /// Boxed because it is large and almost always absent: a lowering is cloned per fragment, and

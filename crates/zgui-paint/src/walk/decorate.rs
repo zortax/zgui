@@ -110,7 +110,7 @@ impl Decorations {
 /// record, changing `text-decoration` on a paragraph would replay every line inside it exactly as
 /// it was.
 pub fn signature(decorations: &[DecorationStyle]) -> u64 {
-    let mut hash = zgui_scene::ContentHash::new().u32(decorations.len() as u32);
+    let mut hash = zgui_space::ContentHash::new().u32(decorations.len() as u32);
     for decoration in decorations {
         hash = decoration.fold_into(hash);
     }
@@ -143,9 +143,9 @@ pub fn interrupts_propagation(style: &ComputedStyle) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use compositor_types::LineStyle as Line;
     use zgui_color::Color;
     use zgui_css::StyleDraft;
-    use zgui_scene::prim::decoration::DecorationStyle as Line;
 
     use super::{Decorations, interrupts_propagation};
     use crate::emit::text::DecorationStyle;
@@ -155,7 +155,7 @@ mod tests {
         DecorationStyle {
             underline: true,
             color,
-            style: Line::Solid,
+            style: Line::SOLID,
             thickness: 1.0,
             ..DecorationStyle::default()
         }

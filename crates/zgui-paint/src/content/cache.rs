@@ -9,7 +9,6 @@ use zgui_atlas::{Atlas, AtlasKey, AtlasLimits, AtlasReport, TextureSink};
 use zgui_layout::fragment::ParagraphId;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_profile::{Counter, counter};
-use zgui_scene::{ResourceGeneration, ResourceKey, ResourceRegistry};
 use zgui_text::ShapedGlyphs;
 
 use crate::content::cache::images::ImageContent;
@@ -27,12 +26,6 @@ pub struct ContentCache {
     vectors: VectorContent,
     /// What is attached to each replaced node.
     images: ImageContent,
-    /// Where each named raster is, for the sprites that were pushed naming one.
-    ///
-    /// Empty whenever every raster a frame drew was already placed as it was reached, which is what
-    /// happens when rasterising is synchronous — so the ordinary frame files nothing here and its
-    /// fix-up pass is a check on an empty list.
-    registry: ResourceRegistry,
 }
 
 impl ContentCache {
@@ -42,31 +35,7 @@ impl ContentCache {
             atlas: Atlas::new(limits),
             vectors: VectorContent::default(),
             images: ImageContent::default(),
-            registry: ResourceRegistry::new(),
         }
-    }
-
-    /// Where each named raster currently is.
-    ///
-    /// What a frame's fix-up pass resolves its sprites through. See
-    /// [`Scene::resolve_resources`](zgui_scene::Scene::resolve_resources).
-    pub fn registry(&self) -> &ResourceRegistry {
-        &self.registry
-    }
-
-    /// Which lifetime of this cache names are being handed out in.
-    pub fn generation(&self) -> ResourceGeneration {
-        self.registry.generation()
-    }
-
-    /// The name this cache would hold `key`'s content under right now.
-    pub fn name(&self, key: AtlasKey) -> ResourceKey {
-        ResourceKey::of(key, self.registry.generation())
-    }
-
-    /// Records where a named raster is, so a sprite that carries the name can be finished.
-    pub fn place(&mut self, key: ResourceKey, tile: zgui_atlas::AtlasTile) {
-        self.registry.place(key, tile);
     }
 
     /// Starts a frame, which is what makes eviction able to tell cold content from hot.
@@ -191,10 +160,6 @@ impl ContentCache {
     pub fn clear(&mut self) {
         self.atlas.clear();
         self.vectors.clear();
-        // Every name handed out before now pointed into a texture that is about to stop existing,
-        // so they stop being names. A sprite still carrying one resolves to nothing rather than to
-        // whatever has since taken that content's place.
-        self.registry.discard();
     }
 }
 

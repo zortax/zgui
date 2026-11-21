@@ -10,18 +10,17 @@ use std::sync::OnceLock;
 use style::custom_properties::Name;
 
 use crate::computed::style::ComputedStyle;
+use crate::shader::property;
 
 /// The custom properties whose presence makes an element read custom properties by any name.
 ///
 /// A shader or filter takes its parameters from custom properties named after the effect, so an
-/// element that declares one of these reads names no declaration of its own mentions. The names
-/// mirror `zgui_scene::property`, which this crate sits below; the scene crate's tests hold the
-/// two lists equal.
+/// element that declares one of these reads names no declaration of its own mentions.
 pub const WILDCARD_DECLARERS: [&str; 4] = [
-    "zgui-shader",
-    "zgui-shape",
-    "zgui-filter",
-    "zgui-backdrop-filter",
+    property::SHADER,
+    property::SHAPE,
+    property::FILTER,
+    property::BACKDROP_FILTER,
 ];
 
 /// The computed text of the custom property `name` on `style`, without its `--` prefix.

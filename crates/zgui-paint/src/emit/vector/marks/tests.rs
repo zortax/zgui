@@ -107,8 +107,6 @@ fn duplicate_discs_go_only_past_eightfold_overdraw() {
 fn an_overlapping_fill_with_a_hole_is_no_union() {
     use std::sync::Arc;
 
-    use zgui_scene::peniko;
-
     // A ring written as two circles turning opposite ways: under the nonzero rule the inner one
     // is a hole, which no sum of coverage draws.
     let ring = Decomposition {
@@ -126,7 +124,7 @@ fn an_overlapping_fill_with_a_hole_is_no_union() {
     let lowered = |found: &Decomposition, rule| {
         super::lower(
             Arc::new(found.clone()),
-            zgui_scene::kurbo::Affine::IDENTITY,
+            kurbo::Affine::IDENTITY,
             &affine,
             Some(rule),
             &crate::content::vectors::NoVectorMasks,

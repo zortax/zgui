@@ -17,9 +17,9 @@
 use core::hash::Hash;
 use std::sync::{Arc, Weak};
 
+use kurbo::{self, BezPath};
 use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
-use zgui_scene::kurbo::{self, BezPath};
 
 use crate::emit::vector::recognise::Decomposition;
 

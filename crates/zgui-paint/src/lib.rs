@@ -3,9 +3,8 @@
 //!
 //! Everything above this crate describes a document; everything below it draws rectangles. This is
 //! where the two meet. Each fragment's painting is recorded as compositor items into a transaction
-//! through a [`CompositorSync`], and the content the compositor does not take yet is pushed into a
-//! [`Scene`](zgui_scene::Scene). Both are values, so the whole stage is testable with no graphics
-//! device anywhere.
+//! through a [`CompositorSync`], against the clip, paint and coordinate-system [`Tables`]. Both are
+//! values, so the whole stage is testable with no graphics device anywhere.
 //!
 //! # The stage runs in two halves, and the order between them is load-bearing
 //!
@@ -36,12 +35,11 @@
 //!
 //! ```
 //! use zgui_geom::Size;
-//! use zgui_paint::Painter;
-//! use zgui_scene::Scene;
+//! use zgui_paint::{Painter, Tables};
 //!
 //! let mut painter = Painter::new();
-//! let mut scene = Scene::new();
-//! scene.begin_frame(Size::new(64, 64));
+//! let mut tables = Tables::new();
+//! tables.begin_frame(Size::new(64, 64));
 //!
 //! // A document with no boxes emits nothing, and says so rather than leaving it to be inferred.
 //! let report = painter.report_of_nothing();
@@ -56,11 +54,14 @@ pub mod content;
 pub mod damage;
 pub mod emit;
 pub mod lower;
+pub mod paints;
 pub mod parity;
 pub mod shiftable;
 pub mod sync;
+pub mod tables;
 pub mod walk;
 
+pub use crate::content::vectors::VectorId;
 pub use crate::content::{
     ContentCache, Drawing, FrameContent, ImageError, NoVectors, TileOwner, VectorCache,
     VectorSource, Vectors,
@@ -77,9 +78,10 @@ pub use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
 pub use crate::lower::key::LoweringKey;
 pub use crate::lower::{PaintStyle, lower};
 pub use crate::sync::{CompositorSync, SyncReport, record_chunk};
+pub use crate::tables::Tables;
 pub use crate::walk::{PaintInput, PaintReport, Painter, VectorRouteReport};
-/// The brush slot a run names, from the scene vocabulary.
-pub use zgui_scene::PaintSlot;
+/// The brush slot a run names.
+pub use zgui_space::PaintSlot;
 /// The shaped-text vocabulary the glyph seams speak, from the text layer.
 ///
 /// Re-exported because a caller that shapes its own runs and draws them through

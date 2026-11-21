@@ -23,8 +23,6 @@ zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
-# The filters, shader declarations and text paint table a fragment refers to.
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # The clip chain and the transform a fragment carries are these identifiers. A parallel id space
 # here would be the same aliasing hazard one level up.
 zgui-space = { path = "../zgui-space", version = "0.1.0" }

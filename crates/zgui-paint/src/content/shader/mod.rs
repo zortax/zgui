@@ -12,7 +12,7 @@ pub(crate) use self::declared::program;
 pub use self::declared::{Declaration, declare};
 pub use self::shared::{SharedParams, Wake};
 
-pub use zgui_scene::{ShaderField, ShaderId, ShaderMode, ShaderReads};
+pub use zgui_css::shader::{ShaderField, ShaderId, ShaderMode, ShaderReads};
 
 /// The most bytes of its own parameters a shader declares.
 pub const MAX_PARAMS_BYTES: usize = 64;
@@ -99,7 +99,7 @@ impl ShaderSource for DeclaredShaders {
         if !self.enabled {
             return None;
         }
-        let declared = zgui_scene::shader_named(name)?;
+        let declared = zgui_css::shader::named(name)?;
         Some(ShaderBinding {
             id: declared.id,
             mode: declared.mode,
@@ -113,11 +113,11 @@ impl ShaderSource for DeclaredShaders {
 #[cfg(test)]
 mod tests {
     use super::{DeclaredShaders, NoShaders, ShaderSource};
-    use zgui_scene::{ShaderMode, ShaderReads};
+    use zgui_css::shader::{ShaderMode, ShaderReads};
 
     #[test]
     fn a_declared_effect_is_found_by_the_name_a_style_sheet_writes() {
-        zgui_scene::declare_shader(
+        zgui_css::shader::declare(
             "paint-source-test",
             ShaderMode::Coverage,
             ShaderReads::NOTHING,
@@ -132,7 +132,7 @@ mod tests {
 
     #[test]
     fn a_device_that_cannot_draw_an_effect_answers_nothing_at_all() {
-        zgui_scene::declare_shader(
+        zgui_css::shader::declare(
             "paint-source-gated",
             ShaderMode::Paint,
             ShaderReads::NOTHING,

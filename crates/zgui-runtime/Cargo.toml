@@ -48,7 +48,6 @@ zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # The frame owns scroll offsets and this is where they live: writing one is a fast path over the
 # fragments a frame already has, and the loop is what drives it.
 zgui-scroll = { path = "../zgui-scroll", version = "0.1.0" }
@@ -67,6 +66,8 @@ zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 # applies them can answer. A hand-written stand-in for it would be a check written to agree with
 # the thing it is checking.
 accesskit_consumer.workspace = true
+# The paths the vector layer budget tests draw.
+kurbo.workspace = true
 # The key arena, for the one test that has to name a replaced node without a document to take the
 # name from: nothing in the runtime attaches a picture to one, so the fixture builds the identity
 # by hand.

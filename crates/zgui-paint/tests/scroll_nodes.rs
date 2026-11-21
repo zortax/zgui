@@ -5,7 +5,7 @@ mod support;
 use compositor_types::Command;
 use support::compositor::Recorded;
 use support::{Element, Harness};
-use zgui_scene::spatial::PropertyOwner;
+use zgui_space::spatial::PropertyOwner;
 
 /// A port 100 pixels tall over ten rows of 30, with a sticky heading above them.
 fn list() -> Harness {

@@ -7,8 +7,9 @@ use compositor_types::{
     BufferAge, Built, ChunkKey, ClientId, Frame, FrameClock, FrameRequest, OrderEntry, OrderNode,
     OutputId, RenderTarget,
 };
+use zgui_paint::Tables;
 use zgui_paint::emit::Recorder;
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 use zgui_testkit_compositor::{Composed, Device, Drawing, Pixels, Shown};
 
 /// The key the picture is recorded under.
@@ -111,7 +112,7 @@ impl Gpu {
     /// returns what it drew.
     pub(crate) fn picture(
         &mut self,
-        scene: &mut Scene,
+        scene: &mut Tables,
         space: SpatialId,
         emit: impl FnOnce(&mut Recorder<'_>),
     ) -> Picture {

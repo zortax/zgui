@@ -1,9 +1,10 @@
 //! What a record decides, and what it owns while it stands.
 
+use crate::Tables;
 use zgui_geom::{DevicePx, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
 use zgui_layout::{Fragment, FragmentKind};
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::lower::cache::PaintStyleRef;
 use crate::walk::replay::hold::NoResources;
@@ -40,7 +41,7 @@ fn painted(style: u32) -> crate::walk::replay::Painted {
         transform: SpatialId::VIEWPORT,
         // What the viewport's own coordinate system resolves to, which is what a fragment drawn
         // straight into the window carries.
-        transform_hash: zgui_scene::Content::content_hash(&zgui_geom::Matrix4::IDENTITY),
+        transform_hash: zgui_space::Content::content_hash(&zgui_geom::Matrix4::IDENTITY),
         custom: 0,
         pointer: 0,
         content: 0,
@@ -62,14 +63,14 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
     // A replaced fragment names its node and a drawing names its curves' source, and both names
     // stay put while what they resolve to changes. The revision is the only field that moves.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &same,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -78,28 +79,28 @@ fn a_fragment_whose_outside_content_moved_is_encoded_however_still_it_stayed() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let swapped = crate::walk::replay::Painted {
         content: 1,
         ..painted(0)
     };
-    assert_eq!(cache.reuse(&scene, &same, swapped, None), Reuse::Encode);
-    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+    assert_eq!(cache.reuse(&tables, &same, swapped, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&tables, &same, painted(0), None), Reuse::Encode);
 }
 
-/// A scene with one frame's worth of retained operations.
-fn scene() -> Scene {
-    let mut scene = Scene::new();
-    scene.begin_frame(Size::new(256, 256));
-    scene
+/// Tables begun for one frame.
+fn tables() -> Tables {
+    let mut tables = Tables::new();
+    tables.begin_frame(Size::new(256, 256));
+    tables
 }
 
 #[test]
 fn a_fragment_with_no_record_is_encoded() {
     let cache = PaintCache::new();
-    let scene = scene();
+    let tables = tables();
     assert_eq!(
-        cache.reuse(&scene, &fragment(0.0, 0.0), painted(0), None),
+        cache.reuse(&tables, &fragment(0.0, 0.0), painted(0), None),
         Reuse::Encode
     );
 }
@@ -109,15 +110,15 @@ fn a_fragment_whose_border_widths_moved_is_encoded() {
     // Layout snaps the widths at a fractional scale, so they can move while the border box and
     // the style stand still.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let mut ruled = fragment(0.0, 0.0);
     ruled.border.top = DevicePx(2.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &ruled,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -126,22 +127,25 @@ fn a_fragment_whose_border_widths_moved_is_encoded() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     ruled.border.top = DevicePx(1.0);
-    assert_eq!(cache.reuse(&scene, &ruled, painted(0), None), Reuse::Encode);
+    assert_eq!(
+        cache.reuse(&tables, &ruled, painted(0), None),
+        Reuse::Encode
+    );
 }
 
 #[test]
 fn a_fragment_replayed_where_it_stands_has_not_moved_from_its_record() {
     // `46.929794 + (14.173738 - 46.929794)` is not `14.173738` in `f32`.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &fragment(0.0, 46.929_794),
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -159,14 +163,14 @@ fn a_fragment_replayed_where_it_stands_has_not_moved_from_its_record() {
 #[test]
 fn a_moved_fragment_replays_with_the_distance_it_moved() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let first = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &first,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -176,10 +180,10 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
         &NoResources,
     );
     // A second frame, so the range recorded is in the retained log rather than this frame's.
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let moved = fragment(0.0, -120.0);
     assert_eq!(
-        cache.reuse(&scene, &moved, painted(0), None),
+        cache.reuse(&tables, &moved, painted(0), None),
         Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(-120.0)))
     );
 }
@@ -191,14 +195,14 @@ fn a_moved_fragment_replays_with_the_distance_it_moved() {
 #[test]
 fn a_fragment_moved_twice_replays_with_the_whole_distance() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let first = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &first,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -207,18 +211,18 @@ fn a_fragment_moved_twice_replays_with_the_whole_distance() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let step_one = fragment(0.0, 10.0);
     assert_eq!(
-        cache.reuse(&scene, &step_one, painted(0), None),
+        cache.reuse(&tables, &step_one, painted(0), None),
         Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(10.0)))
     );
     cache.replayed(&step_one);
 
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let step_two = fragment(0.0, 20.0);
     assert_eq!(
-        cache.reuse(&scene, &step_two, painted(0), None),
+        cache.reuse(&tables, &step_two, painted(0), None),
         Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(20.0))),
         "the offset is measured from the encoding, so two steps of ten accumulate to twenty"
     );
@@ -232,14 +236,14 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
     // what they were. Without the alpha here a panel fading out is a panel whose contents never
     // fade, replayed at the alpha they had when the fade began.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &same,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -248,28 +252,28 @@ fn a_fragment_under_a_changed_folded_alpha_is_encoded_again() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let dimmed = crate::walk::replay::Painted {
         alpha: 0.5f32.to_bits(),
         ..painted(0)
     };
-    assert_eq!(cache.reuse(&scene, &same, dimmed, None), Reuse::Encode);
+    assert_eq!(cache.reuse(&tables, &same, dimmed, None), Reuse::Encode);
     // And the same alpha still replays, or every fragment of every document is encoded twice.
-    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+    assert_ne!(cache.reuse(&tables, &same, painted(0), None), Reuse::Encode);
 }
 
 #[test]
 fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
     // The lowered style holds no radii, so the corner fingerprint is the only field that moves.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &same,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -278,13 +282,13 @@ fn a_fragment_whose_corners_moved_is_encoded_however_still_it_stayed() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let squared = crate::walk::replay::Painted {
         corners: 1,
         ..painted(0)
     };
-    assert_eq!(cache.reuse(&scene, &same, squared, None), Reuse::Encode);
-    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+    assert_eq!(cache.reuse(&tables, &same, squared, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&tables, &same, painted(0), None), Reuse::Encode);
 }
 
 #[test]
@@ -295,14 +299,14 @@ fn a_fragment_whose_runs_lose_or_regain_subpixel_coverage_is_encoded_again() {
     // and replayed under the other draws nothing on a transparent target, or coloured fringes
     // off the grid.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &same,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -311,26 +315,26 @@ fn a_fragment_whose_runs_lose_or_regain_subpixel_coverage_is_encoded_again() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let resampled = crate::walk::replay::Painted {
         subpixel: false,
         ..painted(0)
     };
-    assert_eq!(cache.reuse(&scene, &same, resampled, None), Reuse::Encode);
-    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+    assert_eq!(cache.reuse(&tables, &same, resampled, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&tables, &same, painted(0), None), Reuse::Encode);
 }
 
 #[test]
 fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &same,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -339,9 +343,9 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     assert_eq!(
-        cache.reuse(&scene, &same, painted(1), None),
+        cache.reuse(&tables, &same, painted(1), None),
         Reuse::Encode,
         "a hover that changes only a colour must not replay last frame's colour"
     );
@@ -356,18 +360,18 @@ fn a_restyled_fragment_is_encoded_however_still_it_stayed() {
 #[test]
 fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let mut line = fragment(0.0, 0.0);
     line.kind = FragmentKind::Line {
         paragraph: ParagraphId(0),
         line: 0,
     };
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &line,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -376,13 +380,13 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     line.kind = FragmentKind::Line {
         paragraph: ParagraphId(1),
         line: 0,
     };
     assert_eq!(
-        cache.reuse(&scene, &line, painted(0), None),
+        cache.reuse(&tables, &line, painted(0), None),
         Reuse::Encode,
         "one character changed for one of the same width and the previous glyphs would have \
          been replayed"
@@ -392,14 +396,14 @@ fn a_line_whose_paragraph_changed_is_encoded_however_still_it_stayed() {
 #[test]
 fn a_resized_fragment_is_encoded_rather_than_stretched() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let before = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &before,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -408,121 +412,36 @@ fn a_resized_fragment_is_encoded_rather_than_stretched() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let mut wider = fragment(0.0, 0.0);
     wider.border_box.size = Size::new(DevicePx(128.0), DevicePx(24.0));
-    assert_eq!(cache.reuse(&scene, &wider, painted(0), None), Reuse::Encode);
-}
-
-/// A drawing replays wherever its box went. The replay re-emits its vector item into the frame's
-/// pass planning, with the path it was encoded with and its placement moved by the offset.
-#[test]
-fn a_moved_drawing_replays_its_vector_item() {
-    use std::sync::Arc;
-
-    let mut cache = PaintCache::new();
-    let mut scene = scene();
-    let mut mark = fragment(0.0, 0.0);
-    mark.kind = FragmentKind::Vector;
-    let mut path = zgui_scene::kurbo::BezPath::new();
-    path.move_to((0.0, 0.0));
-    path.line_to((10.0, 10.0));
-    path.line_to((0.0, 10.0));
-    path.close_path();
-    let path = Arc::new(path);
-    let item = zgui_scene::VectorItem::filled(
-        zgui_scene::VectorId(1),
-        Arc::clone(&path),
-        zgui_scene::PaintRef::NONE,
-    );
-    scene.begin_chunk_capture(cache.take_capture_scratch());
-    scene.push_vector(item);
-    let chunk = scene.take_chunk_capture();
-    assert_eq!(chunk.vectors.len(), 1);
-    cache.encoded(
-        &mut scene,
-        &mark,
-        painted(0),
-        Encoding {
-            chunk,
-            items: 0,
-            drawn: Rect::default(),
-            resources: &[],
-            complete: true,
-            layer: Default::default(),
-        },
-        &NoResources,
-    );
-    scene.begin_frame(Size::new(256, 256));
-
-    let reuse = cache.reuse(&scene, &mark, painted(0), None);
     assert_eq!(
-        reuse,
-        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
-        "a still drawing replays"
-    );
-    let (source, chunk, _) = cache.chunk(mark.key).expect("recorded");
-    let range = scene.replay_chunk(chunk, Size::default(), source);
-    assert_eq!(range.len(), 1, "and the replay re-emits the vector item");
-    assert_eq!(scene.primitives.vectors.len(), 1);
-
-    scene.begin_frame(Size::new(256, 256));
-    let mut moved = fragment(0.0, 40.0);
-    moved.kind = FragmentKind::Vector;
-    let by = Size::new(DevicePx(0.0), DevicePx(40.0));
-    assert_eq!(
-        cache.reuse(&scene, &moved, painted(0), None),
-        Reuse::Replay(by),
-        "a moved drawing replays at the offset"
-    );
-    let (source, chunk, _) = cache.chunk(moved.key).expect("recorded");
-    scene.replay_chunk(chunk, by, source);
-    let replayed = &scene.primitives.vectors[0];
-    assert!(
-        Arc::ptr_eq(&replayed.path, &path),
-        "the path is the encoded one"
-    );
-    assert_eq!(
-        replayed.placement,
-        zgui_scene::kurbo::Affine::translate((0.0, 40.0))
+        cache.reuse(&tables, &wider, painted(0), None),
+        Reuse::Encode
     );
 }
 
-/// A chunk captured beyond the clip replays complete on arrival.
-///
-/// This is the whole of a panel that scrolls into view from below. While it is outside the
-/// scroll port every primitive it offers is refused by the frame — and captured anyway, because
-/// the capture happens before the cull. When the fragment arrives inside the port, the same
-/// chunk replays and the cull admits the part that has come into view.
+/// A record encoded where its clip admits nothing replays once the fragment moves into view.
 #[test]
-fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
+fn a_record_encoded_beyond_the_clip_replays_on_arrival() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
-    let port = |scene: &mut Scene| crate::walk::replay::Painted {
-        clip: scene.clips.only(zgui_scene::ClipLink::rect(Rect::new(
+    let mut tables = tables();
+    let port = |tables: &mut Tables| crate::walk::replay::Painted {
+        clip: tables.clips.only(zgui_space::ClipLink::rect(Rect::new(
             Point::new(DevicePx(0.0), DevicePx(0.0)),
             Size::new(DevicePx(256.0), DevicePx(128.0)),
         ))),
         ..painted(0)
     };
-    let inside = port(&mut scene);
+    let inside = port(&mut tables);
     let hidden = fragment(0.0, 2000.0);
-    // The fragment paints one quad at its own position, refused by the port's clip down there.
-    scene.begin_chunk_capture(cache.take_capture_scratch());
-    let refused = scene.push_quad(
-        zgui_scene::Quad::filled(hidden.border_box, zgui_scene::PaintRef::NONE)
-            .clipped(inside.clip),
-    );
-    let chunk = scene.take_chunk_capture();
-    assert!(refused.is_none(), "the quad is outside the port");
-    assert_eq!(chunk.quads.len(), 1, "and captured regardless");
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &hidden,
         inside,
         Encoding {
-            chunk,
-            items: 0,
+            minted: Vec::new(),
+            items: 1,
             drawn: Rect::default(),
             resources: &[],
             complete: true,
@@ -530,77 +449,13 @@ fn a_chunk_captured_beyond_the_clip_replays_complete_on_arrival() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
-    let inside = port(&mut scene);
-    let arrived = fragment(0.0, 100.0);
-    let reuse = cache.reuse(&scene, &arrived, inside, None);
-    assert_ne!(
-        reuse,
-        Reuse::Encode,
-        "the chunk is the fragment's complete painting, so arriving at the port replays it"
-    );
-    let Reuse::Replay(offset) = reuse else {
-        unreachable!()
-    };
-    let (source, chunk, _) = cache.chunk(arrived.key).expect("recorded");
-    let range = scene.replay_chunk(chunk, offset, source);
-    assert_eq!(range.len(), 1, "the cull admits the arrived quad");
-    assert_eq!(
-        scene.primitives.quads[0].bounds[1], 100.0,
-        "at the position the fragment arrived at"
-    );
-}
+    tables.begin_frame(Size::new(256, 256));
 
-/// An ellipsized line replayed beyond the line height still draws its glyphs.
-///
-/// The `text-overflow` window is minted by the encoding at the position the line is drawn, and
-/// noted on the capture. A scrolled line replays with an offset, and the note is what carries the
-/// window along: without it the glyphs are culled against the window of the encode frame — the
-/// visible slice shrinks as the scroll runs, and past one line height only the mark is left.
-#[test]
-fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
-    let mut cache = PaintCache::new();
-    let mut scene = scene();
-    let line = fragment(0.0, 0.0);
-    scene.begin_chunk_capture(cache.take_capture_scratch());
-    // The window a cut line's own glyphs are drawn through, minted inside the capture the way
-    // the text emitter mints it.
-    let window = scene.clips.only(zgui_scene::ClipLink::rect(Rect::new(
-        Point::new(DevicePx(0.0), DevicePx(0.0)),
-        Size::new(DevicePx(40.0), DevicePx(24.0)),
-    )));
-    scene.note_minted_clip(window);
-    let drawn = scene.push_quad(
-        zgui_scene::Quad::filled(line.border_box, zgui_scene::PaintRef::NONE).clipped(window),
-    );
-    let chunk = scene.take_chunk_capture();
-    assert!(drawn.is_some(), "the fixture draws inside its own window");
-    cache.encoded(
-        &mut scene,
-        &line,
-        painted(0),
-        Encoding {
-            chunk,
-            items: 0,
-            drawn: Rect::default(),
-            resources: &[],
-            complete: true,
-            layer: Default::default(),
-        },
-        &NoResources,
-    );
-    scene.begin_frame(Size::new(256, 256));
-    // Scrolled past its own height, which is where an encode-position window empties out.
-    let scrolled = fragment(0.0, 100.0);
-    let Reuse::Replay(offset) = cache.reuse(&scene, &scrolled, painted(0), None) else {
-        panic!("a scrolled line replays");
-    };
-    let (source, chunk, _) = cache.chunk(scrolled.key).expect("recorded");
-    let range = scene.replay_chunk(chunk, offset, source);
-    assert_eq!(range.len(), 1, "the window moved with the line");
+    let inside = port(&mut tables);
+    let arrived = fragment(0.0, 100.0);
     assert_eq!(
-        scene.primitives.quads[0].bounds[1], 100.0,
-        "and its content is drawn where the line is now"
+        cache.reuse(&tables, &arrived, inside, None),
+        Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(-1900.0)))
     );
 }
 
@@ -610,14 +465,14 @@ fn an_ellipsized_line_replayed_beyond_the_line_height_still_draws_its_glyphs() {
 #[test]
 fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &same,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -626,26 +481,26 @@ fn a_line_whose_cut_changed_is_encoded_however_still_it_stayed() {
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
     let recut = crate::walk::replay::Painted {
         cut: 1,
         ..painted(0)
     };
-    assert_eq!(cache.reuse(&scene, &same, recut, None), Reuse::Encode);
-    assert_ne!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+    assert_eq!(cache.reuse(&tables, &same, recut, None), Reuse::Encode);
+    assert_ne!(cache.reuse(&tables, &same, painted(0), None), Reuse::Encode);
 }
 
 #[test]
 fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let away = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &away,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -659,11 +514,11 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
     for _ in 0..3 {
         cache.begin_frame();
         cache.end_frame();
-        scene.begin_frame(Size::new(256, 256));
+        tables.begin_frame(Size::new(256, 256));
     }
     assert_eq!(cache.len(), 1);
     assert_ne!(
-        cache.reuse(&scene, &away, painted(0), None),
+        cache.reuse(&tables, &away, painted(0), None),
         Reuse::Encode,
         "a record kept across unvisited frames replays on return"
     );
@@ -672,14 +527,14 @@ fn a_fragment_nobody_visited_keeps_its_record_and_replays_on_return() {
 #[test]
 fn a_retired_fragment_loses_its_record() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let gone = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &gone,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -689,40 +544,27 @@ fn a_retired_fragment_loses_its_record() {
         &NoResources,
     );
     assert_eq!(cache.len(), 1);
-    cache.retire(&[gone.key], &mut scene, &NoResources);
+    cache.retire(&[gone.key], &mut tables, &NoResources);
     assert_eq!(cache.len(), 0);
     // Retiring a name with no record is the ordinary case and costs nothing.
-    cache.retire(&[gone.key], &mut scene, &NoResources);
-    assert_eq!(cache.reuse(&scene, &gone, painted(0), None), Reuse::Encode);
+    cache.retire(&[gone.key], &mut tables, &NoResources);
+    assert_eq!(cache.reuse(&tables, &gone, painted(0), None), Reuse::Encode);
 }
 
-/// Pushes one quad through an interned paint and a real clip, and encodes it into a record.
-fn encode_one_quad(
-    cache: &mut PaintCache,
-    scene: &mut Scene,
-    fragment: &Fragment,
-) -> (ClipId, zgui_scene::PaintId) {
-    use zgui_geom::Point;
-    let rect = zgui_geom::Rect::new(
+/// Encodes a record whose encoding minted one clip chain, and returns the chain.
+fn encode_minting(cache: &mut PaintCache, tables: &mut Tables, fragment: &Fragment) -> ClipId {
+    let rect = Rect::new(
         Point::new(DevicePx(0.0), DevicePx(0.0)),
         Size::new(DevicePx(10.0), DevicePx(10.0)),
     );
-    let clip = scene.clips.only(zgui_scene::ClipLink::rect(rect));
-    let paint = scene
-        .paints
-        .solid(zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0));
-    scene.begin_chunk_capture(cache.take_capture_scratch());
-    scene.push_quad(
-        zgui_scene::Quad::filled(rect, zgui_scene::PaintRef::solid(paint)).clipped(clip),
-    );
-    let chunk = scene.take_chunk_capture();
+    let clip = tables.clips.only(zgui_space::ClipLink::rect(rect));
     cache.encoded(
-        scene,
+        tables,
         fragment,
         painted(0),
         Encoding {
-            chunk,
-            items: 0,
+            minted: vec![clip],
+            items: 1,
             drawn: Rect::default(),
             resources: &[],
             complete: true,
@@ -730,52 +572,48 @@ fn encode_one_quad(
         },
         &NoResources,
     );
-    (clip, paint)
+    clip
 }
 
 #[test]
-fn a_record_holds_its_table_entries_until_it_is_dropped() {
+fn a_record_holds_its_minted_clips_until_it_is_dropped() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let one = fragment(0.0, 0.0);
-    let (clip, paint) = encode_one_quad(&mut cache, &mut scene, &one);
+    let clip = encode_minting(&mut cache, &mut tables, &one);
 
-    assert_eq!(scene.clips.refs(clip), Some(1));
-    assert_eq!(scene.paints.refs(paint), Some(1));
+    assert_eq!(tables.clips.refs(clip), Some(1));
     assert!(cache.bytes() > 0);
 
-    // Re-encoding the same fragment retains before it releases, so the counts hold steady.
-    encode_one_quad(&mut cache, &mut scene, &one);
-    assert_eq!(scene.clips.refs(clip), Some(1));
-    assert_eq!(scene.paints.refs(paint), Some(1));
+    // Re-encoding the same fragment retains before it releases, so the count holds steady.
+    encode_minting(&mut cache, &mut tables, &one);
+    assert_eq!(tables.clips.refs(clip), Some(1));
 
-    cache.retire(&[one.key], &mut scene, &NoResources);
-    assert_eq!(scene.clips.refs(clip), Some(0));
-    assert_eq!(scene.paints.refs(paint), Some(0));
+    cache.retire(&[one.key], &mut tables, &NoResources);
+    assert_eq!(tables.clips.refs(clip), Some(0));
     assert_eq!(cache.bytes(), 0);
 }
 
 #[test]
 fn eviction_takes_only_cold_records_and_is_a_clean_miss() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let one = fragment(0.0, 0.0);
-    let (clip, paint) = encode_one_quad(&mut cache, &mut scene, &one);
+    let clip = encode_minting(&mut cache, &mut tables, &one);
 
     // Selected this frame: the working set is never taken, however much was asked for.
-    assert_eq!(cache.evict_cold(u64::MAX, &mut scene, &NoResources), 0);
+    assert_eq!(cache.evict_cold(u64::MAX, &mut tables, &NoResources), 0);
     assert_eq!(cache.len(), 1);
 
     // A frame later it is cold, and eviction takes it and releases what it held.
     cache.begin_frame();
-    let freed = cache.evict_cold(u64::MAX, &mut scene, &NoResources);
+    let freed = cache.evict_cold(u64::MAX, &mut tables, &NoResources);
     assert!(freed > 0);
     assert_eq!(cache.len(), 0);
     assert_eq!(cache.bytes(), 0);
-    assert_eq!(scene.clips.refs(clip), Some(0));
-    assert_eq!(scene.paints.refs(paint), Some(0));
-    // The miss is clean: the next visit encodes again, and nothing else remembers the record.
-    assert_eq!(cache.reuse(&scene, &one, painted(0), None), Reuse::Encode);
+    assert_eq!(tables.clips.refs(clip), Some(0));
+    // The miss is clean: the next visit encodes again.
+    assert_eq!(cache.reuse(&tables, &one, painted(0), None), Reuse::Encode);
 }
 
 /// A coordinate system whose slot has been handed to an unrelated box is not the one a record was
@@ -793,7 +631,7 @@ fn eviction_takes_only_cold_records_and_is_a_clean_miss() {
 #[test]
 fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
     use zgui_geom::Matrix4;
-    use zgui_scene::{Content, OwnSpace, PropertyOwner, SpatialId};
+    use zgui_space::{Content, OwnSpace, PropertyOwner, SpatialId};
 
     let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
     let moved = Matrix4::translation(10.0, 0.0, 0.0);
@@ -805,20 +643,20 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
     };
 
     let mut cache = PaintCache::new();
-    let mut scene = scene();
-    let viewport = scene.spatial.viewport();
+    let mut tables = tables();
+    let viewport = tables.spatial.viewport();
     let card = owner(2);
-    let space = scene.spatial.space_of(viewport, card, own);
+    let space = tables.spatial.space_of(viewport, card, own);
 
     // A fragment inside the card, drawn in the card's coordinate system rather than one of its own.
     // It survives the card: what goes away is the box above it.
     let label = fragment(0.0, 0.0);
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &label,
         under(space),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -828,10 +666,10 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
         &NoResources,
     );
 
-    scene.begin_frame(Size::new(256, 256));
-    scene.spatial.release(card);
-    scene.spatial.recycle();
-    let stranger = scene.spatial.space_of(viewport, owner(3), own);
+    tables.begin_frame(Size::new(256, 256));
+    tables.spatial.release(card);
+    tables.spatial.recycle();
+    let stranger = tables.spatial.space_of(viewport, owner(3), own);
     assert_eq!(
         stranger.index(),
         space.index(),
@@ -845,7 +683,7 @@ fn a_recycled_spatial_slot_reencodes_the_chunks_that_named_it() {
     );
 
     assert_eq!(
-        cache.reuse(&scene, &label, under(stranger), None),
+        cache.reuse(&tables, &label, under(stranger), None),
         Reuse::Encode,
         "a range recorded under the card was replayed through a slot the card no longer owns",
     );
@@ -858,15 +696,15 @@ fn an_encoding_that_could_not_place_everything_is_not_recorded() {
     // frame takes a letter off the screen for the rest of the session. The frame still shows what
     // it managed to draw; what it must not do is remember it.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let fragment = fragment(0.0, 0.0);
 
     cache.encoded(
-        &mut scene,
+        &mut tables,
         &fragment,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -878,7 +716,7 @@ fn an_encoding_that_could_not_place_everything_is_not_recorded() {
 
     assert!(cache.is_empty(), "nothing was remembered");
     assert_eq!(
-        cache.reuse(&scene, &fragment, painted(0), None),
+        cache.reuse(&tables, &fragment, painted(0), None),
         Reuse::Encode,
         "so the next frame that reaches it draws it again, with the room eviction has made"
     );
@@ -890,16 +728,16 @@ fn a_record_is_given_up_when_a_later_encoding_falls_short() {
     // and is tempting to keep — but it was encoded against tiles the refusal has just evicted, so
     // what it replays is whatever took their rectangles.
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let fragment = fragment(0.0, 0.0);
 
     for complete in [true, false] {
         cache.encoded(
-            &mut scene,
+            &mut tables,
             &fragment,
             painted(0),
             Encoding {
-                chunk: zgui_scene::ChunkPrims::default(),
+                minted: Vec::new(),
                 items: 0,
                 drawn: Rect::default(),
                 resources: &[],
@@ -914,13 +752,13 @@ fn a_record_is_given_up_when_a_later_encoding_falls_short() {
 }
 
 /// Records `fragment` as having drawn a layer with `layer`.
-fn layered(cache: &mut PaintCache, scene: &mut Scene, fragment: &Fragment, layer: LayerRecord) {
+fn layered(cache: &mut PaintCache, tables: &mut Tables, fragment: &Fragment, layer: LayerRecord) {
     cache.encoded(
-        scene,
+        tables,
         fragment,
         painted(0),
         Encoding {
-            chunk: zgui_scene::ChunkPrims::default(),
+            minted: Vec::new(),
             items: 0,
             drawn: Rect::default(),
             resources: &[],
@@ -929,18 +767,18 @@ fn layered(cache: &mut PaintCache, scene: &mut Scene, fragment: &Fragment, layer
         },
         &NoResources,
     );
-    scene.begin_frame(Size::new(256, 256));
+    tables.begin_frame(Size::new(256, 256));
 }
 
 #[test]
 fn a_provisional_record_is_never_replayed() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     let phase = Some([0, 0]);
     layered(
         &mut cache,
-        &mut scene,
+        &mut tables,
         &same,
         LayerRecord {
             phase,
@@ -951,12 +789,15 @@ fn a_provisional_record_is_never_replayed() {
             window: None,
         },
     );
-    assert_eq!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
+    assert_eq!(
+        cache.reuse(&tables, &same, painted(0), phase),
+        Reuse::Encode
+    );
 
     // An exact layer replays at its own phase, and only there.
     layered(
         &mut cache,
-        &mut scene,
+        &mut tables,
         &same,
         LayerRecord {
             phase,
@@ -967,9 +808,12 @@ fn a_provisional_record_is_never_replayed() {
             window: None,
         },
     );
-    assert_ne!(cache.reuse(&scene, &same, painted(0), phase), Reuse::Encode);
+    assert_ne!(
+        cache.reuse(&tables, &same, painted(0), phase),
+        Reuse::Encode
+    );
     assert_eq!(
-        cache.reuse(&scene, &same, painted(0), Some([8, 0])),
+        cache.reuse(&tables, &same, painted(0), Some([8, 0])),
         Reuse::Encode,
         "half a pixel off the raster's grid"
     );
@@ -978,11 +822,11 @@ fn a_provisional_record_is_never_replayed() {
 #[test]
 fn a_promotable_record_encodes_again_after_three_drawn_replays() {
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let same = fragment(0.0, 0.0);
     layered(
         &mut cache,
-        &mut scene,
+        &mut tables,
         &same,
         LayerRecord {
             phase: None,
@@ -995,28 +839,26 @@ fn a_promotable_record_encodes_again_after_three_drawn_replays() {
     );
     for replay in 0..3 {
         assert_ne!(
-            cache.reuse(&scene, &same, painted(0), None),
+            cache.reuse(&tables, &same, painted(0), None),
             Reuse::Encode,
             "replay {replay}"
         );
         cache.begin_frame();
         cache.replayed(&same);
     }
-    assert_eq!(cache.reuse(&scene, &same, painted(0), None), Reuse::Encode);
+    assert_eq!(cache.reuse(&tables, &same, painted(0), None), Reuse::Encode);
 }
 
 #[test]
 fn a_cut_record_replays_only_while_its_window_holds_what_is_shown() {
-    use zgui_scene::kurbo;
-
     // The viewport shows 0..256 on each axis; the window holds a quarter of that more each way.
     let window = kurbo::Rect::new(-64.0, -64.0, 320.0, 320.0);
     let mut cache = PaintCache::new();
-    let mut scene = scene();
+    let mut tables = tables();
     let first = fragment(0.0, 0.0);
     layered(
         &mut cache,
-        &mut scene,
+        &mut tables,
         &first,
         LayerRecord {
             window: Some(window),
@@ -1024,29 +866,32 @@ fn a_cut_record_replays_only_while_its_window_holds_what_is_shown() {
         },
     );
     assert_eq!(
-        cache.reuse(&scene, &first, painted(0), None),
+        cache.reuse(&tables, &first, painted(0), None),
         Reuse::Replay(Size::new(DevicePx(0.0), DevicePx(0.0))),
         "in place, the window holds the viewport"
     );
     let near = fragment(48.0, -32.0);
     assert_eq!(
-        cache.reuse(&scene, &near, painted(0), None),
+        cache.reuse(&tables, &near, painted(0), None),
         Reuse::Replay(Size::new(DevicePx(48.0), DevicePx(-32.0))),
         "a move within the margin keeps every shown prim"
     );
     let far = fragment(80.0, 0.0);
     assert_eq!(
-        cache.reuse(&scene, &far, painted(0), None),
+        cache.reuse(&tables, &far, painted(0), None),
         Reuse::Encode,
         "a move past the margin shows prims the cut left out"
     );
 
     // A wider viewport shows more of the fragment where it stands.
-    scene.begin_frame(Size::new(512, 256));
-    assert_eq!(cache.reuse(&scene, &first, painted(0), None), Reuse::Encode);
+    tables.begin_frame(Size::new(512, 256));
+    assert_eq!(
+        cache.reuse(&tables, &first, painted(0), None),
+        Reuse::Encode
+    );
 
     // A record with no window replays anywhere.
-    let mut scene = self::scene();
-    layered(&mut cache, &mut scene, &first, LayerRecord::default());
-    assert_ne!(cache.reuse(&scene, &far, painted(0), None), Reuse::Encode);
+    let mut tables = self::tables();
+    layered(&mut cache, &mut tables, &first, LayerRecord::default());
+    assert_ne!(cache.reuse(&tables, &far, painted(0), None), Reuse::Encode);
 }

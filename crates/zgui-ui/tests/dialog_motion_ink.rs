@@ -8,12 +8,11 @@
 //! resized under an open dialog. What was under them: while the surface's transform is animating,
 //! its text can be promoted to outline glyphs, and the vector pipeline resolved residual clips and
 //! the draw order in a different coordinate space from every other primitive
-//! (`zgui-render-vector-vello`'s residual placement, and [`VectorItem::local_ink`]); and an element
+//! (the residual placement and the local ink of the old vector pipeline); and an element
 //! whose finished animation the engine dropped on an unrelated recascade painted from the first
 //! keyframe that cascade had captured, because nothing re-settled its style
 //! ([`Animator::tick`]'s cascade for retired holds).
 //!
-//! [`VectorItem::local_ink`]: zgui_scene::VectorItem
 //! [`Animator::tick`]: zgui_anim::Animator::tick
 
 mod desktop;

@@ -2,8 +2,8 @@
 
 use core::cell::{RefCell, RefMut};
 
+use crate::VectorId;
 use zgui_geom::{Device, DevicePx, Rect, Size};
-use zgui_scene::VectorId;
 
 use crate::content::cache::{ContentCache, FrameContent};
 use crate::content::vectors::{

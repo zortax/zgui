@@ -48,9 +48,9 @@ use zgui_geom::{CssPx, Device, DevicePx, Scale, Size};
 use zgui_input::Router;
 use zgui_layout::HitIndex;
 use zgui_layout::tree::store::LayoutStore;
+use zgui_paint::Tables;
 use zgui_paint::{ContentCache, Painter};
 use zgui_platform::Surface;
-use zgui_scene::Scene;
 use zgui_style::{SheetHandle, SheetOrigin, SheetSource, StyleEngine, Viewport};
 use zgui_view::{Anchor, BuildCxOwned, DomHandle, HostHandle};
 use zgui_view_dom::DocumentDom;
@@ -172,16 +172,8 @@ pub struct Window {
     /// A gap far longer than a refresh interval is a park rather than a slow frame, and buys a
     /// motion nothing: see [`Window::advance_scroll`].
     last_frame: Option<zgui_vocab::Timestamp>,
-    /// The moment the first frame ran at, so an effect can be told how long the window has been up.
-    ///
-    /// Measured from the first frame rather than from the process, because that is the moment an
-    /// effect's own clock should start: a window opened late should not begin its animations part
-    /// of the way through.
-    opened_at: Option<zgui_vocab::Timestamp>,
-    /// The moment the previous frame ran at, so an effect can be told how long the last one took.
+    /// The moment the previous frame ran at.
     painted_at: Option<zgui_vocab::Timestamp>,
-    /// What this frame's application effects are told about it, computed once at the frame's top.
-    frame_clock: zgui_scene::FrameClock,
     /// What the running animations wrote on the last frame, and what still owes an undo.
     animator: zgui_anim::Animator,
     /// The moment the running animations owe their next frame at.
@@ -200,8 +192,8 @@ pub struct Window {
     /// They ask for no frame at every refresh, so this moment is the only thing that wakes the
     /// loop for them.
     hold_due: Option<Instant>,
-    /// The display list.
-    scene: Scene,
+    /// The clip, paint and coordinate-system tables the paint stage draws through.
+    tables: Tables,
     /// The paint stage's state between frames.
     painter: Painter,
     /// Whether every replayed range is checked against the cache holding the rasters it draws.
@@ -210,14 +202,6 @@ pub struct Window {
     /// rather than the walk reading the environment, so that the answer is a property of this
     /// window and a test can state it.
     verify_replays: bool,
-    /// Whether the log has said that the compositor path leaves some content undrawn.
-    compositor_omissions_noted: bool,
-    /// Whether this window's frames keep the coordinate system every primitive was pushed under.
-    ///
-    /// See [`Window::set_check_spatial_dependencies`]. Applied to the scene at the start of every
-    /// frame rather than read from the environment once, for the same reason as `verify_replays`:
-    /// a check nothing can switch on is a check no test can watch working.
-    check_spatial_dependencies: bool,
     /// The glyph tiles and decoded images this window draws from.
     content: ContentCache,
     /// The same, for the nodes whose content is an externally rendered surface.
@@ -722,18 +706,14 @@ impl Window {
             retired_clips: rustc_hash::FxHashSet::default(),
             scroll,
             last_frame: None,
-            opened_at: None,
             painted_at: None,
-            frame_clock: zgui_scene::FrameClock::default(),
             animator: zgui_anim::Animator::new(),
             animation: crate::window::anim::cadence::AnimationCadence::parked(),
             hold_after: None,
             hold_due: None,
-            scene: Scene::new(),
+            tables: Tables::new(),
             painter: Painter::new(),
             verify_replays: zgui_layout::invariants::enabled(),
-            compositor_omissions_noted: false,
-            check_spatial_dependencies: zgui_scene::invariant::enabled(),
             content: ContentCache::new(atlas_limits),
             replaced_surfaces,
             images,
@@ -755,7 +735,7 @@ impl Window {
             renderer,
             compositor,
             renderer_totals: crate::window::counters::Totals::default(),
-            check_damage: zgui_scene::invariant::enabled(),
+            check_damage: zgui_layout::invariants::enabled(),
             committed: None,
             resync: std::cell::Cell::new(false),
             retired: false,
@@ -1162,9 +1142,9 @@ impl Window {
         Scale::new(self.scale)
     }
 
-    /// The display list the last frame built.
-    pub fn scene(&self) -> &Scene {
-        &self.scene
+    /// Returns the clip, paint and coordinate-system tables the last frame drew through.
+    pub fn tables(&self) -> &Tables {
+        &self.tables
     }
 
     /// What every coordinate system in the drawn frame resolves to.
@@ -1280,21 +1260,6 @@ impl Window {
         self.verify_replays = verify;
     }
 
-    /// Turns on the check that every primitive is still drawn through the coordinate system it was
-    /// pushed under.
-    ///
-    /// On by default only when `ZGUI_INVARIANTS` is set, because it costs a word of storage per
-    /// primitive per frame and a lookup per primitive to answer. A test about the check itself
-    /// turns it on directly, rather than depending on how the process was launched — and until
-    /// something could, the check was wired into the frame loop with nothing able to watch it run
-    /// there.
-    ///
-    /// It takes effect on the next frame: the names are kept alongside the log and are meaningless
-    /// unless they have been kept since that log began.
-    pub fn set_check_spatial_dependencies(&mut self, check: bool) {
-        self.check_spatial_dependencies = check;
-    }
-
     /// Turns on the check that the compositor redraws nothing the paint walk did not visit.
     ///
     /// A frame that breaks it panics, naming what was redrawn outside the region the walk was
@@ -1304,16 +1269,6 @@ impl Window {
     /// when `ZGUI_INVARIANTS` is set.
     pub fn set_check_damage_containment(&mut self, check: bool) {
         self.check_damage = check;
-    }
-
-    /// How many of this frame's primitives carry the name of a coordinate system.
-    ///
-    /// Zero for a window that was never asked to keep them, and the non-vacuity control for any
-    /// test that watches the check pass: a frame that recorded nothing has nothing to compare, and
-    /// [`Scene::check_spatial_dependencies`](zgui_scene::Scene::check_spatial_dependencies) is
-    /// perfectly happy about it.
-    pub fn spatial_dependencies_recorded(&self) -> usize {
-        self.scene.spatial_dependencies_recorded()
     }
 
     /// Every raster a live paint record names that the content cache no longer holds.

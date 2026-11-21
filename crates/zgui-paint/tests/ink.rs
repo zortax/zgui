@@ -43,15 +43,10 @@ fn assert_all_inside(harness: &mut Harness, bounds: Rect<DevicePx, Device>, draw
         assert_contains(bounds, ink, instance.kind());
         counted += 1;
     }
-    let primitives = &harness.scene.primitives;
-    for external in &primitives.externals {
-        assert_contains(bounds, external.ink(), "external quad");
-        counted += 1;
-    }
     assert!(
         counted >= drawn,
         "the fixture drew {counted} primitives and the audit expected at least {drawn}: an audit \
-         over an empty scene passes while proving nothing"
+         over an empty drawing passes while proving nothing"
     );
 }
 
@@ -163,12 +158,13 @@ fn a_backdrop_filters_source_stays_inside_the_reported_ink() {
 /// box, because nothing tells the layout stage that an ancestor's decoration is being drawn here.
 #[test]
 fn a_wavy_underline_is_given_a_band_and_stays_inside_the_line_box() {
+    use compositor_types::LineStyle as Line;
     use zgui_css::StyleDraft;
     use zgui_geom::{Point, Rect as GeomRect, Size};
     use zgui_layout::fragment::ParagraphId;
+    use zgui_paint::Tables;
     use zgui_paint::emit::text::{self, DecorationStyle, TextPlacement};
-    use zgui_scene::prim::decoration::DecorationStyle as Line;
-    use zgui_scene::{ClipId, Scene, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     let line = GeomRect::new(
         Point::new(DevicePx(0.0), DevicePx(100.0)),
@@ -187,12 +183,12 @@ fn a_wavy_underline_is_given_a_band_and_stays_inside_the_line_box() {
         underline: true,
         overline: true,
         line_through: true,
-        style: Line::Wavy,
+        style: Line::WAVY,
         thickness: 2.0,
         color: zgui_color::Color::srgb(1.0, 0.0, 0.0, 1.0),
     };
 
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     let style = zgui_paint::lower::lower(&StyleDraft::initial().build(), 1.0);
     let mut pushed = 0;
     let mut lone = Lone::record(&mut scene, (SpatialId::VIEWPORT, ClipId::ROOT), |rec| {
@@ -242,9 +238,10 @@ fn a_text_shadow_is_drawn_as_a_second_pass_over_the_same_glyphs_at_its_own_offse
     use zgui_css::StyleDraft;
     use zgui_geom::{Point, Rect as GeomRect, Size};
     use zgui_layout::fragment::ParagraphId;
+    use zgui_paint::Tables;
     use zgui_paint::emit::text::{self, GlyphSource, TextPlacement};
     use zgui_paint::lower::ShadowSpec;
-    use zgui_scene::{ClipId, Scene, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     /// One glyph ten pixels in, sixteen pixels down to its baseline.
     struct OneGlyph;
@@ -268,7 +265,7 @@ fn a_text_shadow_is_drawn_as_a_second_pass_over_the_same_glyphs_at_its_own_offse
                 coords: &[],
                 synthetic_bold: 0.0,
                 synthetic_slant: 0.0,
-                brush: zgui_scene::PaintSlot(0),
+                brush: zgui_space::PaintSlot(0),
                 glyphs: &GLYPHS,
                 text_start: 0,
             });
@@ -289,7 +286,7 @@ fn a_text_shadow_is_drawn_as_a_second_pass_over_the_same_glyphs_at_its_own_offse
         inset: false,
     });
 
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     let mut pushed = 0;
     let mut lone = Lone::record(&mut scene, (SpatialId::VIEWPORT, ClipId::ROOT), |rec| {
         pushed = text::emit(
@@ -355,7 +352,7 @@ fn a_filters_reach_grows_with_the_device_scale() {
         "a blur has to reach outside its bounds"
     );
     // The resampling reach is in device pixels at every density, so only the kernel scales.
-    let kernel = |extent| reach(extent) - zgui_scene::Filter::RESAMPLE_REACH;
+    let kernel = |extent| reach(extent) - zgui_layout::fragment::filter::Filter::RESAMPLE_REACH;
     assert!(
         (kernel(at_two) - 2.0 * kernel(at_one)).abs() < 1e-3,
         "twice the density is twice the kernel's reach: {} against {}",
@@ -382,7 +379,7 @@ fn an_animated_transform_reports_the_union_of_where_it_was_and_where_it_is() {
         .store
         .fragment(harness.fragment_of("subject"))
         .expect("a fragment")
-        .device_ink(&zgui_scene::Placements::of(&harness.scene.spatial));
+        .device_ink(&zgui_space::Placements::of(&harness.scene.spatial));
 
     let subject = harness.element("subject");
     harness.edit_and_restyle(|batch| {
@@ -395,7 +392,7 @@ fn an_animated_transform_reports_the_union_of_where_it_was_and_where_it_is() {
         .store
         .fragment(harness.fragment_of("subject"))
         .expect("a fragment")
-        .device_ink(&zgui_scene::Placements::of(&harness.scene.spatial));
+        .device_ink(&zgui_space::Placements::of(&harness.scene.spatial));
     assert_ne!(
         before.origin, after.origin,
         "the fixture has to have moved it"

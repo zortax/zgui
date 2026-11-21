@@ -5,11 +5,13 @@
 //! last — after the box's descendants, which is why it is emitted separately rather than in the
 //! run below.
 
-use compositor_types::{BorderStyle, Color as Premultiplied, PaintKind, Quad, ShaderQuad, Shadow};
+use crate::Tables;
+use crate::paints::{Paint, PaintOwner, PaintRef, PaintRole};
+use compositor_types::{Color as Premultiplied, PaintKind, Quad, ShaderQuad, Shadow};
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Edges, Point, Rect, Vec2};
-use zgui_scene::{ClipId, Paint, PaintOwner, PaintRef, PaintRole, PropertyOwner, Scene, SpatialId};
+use zgui_space::{ClipId, PropertyOwner, SpatialId};
 
 use crate::emit::paint::gradient_paint;
 use crate::emit::record::{Recorder, flat_radii, local_rect};
@@ -141,18 +143,18 @@ pub fn background_and_border(
     if let Some(pushed) = shaded(rec, style, placement, shaders, pointer) {
         return pushed;
     }
-    let (fills, draws_border) = fills_of(rec.scene(), style, placement);
+    let (fills, draws_border) = fills_of(rec.tables(), style, placement);
     let borders = border_widths(placement.border);
     let stroke = match placement.owner_of(PaintRole::BorderSides) {
         Some(name) if draws_border => {
             let owned = rec
-                .scene()
+                .tables()
                 .paints
                 .owned(name, border_paint(style.border.colors, placement.border));
             rec.slot(owned)
         }
         _ => {
-            let stroke = border_stroke(rec.scene(), style, borders, true);
+            let stroke = border_stroke(rec.tables(), style, borders, true);
             rec.paint(stroke)
         }
     };
@@ -179,7 +181,7 @@ pub fn background_and_border(
 /// effect decides is filled by exactly the same cascade: a gradient, an image and a colour all keep
 /// working, and a list built twice is a list the two paths can disagree about.
 fn fills_of(
-    scene: &mut Scene,
+    tables: &mut Tables,
     style: &PaintStyle,
     placement: BoxPlacement,
 ) -> (SmallVec<[PaintRef; 2]>, bool) {
@@ -188,15 +190,15 @@ fn fills_of(
     // colour in from transparent.
     if let Some(name) = placement.owner_of(PaintRole::Background) {
         fills.push(
-            scene
+            tables
                 .paints
                 .owned(name, Paint::Solid(style.background.color)),
         );
     } else if style.background.color.alpha() != 0.0 {
         fills.push(
-            scene
+            tables
                 .paints
-                .add(zgui_scene::Paint::Solid(style.background.color)),
+                .add(crate::paints::Paint::Solid(style.background.color)),
         );
     }
     // A ramp is resolved against the box with its corner at the origin rather than where the box
@@ -210,7 +212,7 @@ fn fills_of(
         placement.border_box.size,
     );
     for layer in style.background.layers.iter().rev() {
-        if let Some(fill) = gradient_paint(scene, layer, local, placement.scale) {
+        if let Some(fill) = gradient_paint(tables, layer, local, placement.scale) {
             fills.push(fill);
         }
     }
@@ -253,19 +255,19 @@ fn shaded(
     }
     let block = crate::emit::shader::block_at(named, binding, pointer, placement.border_box);
     let (shader, params) = rec.shader_slots(binding.id, block)?;
-    let shaped = binding.mode == zgui_scene::ShaderMode::Coverage;
+    let shaped = binding.mode == zgui_css::shader::ShaderMode::Coverage;
     // A paint effect shades the whole box itself, so it is one rectangle and reads no fill. A
     // coverage effect decides only which pixels are inside, so it is drawn once per background
     // layer — the same list, in the same order, with the border on the last — and the cascade goes
     // on deciding what fills the shape.
     let (fills, draws_border) = if shaped {
-        fills_of(rec.scene(), style, placement)
+        fills_of(rec.tables(), style, placement)
     } else {
         (SmallVec::from_slice(&[PaintRef::NONE]), false)
     };
     let borders = border_widths(placement.border);
     // The shaded pipeline strokes in one colour.
-    let stroke = draws_border.then(|| border_stroke(rec.scene(), style, borders, false));
+    let stroke = draws_border.then(|| border_stroke(rec.tables(), style, borders, false));
     let stroke = stroke.map(|stroke| rec.paint(stroke));
     let owned_fill = shaped && placement.owner_of(PaintRole::Background).is_some();
     let last = fills.len().saturating_sub(1);
@@ -337,7 +339,7 @@ fn push(
         },
         clip,
         space,
-        style: BorderStyle(style.border.style.to_scene() as u8),
+        style: style.border.style.to_compositor(),
         _pad: [0; 3],
     });
 }
@@ -359,7 +361,7 @@ pub fn outline(rec: &mut Recorder<'_>, style: &PaintStyle, placement: BoxPlaceme
     }
     let stroke = match placement.owner_of(PaintRole::Outline) {
         Some(name) => {
-            let owned = rec.scene().paints.owned(name, Paint::Solid(outline.color));
+            let owned = rec.tables().paints.owned(name, Paint::Solid(outline.color));
             rec.slot(owned)
         }
         None => rec.color(outline.color),
@@ -377,7 +379,7 @@ pub fn outline(rec: &mut Recorder<'_>, style: &PaintStyle, placement: BoxPlaceme
         paint_origin: [0.0; 2],
         clip,
         space,
-        style: BorderStyle(outline.style.to_scene() as u8),
+        style: outline.style.to_compositor(),
         _pad: [0; 3],
     });
     1
@@ -391,9 +393,14 @@ fn border_widths(border: Edges<DevicePx>) -> [f32; 4] {
 /// The paint a box's border is stroked with, given the widths in top, right, bottom, left order.
 ///
 /// The sides that have a width decide. One colour on all of them is a solid stroke. Different
-/// colours are a [`Paint::Sides`](zgui_scene::Paint::Sides) stroke when `sides` allows it, and the
+/// colours are a [`Paint::Sides`](crate::paints::Paint::Sides) stroke when `sides` allows it, and the
 /// first visible colour when it does not.
-fn border_stroke(scene: &mut Scene, style: &PaintStyle, widths: [f32; 4], sides: bool) -> PaintRef {
+fn border_stroke(
+    tables: &mut Tables,
+    style: &PaintStyle,
+    widths: [f32; 4],
+    sides: bool,
+) -> PaintRef {
     let colors = style.border.colors;
     let shown = || {
         (0..4)
@@ -402,7 +409,7 @@ fn border_stroke(scene: &mut Scene, style: &PaintStyle, widths: [f32; 4], sides:
     };
     let color = match shown().next() {
         Some(first) if shown().all(|color| color == first) => first,
-        Some(_) if sides => return scene.paints.add(zgui_scene::Paint::Sides(colors)),
+        Some(_) if sides => return tables.paints.add(crate::paints::Paint::Sides(colors)),
         Some(first) => shown().find(|color| color.alpha() != 0.0).unwrap_or(first),
         // No side has a width, so the stroke draws nothing whatever its colour.
         None => colors
@@ -414,7 +421,7 @@ fn border_stroke(scene: &mut Scene, style: &PaintStyle, widths: [f32; 4], sides:
     if color.alpha() == 0.0 {
         return PaintRef::NONE;
     }
-    scene.paints.add(zgui_scene::Paint::Solid(color))
+    tables.paints.add(crate::paints::Paint::Solid(color))
 }
 
 /// Radii grown outwards by `by`, which is what an outline's and a spread shadow's corners take.
@@ -465,8 +472,8 @@ mod tests {
             ),
             border: zgui_geom::Edges::ZERO,
             radii: Corners::uniform(Vec2::new(DevicePx(10.0), DevicePx(10.0))),
-            clip: zgui_scene::ClipId::ROOT,
-            transform: zgui_scene::SpatialId::VIEWPORT,
+            clip: zgui_space::ClipId::ROOT,
+            transform: zgui_space::SpatialId::VIEWPORT,
             scale: 1.0,
             owned: None,
         }
@@ -490,12 +497,12 @@ mod tests {
     fn only_shadow(
         emit: impl FnOnce(&mut crate::emit::record::Recorder<'_>) -> usize,
     ) -> compositor_types::Shadow {
-        let mut scene = zgui_scene::Scene::new();
+        let mut tables = crate::Tables::new();
         let mut recording = Recording::new();
         let mut rec = recording.recorder(
-            &mut scene,
-            zgui_scene::SpatialId::VIEWPORT,
-            zgui_scene::ClipId::ROOT,
+            &mut tables,
+            zgui_space::SpatialId::VIEWPORT,
+            zgui_space::ClipId::ROOT,
         );
         assert_eq!(
             emit(&mut rec),

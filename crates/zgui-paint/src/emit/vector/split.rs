@@ -11,8 +11,8 @@
 use core::hash::Hasher;
 use core::ops::Range;
 
+use kurbo::{self, BezPath, PathEl, Point};
 use rustc_hash::FxHasher;
-use zgui_scene::kurbo::{self, BezPath, PathEl, Point};
 
 /// The fewest subpaths a path needs before its outlines are looked for.
 pub(crate) const MIN_SUBPATHS: usize = 8;

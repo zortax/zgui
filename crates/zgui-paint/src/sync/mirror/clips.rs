@@ -2,7 +2,7 @@
 
 use compositor_types::{ClipId, ClipNode, ClipShape, MaskMode, Transaction};
 use rustc_hash::FxHashMap;
-use zgui_scene::{ChangeCoverage, ClipLink, ClipTable, SpatialTree, TableVersion};
+use zgui_space::{ChangeCoverage, ClipLink, ClipTable, SpatialTree, TableVersion};
 
 use crate::emit::record::ImageKey;
 use crate::sync::mirror::holds::Holds;
@@ -20,7 +20,7 @@ pub(crate) struct Clips {
     entries: Vec<Option<Entry>>,
     nodes: FxHashMap<ClipId, u32>,
     version: Option<TableVersion>,
-    changed: Vec<zgui_scene::ClipId>,
+    changed: Vec<zgui_space::ClipId>,
 }
 
 /// One mirrored chain.
@@ -48,7 +48,7 @@ impl Clips {
         tx: &mut Transaction,
         holds: &mut Holds,
         sources: Sources<'_>,
-        id: zgui_scene::ClipId,
+        id: zgui_space::ClipId,
     ) -> Option<ClipId> {
         let mut sources = sources;
         let node = self.mirror(tx, holds, &mut sources, id)?;
@@ -62,7 +62,7 @@ impl Clips {
         tx: &mut Transaction,
         holds: &mut Holds,
         sources: &mut Sources<'_>,
-        id: zgui_scene::ClipId,
+        id: zgui_space::ClipId,
     ) -> Option<ClipId> {
         if self.version.is_none() {
             self.version = Some(sources.table.version());
@@ -110,7 +110,7 @@ impl Clips {
         self.version = Some(sources.table.version());
         if coverage == ChangeCoverage::All {
             changed.clear();
-            changed.extend(self.nodes.values().map(|&raw| zgui_scene::ClipId(raw)));
+            changed.extend(self.nodes.values().map(|&raw| zgui_space::ClipId(raw)));
         }
         let mut written = 0;
         for &id in &changed {
@@ -124,13 +124,13 @@ impl Clips {
     pub(crate) fn removed(&mut self, id: ClipId, table: &mut ClipTable) {
         if let Some(raw) = self.nodes.remove(&id) {
             self.entries[raw as usize] = None;
-            table.release(zgui_scene::ClipId(raw));
+            table.release(zgui_space::ClipId(raw));
         }
     }
 
     /// Returns the zgui chains of every mirrored node.
-    pub(crate) fn mirrored(&self) -> impl Iterator<Item = zgui_scene::ClipId> + '_ {
-        self.nodes.values().map(|&raw| zgui_scene::ClipId(raw))
+    pub(crate) fn mirrored(&self) -> impl Iterator<Item = zgui_space::ClipId> + '_ {
+        self.nodes.values().map(|&raw| zgui_space::ClipId(raw))
     }
 
     /// Writes the node of `id` if its value changed, and returns the number of nodes written.
@@ -139,7 +139,7 @@ impl Clips {
         tx: &mut Transaction,
         holds: &mut Holds,
         sources: &mut Sources<'_>,
-        id: zgui_scene::ClipId,
+        id: zgui_space::ClipId,
     ) -> usize {
         let Some(Some(entry)) = self.entries.get(id.0 as usize).cloned() else {
             return 0;
@@ -167,9 +167,9 @@ impl Clips {
         tx: &mut Transaction,
         holds: &mut Holds,
         sources: &mut Sources<'_>,
-        id: zgui_scene::ClipId,
+        id: zgui_space::ClipId,
     ) -> Option<Result<ClipNode, Option<ClipId>>> {
-        let zgui_scene::ClipNode::Link { link, parent, .. } = *sources.table.get(id)? else {
+        let zgui_space::ClipNode::Link { link, parent, .. } = *sources.table.get(id)? else {
             return None;
         };
         let parent = self.mirror(tx, holds, sources, parent);

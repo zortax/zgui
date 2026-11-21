@@ -1,10 +1,10 @@
 //! zgui's tables resolved into compositor nodes and slots while a chunk's items are built.
 
+use crate::Tables;
 use compositor_types::{
     ClipId, Filter, ImageDesc, ImageId, ImageWrite, PaintId, PaintKind, ParamsBlock, ParamsId,
     ShaderId, Transaction, TransformId,
 };
-use zgui_scene::Scene;
 
 use crate::sync::mirror::Mirror;
 
@@ -32,23 +32,23 @@ impl<'a> Resolver<'a> {
     }
 
     /// Returns the transform node of the coordinate system in `slot`.
-    pub(crate) fn space(&mut self, scene: &Scene, slot: u32) -> TransformId {
-        self.mirror.space(self.tx, &scene.spatial, slot)
+    pub(crate) fn space(&mut self, tables: &Tables, slot: u32) -> TransformId {
+        self.mirror.space(self.tx, &tables.spatial, slot)
     }
 
     /// Returns the clip node of the chain `clip`, or `None` for a chain that clips nothing the
     /// compositor can express.
-    pub(crate) fn clip(&mut self, scene: &mut Scene, clip: zgui_scene::ClipId) -> Option<ClipId> {
-        self.mirror.clip(self.tx, scene, clip)
+    pub(crate) fn clip(&mut self, tables: &mut Tables, clip: zgui_space::ClipId) -> Option<ClipId> {
+        self.mirror.clip(self.tx, tables, clip)
     }
 
     /// Returns the slot and kind of the paint `paint`, or `None` for a paint with no slot kind.
     pub(crate) fn paint(
         &mut self,
-        scene: &mut Scene,
-        paint: zgui_scene::PaintId,
+        tables: &mut Tables,
+        paint: zgui_space::PaintId,
     ) -> Option<(PaintId, PaintKind)> {
-        self.mirror.paint(self.tx, scene, paint)
+        self.mirror.paint(self.tx, tables, paint)
     }
 
     /// Returns the image of `key` and its description, creating or updating it from `pixels`, or
@@ -74,7 +74,7 @@ impl<'a> Resolver<'a> {
 
     /// Returns the compositor shader of the declared shader `id`, or `None` for a handle no
     /// program was declared under.
-    pub(crate) fn shader(&mut self, id: zgui_scene::ShaderId) -> Option<ShaderId> {
+    pub(crate) fn shader(&mut self, id: zgui_css::shader::ShaderId) -> Option<ShaderId> {
         self.mirror.shader(self.tx, id)
     }
 

@@ -1,17 +1,21 @@
-//! A computed filter chain, in the vocabulary the display list speaks.
+//! Computed filter chains, and how far they read.
 //!
-//! One conversion, one home. How far a filter reaches decides three different things — how far a
-//! fragment's ink spreads, whether it belongs in the registry of fragments that read pixels they do
-//! not write, and how far the damage around it has to grow — and two of those are answered before
-//! anything is drawn. A second conversion elsewhere would let those three disagree.
+//! The reach of a chain decides how far a fragment's ink spreads, whether the fragment reads
+//! pixels it does not write, and how far damage around it grows.
+
+mod extent;
+mod value;
 
 use smallvec::SmallVec;
 use zgui_css::ComputedStyle;
+use zgui_css::shader::ShaderMode;
 use zgui_css::values::custom;
 use zgui_css::values::effect::FilterValue;
-use zgui_scene::Filter;
 
 use crate::fragment::custom_properties::CustomProperties;
+
+pub use crate::fragment::filter::extent::read_extent;
+pub use crate::fragment::filter::value::Filter;
 
 /// A filter chain, which is short in every document that has one at all.
 pub type FilterChain = SmallVec<[Filter; 2]>;
@@ -44,23 +48,18 @@ pub fn backdrop_with(style: &ComputedStyle, declared: CustomProperties, scale: f
     chain
 }
 
-/// The application effect `property` names, as far as how far it reads.
-///
-/// The parameters are deliberately absent: this conversion exists to answer how far a fragment
-/// reads, which is the effect's own declaration and nothing else. What the effect is *drawn* with
-/// is resolved where it is emitted, against a scene this stage does not have.
+/// Returns the filter effect `property` names on `style`, with the reach it declared.
 fn effect(style: &ComputedStyle, property: &custom::Property, scale: f32) -> Option<Filter> {
     let name = property.text(style)?.trim();
     if name.is_empty() || name == "none" {
         return None;
     }
-    let declared = zgui_scene::shader_named(name)?;
-    if declared.mode != zgui_scene::ShaderMode::Filter {
+    let declared = zgui_css::shader::named(name)?;
+    if declared.mode != ShaderMode::Filter {
         return None;
     }
     Some(Filter::Custom {
         shader: declared.id,
-        params: zgui_scene::ShaderParamsSlot(0),
         reach: declared.reach * scale,
     })
 }
@@ -141,9 +140,9 @@ fn deviation(radius: f32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use crate::fragment::filter::Filter;
     use zgui_css::values::effect::FilterValue;
     use zgui_css::values::length::NonNegativeLength;
-    use zgui_scene::Filter;
 
     use super::{chain, convert, deviation};
 

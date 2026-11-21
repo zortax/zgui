@@ -1,8 +1,9 @@
 //! Paint sources mirrored as paint slots.
 
+use crate::paints::PaintTable;
 use compositor_types::{Paint, PaintId, PaintKind, Transaction};
 use rustc_hash::FxHashMap;
-use zgui_scene::{ChangeCoverage, PaintTable, TableVersion};
+use zgui_space::{ChangeCoverage, TableVersion};
 
 use crate::sync::mirror::color;
 use crate::sync::mirror::holds::Holds;
@@ -16,7 +17,7 @@ pub(crate) struct Paints {
     entries: Vec<Option<Entry>>,
     slots: FxHashMap<PaintId, u32>,
     version: Option<TableVersion>,
-    changed: Vec<zgui_scene::PaintId>,
+    changed: Vec<zgui_space::PaintId>,
 }
 
 /// One mirrored paint.
@@ -36,7 +37,7 @@ impl Paints {
         tx: &mut Transaction,
         holds: &mut Holds,
         table: &mut PaintTable,
-        id: zgui_scene::PaintId,
+        id: zgui_space::PaintId,
     ) -> Option<(PaintId, PaintKind)> {
         if self.version.is_none() {
             self.version = Some(table.version());
@@ -82,7 +83,7 @@ impl Paints {
         self.version = Some(table.version());
         if coverage == ChangeCoverage::All {
             changed.clear();
-            changed.extend(self.slots.values().map(|&raw| zgui_scene::PaintId(raw)));
+            changed.extend(self.slots.values().map(|&raw| zgui_space::PaintId(raw)));
         }
         let mut written = 0;
         for &id in &changed {
@@ -96,13 +97,13 @@ impl Paints {
     pub(crate) fn removed(&mut self, id: PaintId, table: &mut PaintTable) {
         if let Some(raw) = self.slots.remove(&id) {
             self.entries[raw as usize] = None;
-            table.release(zgui_scene::PaintId(raw));
+            table.release(zgui_space::PaintId(raw));
         }
     }
 
     /// Returns the zgui paints of every mirrored slot.
-    pub(crate) fn mirrored(&self) -> impl Iterator<Item = zgui_scene::PaintId> + '_ {
-        self.slots.values().map(|&raw| zgui_scene::PaintId(raw))
+    pub(crate) fn mirrored(&self) -> impl Iterator<Item = zgui_space::PaintId> + '_ {
+        self.slots.values().map(|&raw| zgui_space::PaintId(raw))
     }
 
     /// Writes the slot of `id` if its value changed, and returns the number of slots written.
@@ -111,7 +112,7 @@ impl Paints {
         tx: &mut Transaction,
         holds: &mut Holds,
         table: &PaintTable,
-        id: zgui_scene::PaintId,
+        id: zgui_space::PaintId,
     ) -> usize {
         let index = id.0 as usize;
         let Some(Some(entry)) = self.entries.get(index) else {

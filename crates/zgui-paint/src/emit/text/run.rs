@@ -94,16 +94,16 @@ mod tests {
             coords: &[],
             synthetic_bold: zgui_text::SYNTHETIC_BOLD_RATIO,
             synthetic_slant: 14.0,
-            brush: zgui_scene::PaintSlot(0),
+            brush: zgui_space::PaintSlot(0),
             glyphs: &glyphs,
             text_start: 0,
         };
-        let mut scene = zgui_scene::Scene::new();
+        let mut tables = crate::Tables::new();
         let mut recording = crate::emit::record::Recording::new();
         let mut rec = recording.recorder(
-            &mut scene,
-            zgui_scene::SpatialId::VIEWPORT,
-            zgui_scene::ClipId::ROOT,
+            &mut tables,
+            zgui_space::SpatialId::VIEWPORT,
+            zgui_space::ClipId::ROOT,
         );
         super::record(
             &mut rec,

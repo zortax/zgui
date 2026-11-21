@@ -14,10 +14,11 @@ use zgui_color::Color;
 use zgui_dom::{Document, NodeKind};
 use zgui_geom::{DevicePx, Point, Rect, Size};
 use zgui_interned::ElementName;
+use zgui_paint::VectorId;
 use zgui_paint::content::VectorPlacement as Placement;
 use zgui_paint::emit::vector::{ShapePaint, VectorPlacement};
 use zgui_paint::{VectorCache, VectorSource};
-use zgui_scene::{ClipId, SpatialId, VectorId};
+use zgui_space::{ClipId, SpatialId};
 use zgui_testkit_compositor::Pixels;
 use zgui_vocab::{PropKey, PropValue, prop::drawing};
 

@@ -25,13 +25,14 @@ pub(crate) use self::key::Part;
 pub(crate) use self::mirror::images::whole;
 pub(crate) use self::resolve::Resolver;
 
+use crate::Tables;
 use compositor_types::{ChunkKey, OutputId, ScrollId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_layout::{FragKey, Fragment, LayoutStore};
-use zgui_scene::spatial::PropertyOwner;
-use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId};
+use zgui_space::spatial::PropertyOwner;
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::{Items, Recorder};
 use crate::sync::mirror::{Held, Mirror};
@@ -82,8 +83,6 @@ pub struct SyncReport {
     pub table_writes: usize,
     /// Order entries replaced.
     pub order_entries: usize,
-    /// Primitives of kinds the chunks do not record yet, and filter steps groups leave out.
-    pub omitted_primitives: usize,
     /// Nodes and slots removed because no chunk and no node names them any more.
     pub released: usize,
     /// Shared parameter blocks written because they changed.
@@ -122,13 +121,13 @@ impl CompositorSync {
     /// Finishes the frame's transaction and returns it.
     ///
     /// The chunks of fragments retired this frame that no fragment recorded again are removed.
-    /// Then the walk's changes to `scene`'s tables and to the order of `store` are written, and
+    /// Then the walk's changes to `tables` and to the order of `store` are written, and
     /// the nodes and slots nothing names any more are removed.
     ///
     /// Returns `None` when no transaction is open.
-    pub fn close(&mut self, store: &LayoutStore, scene: &mut Scene) -> Option<Transaction> {
+    pub fn close(&mut self, store: &LayoutStore, tables: &mut Tables) -> Option<Transaction> {
         let mut transaction = self.transaction.take()?;
-        self.release_forgotten(scene);
+        self.release_forgotten(tables);
         for key in self.retired.drain() {
             self.owners.remove(&key);
             self.extras.remove(&key);
@@ -141,7 +140,7 @@ impl CompositorSync {
         }
         self.report.params_written += self.mirror.params.sync(&mut transaction);
         // The walk's replays rewrite the slots of the clips they carry along.
-        self.report.table_writes += self.mirror.sync(&mut transaction, scene);
+        self.report.table_writes += self.mirror.sync(&mut transaction, tables);
         let extras = &self.extras;
         let outlined =
             |owner: BoxKey| extras.contains_key(&key::at(owner.as_u64(), 0, Part::Outline));
@@ -151,13 +150,13 @@ impl CompositorSync {
             tx: &mut transaction,
             store,
             mirror: &mut self.mirror,
-            scene,
+            tables,
             outlined: &outlined,
             backdropped: &backdropped,
         });
         self.report.order_entries += order.entries;
         self.report.table_writes += order.effects;
-        self.report.released += self.mirror.settle(&mut transaction, scene);
+        self.report.released += self.mirror.settle(&mut transaction, tables);
         Some(transaction)
     }
 
@@ -169,7 +168,7 @@ impl CompositorSync {
     /// Forgets every chunk, node and slot, for a compositor that dropped them.
     ///
     /// The open transaction is dropped, and the next transaction mirrors everything again. The
-    /// zgui table holds of the forgotten mirror are given back with the next scene the sync is
+    /// zgui table holds of the forgotten mirror are given back with the next tables the sync is
     /// handed.
     pub fn reset(&mut self) {
         let mut held = self.mirror.held();
@@ -187,10 +186,10 @@ impl CompositorSync {
     /// Returns the scroll node that applies the scroll offset of the box `container`.
     ///
     /// `None` until a chunk drawn in the container's content space is recorded.
-    pub fn scroll_node(&self, scene: &Scene, container: BoxKey) -> Option<ScrollId> {
+    pub fn scroll_node(&self, tables: &Tables, container: BoxKey) -> Option<ScrollId> {
         self.mirror
             .spaces
-            .scroll_of(&scene.spatial, PropertyOwner::of(container))
+            .scroll_of(&tables.spatial, PropertyOwner::of(container))
     }
 
     /// Makes every window that draws a [`SharedParams`](crate::content::shader::SharedParams)
@@ -225,10 +224,10 @@ impl CompositorSync {
         self.mirror.spaces.adopt(scroll, serial);
     }
 
-    /// Gives the table holds of a mirror forgotten by `reset` back to `scene`.
-    fn release_forgotten(&mut self, scene: &mut Scene) {
+    /// Gives the table holds of a mirror forgotten by `reset` back to `tables`.
+    fn release_forgotten(&mut self, tables: &mut Tables) {
         if let Some(held) = self.forgotten.take() {
-            held.release(scene);
+            held.release(tables);
         }
     }
 
@@ -256,25 +255,21 @@ impl CompositorSync {
         Some(Resolver::new(transaction, &mut self.mirror))
     }
 
-    /// Writes what the scene's tables changed since the last frame.
-    pub(crate) fn mirror_tables(&mut self, scene: &mut Scene) {
-        self.release_forgotten(scene);
+    /// Writes what `tables` changed since the last frame.
+    pub(crate) fn mirror_tables(&mut self, tables: &mut Tables) {
+        self.release_forgotten(tables);
         if let Some(transaction) = &mut self.transaction {
-            self.report.table_writes += self.mirror.sync(transaction, scene);
+            self.report.table_writes += self.mirror.sync(transaction, tables);
         }
     }
 
     /// Records `items` as the painting of `fragment`.
-    ///
-    /// `prims` holds what the fragment pushed into the scene, which are kinds the chunks do not
-    /// record yet.
     pub(crate) fn record(
         &mut self,
         store: &LayoutStore,
         fragment: &Fragment,
         items: &Items,
-        prims: &ChunkPrims,
-        scene: &mut Scene,
+        tables: &mut Tables,
     ) {
         let Some(transaction) = &mut self.transaction else {
             return;
@@ -293,10 +288,9 @@ impl CompositorSync {
         if self.owners.insert(key, fragment.key) != Some(fragment.key) && !replaces {
             self.order.fragments_changed(fragment.box_);
         }
-        flush::record(transaction, &mut self.mirror, scene, key, items);
+        flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
         self.report.recorded += 1;
-        self.report.omitted_primitives += prims.len();
         self.chunks.insert(
             fragment.key,
             Chunk {
@@ -320,7 +314,7 @@ impl CompositorSync {
         fragment: &Fragment,
         part: Part,
         items: &Items,
-        scene: &mut Scene,
+        tables: &mut Tables,
     ) {
         let Some(transaction) = &mut self.transaction else {
             return;
@@ -353,7 +347,7 @@ impl CompositorSync {
         if !replaces && !self.extras.contains_key(&key) {
             self.order.part_changed(fragment.box_, part);
         }
-        flush::record(transaction, &mut self.mirror, scene, key, items);
+        flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
         self.report.recorded += 1;
         self.owners.insert(key, fragment.key);
@@ -443,7 +437,7 @@ impl CompositorSync {
 pub fn record_chunk(
     transaction: &mut Transaction,
     key: ChunkKey,
-    scene: &mut Scene,
+    tables: &mut Tables,
     (space, clip): (SpatialId, ClipId),
     emit: impl FnOnce(&mut Recorder<'_>),
 ) {
@@ -451,13 +445,13 @@ pub fn record_chunk(
     let mut items = Items::default();
     let resolver = Resolver::new(transaction, &mut mirror);
     emit(&mut Recorder::new(
-        scene,
+        tables,
         &mut items,
         Some(resolver),
         space,
         clip,
     ));
-    flush::record(transaction, &mut mirror, scene, key, &items);
+    flush::record(transaction, &mut mirror, tables, key, &items);
     mirror.recorded(key);
 }
 

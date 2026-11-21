@@ -7,8 +7,8 @@ use core::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
 
 use compositor_types::MarkPayload;
+use kurbo::{self, BezPath, Point, Shape as _};
 use rustc_hash::{FxHashMap, FxHasher};
-use zgui_scene::kurbo::{self, BezPath, Point, Shape as _};
 
 use super::recognitions::evict;
 use crate::emit::vector::split::{

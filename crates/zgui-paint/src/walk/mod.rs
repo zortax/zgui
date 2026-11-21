@@ -24,6 +24,7 @@ pub mod stacking;
 
 use std::borrow::Cow;
 
+use crate::Tables;
 use compositor_types::RenderCapabilities;
 use zgui_atlas::AtlasKey;
 use zgui_bits::DamageSet;
@@ -33,7 +34,7 @@ use zgui_layout::fragment::FragmentFlags;
 use zgui_layout::fragment::diff::pixels;
 use zgui_layout::{FragKey, Fragment, FragmentKind, LayoutStore};
 use zgui_profile::{Counter, counter};
-use zgui_scene::{PropertyOwner, Scene};
+use zgui_space::PropertyOwner;
 
 use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, VectorSource};
 use crate::emit::group::{self, Isolation};
@@ -133,7 +134,7 @@ pub struct PaintInput<'a> {
     /// while the damage they are culled against is measured on the device — see
     /// [`marks::extent`](crate::damage::marks::extent). A caller with no composed frame yet passes
     /// nothing and the marks stay untransformed, which is exact for everything upright.
-    pub placements: Option<&'a zgui_scene::Placements>,
+    pub placements: Option<&'a zgui_space::Placements>,
 }
 
 impl<'a> PaintInput<'a> {
@@ -171,7 +172,7 @@ impl<'a> PaintInput<'a> {
 /// What one emit walk did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaintReport {
-    /// How many compositor items and scene primitives the visited fragments draw.
+    /// How many compositor items the visited fragments draw.
     pub primitives: usize,
     /// Which fragments contributed, when the walk was asked to record them.
     pub emitted: Vec<FragKey>,
@@ -230,7 +231,7 @@ impl PaintReport {
         &self,
         store: &LayoutStore,
         damage: &DamageSet,
-        placements: &zgui_scene::Placements,
+        placements: &zgui_space::Placements,
     ) {
         assert!(
             self.recorded,
@@ -300,8 +301,8 @@ struct WalkScratch {
     decorations: Decorations,
     text_fills: TextFills,
     named: Vec<AtlasKey>,
-    shapes: rustc_hash::FxHashMap<zgui_scene::SpatialId, u64>,
-    spaces: rustc_hash::FxHashMap<zgui_scene::SpatialId, Option<zgui_geom::Affine2>>,
+    shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
+    spaces: rustc_hash::FxHashMap<zgui_space::SpatialId, Option<zgui_geom::Affine2>>,
 }
 
 impl WalkScratch {
@@ -371,7 +372,7 @@ impl Painter {
     }
 
     /// Walks the document in painting order and emits everything the damage reaches.
-    pub fn emit(&mut self, input: &PaintInput<'_>, scene: &mut Scene) -> PaintReport {
+    pub fn emit(&mut self, input: &PaintInput<'_>, tables: &mut Tables) -> PaintReport {
         let Some(root) = input.store.root() else {
             return PaintReport {
                 recorded: input.record_emitted,
@@ -381,13 +382,13 @@ impl Painter {
         };
         self.cache.begin_frame();
         if let Some(sync) = &mut self.sync {
-            sync.mirror_tables(scene);
+            sync.mirror_tables(tables);
         }
         let scratch = std::mem::take(&mut self.scratch);
         let mut pass = Pass {
             painter: self,
             input,
-            scene,
+            tables,
             report: PaintReport {
                 recorded: input.record_emitted,
                 surface: input.surface,
@@ -440,7 +441,7 @@ impl Painter {
             };
             report
                 .layers_owed
-                .extend(layers.settle(scene.viewport(), input.damage, &mut write));
+                .extend(layers.settle(tables.viewport(), input.damage, &mut write));
         }
         self.cache.end_frame();
         self.styles.sweep();
@@ -455,28 +456,23 @@ impl Painter {
     pub fn retire(
         &mut self,
         keys: &[zgui_layout::FragKey],
-        scene: &mut Scene,
+        tables: &mut Tables,
         owner: &dyn ResourceOwner,
     ) {
         if let Some(sync) = &mut self.sync {
             sync.retire(keys);
         }
-        self.cache.retire(keys, scene, owner);
-    }
-
-    /// Notes every record's chunk into the scene again, for a renderer that lost its residence.
-    pub fn renote_chunks(&self, scene: &mut Scene) {
-        self.cache.renote_chunks(scene);
+        self.cache.retire(keys, tables, owner);
     }
 
     /// Drops the coldest records until `bytes` chunk bytes have gone, and reports how many went.
     pub fn evict_cold_chunks(
         &mut self,
         bytes: u64,
-        scene: &mut Scene,
+        tables: &mut Tables,
         owner: &dyn ResourceOwner,
     ) -> u64 {
-        self.cache.evict_cold(bytes, scene, owner)
+        self.cache.evict_cold(bytes, tables, owner)
     }
 
     /// Drops the coldest records holding a raster `holds` names until their rasters sum to
@@ -487,7 +483,7 @@ impl Painter {
         &mut self,
         bytes: u64,
         bytes_of: &dyn Fn(AtlasKey) -> Option<u64>,
-        scene: &mut Scene,
+        tables: &mut Tables,
         owner: &dyn ResourceOwner,
     ) -> usize {
         let cold = self.cache.cold_holding(&|key| bytes_of(key).is_some());
@@ -505,7 +501,7 @@ impl Painter {
                 }
             }
         }
-        self.cache.evict(&picked, scene, owner)
+        self.cache.evict(&picked, tables, owner)
     }
 
     /// Drops the records of `fragments`, so the next frame whose damage reaches them encodes them
@@ -513,15 +509,15 @@ impl Painter {
     pub fn evict_records(
         &mut self,
         fragments: &[FragKey],
-        scene: &mut Scene,
+        tables: &mut Tables,
         owner: &dyn ResourceOwner,
     ) -> usize {
-        self.cache.evict(fragments, scene, owner)
+        self.cache.evict(fragments, tables, owner)
     }
 
     /// Drops every record, releasing everything each one held into caches that survive.
-    pub fn clear_records(&mut self, scene: &mut Scene, owner: &dyn ResourceOwner) {
-        self.cache.clear_releasing(scene, owner);
+    pub fn clear_records(&mut self, tables: &mut Tables, owner: &dyn ResourceOwner) {
+        self.cache.clear_releasing(tables, owner);
     }
 }
 
@@ -532,7 +528,7 @@ struct Pass<'a, 'b> {
     /// What the walk reads.
     input: &'a PaintInput<'b>,
     /// What it writes.
-    scene: &'a mut Scene,
+    tables: &'a mut Tables,
     /// What it did.
     report: PaintReport,
     /// The box the walk starts at, which is the only box entered without a [`Visitor::descends`]
@@ -554,9 +550,9 @@ struct Pass<'a, 'b> {
     /// The rasters the fragment currently being encoded has named, reused between fragments.
     named: Vec<AtlasKey>,
     /// The fingerprint of what each coordinate system does to shapes, by name, for this frame.
-    shapes: rustc_hash::FxHashMap<zgui_scene::SpatialId, u64>,
+    shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
     /// What each coordinate system resolves to in the plane, by name, for this frame.
-    spaces: rustc_hash::FxHashMap<zgui_scene::SpatialId, Option<zgui_geom::Affine2>>,
+    spaces: rustc_hash::FxHashMap<zgui_space::SpatialId, Option<zgui_geom::Affine2>>,
 }
 
 impl Pass<'_, '_> {
@@ -567,13 +563,13 @@ impl Pass<'_, '_> {
     /// the scale, the turn and the projection it was encoded under: the density a drawing is
     /// rasterised at and whether a run of text stays upright. A pan moves only the translation,
     /// and every recording under it replays.
-    fn shape_hash(&mut self, space: zgui_scene::SpatialId) -> u64 {
+    fn shape_hash(&mut self, space: zgui_space::SpatialId) -> u64 {
         if let Some(&held) = self.shapes.get(&space) {
             return held;
         }
-        use zgui_scene::Content;
+        use zgui_space::Content;
         let mut matrix = self
-            .scene
+            .tables
             .spatial
             .resolve(space)
             .unwrap_or(zgui_geom::Matrix4::IDENTITY);
@@ -592,7 +588,7 @@ impl Pass<'_, '_> {
     fn layer_phase(
         &mut self,
         fragment: &Fragment,
-        space: zgui_scene::SpatialId,
+        space: zgui_space::SpatialId,
     ) -> Option<[u8; 2]> {
         if fragment.kind != FragmentKind::Vector {
             return None;
@@ -601,7 +597,7 @@ impl Pass<'_, '_> {
             Some(held) => *held,
             None => {
                 let resolved = self
-                    .scene
+                    .tables
                     .spatial
                     .resolve(space)
                     .as_ref()
@@ -731,7 +727,7 @@ impl Pass<'_, '_> {
             return rect;
         };
         let built = fragment.on_device(rect, placements);
-        if fragment.anchor != zgui_scene::SpatialId::VIEWPORT
+        if fragment.anchor != zgui_space::SpatialId::VIEWPORT
             && fragment.transform == Some(fragment.anchor)
         {
             // The union of `built` with itself, in bits: the rectangle its own corners give.
@@ -856,7 +852,7 @@ impl Pass<'_, '_> {
             return 0;
         }
         let store = self.input.store;
-        let mut hash = zgui_scene::ContentHash::new().u32(slices.len() as u32);
+        let mut hash = zgui_space::ContentHash::new().u32(slices.len() as u32);
         for slice in slices {
             let style = self
                 .painter
@@ -1011,7 +1007,7 @@ impl Pass<'_, '_> {
         emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
         let painter = &mut *self.painter;
         let mut rec = Recorder::new(
-            self.scene,
+            self.tables,
             &mut painter.outline,
             painter.sync.as_mut().and_then(CompositorSync::resolver),
             crate::lower::transform::of(fragment),
@@ -1024,7 +1020,7 @@ impl Pass<'_, '_> {
                 fragment,
                 crate::sync::Part::Outline,
                 &painter.outline,
-                self.scene,
+                self.tables,
             );
         }
     }
@@ -1035,8 +1031,8 @@ impl Pass<'_, '_> {
         &self,
         fragment: &Fragment,
         offset: zgui_geom::Size<DevicePx, Device>,
-        transform: zgui_scene::SpatialId,
-        clip: zgui_scene::ClipId,
+        transform: zgui_space::SpatialId,
+        clip: zgui_space::ClipId,
     ) {
         let (Some(tiles), Some(layers)) = (
             self.painter.cache.tiles(fragment.key),
@@ -1052,7 +1048,7 @@ impl Pass<'_, '_> {
         for &(key, local) in tiles.iter() {
             crate::emit::vector::show_tile(
                 layers,
-                self.scene,
+                self.tables,
                 placement,
                 key,
                 local.translate(offset),
@@ -1148,7 +1144,7 @@ impl Pass<'_, '_> {
             anim,
             alpha: self.alpha().to_bits(),
             subpixel: crate::emit::text::keeps_subpixel(
-                self.scene,
+                self.tables,
                 transform,
                 self.input.capabilities.subpixel_text,
                 self.opaque(),
@@ -1182,22 +1178,17 @@ impl Pass<'_, '_> {
         } else {
             self.painter
                 .cache
-                .reuse(self.scene, fragment, painted, phase)
+                .reuse(self.tables, fragment, painted, phase)
         };
         match reuse {
             Reuse::Replay(offset) => {
                 self.verify_replay(fragment);
-                let (source, chunk, items) = self
+                let items = self
                     .painter
                     .cache
-                    .chunk(fragment.key)
-                    .expect("a replayable fragment has a recorded chunk");
-                let mut pushed = items;
-                if !chunk.is_empty() {
-                    let range = self.scene.replay_chunk(chunk, offset, source);
-                    pushed += (range.end - range.start) as usize;
-                }
-                self.report.primitives += pushed;
+                    .items(fragment.key)
+                    .expect("a replayable fragment has a record");
+                self.report.primitives += items;
                 self.show_replayed_tiles(fragment, offset, transform, clip);
                 self.painter.cache.replayed(fragment);
                 if let Some(sync) = &mut self.painter.sync {
@@ -1226,23 +1217,19 @@ impl Pass<'_, '_> {
                 // draws that had nowhere to go, and it leaves a hole in the chunk that nothing
                 // downstream can see.
                 let refusals = self.input.resources.refusals();
-                // Everything the emitters push into the scene between here and the take is the
-                // fragment's own, captured before the cull so the record is the painting and never
-                // one position's clipped part of it.
-                self.scene
-                    .begin_chunk_capture(self.painter.cache.take_capture_scratch());
+                self.tables.begin_minting();
                 let painter = &mut *self.painter;
                 let mut rec = Recorder::new(
-                    self.scene,
+                    self.tables,
                     &mut painter.items,
                     painter.sync.as_mut().and_then(CompositorSync::resolver),
                     transform,
                     clip,
                 );
                 let emitted = order::fragment_tracked(&mut rec, fragment, &emission);
-                let chunk = self.scene.take_chunk_capture();
+                let minted = self.tables.take_minted();
                 if let Some(sync) = &mut painter.sync {
-                    sync.record(store, fragment, &painter.items, &chunk, self.scene);
+                    sync.record(store, fragment, &painter.items, self.tables);
                 }
                 let items = painter.items.len();
                 self.report.primitives += emitted.pushed;
@@ -1260,11 +1247,11 @@ impl Pass<'_, '_> {
                     self.report.layers_owed.push(owed);
                 }
                 self.painter.cache.encoded(
-                    self.scene,
+                    self.tables,
                     fragment,
                     painted,
                     Encoding {
-                        chunk,
+                        minted,
                         items,
                         drawn,
                         resources: &self.named,
@@ -1292,7 +1279,7 @@ impl Pass<'_, '_> {
 
 /// What recording a box's backdrop writes into and reads.
 struct Backdropped<'a> {
-    scene: &'a mut Scene,
+    tables: &'a mut Tables,
     items: &'a mut Items,
     sync: Option<&'a mut CompositorSync>,
     store: &'a LayoutStore,
@@ -1309,7 +1296,7 @@ fn backdrop(
     computed: &zgui_css::ComputedStyle,
 ) -> usize {
     let Backdropped {
-        scene,
+        tables,
         items,
         mut sync,
         store,
@@ -1317,7 +1304,7 @@ fn backdrop(
         scale,
     } = into;
     let mut rec = Recorder::new(
-        scene,
+        tables,
         items,
         sync.as_deref_mut().and_then(CompositorSync::resolver),
         crate::lower::transform::of(fragment),
@@ -1325,7 +1312,7 @@ fn backdrop(
     );
     let recorded = group::backdrop(&mut rec, style, computed, fragment, shaders, scale);
     if let Some(sync) = sync {
-        sync.record_extra(store, fragment, crate::sync::Part::Backdrop, items, scene);
+        sync.record_extra(store, fragment, crate::sync::Part::Backdrop, items, tables);
     }
     recorded
 }
@@ -1466,7 +1453,7 @@ impl stacking::Visitor for Pass<'_, '_> {
         if let Some(fragment) = own {
             self.report.primitives += backdrop(
                 Backdropped {
-                    scene: self.scene,
+                    tables: self.tables,
                     items: &mut self.painter.outline,
                     sync: self.painter.sync.as_mut(),
                     store,

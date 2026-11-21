@@ -18,11 +18,12 @@
 mod effect;
 mod splice;
 
+use crate::Tables;
 use compositor_types::{OrderEntry, OrderId, OrderNode, OutputId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
 use zgui_layout::{LayoutStore, OrderVersion};
-use zgui_scene::{ChangeCoverage, Scene};
+use zgui_space::ChangeCoverage;
 
 use crate::emit::group::GroupEffect;
 use crate::sync::key::{self, Part};
@@ -92,7 +93,7 @@ pub(crate) struct Context<'a> {
     pub(crate) tx: &'a mut Transaction,
     pub(crate) store: &'a LayoutStore,
     pub(crate) mirror: &'a mut Mirror,
-    pub(crate) scene: &'a mut Scene,
+    pub(crate) tables: &'a mut Tables,
     /// Whether a box has an outline chunk.
     pub(crate) outlined: &'a dyn Fn(BoxKey) -> bool,
     /// Whether a box has a backdrop chunk.
@@ -309,7 +310,7 @@ impl Order {
             let (effect, written) = effect::write(
                 context.tx,
                 context.mirror,
-                context.scene,
+                context.tables,
                 node.id,
                 node.effect.take(),
                 self.effects.get(&key),

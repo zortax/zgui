@@ -14,6 +14,7 @@ pub use self::recording::Recording;
 
 use std::sync::Arc;
 
+use crate::Tables;
 use compositor_types::{
     Backdrop, ClipRef, ClipShape, ExternalQuad, Filter, Glyph, GlyphRun, Line, LocalClip,
     LocalParent, MarkPayload, Marks, PaintRef, ParamsBlock, PathItem, Quad, ShaderQuad, Shadow,
@@ -21,18 +22,18 @@ use compositor_types::{
 };
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Rect, Vec2};
-use zgui_scene::{ClipId, ClipLink, Scene, SpatialId};
+use zgui_space::{ClipId, ClipLink, SpatialId};
 
 use crate::sync::Resolver;
 
-/// Where emitters record one chunk's items, and the scene whose tables they read.
+/// Where emitters record one chunk's items, and the tables they read.
 ///
 /// The chunk has a default coordinate system and a default clip chain, which are the fragment's
 /// own. An item drawn in them refers to them as `INHERIT`.
 ///
 /// Without a compositor, the items are built and nothing refers to a node or a slot.
 pub struct Recorder<'a> {
-    scene: &'a mut Scene,
+    tables: &'a mut Tables,
     items: &'a mut Items,
     resolver: Option<Resolver<'a>>,
 }
@@ -41,7 +42,7 @@ impl<'a> Recorder<'a> {
     /// Creates a recorder that empties `items` and records into them, with `space` and `clip` as
     /// the chunk's defaults.
     pub(crate) fn new(
-        scene: &'a mut Scene,
+        tables: &'a mut Tables,
         items: &'a mut Items,
         resolver: Option<Resolver<'a>>,
         space: SpatialId,
@@ -49,7 +50,7 @@ impl<'a> Recorder<'a> {
     ) -> Self {
         items.reset(space, clip);
         Self {
-            scene,
+            tables,
             items,
             resolver,
         }
@@ -58,21 +59,20 @@ impl<'a> Recorder<'a> {
     /// Returns a recorder into the same items for a shorter time.
     pub(crate) fn reborrow(&mut self) -> Recorder<'_> {
         Recorder {
-            scene: self.scene,
+            tables: self.tables,
             items: self.items,
             resolver: self.resolver.as_mut().map(Resolver::reborrow),
         }
     }
 
-    /// Returns the scene, whose tables the emitters read and whose display list receives the
-    /// content the recorder does not take.
-    pub fn scene(&mut self) -> &mut Scene {
-        self.scene
+    /// Returns the tables the emitters read and intern into.
+    pub fn tables(&mut self) -> &mut Tables {
+        self.tables
     }
 
-    /// Returns the scene for reading.
-    pub fn scene_ref(&self) -> &Scene {
-        self.scene
+    /// Returns the tables for reading.
+    pub fn tables_ref(&self) -> &Tables {
+        self.tables
     }
 
     /// Returns the reference an item drawn in the coordinate system `space` holds.
@@ -88,7 +88,7 @@ impl<'a> Recorder<'a> {
         let Some(resolver) = &mut self.resolver else {
             return SpaceRef::INHERIT;
         };
-        let id = resolver.space(self.scene, slot);
+        let id = resolver.space(self.tables, slot);
         refer(self.items, Ref::Space(id));
         SpaceRef(id.slot())
     }
@@ -106,7 +106,7 @@ impl<'a> Recorder<'a> {
         let Some(resolver) = &mut self.resolver else {
             return ClipRef::INHERIT;
         };
-        match resolver.clip(self.scene, clip) {
+        match resolver.clip(self.tables, clip) {
             Some(id) => {
                 refer(self.items, Ref::Clip(id));
                 ClipRef(id.slot())
@@ -125,7 +125,7 @@ impl<'a> Recorder<'a> {
         match self.local_clip_in(reference, link) {
             Some(clip) => clip,
             None => {
-                let chain = self.scene.clips.push(parent, link);
+                let chain = self.tables.clips.push(parent, link);
                 self.clip(chain)
             }
         }
@@ -180,11 +180,11 @@ impl<'a> Recorder<'a> {
     /// Returns the reference that paints the interned paint `paint`.
     ///
     /// A solid colour is carried in the reference. Every other paint refers to a slot.
-    pub fn paint(&mut self, paint: zgui_scene::PaintRef) -> PaintRef {
+    pub fn paint(&mut self, paint: crate::paints::PaintRef) -> PaintRef {
         let Some(id) = paint.id() else {
             return PaintRef::NONE;
         };
-        if let Some(zgui_scene::Paint::Solid(color)) = self.scene.paints.get(id) {
+        if let Some(crate::paints::Paint::Solid(color)) = self.tables.paints.get(id) {
             return self.color(*color);
         }
         self.slot(paint)
@@ -193,14 +193,14 @@ impl<'a> Recorder<'a> {
     /// Returns the reference to the slot of `paint`, whose value a later frame may rewrite.
     ///
     /// An image paint, which the compositor has no slot for, paints nothing.
-    pub fn slot(&mut self, paint: zgui_scene::PaintRef) -> PaintRef {
+    pub fn slot(&mut self, paint: crate::paints::PaintRef) -> PaintRef {
         let Some(id) = paint.id() else {
             return PaintRef::NONE;
         };
         let Some(resolver) = &mut self.resolver else {
             return PaintRef::NONE;
         };
-        let Some((slot, kind)) = resolver.paint(self.scene, id) else {
+        let Some((slot, kind)) = resolver.paint(self.tables, id) else {
             return PaintRef::NONE;
         };
         refer(self.items, Ref::Paint(kind, slot));
@@ -223,7 +223,7 @@ impl<'a> Recorder<'a> {
     /// are zero.
     pub fn shader_slots(
         &mut self,
-        shader: zgui_scene::ShaderId,
+        shader: zgui_css::shader::ShaderId,
         params: ParamsBlock,
     ) -> Option<(u32, u32)> {
         let Some(resolver) = &mut self.resolver else {
@@ -243,7 +243,7 @@ impl<'a> Recorder<'a> {
     /// are zero.
     pub fn shader_slots_shared(
         &mut self,
-        shader: zgui_scene::ShaderId,
+        shader: zgui_css::shader::ShaderId,
         params: &crate::content::shader::SharedParams,
     ) -> Option<(u32, u32)> {
         let Some(resolver) = &mut self.resolver else {
@@ -370,10 +370,10 @@ fn finite_path(item: &PathItem) -> bool {
         let style = &stroke.style;
         finite(&[style.width, style.miter_limit, style.dash_offset]) && finite(&style.dash_pattern)
     });
-    let geometry = |path: &zgui_scene::kurbo::BezPath| {
-        use zgui_scene::kurbo::PathEl;
+    let geometry = |path: &kurbo::BezPath| {
+        use kurbo::PathEl;
 
-        let point = |point: &zgui_scene::kurbo::Point| point.x.is_finite() && point.y.is_finite();
+        let point = |point: &kurbo::Point| point.x.is_finite() && point.y.is_finite();
         path.elements().iter().all(|element| match element {
             PathEl::MoveTo(a) | PathEl::LineTo(a) => point(a),
             PathEl::QuadTo(a, b) => point(a) && point(b),

@@ -1,7 +1,7 @@
 //! The per-fragment paint records: each fragment's compiled painting, owned across frames.
 
+use zgui_paint::Tables;
 use zgui_paint::{ContentCache, Painter};
-use zgui_scene::Scene;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};
@@ -21,7 +21,7 @@ pub struct PaintChunksBudget<'a> {
     /// The records.
     painter: &'a mut Painter,
     /// The tables the records hold entries of.
-    scene: &'a mut Scene,
+    tables: &'a mut Tables,
     /// The atlas the records hold tiles of.
     content: &'a mut ContentCache,
     /// How many chunk bytes may be held.
@@ -34,14 +34,14 @@ impl<'a> PaintChunksBudget<'a> {
     /// The adapter over one window's paint records.
     pub fn new(
         painter: &'a mut Painter,
-        scene: &'a mut Scene,
+        tables: &'a mut Tables,
         content: &'a mut ContentCache,
         limit: u64,
         tracked: &'a mut Tracked,
     ) -> Self {
         Self {
             painter,
-            scene,
+            tables,
             content,
             limit,
             tracked,
@@ -82,11 +82,11 @@ impl Budgeted for PaintChunksBudget<'_> {
 
     fn evict(&mut self, units: u64, _epoch: SceneEpoch) -> u64 {
         self.painter
-            .evict_cold_chunks(units, self.scene, &self.content.tile_owner())
+            .evict_cold_chunks(units, self.tables, &self.content.tile_owner())
     }
 
     fn forget(&mut self) {
         self.painter
-            .clear_records(self.scene, &self.content.tile_owner());
+            .clear_records(self.tables, &self.content.tile_owner());
     }
 }

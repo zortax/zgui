@@ -4,9 +4,10 @@ mod support;
 
 use support::{Element, Harness};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
+use zgui_paint::Tables;
 use zgui_paint::emit::paint::gradient_paint;
 use zgui_paint::lower::background::{Extent, GradientShape, RadialEnding};
-use zgui_scene::{GradientKind, Paint, Scene};
+use zgui_paint::paints::{GradientKind, Paint};
 
 /// The first background layer of `mark`, styled with `background`.
 fn layer(background: &str) -> zgui_paint::lower::background::GradientSpec {
@@ -30,7 +31,7 @@ fn layer(background: &str) -> zgui_paint::lower::background::GradientSpec {
 
 /// The gradient a layer becomes over a 200 by 100 box at (10, 20).
 fn kind(spec: &zgui_paint::lower::background::GradientSpec) -> GradientKind {
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     let bounds: Rect<DevicePx, Device> = Rect::new(
         Point::new(DevicePx(10.0), DevicePx(20.0)),
         Size::new(DevicePx(200.0), DevicePx(100.0)),

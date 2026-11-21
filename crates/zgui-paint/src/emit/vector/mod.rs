@@ -44,13 +44,15 @@ pub(crate) use series::shown;
 
 use std::sync::OnceLock;
 
+use crate::paints::{Paint, PaintRef};
+use crate::{Tables, VectorId};
 use zgui_color::Color;
 use zgui_css::ComputedStyle;
 use zgui_css::values::color::{current, to_color};
 use zgui_css::values::custom;
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_profile::{Counter, counter};
-use zgui_scene::{ClipId, ClipLink, Paint, PaintRef, Scene, SpatialId, VectorId};
+use zgui_space::{ClipId, ClipLink, SpatialId};
 
 use crate::content::vectors::VectorMaskSource;
 use crate::emit::paint::{gradient_paint, needs_densifying};
@@ -156,7 +158,7 @@ pub(crate) struct ShapeSource<'a> {
     /// The shape in its own space.
     pub(crate) shape: &'a zgui_svg::Shape,
     /// What places it in the fragment's space.
-    pub(crate) fit: zgui_scene::kurbo::Affine,
+    pub(crate) fit: kurbo::Affine,
     /// Where the placed shape is kept once made, for a fit that is not the identity.
     pub(crate) cell: Option<&'a OnceLock<zgui_svg::Shape>>,
 }
@@ -166,7 +168,7 @@ impl<'a> ShapeSource<'a> {
     pub(crate) fn placed_shape(shape: &'a zgui_svg::Shape) -> Self {
         Self {
             shape,
-            fit: zgui_scene::kurbo::Affine::IDENTITY,
+            fit: kurbo::Affine::IDENTITY,
             cell: None,
         }
     }
@@ -174,10 +176,10 @@ impl<'a> ShapeSource<'a> {
     /// A shape in the painter's coordinates, moved by `offset` into the fragment's space.
     ///
     /// A translation is a uniform fit, so no route places the shape.
-    pub(crate) fn translated(shape: &'a zgui_svg::Shape, offset: zgui_scene::kurbo::Vec2) -> Self {
+    pub(crate) fn translated(shape: &'a zgui_svg::Shape, offset: kurbo::Vec2) -> Self {
         Self {
             shape,
-            fit: zgui_scene::kurbo::Affine::translate(offset),
+            fit: kurbo::Affine::translate(offset),
             cell: None,
         }
     }
@@ -195,7 +197,7 @@ impl<'a> ShapeSource<'a> {
     ///
     /// Only recognition under a fit that scales its axes differently reads it.
     pub(crate) fn placed(&self) -> &'a zgui_svg::Shape {
-        if self.fit == zgui_scene::kurbo::Affine::IDENTITY {
+        if self.fit == kurbo::Affine::IDENTITY {
             return self.shape;
         }
         let fit = self.fit;
@@ -262,7 +264,7 @@ pub(crate) struct LayerOutcome {
     /// The tile images the drawing recorded, with their rectangles in the fragment's space.
     pub(crate) tiles: Option<crate::emit::record::ShownTiles>,
     /// The region of local space whose prims a series cut to it draws.
-    pub(crate) window: Option<zgui_scene::kurbo::Rect>,
+    pub(crate) window: Option<kurbo::Rect>,
 }
 
 /// Resolves how a shape carrying `style` is painted.
@@ -298,11 +300,11 @@ pub struct VectorPlacement {
 /// A transform that leaves the z = 0 plane is flattened rather than refused, which is what the
 /// rasteriser does with the same matrix: what is lost is the transform, never the shape.
 pub(crate) fn under(
-    scene: &Scene,
+    tables: &Tables,
     transform: SpatialId,
     rect: Rect<DevicePx, Device>,
 ) -> Rect<DevicePx, Device> {
-    match scene
+    match tables
         .spatial
         .resolve(transform)
         .as_ref()
@@ -459,15 +461,15 @@ pub fn layer_image(
 /// placement's clip admits it on the surface.
 pub(crate) fn show_tile(
     layers: &dyn crate::content::vectors::VectorLayerSource,
-    scene: &Scene,
+    tables: &Tables,
     placement: VectorPlacement,
     key: crate::emit::record::ImageKey,
     local: Rect<DevicePx, Device>,
 ) {
-    let device = under(scene, placement.transform, local);
-    let admitted = scene
+    let device = under(tables, placement.transform, local);
+    let admitted = tables
         .clips
-        .bounds_placed(placement.clip, &|space| scene.spatial.resolve(space));
+        .bounds_placed(placement.clip, &|space| tables.spatial.resolve(space));
     layers.shown(key, device.intersection(admitted));
 }
 
@@ -475,7 +477,7 @@ pub(crate) fn show_tile(
 /// through it hold.
 ///
 /// The links are chunk-local clips, so they move with the chunk. A link in another coordinate
-/// system than the chunk's is a clip chain the scene mints.
+/// system than the chunk's is a clip chain minted in the clip table.
 pub(crate) fn clip_through(
     rec: &mut Recorder<'_>,
     placement: VectorPlacement,
@@ -488,9 +490,9 @@ pub(crate) fn clip_through(
             clip = local;
             continue;
         }
-        let scene = rec.scene();
-        chain = scene.clips.push(chain, link);
-        scene.note_minted_clip(chain);
+        let tables = rec.tables();
+        chain = tables.clips.push(chain, link);
+        tables.note_minted_clip(chain);
         clip = rec.clip(chain);
     }
     clip
@@ -515,7 +517,7 @@ fn candidate(
     }
     let gradient = |paint: &zgui_svg::Paint| matches!(paint, zgui_svg::Paint::Gradient(_));
     let affine = rec
-        .scene_ref()
+        .tables_ref()
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -572,7 +574,7 @@ pub(crate) fn draw_drawing_tracked(
         .filter(|_| candidate(rec, base, drawing, &paint, masks, placement));
     if let Some((input, layers)) = layers {
         let spatial = rec
-            .scene_ref()
+            .tables_ref()
             .spatial
             .resolve(placement.transform)
             .as_ref()
@@ -585,8 +587,8 @@ pub(crate) fn draw_drawing_tracked(
             spatial,
         });
         // The ink under the transform, rounded out: what a provisional or deferred drawing is owed.
-        let owed = |scene: &Scene, local: Rect<DevicePx, Device>| {
-            let ink = under(scene, placement.transform, local);
+        let owed = |tables: &Tables, local: Rect<DevicePx, Device>| {
+            let ink = under(tables, placement.transform, local);
             let left = ink.left().0.floor();
             let top = ink.top().0.floor();
             let right = ink.right().0.ceil();
@@ -614,7 +616,7 @@ pub(crate) fn draw_drawing_tracked(
                 if provisional {
                     counter::bump(Counter::VectorLayersProvisional);
                     emitted.layer.provisional = true;
-                    emitted.layer.owed = owed(rec.scene_ref(), local);
+                    emitted.layer.owed = owed(rec.tables_ref(), local);
                 }
                 return emitted;
             }
@@ -625,7 +627,7 @@ pub(crate) fn draw_drawing_tracked(
                 for tile in tiles.tiles() {
                     let local = rect_of(drawing.fit.transform_rect_bbox(tile.path_rect));
                     emitted.pushed += layer_image(rec, local, &tile.pixels, placement, input.alpha);
-                    show_tile(layers, rec.scene_ref(), placement, tile.pixels.key, local);
+                    show_tile(layers, rec.tables_ref(), placement, tile.pixels.key, local);
                     shown.push((tile.pixels.key, local));
                 }
                 emitted.layer.tiles = Some(shown.into());
@@ -640,7 +642,7 @@ pub(crate) fn draw_drawing_tracked(
                         .iter()
                         .map(|tile| drawing.fit.transform_rect_bbox(tile.path_rect))
                         .reduce(|a, b| a.union(b));
-                    emitted.layer.owed = ink.and_then(|ink| owed(rec.scene_ref(), rect_of(ink)));
+                    emitted.layer.owed = ink.and_then(|ink| owed(rec.tables_ref(), rect_of(ink)));
                 }
                 return emitted;
             }
@@ -648,7 +650,7 @@ pub(crate) fn draw_drawing_tracked(
                 counter::bump(Counter::VectorLayersDeferred);
                 emitted.routes.insert(VectorRoute::CpuLayer);
                 emitted.layer.deferred = true;
-                emitted.layer.owed = owed(rec.scene_ref(), local);
+                emitted.layer.owed = owed(rec.tables_ref(), local);
                 return emitted;
             }
             crate::content::vectors::LayerAnswer::Items(why) => {
@@ -741,7 +743,7 @@ pub(crate) fn draw_drawing_tracked(
 }
 
 /// A rectangle of path-space arithmetic in the fragment's space.
-fn rect_of(rect: zgui_scene::kurbo::Rect) -> Rect<DevicePx, Device> {
+fn rect_of(rect: kurbo::Rect) -> Rect<DevicePx, Device> {
     Rect::new(
         zgui_geom::Point::new(DevicePx(rect.x0 as f32), DevicePx(rect.y0 as f32)),
         zgui_geom::Size::new(
@@ -770,12 +772,12 @@ fn outline_id(base: VectorId, index: usize) -> VectorId {
 /// the rasteriser that draws it cannot walk the ramp itself. A ramp already in sRGB is passed
 /// through untouched, so a two-stop gradient stays two stops.
 pub fn gradient_for_vector(
-    scene: &mut Scene,
+    tables: &mut Tables,
     spec: &GradientSpec,
     bounds: Rect<DevicePx, Device>,
     scale: f32,
 ) -> Option<PaintRef> {
-    let reference = gradient_paint(scene, spec, bounds, scale)?;
+    let reference = gradient_paint(tables, spec, bounds, scale)?;
     if !needs_densifying(spec) {
         return Some(reference);
     }
@@ -785,13 +787,13 @@ pub fn gradient_for_vector(
         stops,
         repeating,
         ..
-    }) = scene.paints.get(id).cloned()
+    }) = tables.paints.get(id).cloned()
     else {
         // A one-stop ramp interned as a flat colour, which needs no densifying and has no curve.
         return Some(reference);
     };
     let dense = zgui_color::densify(&stops, spec.interpolation);
-    Some(scene.paints.add(Paint::Gradient {
+    Some(tables.paints.add(Paint::Gradient {
         kind,
         stops: dense.into_iter().collect(),
         space: zgui_color::ColorSpace::Srgb,
@@ -802,11 +804,12 @@ pub fn gradient_for_vector(
 
 #[cfg(test)]
 mod tests {
+    use crate::Tables;
+    use crate::paints::Paint;
     use smallvec::smallvec;
     use zgui_color::{Color, ColorSpace, GradientStop, Interpolation};
     use zgui_css::StyleDraft;
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-    use zgui_scene::{Paint, Scene};
 
     use super::{gradient_for_vector, shape_paint};
     use crate::lower::background::{GradientShape, GradientSpec, SpecStop};
@@ -839,8 +842,8 @@ mod tests {
     }
 
     /// The stops a paint reference resolves to.
-    fn stops_of(scene: &Scene, reference: zgui_scene::PaintRef) -> Vec<GradientStop> {
-        match scene.paints.get(reference.id().expect("a paint")) {
+    fn stops_of(tables: &Tables, reference: crate::paints::PaintRef) -> Vec<GradientStop> {
+        match tables.paints.get(reference.id().expect("a paint")) {
             Some(Paint::Gradient { stops, .. }) => stops.to_vec(),
             other => panic!("expected a gradient, found {other:?}"),
         }
@@ -857,20 +860,20 @@ mod tests {
 
     #[test]
     fn an_srgb_ramp_reaches_a_rasteriser_with_the_stops_it_was_written_with() {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(100, 100));
-        let reference = gradient_for_vector(&mut scene, &ramp(ColorSpace::Srgb), bounds(), 1.0)
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(100, 100));
+        let reference = gradient_for_vector(&mut tables, &ramp(ColorSpace::Srgb), bounds(), 1.0)
             .expect("a ramp");
-        assert_eq!(stops_of(&scene, reference).len(), 2);
+        assert_eq!(stops_of(&tables, reference).len(), 2);
     }
 
     #[test]
     fn an_oklab_ramp_is_resolved_into_srgb_stops_a_rasteriser_can_interpolate() {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(100, 100));
-        let reference = gradient_for_vector(&mut scene, &ramp(ColorSpace::Oklab), bounds(), 1.0)
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(100, 100));
+        let reference = gradient_for_vector(&mut tables, &ramp(ColorSpace::Oklab), bounds(), 1.0)
             .expect("a ramp");
-        let stops = stops_of(&scene, reference);
+        let stops = stops_of(&tables, reference);
         assert!(
             stops.len() > 2,
             "a curve that is not a straight line in sRGB needs more than its endpoints"

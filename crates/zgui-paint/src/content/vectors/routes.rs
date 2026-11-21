@@ -1,8 +1,8 @@
 //! What the vector routes remember between frames: route declines, recognitions, mark payloads
 //! and path splits.
 
+use crate::VectorId;
 use rustc_hash::FxHashMap;
-use zgui_scene::VectorId;
 
 /// Where the vector routes keep what they found, and the route history of each shape.
 pub trait VectorMaskSource {

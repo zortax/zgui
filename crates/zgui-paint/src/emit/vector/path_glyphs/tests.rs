@@ -3,8 +3,7 @@
 use core::cell::{RefCell, RefMut};
 use std::sync::Arc;
 
-use zgui_scene::kurbo::BezPath;
-use zgui_scene::peniko;
+use kurbo::BezPath;
 
 use super::{Part, lower, split_of};
 use crate::content::vectors::path_glyphs::PartStyle;

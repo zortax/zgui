@@ -13,10 +13,10 @@
 
 use std::sync::Arc;
 
+use crate::VectorId;
 use compositor_types::{MarkFlags, MarkPayload, MarkPlacement};
 use zgui_color::Color;
 use zgui_geom::{DevicePx, Point, Rect, Size};
-use zgui_scene::{VectorId, kurbo, peniko};
 
 use super::document::{density_of, reference, stroke_paint};
 use super::recognise::separated_with;
@@ -175,9 +175,9 @@ pub(super) fn emit_path_glyphs(
         let paint_ref = match which.rule {
             Some(_) => {
                 let fill = shape.fill.as_ref().expect("a fill part has a fill");
-                reference(rec.scene(), &fill.paint, paint.fill)
+                reference(rec.tables(), &fill.paint, paint.fill)
             }
-            None => stroke_paint(rec.scene(), source, paint),
+            None => stroke_paint(rec.tables(), source, paint),
         };
         let paint_ref = rec.paint(paint_ref);
         let mut item = super::marks::item(bounds, paint_ref, &part.payload, (clip, space));

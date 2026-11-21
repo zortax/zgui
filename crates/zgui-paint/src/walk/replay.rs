@@ -1,53 +1,25 @@
-//! Painting a fragment again, or replaying what it painted last time.
+//! The record of each fragment's last painting, which decides whether the fragment replays.
 //!
-//! # Why the cache lives here and not on the fragment
+//! A record carries the state the fragment was painted with: the lowered style, the rectangle, and
+//! the clip chain and coordinate system it was drawn through. It also carries fingerprints of what
+//! the fragment draws, such as the paragraph a line shows, because those can change while the
+//! geometry stays the same. A fragment whose state equals its record replays: the compositor keeps
+//! its chunk, moved by an offset when the fragment moved.
 //!
-//! The emit walk is a pure reader of the fragment tree — that is what lets the fragment tree have
-//! exactly one writer — so a fragment cannot be handed a range to remember. The record lives here
-//! instead, keyed by fragment, and it carries enough of the fragment's own state to decide for
-//! itself whether the record is still good: the lowered style it was painted with, the rectangle it
-//! was painted at, and the chain and transform it was drawn through.
-//!
-//! That is stronger than being told. A record that decides for itself cannot be invalidated by the
-//! wrong phase, or left valid by a phase that forgot.
-//!
-//! # Why the record holds what the fragment draws as well as where
-//!
-//! A fragment keeps its name for as long as it is the same piece of the same box, and *which
-//! paragraph a line draws* is not part of being the same line — a paragraph is interned by the
-//! shaping of its characters, so one changed character issues a new identifier for it while the
-//! line stays exactly where it was. A record that compared only the style, the chain, the transform
-//! and the size would find every one of those equal and replay the previous characters into a
-//! perfectly damaged rectangle. A counter going from `1` to `7` is the whole failure: same width,
-//! same line, same everything the geometry can see, and the old digit back on the screen.
-//!
-//! # How a chunk with a vector item in it replays
-//!
-//! A record's chunk is captured at the pushes, before the clip cull, so it is the fragment's
-//! complete painting: a row arriving at the edge of a scroll port replays the whole of itself and
-//! the cull admits the part that has come into view. A **vector item** replays too — re-pushed
-//! into the frame's pass planning exactly as a fresh emission pushes it. Its path is in path space
-//! and shared by pointer with the rasteriser's encoding cache, so a moved drawing replays with its
-//! placement moved and the rasteriser keeps its encoding.
-//!
-//! # The invariant a replay depends on
-//!
-//! A replayed chunk carries the clip, paint and transform indices of the frame it was encoded in.
-//! Those resolve because the side tables are kept across frames and an entry keeps its identity
-//! for as long as anything refers to it — so the recorded content hashes are checked, in debug
-//! builds, against what the indices resolve to now. A table rebuilt per frame would draw one
-//! fragment with another's paint, with no error anywhere, and this is what fails instead.
+//! The clip, paint and coordinate-system ids a record names stay valid because the tables keep
+//! them across frames while anything holds them. Debug builds check the recorded clip hash
+//! against what the ids resolve to now.
 
 pub mod hold;
 
 use rustc_hash::FxHashMap;
-use std::sync::Arc;
 use zgui_atlas::AtlasKey;
 use zgui_geom::{Device, DevicePx, Edges, Rect, Size};
 use zgui_layout::{FragKey, Fragment, FragmentKind};
 use zgui_profile::{Counter, counter};
 
-use zgui_scene::{ChunkPrims, ClipId, Scene, SpatialId, TableHolds};
+use crate::Tables;
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::ShownTiles;
 use crate::lower::cache::PaintStyleRef;
@@ -176,14 +148,8 @@ pub struct Painted {
 /// What one fragment painted last time it was painted.
 #[derive(Clone, Debug)]
 pub struct Record {
-    /// The scene primitives the fragment pushed, owned here.
-    ///
-    /// The items the compositor's chunk holds are not among them. Owned rather than a range of
-    /// the scene's log, because the log is cleared every frame: a range names whatever occupies
-    /// those positions now, and a record must stay replayable however many frames pass between
-    /// the encoding and the next visit. Shared, because a renderer keeping chunks resident holds
-    /// the same bytes as its upload source.
-    pub prims: Arc<ChunkPrims>,
+    /// The clip chains the encoding minted for its own content, held while the record stands.
+    pub minted: Vec<ClipId>,
     /// How many items the fragment recorded into its compositor chunk.
     pub items: usize,
     /// The rectangle the walk culled the fragment against when it was encoded, in the
@@ -191,12 +157,6 @@ pub struct Record {
     pub drawn: Rect<DevicePx, Device>,
     /// How far the replays since the encoding moved the fragment.
     pub moved: Size<DevicePx, Device>,
-    /// Which encoding produced [`Record::prims`], distinct per encoding for the life of the cache.
-    ///
-    /// A consumer that mirrors chunks elsewhere — a persistent GPU copy — keys its residence on
-    /// the pair of the fragment and this, so a re-encoded chunk is a new identity rather than a
-    /// mutation it has to detect.
-    pub revision: u64,
     /// What the fragment was drawing when the range was recorded.
     pub kind: FragmentKind,
     /// How it was painted.
@@ -250,7 +210,7 @@ pub struct Record {
     /// The record replays only while the region, moved as the fragment moved, holds what the
     /// viewport shows of the fragment through its chain. A move or a wider clip can show prims the
     /// cut left out.
-    pub window: Option<zgui_scene::kurbo::Rect>,
+    pub window: Option<kurbo::Rect>,
 }
 
 /// What the layer route did for one encoding.
@@ -267,7 +227,7 @@ pub struct LayerRecord {
     /// The tile images the encoding recorded, with their rectangles in the fragment's space.
     pub tiles: Option<ShownTiles>,
     /// The region of the fragment's space whose prims a series cut to it draws.
-    pub window: Option<zgui_scene::kurbo::Rect>,
+    pub window: Option<kurbo::Rect>,
 }
 
 /// How many drawn replays a promotable record waits before it encodes again.
@@ -281,9 +241,8 @@ pub const PROMOTE_REPLAYS: u8 = 3;
 /// nothing.
 #[derive(Clone, Debug)]
 pub struct Encoding<'a> {
-    /// The scene primitives the fragment pushed, captured at the pushes before the cull and the
-    /// order.
-    pub chunk: ChunkPrims,
+    /// The clip chains the encoding minted for its own content.
+    pub minted: Vec<ClipId>,
     /// How many items the fragment recorded into its compositor chunk.
     pub items: usize,
     /// The rectangle the walk culled the fragment against, in the fragment's anchor.
@@ -320,10 +279,6 @@ pub struct PaintCache {
     records: FxHashMap<FragKey, Record>,
     /// Fragments seen this frame, so the retained rest can be counted when the frame ends.
     seen: Vec<FragKey>,
-    /// The storage the next capture starts from — the arrays of the last record replaced.
-    capture_scratch: ChunkPrims,
-    /// The revision the next encoding is stamped with.
-    next_revision: u64,
     /// The frame number selections are stamped with.
     epoch: u64,
     /// The owned bytes of every record's chunk, maintained as records come and go.
@@ -353,10 +308,10 @@ impl PaintCache {
         self.records.is_empty()
     }
 
-    /// Discards every record, which is what a frame drawn into a fresh scene needs.
+    /// Discards every record, which is what a frame drawn into fresh tables needs.
     ///
     /// The holds the records were carrying go with them, so this may only be used where the cache
-    /// they were taken in is emptied too — a lost device, a scene rebuilt from nothing. Anywhere
+    /// they were taken in is emptied too — a lost device, tables rebuilt from nothing. Anywhere
     /// else it would leave tiles held by records that no longer exist, which is a cache where
     /// nothing is ever evictable again.
     pub fn clear(&mut self) {
@@ -387,14 +342,6 @@ impl PaintCache {
         self.selections
     }
 
-    /// The storage the next capture starts from, emptied by the capture that takes it.
-    ///
-    /// Handing the last replaced record's arrays back is what keeps an animating fragment's
-    /// re-encodes allocation-free once its painting has reached its size.
-    pub fn take_capture_scratch(&mut self) -> ChunkPrims {
-        core::mem::take(&mut self.capture_scratch)
-    }
-
     /// Ends the frame, counting the records the frame kept without visiting their fragment.
     ///
     /// A record survives culling, clean frames and invisibility: it owns its primitives, and its
@@ -411,29 +358,22 @@ impl PaintCache {
     /// `keys` is the layout store's account of every fragment destroyed since the last drain. A
     /// key with no record is the ordinary case — most fragments die without ever being painted —
     /// and costs one lookup.
-    pub fn retire(&mut self, keys: &[FragKey], scene: &mut Scene, owner: &dyn ResourceOwner) {
+    pub fn retire(&mut self, keys: &[FragKey], tables: &mut Tables, owner: &dyn ResourceOwner) {
         counter::add(Counter::FragmentsRetired, keys.len() as u64);
-        let mut holds = TableHolds::default();
         for key in keys {
             if let Some(record) = self.records.remove(key) {
-                self.drop_record(record, scene, owner, &mut holds);
+                self.drop_record(record, tables, owner);
             }
         }
     }
 
     /// Releases everything one removed record held, and keeps the byte account true.
-    fn drop_record(
-        &mut self,
-        record: Record,
-        scene: &mut Scene,
-        owner: &dyn ResourceOwner,
-        holds: &mut TableHolds,
-    ) {
-        self.bytes = self.bytes.saturating_sub(record.prims.bytes());
-        record.prims.named_ids(holds);
-        release_tables(scene, holds);
+    fn drop_record(&mut self, record: Record, tables: &mut Tables, owner: &dyn ResourceOwner) {
+        self.bytes = self
+            .bytes
+            .saturating_sub(bytes_of(record.minted.capacity()));
+        release_clips(tables, &record.minted);
         release(owner, &record.resources);
-        scene.note_chunk_retired(record.revision);
     }
 
     /// Drops the coldest records until `bytes_to_free` chunk bytes have gone, and reports how
@@ -446,7 +386,7 @@ impl PaintCache {
     pub fn evict_cold(
         &mut self,
         bytes_to_free: u64,
-        scene: &mut Scene,
+        tables: &mut Tables,
         owner: &dyn ResourceOwner,
     ) -> u64 {
         let mut cold: Vec<(u64, FragKey)> = self
@@ -457,7 +397,6 @@ impl PaintCache {
             .collect();
         cold.sort_unstable();
         let mut freed = 0_u64;
-        let mut holds = TableHolds::default();
         for (_, key) in cold {
             if freed >= bytes_to_free {
                 break;
@@ -465,9 +404,9 @@ impl PaintCache {
             let Some(record) = self.records.remove(&key) else {
                 continue;
             };
-            freed += record.prims.bytes() as u64;
+            freed += bytes_of(record.minted.capacity()) as u64;
             counter::bump(Counter::ChunksEvicted);
-            self.drop_record(record, scene, owner, &mut holds);
+            self.drop_record(record, tables, owner);
         }
         freed
     }
@@ -500,41 +439,28 @@ impl PaintCache {
     pub fn evict(
         &mut self,
         keys: &[FragKey],
-        scene: &mut Scene,
+        tables: &mut Tables,
         owner: &dyn ResourceOwner,
     ) -> usize {
-        let mut holds = TableHolds::default();
         let mut evicted = 0;
         for key in keys {
             if let Some(record) = self.records.remove(key) {
                 counter::bump(Counter::ChunksEvicted);
-                self.drop_record(record, scene, owner, &mut holds);
+                self.drop_record(record, tables, owner);
                 evicted += 1;
             }
         }
         evicted
     }
 
-    /// Notes every record's chunk into the scene again, for a renderer that lost its residence.
-    ///
-    /// A recovered device holds nothing: every replay would fall back to transient upload until
-    /// its fragment happened to encode again. Re-noting lets the next drawn frame make the whole
-    /// cache resident in one pass of uploads instead.
-    pub fn renote_chunks(&self, scene: &mut Scene) {
-        for record in self.records.values() {
-            scene.note_chunk_inserted(record.revision, Arc::clone(&record.prims));
-        }
-    }
-
     /// Drops every record, releasing everything each one held.
     ///
-    /// For a caller whose scene tables and atlas survive the painter — a budget's forget. Where
+    /// For a caller whose tables and atlas survive the painter — a budget's forget. Where
     /// they die together, [`PaintCache::clear`] is the cheaper spelling.
-    pub fn clear_releasing(&mut self, scene: &mut Scene, owner: &dyn ResourceOwner) {
-        let mut holds = TableHolds::default();
+    pub fn clear_releasing(&mut self, tables: &mut Tables, owner: &dyn ResourceOwner) {
         let records: Vec<Record> = self.records.drain().map(|(_, record)| record).collect();
         for record in records {
-            self.drop_record(record, scene, owner, &mut holds);
+            self.drop_record(record, tables, owner);
         }
         self.seen.clear();
     }
@@ -552,7 +478,7 @@ impl PaintCache {
     /// is shown.
     pub fn reuse(
         &self,
-        scene: &Scene,
+        tables: &Tables,
         fragment: &Fragment,
         painted: Painted,
         phase: Option<[u8; 2]>,
@@ -579,7 +505,7 @@ impl PaintCache {
         // are content-stable today, so this only misses once table eviction can reassign a slot —
         // at which point a miss here is what keeps the replay from drawing through another
         // fragment's chain.
-        if record.clip_hash != scene.clips.content_hash(painted.clip) {
+        if record.clip_hash != tables.clips.content_hash(painted.clip) {
             return Reuse::Encode;
         }
         let offset = Size::new(
@@ -587,12 +513,12 @@ impl PaintCache {
             DevicePx(fragment.border_box.origin.y.0 - record.border_box.origin.y.0),
         );
         if let Some(window) = record.window
-            && !holds_shown(scene, &painted, window, offset)
+            && !holds_shown(tables, &painted, window, offset)
         {
             return Reuse::Encode;
         }
         debug_assert!(
-            self.indices_still_resolve(scene, record),
+            self.indices_still_resolve(tables, record),
             "a replayed range's clip or transform no longer resolves to what it was recorded with"
         );
         Reuse::Replay(offset)
@@ -636,12 +562,9 @@ impl PaintCache {
             .and_then(|record| record.tiles.as_ref())
     }
 
-    /// The scene primitives recorded for `fragment`, their revision and how many compositor items
-    /// the fragment recorded, for a caller that has already decided to replay it.
-    pub fn chunk(&self, fragment: FragKey) -> Option<(u64, &Arc<ChunkPrims>, usize)> {
-        self.records
-            .get(&fragment)
-            .map(|record| (record.revision, &record.prims, record.items))
+    /// Returns how many compositor items `fragment` recorded, or `None` if it has no record.
+    pub fn items(&self, fragment: FragKey) -> Option<usize> {
+        self.records.get(&fragment).map(|record| record.items)
     }
 
     /// Records what a fragment painted this frame, and counts it as encoded.
@@ -651,7 +574,7 @@ impl PaintCache {
     /// letters it already had never lets its own tiles reach a refcount of zero in between.
     pub fn encoded(
         &mut self,
-        scene: &mut Scene,
+        tables: &mut Tables,
         fragment: &Fragment,
         painted: Painted,
         encoding: Encoding<'_>,
@@ -662,7 +585,7 @@ impl PaintCache {
         self.seen.push(fragment.key);
         self.selections += 1;
         let Encoding {
-            chunk,
+            minted,
             items,
             drawn,
             resources,
@@ -675,9 +598,8 @@ impl PaintCache {
             // what was there costs one re-encoding on the next frame that reaches it, by which
             // time the eviction the refusal triggered has made room.
             counter::bump(Counter::ChunksIncomplete);
-            let mut holds = TableHolds::default();
             if let Some(record) = self.records.remove(&fragment.key) {
-                self.drop_record(record, scene, owner, &mut holds);
+                self.drop_record(record, tables, owner);
             }
             return;
         }
@@ -688,59 +610,35 @@ impl PaintCache {
             owner.retain(*key);
         }
         counter::add(Counter::RecordTilesRetained, held.len() as u64);
-        // The replaced record's arrays become the next capture's storage, so re-encoding a
-        // fragment allocates only where its painting grew. Everything it held — atlas tiles and
-        // table entries alike — is released only after the new holds are taken, so a fragment
-        // re-encoding the letters it already had never lets its own tiles reach a refcount of
-        // zero in between.
-        let mut replaced_holds = TableHolds::default();
-        let replaced_resources = match self.records.remove(&fragment.key) {
-            Some(replaced) => {
-                self.bytes = self.bytes.saturating_sub(replaced.prims.bytes());
-                replaced.prims.named_ids(&mut replaced_holds);
-                scene.note_chunk_retired(replaced.revision);
-                // The replaced arrays are recycled as the next capture's storage where nothing
-                // else — a renderer holding the chunk resident — still shares them.
-                if let Ok(freed) = Arc::try_unwrap(replaced.prims) {
-                    self.capture_scratch = freed;
-                }
-                Some(replaced.resources)
-            }
-            None => None,
-        };
-        let prims = Arc::new(chunk);
-        let mut holds = TableHolds::default();
-        prims.named_ids(&mut holds);
-        for clip in &holds.clips {
-            scene.clips.retain(*clip);
+        // Everything the replaced record held is released only after the new holds are taken, so
+        // a fragment re-encoding the letters it already had never lets its own tiles reach a
+        // refcount of zero in between.
+        let replaced = self.records.remove(&fragment.key).map(|replaced| {
+            self.bytes = self
+                .bytes
+                .saturating_sub(bytes_of(replaced.minted.capacity()));
+            (replaced.minted, replaced.resources)
+        });
+        for clip in &minted {
+            tables.clips.retain(*clip);
         }
-        for paint in &holds.paints {
-            scene.paints.retain(*paint);
-        }
-        for params in &holds.shaders {
-            scene.shader_params.retain(*params);
-        }
-        let chunk_bytes = prims.bytes();
+        let chunk_bytes = bytes_of(minted.capacity());
         self.bytes += chunk_bytes;
         // A fragment is selected at most once per frame, so nothing selected earlier this frame
         // is being replaced here and the sum only grows.
         self.selected_bytes += chunk_bytes;
-        self.next_revision += 1;
-        scene.note_chunk_inserted(self.next_revision, Arc::clone(&prims));
-        scene.bind_capture(self.next_revision);
         self.records.insert(
             fragment.key,
             Record {
-                prims,
+                minted,
                 items,
                 drawn,
                 moved: Size::default(),
-                revision: self.next_revision,
                 kind: fragment.kind,
                 painted,
                 border_box: fragment.border_box,
                 border: fragment.border,
-                clip_hash: scene.clips.content_hash(painted.clip),
+                clip_hash: tables.clips.content_hash(painted.clip),
                 last_selected: self.epoch,
                 resources: held,
                 layer_phase: layer.phase,
@@ -752,8 +650,8 @@ impl PaintCache {
                 window: layer.window,
             },
         );
-        release_tables(scene, &replaced_holds);
-        if let Some(resources) = replaced_resources {
+        if let Some((minted, resources)) = replaced {
+            release_clips(tables, &minted);
             release(owner, &resources);
         }
     }
@@ -779,7 +677,7 @@ impl PaintCache {
             // accumulated several.
             if record.last_selected != self.epoch {
                 record.last_selected = self.epoch;
-                self.selected_bytes += record.prims.bytes();
+                self.selected_bytes += bytes_of(record.minted.capacity());
             }
             if record.promote {
                 record.rasterised_frames = record.rasterised_frames.saturating_add(1);
@@ -796,9 +694,9 @@ impl PaintCache {
     /// box is now, which is the whole of why moving a box is a write. What must not happen is the
     /// range being replayed through a *different box's* coordinate system, and that is the name's
     /// occupancy counter — compared where the record's whole painting is.
-    fn indices_still_resolve(&self, scene: &Scene, record: &Record) -> bool {
-        scene.clips.content_hash(record.painted.clip) == record.clip_hash
-            && scene.spatial.contains(record.painted.transform)
+    fn indices_still_resolve(&self, tables: &Tables, record: &Record) -> bool {
+        tables.clips.content_hash(record.painted.clip) == record.clip_hash
+            && tables.spatial.contains(record.painted.transform)
     }
 
     /// Every raster every live record names, with repeats across records.
@@ -838,12 +736,12 @@ impl PaintCache {
 /// Whether `window`, moved by `offset`, holds what the viewport shows of the space `painted` is
 /// drawn in, through its chain. True when nothing is shown.
 fn holds_shown(
-    scene: &Scene,
+    tables: &Tables,
     painted: &Painted,
-    window: zgui_scene::kurbo::Rect,
+    window: kurbo::Rect,
     offset: Size<DevicePx, Device>,
 ) -> bool {
-    let Some(shown) = crate::emit::vector::shown(scene, painted.clip, painted.transform) else {
+    let Some(shown) = crate::emit::vector::shown(tables, painted.clip, painted.transform) else {
         return true;
     };
     let (dx, dy) = (f64::from(offset.width.0), f64::from(offset.height.0));
@@ -853,17 +751,16 @@ fn holds_shown(
         && window.y1 + dy >= shown.y1
 }
 
-/// Gives up one hold on each table entry in `holds`.
-fn release_tables(scene: &mut Scene, holds: &TableHolds) {
-    for clip in &holds.clips {
-        scene.clips.release(*clip);
+/// Gives up one hold on each clip chain in `clips`.
+fn release_clips(tables: &mut Tables, clips: &[ClipId]) {
+    for clip in clips {
+        tables.clips.release(*clip);
     }
-    for paint in &holds.paints {
-        scene.paints.release(*paint);
-    }
-    for params in &holds.shaders {
-        scene.shader_params.release(*params);
-    }
+}
+
+/// Returns the bytes a minted clip list of `capacity` keeps allocated.
+fn bytes_of(capacity: usize) -> usize {
+    capacity * size_of::<ClipId>()
 }
 
 /// Gives up one hold on each of `keys`, and counts them.

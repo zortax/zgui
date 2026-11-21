@@ -3,7 +3,7 @@
 use compositor_types::{
     Anchor, Matrix4, ScrollId, ScrollNode, StickyAnchor, TransformId, TransformNode,
 };
-use zgui_scene::spatial::{Anchoring, ScrollPort, SpatialNode, StickyPort};
+use zgui_space::spatial::{Anchoring, ScrollPort, SpatialNode, StickyPort};
 
 /// What a mirrored transform node and its scroll node were last written with.
 #[derive(Clone, Copy, Debug, PartialEq)]

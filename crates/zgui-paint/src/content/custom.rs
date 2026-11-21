@@ -11,8 +11,10 @@ use std::sync::Arc;
 use compositor_types::{BorderStyle, PaintRef, Quad, ShaderQuad};
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::kurbo;
-use zgui_scene::{ClipId, ShaderId, SpatialId, VectorId};
+
+use crate::VectorId;
+use zgui_css::shader::ShaderId;
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::{Recorder, flat_radii, local_rect};
 
@@ -250,7 +252,7 @@ impl ScenePainter<'_> {
             path: Arc::new(path.into()),
             fill: Some(zgui_svg::Fill {
                 paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Solid(color)),
-                rule: zgui_scene::peniko::Fill::NonZero,
+                rule: peniko::Fill::NonZero,
             }),
             stroke: None,
             clips: Vec::new(),
@@ -315,10 +317,11 @@ fn corners(radius: f32) -> Corners<Vec2<DevicePx>> {
 #[cfg(test)]
 mod tests {
     use super::ScenePainter;
+    use crate::Tables;
     use compositor_types::{GlyphFlags, PaintRef};
     use zgui_color::Color;
     use zgui_geom::{DevicePx, Point, Rect, Size};
-    use zgui_scene::{ClipId, Scene, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
     use zgui_text::{FaceId, ShapedGlyph, ShapedRun};
 
     use crate::emit::record::{Recorder, Recording};
@@ -345,7 +348,7 @@ mod tests {
             coords: &[8192],
             synthetic_bold: 0.0,
             synthetic_slant: 0.0,
-            brush: zgui_scene::PaintSlot(3),
+            brush: zgui_space::PaintSlot(3),
             glyphs: &GLYPHS,
             text_start: 0,
         }
@@ -370,7 +373,7 @@ mod tests {
             },
             vector_masks: &crate::content::vectors::NoVectorMasks,
             text_subpixel: subpixel,
-            vector_id: zgui_scene::VectorId(0),
+            vector_id: crate::VectorId(0),
             shapes_pushed: 0,
             vector_routes: crate::emit::vector::VectorRoutes::NONE,
             pushed: 0,
@@ -380,9 +383,9 @@ mod tests {
     /// A shape is drawn from its own path, placed at the content box by a translation.
     #[test]
     fn a_custom_shape_is_placed_at_its_content_box() {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(200, 100));
-        let mut path = zgui_scene::kurbo::BezPath::new();
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(200, 100));
+        let mut path = kurbo::BezPath::new();
         path.move_to((0.0, 0.0));
         path.line_to((12.0, 1.0));
         path.line_to((3.0, 9.0));
@@ -391,13 +394,13 @@ mod tests {
             path: std::sync::Arc::new(path),
             fill: Some(zgui_svg::Fill {
                 paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
-                rule: zgui_scene::peniko::Fill::NonZero,
+                rule: peniko::Fill::NonZero,
             }),
             stroke: None,
             clips: Vec::new(),
         };
         let mut recording = Recording::new();
-        let rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         painter(rec, false, 1.0).shape(&shape);
 
         let item = &recording.paths()[0];
@@ -405,19 +408,16 @@ mod tests {
             std::sync::Arc::ptr_eq(&item.path, &shape.path),
             "the painter's own path is drawn, not a copy"
         );
-        assert_eq!(
-            item.placement,
-            zgui_scene::kurbo::Affine::translate((10.5, 20.25))
-        );
+        assert_eq!(item.placement, kurbo::Affine::translate((10.5, 20.25)));
     }
 
     /// A run is one glyph run at the content box plus its origin, in the folded colour and at its
     /// own instance.
     #[test]
     fn a_run_is_recorded_at_its_content_box_in_the_folded_colour() {
-        let mut scene = Scene::new();
+        let mut tables = Tables::new();
         let mut recording = Recording::new();
-        let rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         let mut painter = painter(rec, false, 0.5);
         painter.glyphs(
             &run(),
@@ -443,9 +443,9 @@ mod tests {
     #[test]
     fn a_run_asks_for_per_channel_coverage_where_the_fragment_allows_it() {
         for subpixel in [false, true] {
-            let mut scene = Scene::new();
+            let mut tables = Tables::new();
             let mut recording = Recording::new();
-            let rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+            let rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
             painter(rec, subpixel, 1.0).glyphs(
                 &run(),
                 Point::new(DevicePx(0.0), DevicePx(0.0)),

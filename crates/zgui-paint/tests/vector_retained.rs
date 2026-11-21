@@ -8,8 +8,9 @@ use zgui_color::Color;
 use zgui_paint::content::NoVectorMasks;
 use zgui_paint::emit::record::Recording;
 use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, draw_drawing};
-use zgui_scene::kurbo;
-use zgui_scene::{ClipId, SpatialId, VectorId, peniko};
+
+use zgui_paint::VectorId;
+use zgui_space::{ClipId, SpatialId};
 
 use support::conformance::scene_at;
 

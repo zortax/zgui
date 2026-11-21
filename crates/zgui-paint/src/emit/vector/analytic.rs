@@ -8,11 +8,12 @@
 //! do not. So a part of more than one primitive takes this route only while the primitives are at
 //! least two device pixels apart, which leaves no pixel that two of them reach.
 
+use crate::VectorId;
 use compositor_types::{BorderStyle, ClipRef, PaintRef, Quad, SpaceRef};
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{ClipLink, CornerShape, VectorId};
+use zgui_space::{ClipLink, CornerShape};
 
 use super::document::{density_of, reference, stroke_paint};
 use super::recognise::{self, Decomposition};
@@ -332,14 +333,14 @@ pub(super) fn emit_analytic(
     let space = (clip, rec.space(placement.transform));
     let fill_paint = match fill {
         Some(fill) => {
-            let reference = reference(rec.scene(), &placed_paint(source, &fill.paint), paint.fill);
+            let reference = reference(rec.tables(), &placed_paint(source, &fill.paint), paint.fill);
             rec.paint(reference)
         }
         None => PaintRef::NONE,
     };
     let stroke_paint = match stroked {
         Some(_) => {
-            let reference = stroke_paint(rec.scene(), source, paint);
+            let reference = stroke_paint(rec.tables(), source, paint);
             rec.paint(reference)
         }
         None => PaintRef::NONE,
@@ -386,7 +387,7 @@ pub(super) fn clip_links(
     affine: &zgui_geom::Affine2,
     tau_local: f64,
     masks: &dyn VectorMaskSource,
-    transform: zgui_scene::SpatialId,
+    transform: zgui_space::SpatialId,
     inks: &[Rect<DevicePx, Device>],
     margin: f32,
 ) -> Option<SmallVec<[ClipLink; 2]>> {

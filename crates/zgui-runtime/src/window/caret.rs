@@ -191,7 +191,7 @@ impl Window {
     ) -> Option<(usize, zgui_edit::Affinity)> {
         let layout = self.layout.borrow();
         let located = Located::of(&layout, &self.text, node)?;
-        let (shown, affinity) = located.hit(point, &self.scene.spatial)?;
+        let (shown, affinity) = located.hit(point, &self.tables.spatial)?;
         Some((self.editors.to_model(node, shown), affinity))
     }
 

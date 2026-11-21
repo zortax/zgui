@@ -13,11 +13,11 @@
 
 use std::sync::Arc;
 
+use crate::VectorId;
 use compositor_types::{ClipRef, MarkBox, MarkFlags, MarkPayload, Marks, PaintRef, SpaceRef};
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-use zgui_scene::{VectorId, kurbo, peniko};
 
 use super::analytic::{clip_links, look, of_color};
 use super::document::{reference, stroke_paint};
@@ -178,12 +178,12 @@ pub(super) fn emit_marks(
     let space = rec.space(placement.transform);
     let mut pushed = 0;
     if let (Some((lowered, place)), Some(fill)) = (fills, fill) {
-        let paint = reference(rec.scene(), &placed_paint(source, &fill.paint), paint.fill);
+        let paint = reference(rec.tables(), &placed_paint(source, &fill.paint), paint.fill);
         let paint = rec.paint(paint);
         pushed += record(rec, lowered, place, paint, (clip, space));
     }
     if let Some((lowered, place)) = strokes {
-        let paint = stroke_paint(rec.scene(), source, paint);
+        let paint = stroke_paint(rec.tables(), source, paint);
         let paint = rec.paint(paint);
         pushed += record(rec, lowered, place, paint, (clip, space));
     }

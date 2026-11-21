@@ -74,7 +74,7 @@ fn full_damage_reaches_only_the_surface() {
         report.skipped_subtrees > 1900,
         "the rows off the surface were not skipped whole"
     );
-    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let placements = zgui_space::Placements::of(&harness.scene.spatial);
     report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
@@ -99,7 +99,7 @@ fn every_fragment_the_damage_reaches_is_emitted() {
     harness.damage.absorb(rect(0, 0, 300, 30));
     harness.expand();
     let report = harness.paint();
-    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let placements = zgui_space::Placements::of(&harness.scene.spatial);
     report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
@@ -152,7 +152,7 @@ fn a_blurred_panel_over_animating_content_has_its_source_region_repainted() {
     );
 
     let report = harness.paint();
-    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let placements = zgui_space::Placements::of(&harness.scene.spatial);
     report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
@@ -209,7 +209,7 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
     let vacated_ink = zgui_layout::fragment::index::device_ink_of(
         &harness.store,
         key,
-        &zgui_scene::Placements::of(&harness.scene.spatial),
+        &zgui_space::Placements::of(&harness.scene.spatial),
     );
     assert!(
         !vacated_ink.is_empty(),
@@ -224,7 +224,7 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
         &mut harness.document,
         &harness.store,
         &mut harness.damage,
-        &zgui_scene::Placements::of(&harness.scene.spatial),
+        &zgui_space::Placements::of(&harness.scene.spatial),
     );
     assert_eq!(absorbed, 1, "one root was removed and one contributed");
     assert!(
@@ -243,7 +243,7 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
         &mut harness.document,
         &harness.store,
         &mut harness.damage,
-        &zgui_scene::Placements::of(&harness.scene.spatial),
+        &zgui_space::Placements::of(&harness.scene.spatial),
     );
     assert_eq!(again, 0);
 }
@@ -450,7 +450,7 @@ fn a_replayed_ranges_indices_still_resolve_to_what_they_were_recorded_with() {
     let clip = harness.store.fragment(row).expect("a fragment").clip;
     assert_ne!(
         clip,
-        zgui_scene::ClipId::ROOT,
+        zgui_space::ClipId::ROOT,
         "the row has to be clipped, or the invariant has nothing to check"
     );
     let recorded = harness.scene.clips.content_hash(clip);
@@ -598,7 +598,7 @@ fn emit_and_hit_agree_on_the_same_matrix() {
     // One tick of a transition: the matrix under the name is rewritten, and *nothing else happens*.
     // No fragment is recomposed, no hit entry is rewritten, no primitive is emitted again. This is
     // the frame C2 will produce, and the whole reason hit entries had to stop naming the device.
-    let owner = zgui_scene::PropertyOwner::of(harness.box_of("card"));
+    let owner = zgui_space::PropertyOwner::of(harness.box_of("card"));
     let held = *harness
         .scene
         .spatial
@@ -606,7 +606,7 @@ fn emit_and_hit_agree_on_the_same_matrix() {
         .expect("a live coordinate system");
     let moved = harness.scene.spatial.establish(
         owner,
-        zgui_scene::SpatialNode {
+        zgui_space::SpatialNode {
             local: zgui_geom::Matrix4::translation(200.0, 0.0, 0.0),
             ..held
         },

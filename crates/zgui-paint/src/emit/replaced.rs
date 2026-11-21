@@ -13,7 +13,7 @@ use compositor_types::{
 };
 use zgui_css::values::size::{ObjectFitValue, ObjectPositionValue};
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{ClipId, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::{ImageKey, ImagePixels, Recorder, flat_radii, local_rect};
 
@@ -187,8 +187,9 @@ fn offset(position: &zgui_css::values::length::LengthPercentage, leftover: f32, 
 
 #[cfg(test)]
 mod tests {
+    use crate::Tables;
     use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-    use zgui_scene::{ClipId, Scene, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     use super::{ReplacedPlacement, Source, emit};
     use crate::emit::record::Recording;
@@ -214,14 +215,14 @@ mod tests {
 
     #[test]
     fn an_external_texture_is_recorded_over_the_content_box() {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(64, 64));
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(64, 64));
         let rect = Rect::new(
             Point::new(DevicePx(0.0), DevicePx(0.0)),
             Size::new(DevicePx(32.0), DevicePx(32.0)),
         );
         let mut recording = Recording::new();
-        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         assert_eq!(
             emit(&mut rec, Source::External(texture()), placement(rect)),
             Some(1)
@@ -315,14 +316,14 @@ mod tests {
 
     #[test]
     fn a_content_box_with_no_area_draws_nothing() {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(64, 64));
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(64, 64));
         let empty = Rect::new(
             Point::new(DevicePx(4.0), DevicePx(4.0)),
             Size::new(DevicePx(0.0), DevicePx(16.0)),
         );
         let mut recording = Recording::new();
-        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         assert_eq!(
             emit(&mut rec, Source::External(texture()), placement(empty)),
             Some(0)

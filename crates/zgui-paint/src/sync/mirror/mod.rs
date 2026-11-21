@@ -18,8 +18,8 @@ pub(crate) mod params;
 pub(crate) mod shaders;
 pub(crate) mod spaces;
 
+use crate::Tables;
 use compositor_types::{AnyId, ChunkKey, Transaction};
-use zgui_scene::Scene;
 
 use crate::sync::mirror::clips::Sources;
 
@@ -45,25 +45,25 @@ pub(crate) struct Mirror {
 /// The zgui ids a mirror held when it was forgotten, to give back to the tables.
 #[derive(Debug, Default)]
 pub(crate) struct Held {
-    clips: Vec<zgui_scene::ClipId>,
-    paints: Vec<zgui_scene::PaintId>,
+    clips: Vec<zgui_space::ClipId>,
+    paints: Vec<zgui_space::PaintId>,
 }
 
 impl Mirror {
     /// Writes what the tables changed since the last call, and returns the number of writes.
-    pub(crate) fn sync(&mut self, tx: &mut Transaction, scene: &mut Scene) -> usize {
-        let spaces = self.spaces.sync(tx, &mut self.holds, &scene.spatial);
+    pub(crate) fn sync(&mut self, tx: &mut Transaction, tables: &mut Tables) -> usize {
+        let spaces = self.spaces.sync(tx, &mut self.holds, &tables.spatial);
         let clips = self.clips.sync(
             tx,
             &mut self.holds,
             Sources {
-                table: &mut scene.clips,
+                table: &mut tables.clips,
                 spaces: &mut self.spaces,
                 images: &self.images,
-                tree: &scene.spatial,
+                tree: &tables.spatial,
             },
         );
-        let paints = self.paints.sync(tx, &mut self.holds, &scene.paints);
+        let paints = self.paints.sync(tx, &mut self.holds, &tables.paints);
         spaces + clips + paints
     }
 
@@ -71,7 +71,7 @@ impl Mirror {
     pub(crate) fn space(
         &mut self,
         tx: &mut Transaction,
-        tree: &zgui_scene::SpatialTree,
+        tree: &zgui_space::SpatialTree,
         slot: u32,
     ) -> compositor_types::TransformId {
         self.spaces.ensure(tx, &mut self.holds, tree, slot)
@@ -83,14 +83,14 @@ impl Mirror {
     pub(crate) fn clip(
         &mut self,
         tx: &mut Transaction,
-        scene: &mut Scene,
-        id: zgui_scene::ClipId,
+        tables: &mut Tables,
+        id: zgui_space::ClipId,
     ) -> Option<compositor_types::ClipId> {
         let sources = Sources {
-            table: &mut scene.clips,
+            table: &mut tables.clips,
             spaces: &mut self.spaces,
             images: &self.images,
-            tree: &scene.spatial,
+            tree: &tables.spatial,
         };
         self.clips.ensure(tx, &mut self.holds, sources, id)
     }
@@ -99,14 +99,14 @@ impl Mirror {
     pub(crate) fn held_clip(
         &mut self,
         tx: &mut Transaction,
-        scene: &mut Scene,
-        id: zgui_scene::ClipId,
+        tables: &mut Tables,
+        id: zgui_space::ClipId,
     ) -> Option<compositor_types::ClipId> {
         let mut sources = Sources {
-            table: &mut scene.clips,
+            table: &mut tables.clips,
             spaces: &mut self.spaces,
             images: &self.images,
-            tree: &scene.spatial,
+            tree: &tables.spatial,
         };
         self.clips.mirror(tx, &mut self.holds, &mut sources, id)
     }
@@ -117,11 +117,11 @@ impl Mirror {
     pub(crate) fn paint(
         &mut self,
         tx: &mut Transaction,
-        scene: &mut Scene,
-        id: zgui_scene::PaintId,
+        tables: &mut Tables,
+        id: zgui_space::PaintId,
     ) -> Option<(compositor_types::PaintId, compositor_types::PaintKind)> {
         self.paints
-            .ensure(tx, &mut self.holds, &mut scene.paints, id)
+            .ensure(tx, &mut self.holds, &mut tables.paints, id)
     }
 
     /// Returns the image of `key` for the chunk being recorded, creating or updating it from
@@ -143,7 +143,7 @@ impl Mirror {
     pub(crate) fn shader(
         &mut self,
         tx: &mut Transaction,
-        id: zgui_scene::ShaderId,
+        id: zgui_css::shader::ShaderId,
     ) -> Option<compositor_types::ShaderId> {
         let shader = self.shaders.ensure(tx, id)?;
         self.recording_timed |= self.shaders.reads_time(shader);
@@ -190,15 +190,15 @@ impl Mirror {
     }
 
     /// Removes every node and slot nothing holds, and returns how many were removed.
-    pub(crate) fn settle(&mut self, tx: &mut Transaction, scene: &mut Scene) -> usize {
+    pub(crate) fn settle(&mut self, tx: &mut Transaction, tables: &mut Tables) -> usize {
         let mut removed = std::mem::take(&mut self.removed);
         self.holds.settle(tx, &mut removed);
         for &id in &removed {
             match id {
                 AnyId::Transform(id) => self.spaces.removed(id),
                 AnyId::Scroll(id) => self.spaces.removed_scroll(id),
-                AnyId::Clip(id) => self.clips.removed(id, &mut scene.clips),
-                AnyId::Paint(id) => self.paints.removed(id, &mut scene.paints),
+                AnyId::Clip(id) => self.clips.removed(id, &mut tables.clips),
+                AnyId::Paint(id) => self.paints.removed(id, &mut tables.paints),
                 AnyId::Image(id) => self.images.removed(id),
                 AnyId::Params(id) => self.params.removed(id),
                 _ => {}
@@ -226,13 +226,13 @@ impl Held {
         self.paints.extend(other.paints);
     }
 
-    /// Gives every hold back to `scene`'s tables.
-    pub(crate) fn release(self, scene: &mut Scene) {
+    /// Gives every hold back to `tables`.
+    pub(crate) fn release(self, tables: &mut Tables) {
         for id in self.clips {
-            scene.clips.release(id);
+            tables.clips.release(id);
         }
         for id in self.paints {
-            scene.paints.release(id);
+            tables.paints.release(id);
         }
     }
 }

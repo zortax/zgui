@@ -23,9 +23,9 @@ use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
 use compositor_types::{MarkFlags, MarkPayload, MarkPlacement};
+use kurbo::{Affine, BezPath, Point};
 use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
-use zgui_scene::kurbo::{Affine, BezPath, Point};
 
 use super::recognitions::evict;
 use crate::emit::vector::recognise::Decomposition;
@@ -975,13 +975,14 @@ pub(crate) fn part_of(lane: Lane, range: core::ops::Range<usize>, len: usize) ->
 mod tests {
     use std::sync::Arc;
 
+    use crate::{Tables, VectorId};
     use compositor_types::{MarkFlags, MarkPayload};
+    use kurbo::{Affine, BezPath, Circle, Shape as _};
     use zgui_canvas::{Brush, CanvasScene};
     use zgui_color::Color;
     use zgui_geom::Size;
     use zgui_profile::Counter;
-    use zgui_scene::kurbo::{Affine, BezPath, Circle, Shape as _};
-    use zgui_scene::{ClipId, Scene, SpatialId, VectorId};
+    use zgui_space::{ClipId, SpatialId};
 
     use super::{
         CHUNK, EVICTED_SHAPES, Lane, MAX_SHAPES, MarkPayloads, SeriesLookup, SeriesPart,
@@ -1224,7 +1225,7 @@ mod tests {
             zgui_canvas::Series::Line {
                 data: Arc::clone(&data),
                 to_canvas: Affine::scale_non_uniform(100.0, 20.0),
-                stroke: zgui_scene::kurbo::Stroke::new(1.0),
+                stroke: kurbo::Stroke::new(1.0),
                 brush: Brush::Solid(Color::WHITE),
             },
             zgui_canvas::Lod::Columns,
@@ -1431,8 +1432,8 @@ mod tests {
 
     /// Records `drawing` into a chunk of its own and returns the payload of its one mark.
     fn draw(drawing: &Drawing, source: &CachedMarks) -> Arc<MarkPayload> {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(64, 64));
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(64, 64));
         let mut recording = crate::emit::record::Recording::new();
         let paint = ShapePaint {
             fill: Color::WHITE,
@@ -1444,7 +1445,7 @@ mod tests {
             transform: SpatialId::VIEWPORT,
             scale: 1.0,
         };
-        let mut rec = recording.recorder(&mut scene, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
         draw_drawing(&mut rec, VectorId(1), drawing, paint, source, placement);
         assert_eq!(recording.marks().len(), 1, "the shape draws as a mark");
         Arc::clone(recording.payload(&recording.marks()[0]))

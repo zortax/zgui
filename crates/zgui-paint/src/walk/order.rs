@@ -12,8 +12,8 @@
 //! Step five is why the outline is a separate function: it belongs after the subtree, and a function
 //! that emitted it beside the background would sort a box's focus ring underneath its own text.
 
+use crate::VectorId;
 use zgui_layout::{Fragment, FragmentKind};
-use zgui_scene::VectorId;
 
 use crate::content::vectors::VectorMaskSource;
 use crate::content::vectors::{Placement as DrawingPlacement, VectorSource};
@@ -119,7 +119,7 @@ pub struct Emission<'a> {
 /// What one fragment emitted, including the path selected for vector content.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FragmentEmission {
-    /// How many items were recorded and primitives pushed into the scene.
+    /// How many items were recorded.
     pub(crate) pushed: usize,
     /// Every vector path selected by the fragment's own content.
     pub(crate) vector_routes: vector::VectorRoutes,
@@ -345,7 +345,7 @@ fn content_tracked(
             };
             // The same question the text stage asks of this fragment: per-channel coverage
             // survives an opaque destination on the pixel grid, and nothing else.
-            let text_subpixel = emission.text_placement.keeps_subpixel(rec.scene_ref());
+            let text_subpixel = emission.text_placement.keeps_subpixel(rec.tables_ref());
             let mut painter = crate::content::custom::ScenePainter {
                 rec: rec.reborrow(),
                 content_box: fragment.content_box(),

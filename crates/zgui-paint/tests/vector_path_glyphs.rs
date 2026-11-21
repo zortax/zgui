@@ -8,12 +8,12 @@ mod support;
 
 use std::sync::Arc;
 
+use kurbo::{self, Affine, BezPath};
 use zgui_canvas::{Brush, CanvasScene, Marker, Series};
 use zgui_color::Color;
 use zgui_geom::Affine2;
 use zgui_paint::content::Drawing;
-use zgui_scene::kurbo::{self, Affine, BezPath};
-use zgui_scene::peniko;
+
 use zgui_svg::{Fill, Ink, Paint, Shape, Stroke};
 use zgui_testkit_compositor::Pixels;
 

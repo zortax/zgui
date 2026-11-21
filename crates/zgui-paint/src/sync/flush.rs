@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
+use crate::Tables;
 use compositor_types::{ChunkFlags, ChunkKey, ChunkProps, ItemKind, Transaction};
-use zgui_scene::Scene;
 
 use crate::emit::record::{Items, Ref};
 use crate::sync::mirror::Mirror;
@@ -15,16 +15,16 @@ use crate::sync::resolve::Resolver;
 pub(crate) fn record(
     tx: &mut Transaction,
     mirror: &mut Mirror,
-    scene: &mut Scene,
+    tables: &mut Tables,
     key: ChunkKey,
     items: &Items,
 ) {
     let mut resolver = Resolver::new(tx, mirror);
-    let space = resolver.space(scene, items.space.index());
+    let space = resolver.space(tables, items.space.index());
     let clip = if items.clip.is_root() {
         None
     } else {
-        resolver.clip(scene, items.clip)
+        resolver.clip(tables, items.clip)
     };
 
     let mut chunk = tx.record(

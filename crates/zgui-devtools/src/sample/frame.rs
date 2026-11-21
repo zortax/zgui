@@ -19,12 +19,10 @@ use zgui::runtime::budget::{CacheId, CacheUnit};
 /// What the last frame did.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Frame {
-    /// How many primitives are in the display list.
-    pub(crate) primitives: usize,
-    /// How many batches the scene was sorted into.
-    pub(crate) batches: usize,
-    /// How many rasterisation passes were planned for its vector work.
-    pub(crate) passes: usize,
+    /// How many draw calls the renderer issued for the last presented frame.
+    pub(crate) draw_calls: u32,
+    /// How many vector passes the renderer ran for the last presented frame.
+    pub(crate) passes: u32,
     /// The rectangles this frame drew against, in device pixels.
     pub(crate) damage: Vec<Rect<i32, Device>>,
     /// Whether the frame drew against the whole surface.
@@ -120,7 +118,11 @@ pub(crate) fn sample_frame(
     window: &Window,
     moved: &std::collections::BTreeMap<&'static str, u64>,
 ) -> Frame {
-    let scene = window.scene();
+    let stats = window
+        .last_frame_report()
+        .and_then(|report| report.outcome.stats())
+        .unwrap_or_default();
+    let viewport = window.tables().viewport();
     let damage = window.damage();
     let (nodes, document) = {
         let store = window.document().borrow();
@@ -142,12 +144,11 @@ pub(crate) fn sample_frame(
         .collect();
     counters.sort_by(|left, right| right.1.cmp(&left.1).then(left.0.cmp(right.0)));
     Frame {
-        primitives: scene.primitives.len(),
-        batches: scene.batches().count(),
-        passes: scene.pass_plan().passes.len(),
+        draw_calls: stats.draw_calls,
+        passes: stats.vector_passes,
         damage: damage.rects().to_vec(),
         full_damage: damage.is_full(),
-        surface: (scene.viewport().width, scene.viewport().height),
+        surface: (viewport.width, viewport.height),
         counters,
         memory: window.renderer().memory(),
         budget: window

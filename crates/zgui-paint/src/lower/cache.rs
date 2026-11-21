@@ -17,7 +17,7 @@ use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use zgui_css::ComputedStyle;
 use zgui_profile::{Counter, counter};
-use zgui_scene::content::ContentHash;
+use zgui_space::content::ContentHash;
 
 use crate::lower::key::LoweringKey;
 use crate::lower::{PaintStyle, lower};

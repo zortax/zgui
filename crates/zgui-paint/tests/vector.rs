@@ -13,9 +13,9 @@
 mod support;
 
 use zgui_atlas::AtlasLimits;
+use zgui_paint::Tables;
 use zgui_paint::VectorCache;
 use zgui_paint::emit::record::Recording;
-use zgui_scene::Scene;
 use zgui_testkit_compositor::{Drawing, Instance};
 use zgui_vocab::{PropKey, PropValue, prop::drawing};
 
@@ -85,23 +85,23 @@ fn recorded(harness: &Harness, cache: &VectorCache) -> Recording {
     )
     .expect("the element draws");
     let style = &harness.store().node(fragment.box_).style;
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     scene.begin_frame(zgui_geom::Size::new(200, 100));
     let mut recording = Recording::new();
     let mut rec = recording.recorder(
         &mut scene,
-        zgui_scene::SpatialId::VIEWPORT,
-        zgui_scene::ClipId::ROOT,
+        zgui_space::SpatialId::VIEWPORT,
+        zgui_space::ClipId::ROOT,
     );
     zgui_paint::emit::vector::draw_drawing(
         &mut rec,
-        zgui_scene::VectorId(1),
+        zgui_paint::VectorId(1),
         &drawing,
         zgui_paint::emit::vector::shape_paint(style, 1.0),
         &zgui_paint::content::NoVectorMasks,
         zgui_paint::emit::vector::VectorPlacement {
-            clip: zgui_scene::ClipId::ROOT,
-            transform: zgui_scene::SpatialId::VIEWPORT,
+            clip: zgui_space::ClipId::ROOT,
+            transform: zgui_space::SpatialId::VIEWPORT,
             scale: 1.0,
         },
     );
@@ -132,7 +132,7 @@ fn an_eligible_drawing_is_one_path_the_compositor_draws_as_one_mask() {
 fn an_eligible_canvas_fill_is_one_mask_as_well() {
     let handle = zgui_canvas::SceneHandle::new();
     handle.edit(|scene| {
-        let path = zgui_scene::kurbo::BezPath::from_svg(TRIANGLE).unwrap();
+        let path = kurbo::BezPath::from_svg(TRIANGLE).unwrap();
         scene.push(
             zgui_canvas::ShapeBuilder::new(path)
                 .fill(zgui_canvas::Brush::Solid(zgui_color::Color::BLACK))
@@ -158,7 +158,7 @@ fn a_small_solid_canvas_stroke_is_one_mask() {
     let handle = zgui_canvas::SceneHandle::new();
     handle.edit(|scene| {
         // A curve, because a straight one is a quad on the analytic route or a mark.
-        let mut path = zgui_scene::kurbo::BezPath::new();
+        let mut path = kurbo::BezPath::new();
         path.move_to((3.0, 3.0));
         path.curve_to((9.0, 3.0), (15.0, 21.0), (21.0, 21.0));
         scene.push(
@@ -267,7 +267,7 @@ fn an_element_carrying_outlines_reaches_a_rasteriser_through_the_emit_walk() {
 fn a_canvas_scene_reaches_a_rasteriser_with_its_own_paints() {
     let handle = zgui_canvas::SceneHandle::new();
     handle.edit(|scene| {
-        let mut path = zgui_scene::kurbo::BezPath::new();
+        let mut path = kurbo::BezPath::new();
         path.move_to((0.0, 0.0));
         path.line_to((24.0, 0.0));
         path.line_to((24.0, 24.0));
@@ -279,7 +279,7 @@ fn a_canvas_scene_reaches_a_rasteriser_with_its_own_paints() {
                 )))
                 .build(),
         );
-        let mut line = zgui_scene::kurbo::BezPath::new();
+        let mut line = kurbo::BezPath::new();
         line.move_to((0.0, 24.0));
         line.line_to((24.0, 0.0));
         scene.push(
@@ -336,8 +336,8 @@ fn a_drawing_is_fitted_to_the_box_its_style_gave_it() {
 }
 
 /// The bounds of the one path the drawing of `mark` records, placed in the fragment's space.
-fn recorded_bounds(harness: &Harness, cache: &VectorCache) -> zgui_scene::kurbo::Rect {
-    use zgui_scene::kurbo::Shape as _;
+fn recorded_bounds(harness: &Harness, cache: &VectorCache) -> kurbo::Rect {
+    use kurbo::Shape as _;
 
     let recording = recorded(harness, cache);
     let [item] = recording.paths() else {
@@ -656,7 +656,7 @@ fn changing_the_outlines_damages_the_element_that_draws_them() {
         .store()
         .fragment(harness.fragment_of("mark"))
         .expect("a fragment")
-        .device_ink(&zgui_scene::Placements::of(&harness.scene.spatial));
+        .device_ink(&zgui_space::Placements::of(&harness.scene.spatial));
     let damage = &harness.damage;
     assert!(
         !damage.is_full(),

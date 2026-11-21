@@ -79,14 +79,6 @@ impl Window {
         }
         if let Some(report) = report {
             tracing::debug!(target: "zgui::compositor", ?report, "transaction committed");
-            if report.omitted_primitives > 0 && !self.compositor_omissions_noted {
-                self.compositor_omissions_noted = true;
-                tracing::warn!(
-                    target: "zgui::compositor",
-                    primitives = report.omitted_primitives,
-                    "content of kinds the compositor path does not record yet is not drawn"
-                );
-            }
         }
     }
 }

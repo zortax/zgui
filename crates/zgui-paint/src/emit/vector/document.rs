@@ -19,8 +19,8 @@ use std::sync::Arc;
 use compositor_types::{FillRule, PathClip, PathFill, PathItem, PathStroke};
 use zgui_color::{Color, ColorSpace, HueInterpolation};
 use zgui_profile::{Counter, counter};
-use zgui_scene::kurbo;
-use zgui_scene::{GradientKind, Paint, PaintRef, VectorStroke, peniko};
+
+use crate::paints::{GradientKind, Paint, PaintRef};
 
 use crate::content::vectors::VectorMaskSource;
 use crate::emit::record::Recorder;
@@ -34,7 +34,7 @@ use super::{ShapeEmission, VectorRoute};
 /// Records one shape, and returns how many items were recorded.
 pub fn emit(
     rec: &mut Recorder<'_>,
-    id: zgui_scene::VectorId,
+    id: crate::VectorId,
     shape: &zgui_svg::Shape,
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
@@ -57,7 +57,7 @@ pub fn emit(
 /// with the fit as the item's placement, so a new fit makes no new path.
 pub(crate) fn emit_tracked(
     rec: &mut Recorder<'_>,
-    id: zgui_scene::VectorId,
+    id: crate::VectorId,
     source: &ShapeSource<'_>,
     paint: &ShapePaint,
     masks: &dyn VectorMaskSource,
@@ -65,7 +65,7 @@ pub(crate) fn emit_tracked(
 ) -> ShapeEmission {
     // Resolved once for both recognising routes, which read the same matrix.
     let affine = rec
-        .scene_ref()
+        .tables_ref()
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -102,14 +102,14 @@ pub(crate) fn emit_tracked(
         return ShapeEmission::default();
     }
     let shape = source.shape;
-    let stroke = stroke_of(rec.scene(), shape, paint, source.fit);
+    let stroke = stroke_of(rec.tables(), shape, paint, source.fit);
     // A part whose paint paints nothing is left out, so the other part is drawn as it would be
     // alone.
     let fill = shape
         .fill
         .as_ref()
         .map(|fill| {
-            let reference = reference(rec.scene(), &fill.paint, paint.fill);
+            let reference = reference(rec.tables(), &fill.paint, paint.fill);
             PathFill {
                 paint: rec.paint(reference),
                 rule: fill_rule(fill.rule),
@@ -117,9 +117,9 @@ pub(crate) fn emit_tracked(
         })
         .filter(|fill| fill.paint != compositor_types::PaintRef::NONE);
     let stroke = stroke
-        .map(|stroke| PathStroke {
-            paint: rec.paint(stroke.paint),
-            style: stroke.style,
+        .map(|(stroke, style)| PathStroke {
+            paint: rec.paint(stroke),
+            style,
         })
         .filter(|stroke| stroke.paint != compositor_types::PaintRef::NONE);
     if fill.is_none() && stroke.is_none() {
@@ -210,23 +210,24 @@ pub(super) fn density_of(affine: &zgui_geom::Affine2, stroked: bool) -> Option<[
     Some([kx, ky])
 }
 
-/// What strokes one shape in its own space, which is the shape's own stroke or the element's.
+/// Returns the paint and style that stroke one shape in its own space, from the shape's own stroke
+/// or the element's.
 ///
 /// A shape that named no stroke is stroked only when the element asked for one through
 /// `--zgui-stroke`. That is what makes a bare outline strokeable from a stylesheet without giving
 /// every shape of a vector document a stroke it never asked for. The element's width is in device
 /// pixels, so it is divided by the scale `fit` applies; a fit with no scale strokes nothing.
 pub(super) fn stroke_of(
-    scene: &mut zgui_scene::Scene,
+    tables: &mut crate::Tables,
     shape: &zgui_svg::Shape,
     paint: &ShapePaint,
     fit: kurbo::Affine,
-) -> Option<VectorStroke> {
+) -> Option<(PaintRef, kurbo::Stroke)> {
     match &shape.stroke {
-        Some(stroke) => Some(VectorStroke {
-            paint: reference(scene, &stroke.paint, paint.stroke.unwrap_or(paint.fill)),
-            style: stroke.style.clone(),
-        }),
+        Some(stroke) => Some((
+            reference(tables, &stroke.paint, paint.stroke.unwrap_or(paint.fill)),
+            stroke.style.clone(),
+        )),
         None => {
             let color = paint.stroke?;
             let width =
@@ -234,10 +235,10 @@ pub(super) fn stroke_of(
             if !width.is_finite() {
                 return None;
             }
-            Some(VectorStroke {
-                paint: PaintRef::solid(scene.paints.solid(color)),
-                style: kurbo::Stroke::new(width),
-            })
+            Some((
+                PaintRef::solid(tables.paints.solid(color)),
+                kurbo::Stroke::new(width),
+            ))
         }
     }
 }
@@ -245,30 +246,30 @@ pub(super) fn stroke_of(
 /// The paint the stroke of `source` is drawn with, placed in the fragment's space: the shape's
 /// own, or the element's.
 pub(super) fn stroke_paint(
-    scene: &mut zgui_scene::Scene,
+    tables: &mut crate::Tables,
     source: &ShapeSource<'_>,
     paint: &ShapePaint,
 ) -> PaintRef {
     match &source.shape.stroke {
         Some(stroke) => reference(
-            scene,
+            tables,
             &super::recognised::placed_paint(source, &stroke.paint),
             paint.stroke.unwrap_or(paint.fill),
         ),
         None => paint.stroke.map_or(PaintRef::NONE, |color| {
-            PaintRef::solid(scene.paints.solid(color))
+            PaintRef::solid(tables.paints.solid(color))
         }),
     }
 }
 
 /// The interned paint one of a document's paints becomes, given the inherited colour.
 pub(super) fn reference(
-    scene: &mut zgui_scene::Scene,
+    tables: &mut crate::Tables,
     paint: &zgui_svg::Paint,
     inherited: Color,
 ) -> PaintRef {
     match paint {
-        zgui_svg::Paint::Solid(ink) => PaintRef::solid(scene.paints.solid(ink.resolve(inherited))),
+        zgui_svg::Paint::Solid(ink) => PaintRef::solid(tables.paints.solid(ink.resolve(inherited))),
         zgui_svg::Paint::Gradient(ramp) => {
             let kind = match ramp.kind {
                 zgui_svg::GradientKind::Linear { start, end } => GradientKind::Linear {
@@ -288,7 +289,7 @@ pub(super) fn reference(
             // In sRGB, with no densifying: a vector document's ramps are defined to interpolate in
             // sRGB, which is the space the rasteriser interpolates in, so the straight lines it
             // draws between the stops are the curve the document asked for.
-            scene.paints.add(Paint::Gradient {
+            tables.paints.add(Paint::Gradient {
                 kind,
                 stops: ramp
                     .stops

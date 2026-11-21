@@ -49,7 +49,7 @@ fn emit_borrows_no_renderer() {
     let _emit: fn(
         &mut zgui_paint::Painter,
         &zgui_paint::PaintInput<'_>,
-        &mut zgui_scene::Scene,
+        &mut zgui_paint::Tables,
     ) -> zgui_paint::PaintReport = zgui_paint::Painter::emit;
 
     // A whole frame, drawn through a cache that holds a picture, with no sink anywhere in the call.

@@ -63,7 +63,7 @@ pub(crate) fn geometry(window: &zgui::runtime::Window) -> Vec<[u32; 4]> {
 /// The same, over a store and a set of answers held apart from any window.
 pub(crate) fn resolved(
     layout: &zgui_layout::LayoutStore,
-    placements: &zgui_scene::Placements,
+    placements: &zgui_space::Placements,
 ) -> Vec<[u32; 4]> {
     let mut out = Vec::new();
     for key in layout.keys() {
@@ -368,7 +368,7 @@ pub(crate) fn compare_readings(
 #[cfg(test)]
 mod tests {
     use zgui::geom::Matrix4;
-    use zgui_scene::{Placements, PropertyOwner, SpatialId, SpatialTree};
+    use zgui_space::{Placements, PropertyOwner, SpatialId, SpatialTree};
 
     use super::{compare_readings, resolved};
 
@@ -424,7 +424,7 @@ mod tests {
         // The control: a copy of the drawn frame's coordinate systems answers exactly what the
         // drawn frame's own answers do. Without it a difference below could be the copy rather
         // than the perturbation.
-        let mut moved = mirror(&window.scene().spatial);
+        let mut moved = mirror(&window.tables().spatial);
         assert_eq!(
             resolved(&layout, &Placements::of(&moved)),
             live,

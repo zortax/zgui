@@ -9,7 +9,7 @@ use zgui_css::values::custom;
 use zgui_elements::kurbo::{self, Rect, Shape};
 use zgui_elements::vector::{self as vector_props};
 use zgui_geom::CssPx;
-use zgui_scene::Scene;
+use zgui_paint::Tables;
 use zgui_style::{SheetOrigin, SheetSource, StyleEngine, Viewport};
 use zgui_text::FixedMetrics;
 use zgui_view::{Anchor, IntoView, NodeId, PropKey, View};
@@ -242,8 +242,8 @@ fn the_outlines_a_view_set_reach_the_compositor_as_the_list_it_wrote_in_the_colo
     let paths = drawing.paths();
     assert_eq!(paths.len(), 2, "two marks, not one path with two subpaths");
 
-    let mut scene = Scene::new();
-    scene.begin_frame(zgui_geom::Size::new(64, 64));
+    let mut tables = Tables::new();
+    tables.begin_frame(zgui_geom::Size::new(64, 64));
     let paint = drawing.paint();
     let shapes: Vec<zgui_svg::Shape> = paths
         .into_iter()
@@ -251,14 +251,15 @@ fn the_outlines_a_view_set_reach_the_compositor_as_the_list_it_wrote_in_the_colo
             path: Arc::new(path),
             fill: Some(zgui_svg::Fill {
                 paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
-                rule: zgui_scene::peniko::Fill::NonZero,
+                // The default rule is non-zero.
+                rule: Default::default(),
             }),
             stroke: None,
             clips: Vec::new(),
         })
         .collect();
 
-    // Through a compositor, not read back out of the scene the test just filled: what a renderer
+    // Through a compositor, not read back out of the tables the test just filled: what a renderer
     // is handed is the frame, and the colour in it is the one the cascade resolved.
     let key = compositor_types::ChunkKey::new(1, 0);
     let mut session =
@@ -268,12 +269,12 @@ fn the_outlines_a_view_set_reach_the_compositor_as_the_list_it_wrote_in_the_colo
     zgui_paint::record_chunk(
         &mut transaction,
         key,
-        &mut scene,
+        &mut tables,
         (zgui_space::SpatialId::VIEWPORT, zgui_space::ClipId::ROOT),
         |rec| {
             pushed = zgui_paint::emit::vector::draw(
                 rec,
-                zgui_scene::VectorId(0),
+                zgui_paint::VectorId(0),
                 &shapes,
                 paint,
                 zgui_paint::emit::vector::VectorPlacement {

@@ -17,6 +17,7 @@
 
 mod cache;
 mod cpu;
+mod id;
 mod layer;
 pub(crate) mod path_glyphs;
 pub(crate) mod payloads;
@@ -24,6 +25,7 @@ mod recognitions;
 mod routes;
 
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
+pub use crate::content::vectors::id::VectorId;
 #[doc(hidden)]
 pub use crate::content::vectors::layer::{
     LayerAnswer, LayerFallback, LayerPixels, LayerRequest, Tile, Tiles, VectorLayerSource,
@@ -45,8 +47,8 @@ pub use crate::content::vectors::routes::{
 
 use std::sync::{Arc, OnceLock};
 
+use kurbo::{Affine, BezPath};
 use zgui_dom::NodeKey;
-use zgui_scene::kurbo::{Affine, BezPath};
 
 /// The outlines one element draws, and the matrix that places them in its fragment's own space.
 #[derive(Clone, Debug, Default)]
@@ -212,7 +214,7 @@ pub fn outlines(paths: &[BezPath], placed: Affine) -> Vec<zgui_svg::Shape> {
             path: Arc::new(placed * path.clone()),
             fill: Some(zgui_svg::Fill {
                 paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
-                rule: zgui_scene::peniko::Fill::NonZero,
+                rule: peniko::Fill::NonZero,
             }),
             stroke: None,
             clips: Vec::new(),
@@ -222,7 +224,7 @@ pub fn outlines(paths: &[BezPath], placed: Affine) -> Vec<zgui_svg::Shape> {
 
 #[cfg(test)]
 mod tests {
-    use zgui_scene::kurbo::Shape;
+    use kurbo::Shape;
 
     use super::parse;
 

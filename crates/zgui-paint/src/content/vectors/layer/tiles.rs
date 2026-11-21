@@ -14,12 +14,12 @@
 use std::sync::Arc;
 use web_time::Instant;
 
+use kurbo::{self, Affine};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_bits::DamageSet;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::ContentHash;
-use zgui_scene::kurbo::{self, Affine};
+use zgui_space::ContentHash;
 
 use super::{
     COLD_US, DEFER_FRAMES, HISTORY_FRAMES, LayerAnswer, LayerFallback, LayerKey, LayerPixels,
@@ -653,8 +653,8 @@ fn shape_hash(shape: &zgui_svg::Shape) -> u64 {
         None => hash = hash.u32(0),
         Some(fill) => {
             hash = paint_of(hash.u32(1), &fill.paint).u32(match fill.rule {
-                zgui_scene::peniko::Fill::NonZero => 0,
-                zgui_scene::peniko::Fill::EvenOdd => 1,
+                peniko::Fill::NonZero => 0,
+                peniko::Fill::EvenOdd => 1,
             });
         }
     }
@@ -682,8 +682,8 @@ fn shape_hash(shape: &zgui_svg::Shape) -> u64 {
         hash = hash
             .u64(Arc::as_ptr(&clip.path).addr() as u64)
             .u32(match clip.rule {
-                zgui_scene::peniko::Fill::NonZero => 0,
-                zgui_scene::peniko::Fill::EvenOdd => 1,
+                peniko::Fill::NonZero => 0,
+                peniko::Fill::EvenOdd => 1,
             });
     }
     hash.finish()

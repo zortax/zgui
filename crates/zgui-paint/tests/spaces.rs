@@ -5,7 +5,7 @@ mod support;
 use support::compositor::Recorded;
 use support::{Element, Harness};
 use zgui_geom::Matrix4;
-use zgui_scene::spatial::{PropertyOwner, SpatialId};
+use zgui_space::spatial::{PropertyOwner, SpatialId};
 
 /// Twenty transformed cards, each in a coordinate system of its own.
 fn cards() -> Harness {

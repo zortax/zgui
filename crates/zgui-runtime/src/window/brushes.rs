@@ -465,8 +465,8 @@ impl Window {
         if holders.is_empty() {
             return;
         }
-        let scene = &self.scene;
-        let resolve = |id| scene.spatial.resolve(id);
+        let tables = &self.tables;
+        let resolve = |id| tables.spatial.resolve(id);
         let mut fragments = Vec::new();
         for key in holders {
             for frag in layout.fragments_of_box(key) {
@@ -474,8 +474,8 @@ impl Window {
                     continue;
                 };
                 fragments.push(*frag);
-                let ink = fragment.on_device_in(fragment.ink, &scene.spatial);
-                let admitted = scene.clips.bounds_placed(fragment.clip, &resolve);
+                let ink = fragment.on_device_in(fragment.ink, &tables.spatial);
+                let admitted = tables.clips.bounds_placed(fragment.clip, &resolve);
                 if let Some(rect) = ink.intersection(admitted)
                     && !rect.is_empty()
                 {
@@ -485,7 +485,7 @@ impl Window {
         }
         drop(layout);
         self.painter
-            .evict_records(&fragments, &mut self.scene, &self.content.tile_owner());
+            .evict_records(&fragments, &mut self.tables, &self.content.tile_owner());
     }
 }
 

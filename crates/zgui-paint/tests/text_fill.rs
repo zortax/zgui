@@ -75,9 +75,10 @@ fn a_ramp_painting_the_text_fills_its_glyphs() {
     use zgui_css::StyleDraft;
     use zgui_geom::{DevicePx, Point, Rect, Size};
     use zgui_layout::fragment::ParagraphId;
+    use zgui_paint::Tables;
     use zgui_paint::emit::text::{self, GlyphSource, TextPlacement};
     use zgui_paint::lower::background::{GradientShape, GradientSpec, SpecStop};
-    use zgui_scene::{ClipId, Scene, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     /// Two glyphs of one run.
     struct TwoGlyphs;
@@ -108,7 +109,7 @@ fn a_ramp_painting_the_text_fills_its_glyphs() {
                 coords: &[],
                 synthetic_bold: 0.0,
                 synthetic_slant: 0.0,
-                brush: zgui_scene::PaintSlot(0),
+                brush: zgui_space::PaintSlot(0),
                 glyphs: &GLYPHS,
                 text_start: 0,
             });
@@ -137,7 +138,7 @@ fn a_ramp_painting_the_text_fills_its_glyphs() {
         repeating: false,
     };
     let style = zgui_paint::lower(&StyleDraft::initial().build(), 1.0);
-    let mut scene = Scene::new();
+    let mut scene = Tables::new();
     let mut lone =
         support::chunk::Lone::record(&mut scene, (SpatialId::VIEWPORT, ClipId::ROOT), |rec| {
             text::emit(

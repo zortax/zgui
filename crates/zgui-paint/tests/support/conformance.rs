@@ -10,13 +10,14 @@
 use std::cell::{RefCell, RefMut};
 use std::sync::Arc;
 
+use kurbo::{self, BezPath};
 use zgui_color::Color;
 use zgui_geom::Affine2;
 use zgui_paint::content::vectors::{MarkPayloads, Splits};
 use zgui_paint::content::{AnalyticOnly, MarksOnly, NoVectorMasks, VectorMaskSource};
 use zgui_paint::emit::vector::{ShapePaint, VectorPlacement, draw_with_masks};
-use zgui_scene::kurbo::{self, BezPath};
-use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId, VectorId, peniko};
+use zgui_paint::{Tables, VectorId};
+use zgui_space::{ClipId, OwnSpace, PropertyOwner, SpatialId};
 use zgui_svg::{Fill, Shape};
 use zgui_testkit_compositor::{Drawing, Pixels};
 
@@ -78,7 +79,7 @@ pub(crate) fn source(route: Option<Route>) -> Box<dyn VectorMaskSource> {
 }
 
 /// The transform `placement` stands for in `scene`.
-pub(crate) fn space(scene: &mut Scene, placement: Affine2) -> SpatialId {
+pub(crate) fn space(scene: &mut Tables, placement: Affine2) -> SpatialId {
     if placement == Affine2::IDENTITY {
         return SpatialId::VIEWPORT;
     }
@@ -92,8 +93,8 @@ pub(crate) fn space(scene: &mut Scene, placement: Affine2) -> SpatialId {
 }
 
 /// A scene over a square target of `side` pixels.
-pub(crate) fn scene_at(side: u32) -> Scene {
-    let mut scene = Scene::new();
+pub(crate) fn scene_at(side: u32) -> Tables {
+    let mut scene = Tables::new();
     scene.begin_frame(zgui_geom::Size::new(side as i32, side as i32));
     scene
 }

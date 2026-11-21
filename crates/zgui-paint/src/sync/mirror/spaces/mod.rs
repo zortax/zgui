@@ -4,8 +4,8 @@ mod written;
 
 use compositor_types::{ScrollId, Transaction, TransformId};
 use rustc_hash::FxHashMap;
-use zgui_scene::ChangeCoverage;
-use zgui_scene::spatial::{PropertyOwner, SpatialId, SpatialNode, SpatialTree, TreeVersion};
+use zgui_space::ChangeCoverage;
+use zgui_space::spatial::{PropertyOwner, SpatialId, SpatialNode, SpatialTree, TreeVersion};
 
 use crate::sync::mirror::holds::Holds;
 

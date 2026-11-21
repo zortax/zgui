@@ -14,7 +14,7 @@
 
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_layout::{Fragment, FragmentKind};
-use zgui_scene::Placements;
+use zgui_space::Placements;
 
 use crate::emit::highlight::{HighlightRequest, HighlightSource};
 
@@ -162,7 +162,7 @@ mod tests {
     #[test]
     fn a_mark_on_a_transformed_line_is_read_where_it_is_drawn() {
         use zgui_geom::Matrix4;
-        use zgui_scene::{OwnSpace, Placements, PropertyOwner, SpatialTree};
+        use zgui_space::{OwnSpace, Placements, PropertyOwner, SpatialTree};
 
         let mut tree = SpatialTree::with_viewport();
         let owner = PropertyOwner::new(2).expect("a handle is never the empty word");

@@ -15,12 +15,12 @@
 use std::sync::Arc;
 use web_time::Instant;
 
+use crate::VectorId;
 use compositor_types::{ImageDesc, ImageFormat};
+use kurbo::{self, Affine};
 use rustc_hash::FxHashMap;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::VectorId;
-use zgui_scene::kurbo::{self, Affine};
 
 use crate::content::vectors::Drawing;
 use crate::content::vectors::cpu::{LayerJob, VectorPainter, Zeno};
@@ -984,7 +984,7 @@ fn mapping(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Mapping> {
 
 /// A hash of what an inherited paint resolves to.
 fn paint_hash(paint: ShapePaint) -> u64 {
-    let mut hash = zgui_scene::ContentHash::new()
+    let mut hash = zgui_space::ContentHash::new()
         .f32s(&paint.fill.to_premultiplied_srgb())
         .f32(paint.stroke_width);
     if let Some(stroke) = paint.stroke {

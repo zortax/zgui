@@ -91,7 +91,7 @@ impl TextFills {
 /// when it changes: without this, editing the gradient on a heading replays every line inside it
 /// exactly as it was.
 pub fn signature(fill: Option<&GradientSpec>) -> u64 {
-    let mut hash = zgui_scene::ContentHash::new();
+    let mut hash = zgui_space::ContentHash::new();
     match fill {
         None => hash = hash.u32(0),
         Some(spec) => {

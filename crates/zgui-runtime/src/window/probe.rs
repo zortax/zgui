@@ -46,8 +46,8 @@ impl Window {
             document: &document,
             layout: &layout,
             hit: &self.hit,
-            clips: &self.scene.clips,
-            spatial: &self.scene.spatial,
+            clips: &self.tables.clips,
+            spatial: &self.tables.spatial,
             scale: zgui_geom::Scale::new(self.scale),
             filter: &filter,
         };

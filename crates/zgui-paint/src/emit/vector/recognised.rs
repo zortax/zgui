@@ -7,8 +7,7 @@
 
 use std::sync::Arc;
 
-use zgui_scene::kurbo::{self, Affine, BezPath, Vec2};
-use zgui_scene::peniko;
+use kurbo::{self, Affine, BezPath, Vec2};
 
 use super::ShapeSource;
 use super::recognise::{self, Declined, Decomposition, Limits, Part};
@@ -247,8 +246,7 @@ pub(crate) fn placed_paint(source: &ShapeSource<'_>, paint: &zgui_svg::Paint) ->
 mod tests {
     use std::sync::Arc;
 
-    use zgui_scene::kurbo::{self, Affine, BezPath, Shape as _};
-    use zgui_scene::peniko;
+    use kurbo::{self, Affine, BezPath, Shape as _};
 
     use super::{Outline, PartOf, recognised};
     use crate::content::Drawing;

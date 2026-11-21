@@ -1,8 +1,9 @@
 //! One chunk of emitted items, recorded into a compositor of its own and drawn.
 
 use compositor_types::ChunkKey;
+use zgui_paint::Tables;
 use zgui_paint::emit::Recorder;
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 use zgui_testkit_compositor::{Drawing, Session};
 
 /// The key the chunk is recorded under.
@@ -17,7 +18,7 @@ impl Lone {
     /// Records what `emit` records as the only chunk of a 256 by 256 output, with `space` and
     /// `clip` as its defaults, and commits it.
     pub(crate) fn record(
-        scene: &mut Scene,
+        scene: &mut Tables,
         defaults: (SpatialId, ClipId),
         emit: impl FnOnce(&mut Recorder<'_>),
     ) -> Self {

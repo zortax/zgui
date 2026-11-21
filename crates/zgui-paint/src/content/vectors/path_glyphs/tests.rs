@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use zgui_scene::kurbo::{self, BezPath, Shape as _};
+use kurbo::{self, BezPath, Shape as _};
 
 use super::{MAX_SPLITS, PartStyle, Splits, outlines};
 use crate::emit::vector::split::{geometry_of, split};

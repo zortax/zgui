@@ -16,7 +16,7 @@ use zgui_dom::side::{AnimOverride, BoxKey};
 use zgui_geom::{DevicePx, Edges};
 use zgui_layout::fragment::diff::pixels;
 use zgui_paint::OwnedPaints;
-use zgui_scene::PaintRewrite;
+use zgui_paint::paints::PaintRewrite;
 use zgui_space::PropertyOwner;
 
 use crate::window::anim::place::Writing;
@@ -62,7 +62,7 @@ impl Writing<'_> {
                 return false;
             };
             for (name, paint) in owned.paints(PropertyOwner::of(*key), values, border) {
-                written &= self.scene.paints.rewrite(name, paint) == PaintRewrite::Written;
+                written &= self.tables.paints.rewrite(name, paint) == PaintRewrite::Written;
             }
         }
         written
@@ -89,15 +89,15 @@ impl Writing<'_> {
     /// Cut to what each fragment's clip chain admits, and rounded outwards to whole pixels, as the
     /// fragment pass does for a repainted box.
     fn damage_own_ink(&mut self, node: NodeKey) {
-        let scene = &*self.scene;
-        let resolve = |id| scene.spatial.resolve(id);
+        let tables = &*self.tables;
+        let resolve = |id| tables.spatial.resolve(id);
         for key in self.layout.boxes_of(node) {
             for frag in self.layout.fragments_of_box(*key) {
                 let Some(fragment) = self.layout.fragment(*frag) else {
                     continue;
                 };
-                let ink = fragment.on_device_in(fragment.ink, &scene.spatial);
-                let admitted = scene.clips.bounds_placed(fragment.clip, &resolve);
+                let ink = fragment.on_device_in(fragment.ink, &tables.spatial);
+                let admitted = tables.clips.bounds_placed(fragment.clip, &resolve);
                 if let Some(rect) = ink.intersection(admitted)
                     && !rect.is_empty()
                 {

@@ -15,6 +15,7 @@
 //! | [`name`] | the bridge between interned names and the engine's own atoms |
 //! | [`engine`] | the engine's own length unit and geometry, and the width the cascade may run at |
 //! | [`parity`] | which CSS this framework actually implements, as a number rather than a claim |
+//! | [`shader`] | the application effects a style sheet names |
 //!
 //! ```
 //! use zgui_css::{ComputedStyle, StyleDraft};
@@ -51,6 +52,7 @@ pub mod engine;
 pub mod name;
 pub mod parity;
 pub mod prefs;
+pub mod shader;
 pub mod values;
 
 pub use crate::computed::draft::StyleDraft;

@@ -4,7 +4,7 @@
 //! of their matrices, so it becomes one matrix.
 
 use compositor_types::{Color, Filter};
-use zgui_scene::peniko::{BlendMode, Compose};
+use peniko::{BlendMode, Compose};
 
 /// A 4x5 colour matrix in row-major order, the constant last in each row.
 type Matrix = [f32; 20];
@@ -24,7 +24,7 @@ const LUMA: [f32; 3] = [0.213, 0.715, 0.072];
 /// A filter that changes nothing adds no step. An application shader adds none either: the chain
 /// carries one to say how far it reads, and the shader itself runs from the effect a style sheet
 /// named, with its parameters.
-pub(crate) fn convert(filters: &[zgui_scene::Filter], out: &mut Vec<Filter>) {
+pub(crate) fn convert(filters: &[zgui_layout::fragment::filter::Filter], out: &mut Vec<Filter>) {
     let mut run: Option<Matrix> = None;
     for filter in filters {
         if let Some(matrix) = matrix(*filter) {
@@ -33,10 +33,10 @@ pub(crate) fn convert(filters: &[zgui_scene::Filter], out: &mut Vec<Filter>) {
         }
         flush(&mut run, out);
         match *filter {
-            zgui_scene::Filter::Blur(deviation) if deviation > 0.0 => {
+            zgui_layout::fragment::filter::Filter::Blur(deviation) if deviation > 0.0 => {
                 out.push(Filter::Blur(deviation));
             }
-            zgui_scene::Filter::DropShadow {
+            zgui_layout::fragment::filter::Filter::DropShadow {
                 offset_x,
                 offset_y,
                 blur,
@@ -71,8 +71,8 @@ fn flush(run: &mut Option<Matrix>, out: &mut Vec<Filter>) {
 
 /// Returns the matrix of a per-pixel filter function, or `None` for one that reads its
 /// neighbourhood.
-fn matrix(filter: zgui_scene::Filter) -> Option<Matrix> {
-    use zgui_scene::Filter as F;
+fn matrix(filter: zgui_layout::fragment::filter::Filter) -> Option<Matrix> {
+    use zgui_layout::fragment::filter::Filter as F;
     Some(match filter {
         F::Brightness(amount) => scale(amount.max(0.0), 0.0),
         F::Contrast(amount) => {
@@ -223,8 +223,8 @@ mod tests {
         let mut out = Vec::new();
         convert(
             &[
-                zgui_scene::Filter::Invert(1.0),
-                zgui_scene::Filter::Brightness(0.5),
+                zgui_layout::fragment::filter::Filter::Invert(1.0),
+                zgui_layout::fragment::filter::Filter::Brightness(0.5),
             ],
             &mut out,
         );
@@ -241,10 +241,10 @@ mod tests {
         let mut out = Vec::new();
         convert(
             &[
-                zgui_scene::Filter::Sepia(1.0),
-                zgui_scene::Filter::Blur(2.0),
-                zgui_scene::Filter::Opacity(1.0),
-                zgui_scene::Filter::Grayscale(1.0),
+                zgui_layout::fragment::filter::Filter::Sepia(1.0),
+                zgui_layout::fragment::filter::Filter::Blur(2.0),
+                zgui_layout::fragment::filter::Filter::Opacity(1.0),
+                zgui_layout::fragment::filter::Filter::Grayscale(1.0),
             ],
             &mut out,
         );
@@ -261,7 +261,10 @@ mod tests {
     #[test]
     fn the_identity_is_the_unit_of_the_product() {
         let mut out = Vec::new();
-        convert(&[zgui_scene::Filter::Brightness(1.0)], &mut out);
+        convert(
+            &[zgui_layout::fragment::filter::Filter::Brightness(1.0)],
+            &mut out,
+        );
         assert!(out.is_empty(), "{out:?}");
         assert_eq!(then(IDENTITY, IDENTITY), IDENTITY);
     }

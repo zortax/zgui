@@ -55,7 +55,6 @@ fn every_painted_quad_reaches_the_compositor_frame() {
     harness.paint_everything();
 
     let sync = harness.compositor.sync;
-    assert_eq!(sync.omitted_primitives, 0);
     assert!(sync.recorded >= 3, "{sync:?}");
     // The root's background, and each panel's background with its border on it.
     let drawing = harness.redraw();

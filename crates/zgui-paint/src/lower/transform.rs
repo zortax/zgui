@@ -12,7 +12,7 @@
 use zgui_css::parity::Support;
 use zgui_css::{ComputedStyle, register_properties};
 use zgui_layout::Fragment;
-use zgui_scene::SpatialId;
+use zgui_space::SpatialId;
 
 register_properties! {
     transform            => Support::Implemented("zgui-layout::fragment::transform"),

@@ -8,7 +8,7 @@ use zgui_geom::{Corners, DevicePx, Vec2};
 
 /// A fingerprint of `radii`, for deciding whether a recorded fragment may be replayed.
 pub fn signature(radii: Corners<Vec2<DevicePx>>) -> u64 {
-    let mut hash = zgui_scene::ContentHash::new();
+    let mut hash = zgui_space::ContentHash::new();
     for corner in [
         radii.top_left,
         radii.top_right,

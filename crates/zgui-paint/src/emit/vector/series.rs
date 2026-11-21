@@ -18,13 +18,14 @@
 
 use std::sync::Arc;
 
+use crate::{Tables, VectorId};
 use compositor_types::{
     ClipRef, MarkFlags, MarkPayload, Marks, PaintRef, PathFill, PathItem, PathStroke, SpaceRef,
 };
+use kurbo::{self, Affine, BezPath};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::kurbo::{self, Affine, BezPath};
-use zgui_scene::{ClipId, Scene, SpatialId, VectorId};
+use zgui_space::{ClipId, SpatialId};
 
 use super::document::{density_of, reference};
 use super::marks::MAX_MARK_PRIMS;
@@ -72,17 +73,17 @@ pub(super) struct SeriesOutcome {
 
 /// The part of local space under `transform` that `clip` and the viewport show, or `None` when
 /// they show nothing or the transform has no inverse on the plane.
-pub(crate) fn shown(scene: &Scene, clip: ClipId, transform: SpatialId) -> Option<kurbo::Rect> {
-    shown_through(scene, clip, transform).map(|(shown, _)| shown)
+pub(crate) fn shown(tables: &Tables, clip: ClipId, transform: SpatialId) -> Option<kurbo::Rect> {
+    shown_through(tables, clip, transform).map(|(shown, _)| shown)
 }
 
 /// What [`shown`] finds, and the to-device map it inverted.
 fn shown_through(
-    scene: &Scene,
+    tables: &Tables,
     clip: ClipId,
     transform: SpatialId,
 ) -> Option<(kurbo::Rect, Affine)> {
-    let affine = scene
+    let affine = tables
         .spatial
         .resolve(transform)
         .as_ref()
@@ -93,10 +94,10 @@ fn shown_through(
     if !determinant.is_finite() || determinant.abs() <= 1e-12 {
         return None;
     }
-    let admitted = scene
+    let admitted = tables
         .clips
-        .bounds_placed(clip, &|space| scene.spatial.resolve(space));
-    let viewport = scene.viewport();
+        .bounds_placed(clip, &|space| tables.spatial.resolve(space));
+    let viewport = tables.viewport();
     let device = kurbo::Rect::new(
         f64::from(admitted.left().0),
         f64::from(admitted.top().0),
@@ -127,11 +128,15 @@ struct Cut {
 
 /// Where the items of a series under `placement` draw, or `None` when they draw whole: nothing is
 /// shown, the transform has no inverse on the plane, or `masks` asks for whole payloads.
-fn cut_of(scene: &Scene, placement: VectorPlacement, masks: &dyn VectorMaskSource) -> Option<Cut> {
+fn cut_of(
+    tables: &Tables,
+    placement: VectorPlacement,
+    masks: &dyn VectorMaskSource,
+) -> Option<Cut> {
     if masks.series_whole() {
         return None;
     }
-    let (shown, to_device) = shown_through(scene, placement.clip, placement.transform)?;
+    let (shown, to_device) = shown_through(tables, placement.clip, placement.transform)?;
     // One over the smallest singular value of the linear part.
     let [a, b, c, d, _, _] = to_device.as_coeffs();
     let (p, q, r) = (a * a + b * b, c * c + d * d, a * c + b * d);
@@ -394,7 +399,7 @@ pub(super) fn emit_series(
         zgui_canvas::Series::Line { stroke, brush, .. } => {
             let half = stroke.width / 2.0 * scale;
             let part = if lod {
-                columns(rec.scene_ref(), data, to_local, placement, masks)
+                columns(rec.tables_ref(), data, to_local, placement, masks)
                     .map_or(SeriesPart::Line, |bucket| SeriesPart::Columns { bucket })
             } else {
                 SeriesPart::Line
@@ -411,8 +416,8 @@ pub(super) fn emit_series(
     }
 
     let [a, b, c, d, _, _] = coefficients;
-    let device = device_scale(rec.scene_ref(), placement);
-    let cut = cut_of(rec.scene_ref(), placement, masks);
+    let device = device_scale(rec.tables_ref(), placement);
+    let cut = cut_of(rec.tables_ref(), placement, masks);
     let refs = (rec.clip(placement.clip), rec.space(placement.transform));
     let mut pushed = 0;
     let mut drew = false;
@@ -445,7 +450,7 @@ pub(super) fn emit_series(
         if provisional {
             outcome.owed = Some(union(
                 outcome.owed.flatten(),
-                owed_of(rec.scene_ref(), placement, ink),
+                owed_of(rec.tables_ref(), placement, ink),
             ));
         }
         let lane = match part.part {
@@ -484,8 +489,8 @@ pub(super) fn emit_series(
 
 /// How many device pixels one local unit spans at most under the placement's transform, or one
 /// when the transform does not resolve to a plane.
-fn device_scale(scene: &Scene, placement: VectorPlacement) -> f64 {
-    scene
+fn device_scale(tables: &Tables, placement: VectorPlacement) -> f64 {
+    tables
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -502,8 +507,8 @@ fn device_scale(scene: &Scene, placement: VectorPlacement) -> f64 {
 }
 
 /// The device pixels of `ink`, in local units, that the viewport shows, rounded out.
-fn owed_of(scene: &Scene, placement: VectorPlacement, ink: kurbo::Rect) -> Owed {
-    let ink = under(scene, placement.transform, rect_of(ink));
+fn owed_of(tables: &Tables, placement: VectorPlacement, ink: kurbo::Rect) -> Owed {
+    let ink = under(tables, placement.transform, rect_of(ink));
     let edges = [
         ink.left().0.floor(),
         ink.top().0.floor(),
@@ -513,7 +518,7 @@ fn owed_of(scene: &Scene, placement: VectorPlacement, ink: kurbo::Rect) -> Owed 
     if !edges.iter().all(|edge| edge.is_finite()) {
         return None;
     }
-    let viewport = scene.viewport();
+    let viewport = tables.viewport();
     let [left, top, right, bottom] = edges.map(|edge| edge.clamp(-1.0, f32::from(i16::MAX)) as i32);
     let rect = Rect::new(Point::new(left, top), Size::new(right - left, bottom - top));
     rect.intersection(Rect::new(Point::new(0, 0), viewport))
@@ -532,7 +537,7 @@ pub(super) fn union(held: Owed, more: Owed) -> Owed {
 /// The data must run left to right, and the line must map data x to device x alone, under an
 /// upright transform. `None` when a device column holds four points or fewer.
 fn columns(
-    scene: &Scene,
+    tables: &Tables,
     data: &Arc<[[f32; 2]]>,
     to_local: Affine,
     placement: VectorPlacement,
@@ -543,7 +548,7 @@ fn columns(
     if !upright(b, c, a.abs().max(d.abs())) {
         return None;
     }
-    let spatial = scene
+    let spatial = tables
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -600,7 +605,7 @@ fn emit_path_markers(
         return None;
     }
     let affine = rec
-        .scene_ref()
+        .tables_ref()
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -635,8 +640,8 @@ fn emit_path_markers(
     }
 
     let [a, b, c, d, _, _] = markers.to_local.as_coeffs();
-    let device = device_scale(rec.scene_ref(), placement);
-    let cut = cut_of(rec.scene_ref(), placement, masks);
+    let device = device_scale(rec.tables_ref(), placement);
+    let cut = cut_of(rec.tables_ref(), placement, masks);
     let refs = (rec.clip(placement.clip), rec.space(placement.transform));
     let mut pushed = 0;
     let mut drew = false;
@@ -678,7 +683,7 @@ fn emit_path_markers(
         if provisional {
             outcome.owed = Some(union(
                 outcome.owed.flatten(),
-                owed_of(rec.scene_ref(), placement, ink),
+                owed_of(rec.tables_ref(), placement, ink),
             ));
         }
         let map = Affine::new([a, b, c, d, origin.x, origin.y]);
@@ -809,7 +814,7 @@ fn brush_paint(
     } else {
         zgui_svg::document::place::paint(&paint, fit)
     };
-    let reference = reference(rec.scene(), &paint, inherited);
+    let reference = reference(rec.tables(), &paint, inherited);
     rec.paint(reference)
 }
 

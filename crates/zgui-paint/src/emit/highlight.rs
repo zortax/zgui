@@ -21,7 +21,7 @@ use zgui_color::Color;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Point, Rect};
 use zgui_layout::fragment::ParagraphId;
-use zgui_scene::{ClipId, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::{self, Recorder};
 

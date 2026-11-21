@@ -17,15 +17,15 @@ use zgui_dom::side::{AnimOverride, AnimPlacement};
 use zgui_geom::DevicePx;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::Painter;
+use zgui_paint::Tables;
 use zgui_profile::{Counter, counter};
-use zgui_scene::Scene;
 use zgui_space::{PropertyOwner, SpatialId};
 
 /// Moves boxes by writing the display list's coordinate systems, and recolours them by writing
 /// the paint slots they own.
 pub(crate) struct Writing<'a> {
     /// The display list holding the coordinate systems and the frame that is on the screen.
-    pub scene: &'a mut Scene,
+    pub tables: &'a mut Tables,
     /// The boxes, for the border box a transform is resolved against.
     pub layout: &'a LayoutStore,
     /// How many device pixels one CSS pixel is.
@@ -50,7 +50,7 @@ impl Placer for Writing<'_> {
             counter::bump(Counter::PlaceWritesWithReemit);
             return Placed::Recomposed;
         };
-        if self.scene.spatial.place(space, matrix) {
+        if self.tables.spatial.place(space, matrix) {
             counter::bump(Counter::PlaceWritesWithoutReemit);
             self.moved.push(space);
             self.reach(node);
@@ -78,7 +78,7 @@ impl Writing<'_> {
         };
         for frag in self.layout.fragments_of_box(*box_key) {
             if let Some(fragment) = self.layout.fragment(*frag) {
-                let ink = fragment.on_device_in(fragment.subtree_ink, &self.scene.spatial);
+                let ink = fragment.on_device_in(fragment.subtree_ink, &self.tables.spatial);
                 self.damage.absorb(whole(ink));
             }
         }
@@ -90,7 +90,7 @@ impl Writing<'_> {
         let Some(box_key) = self.layout.boxes_of(node).first() else {
             return false;
         };
-        let Some(matrix) = self.scene.spatial.resolve(space) else {
+        let Some(matrix) = self.tables.spatial.resolve(space) else {
             return false;
         };
         let surface = zgui_geom::Rect::new(
@@ -126,7 +126,7 @@ impl Writing<'_> {
             fragment.border_box,
             self.scale,
         )?;
-        let space = self.scene.spatial.of(PropertyOwner::of(box_key))?;
+        let space = self.tables.spatial.of(PropertyOwner::of(box_key))?;
         Some((space, matrix))
     }
 }

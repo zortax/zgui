@@ -1,8 +1,8 @@
 //! Turning the parameters a style sheet wrote into the block an effect is drawn with.
 
 use compositor_types::ParamsBlock;
+use zgui_css::shader::ShaderId;
 use zgui_geom::{Device, DevicePx, Point, Rect};
-use zgui_scene::ShaderId;
 
 use crate::content::shader::{ShaderBinding, ShaderSource};
 use crate::lower::NamedShader;
@@ -28,7 +28,7 @@ pub fn filter_step(
 ) -> Option<ShaderStep> {
     let named = named?;
     let binding = shaders.effect(&named.name)?;
-    if binding.mode != zgui_scene::ShaderMode::Filter {
+    if binding.mode != zgui_css::shader::ShaderMode::Filter {
         // The property said the effect filters and the effect does something else. Running it
         // anyway would read a target with a shader written to draw a rectangle.
         return None;
@@ -89,9 +89,9 @@ mod tests {
     use super::{block, block_at};
     use crate::content::shader::ShaderBinding;
     use crate::lower::NamedShader;
+    use zgui_css::shader::ShaderField;
+    use zgui_css::shader::{ShaderId, ShaderMode, ShaderReads};
     use zgui_geom::{DevicePx, Point, Rect, Size};
-    use zgui_scene::ShaderField;
-    use zgui_scene::{ShaderId, ShaderMode, ShaderReads};
 
     const FIELDS: [ShaderField; 2] = [
         ShaderField {

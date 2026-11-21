@@ -5,11 +5,11 @@
 
 mod support;
 
+use kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
 use zgui_atlas::AtlasLimits;
 use zgui_canvas::{Brush, SceneHandle, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{PaintReport, VectorCache, VectorRoute};
-use zgui_scene::kurbo::{self, BezPath, Circle, RoundedRect, Shape as _};
 use zgui_testkit_compositor::{Drawing, Instance};
 
 use support::drawn::numbers;

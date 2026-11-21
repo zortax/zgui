@@ -19,13 +19,15 @@ impl Violation {
     }
 }
 
-/// Whether the checks are switched on outside tests.
+/// Reports whether the checks are switched on outside tests.
 ///
-/// One switch for the whole workspace, read where the display list reads it. Two readers would be
-/// two spellings of one thing, and the failure they produce is a run somebody believes is checked
-/// throughout with half of it switched off.
+/// The checks are on when `ZGUI_INVARIANTS` is set to a value other than empty or `0`. The
+/// variable is read once per process.
 pub fn enabled() -> bool {
-    zgui_scene::invariant::enabled()
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("ZGUI_INVARIANTS").is_ok_and(|value| value != "0" && !value.is_empty())
+    })
 }
 
 /// Runs the checks if they are switched on, and panics on the first violation.
