@@ -89,6 +89,7 @@ pub fn expand(
     // The passes that can grow, and the pass that finds nothing left to absorb.
     let bound = registry.len() + 1;
     let area = f64::from(surface.width.max(0)) * f64::from(surface.height.max(0));
+    let limit = damage.bound();
     for pass in 1..=bound {
         report.passes = pass;
         let mut grew = false;
@@ -99,7 +100,10 @@ pub fn expand(
             let Some(fragment) = store.fragment(*frag) else {
                 continue;
             };
-            let source = pixels(fragment.on_device(extent.source, placements));
+            let Some(source) = clip(pixels(fragment.on_device(extent.source, placements)), limit)
+            else {
+                continue;
+            };
             if !damage.intersects(source) || contains(damage, source) {
                 continue;
             }
@@ -132,6 +136,21 @@ fn finish(damage: &mut DamageSet, area: f64, mut report: Expansion) -> Expansion
         report.escalated = true;
     }
     report
+}
+
+/// Cuts `rect` to `bound` when one is set, returning `None` when nothing lies inside it.
+///
+/// [`DamageSet::absorb_whole`] cuts what it absorbs to the same bound. Testing and absorbing the
+/// clipped region keeps both on the same rectangle so the fixpoint settles when a read extent
+/// overhangs the surface.
+fn clip(
+    rect: zgui_geom::Rect<i32, Device>,
+    bound: Option<zgui_geom::Rect<i32, Device>>,
+) -> Option<zgui_geom::Rect<i32, Device>> {
+    match bound {
+        Some(bound) => rect.intersection(bound),
+        None => Some(rect),
+    }
 }
 
 /// Whether one rectangle of the set already contains all of `rect`.
@@ -184,7 +203,7 @@ mod tests {
     use zgui_bits::DamageSet;
     use zgui_geom::{Device, Point, Rect, Size};
 
-    use super::contains;
+    use super::{clip, contains};
 
     #[test]
     fn a_region_spread_across_two_rectangles_is_contained_by_neither() {
@@ -197,5 +216,18 @@ mod tests {
             &damage,
             Rect::new(Point::new(2, 2), Size::new(4, 4))
         ));
+    }
+
+    #[test]
+    fn clip_cuts_to_the_bound_and_drops_disjoint_rectangles() {
+        let bound: Rect<i32, Device> = Rect::new(Point::new(0, 0), Size::new(100, 100));
+        let overhanging: Rect<i32, Device> = Rect::new(Point::new(-18, -18), Size::new(136, 76));
+        assert_eq!(clip(overhanging, None), Some(overhanging));
+        assert_eq!(
+            clip(overhanging, Some(bound)),
+            Some(Rect::new(Point::new(0, 0), Size::new(100, 58)))
+        );
+        let outside: Rect<i32, Device> = Rect::new(Point::new(120, 0), Size::new(40, 40));
+        assert_eq!(clip(outside, Some(bound)), None);
     }
 }
