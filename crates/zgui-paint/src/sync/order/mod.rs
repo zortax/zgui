@@ -10,7 +10,8 @@
 //! - The layout store marks the order of its children as dirty.
 //! - A child's place in it changed: a fragment came or went, or the child gained or lost its node.
 //! - A child sorts by the place of other boxes, such as an absolutely positioned box ranked where
-//!   it was written. No mark covers those boxes, so the list is rebuilt on every sync.
+//!   it was written. No mark covers those boxes, so the list is checked after a sync that saw an
+//!   order mark below its box.
 //!
 //! A rebuilt list is written as one splice per run of entries that differs, and a list that did
 //! not change writes nothing.
