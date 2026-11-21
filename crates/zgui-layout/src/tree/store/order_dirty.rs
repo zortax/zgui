@@ -67,12 +67,11 @@ impl OrderJournal {
         {
             return ChangeCoverage::All;
         }
-        marked.extend(
-            self.marks
-                .iter()
-                .filter(|(revision, _)| *revision > version.revision)
-                .map(|(_, key)| *key),
-        );
+        // Marks are kept in revision order, so the newer ones are a suffix.
+        let start = self
+            .marks
+            .partition_point(|(revision, _)| *revision <= version.revision);
+        marked.extend(self.marks.range(start..).map(|(_, key)| *key));
         ChangeCoverage::Delta
     }
 }

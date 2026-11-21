@@ -49,7 +49,7 @@ pub(crate) struct Order {
     /// Entries spliced into the lists of nodes created during the current sync.
     created: usize,
     /// The boxes whose list holds a child that sorts by other boxes than itself, which no mark
-    /// covers, so a sync after any order mark checks the order of their children.
+    /// covers, so a sync after an order mark below one of them checks the order of its children.
     volatile: FxHashSet<BoxKey>,
     scratch: Scratch,
 }
@@ -159,13 +159,7 @@ impl Order {
         if coverage == ChangeCoverage::All {
             work.extend(self.nodes.keys().copied());
         }
-        // Without an order mark anywhere, no box moved among its siblings, so no child sorts
-        // differently by the place of other boxes.
-        let volatile: Vec<BoxKey> = if work.is_empty() {
-            Vec::new()
-        } else {
-            self.volatile.iter().copied().collect()
-        };
+        let volatile = self.volatile_above(context.store, &work, coverage);
         work.extend(self.dirty.drain());
 
         let mut entries = self.sync_root(context, root);
@@ -213,6 +207,40 @@ impl Order {
         let spliced = splice(context.tx, root, &self.root_entries, &entries);
         self.root_entries = entries;
         spliced
+    }
+
+    /// Returns the volatile boxes that are `marked` boxes or hold one below them, or every volatile
+    /// box when `coverage` is all of them.
+    ///
+    /// A child that sorts by the place of other boxes sorts by boxes below its owner, so only an
+    /// order mark there can change its rank.
+    fn volatile_above(
+        &self,
+        store: &LayoutStore,
+        marked: &[BoxKey],
+        coverage: ChangeCoverage,
+    ) -> Vec<BoxKey> {
+        if coverage == ChangeCoverage::All {
+            return self.volatile.iter().copied().collect();
+        }
+        let mut found = Vec::new();
+        if self.volatile.is_empty() {
+            return found;
+        }
+        let mut seen: FxHashSet<BoxKey> = FxHashSet::default();
+        for &key in marked {
+            let mut current = Some(key);
+            while let Some(key) = current {
+                if !seen.insert(key) {
+                    break;
+                }
+                if self.volatile.contains(&key) {
+                    found.push(key);
+                }
+                current = store.get(key).and_then(|node| node.parent);
+            }
+        }
+        found
     }
 
     /// Visits every box in `work` not yet `visited`, and returns the entries spliced.
