@@ -16,13 +16,17 @@ use zgui::runtime::AppError;
 
 /// A renderer that accepts a frame and does nothing with it, so the numbers are the CPU's.
 ///
-/// It reports a kept target once it presented a frame, and that it can move composed pixels, so
-/// the compositor narrows a scroll's or a resize's damage the way it does for a device.
+/// It reports what the device renderer reports, so the compositor builds each frame as it does
+/// for a device:
+///
+/// - The target is kept once a frame was presented, also across a change of size.
+/// - Composed pixels can be moved.
+/// - Lowered chunks stay resident.
 #[derive(Default)]
 pub struct NullRenderer {
     /// The surface it was configured for.
     target: Option<RenderTarget>,
-    /// Whether a frame was presented into the target since it was configured.
+    /// Whether the target holds a presented frame of the current scale and opacity.
     kept: bool,
 }
 
@@ -40,12 +44,18 @@ impl Renderer for NullRenderer {
     fn capabilities(&self) -> RenderCapabilities {
         RenderCapabilities {
             can_shift: true,
+            resident_chunks: true,
             ..RenderCapabilities::MINIMAL
         }
     }
 
     fn configure(&mut self, target: RenderTarget) {
-        if self.target.is_some_and(|held| held.size != target.size) {
+        // A change of scale or opacity changes what every kept pixel means. A change of size
+        // keeps the picture.
+        if self
+            .target
+            .is_some_and(|held| held.scale != target.scale || held.opaque != target.opaque)
+        {
             self.kept = false;
         }
         self.target = Some(target);
