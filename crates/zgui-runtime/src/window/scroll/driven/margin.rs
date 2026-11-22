@@ -156,18 +156,31 @@ impl Margin {
             0 => [extent.origin.x as f32, (extent.origin.x + extent.size.width) as f32],
             _ => [extent.origin.y as f32, (extent.origin.y + extent.size.height) as f32],
         });
-        let high = if high >= end {
+        let painted_high = if high >= end {
             high
         } else {
             painted.map_or(port_high, |painted| painted[1].min(high).max(port_high))
         };
-        let low = if low <= start {
+        let painted_low = if low <= start {
             low
         } else {
             painted.map_or(port_low, |painted| painted[0].max(low).min(port_low))
         };
+        // The compositor keeps the offset inside the content, so a margin that reaches an end of
+        // the content vouches for every offset past it.
         let shown = self.offset[axis];
-        [shown - (port_low - low), shown + (high - port_high)]
+        [
+            if low <= start {
+                f32::NEG_INFINITY
+            } else {
+                shown - (port_low - painted_low)
+            },
+            if high >= end {
+                f32::INFINITY
+            } else {
+                shown + (painted_high - port_high)
+            },
+        ]
     }
 }
 

@@ -113,10 +113,10 @@ impl Window {
         if wake {
             self.request_frame();
         }
-        // A frame that found nothing to build ends the motion, whether it stopped or never began.
-        self.driven.moving &= drawn.built;
+        // A frame that found nothing to build and no change to come ends the motion.
+        self.driven.moving &= drawn.built || drawn.wake_ns.is_some();
         let interval = self.refresh_interval();
-        self.driven.due = if self.driven.moving {
+        self.driven.due = if self.driven.moving && drawn.built {
             Some(self.clock.now() + interval)
         } else {
             drawn

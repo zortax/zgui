@@ -40,6 +40,8 @@ pub(crate) struct Driven {
     owner: Option<Owner>,
     /// The element that scrolled under the pointer when the gesture in progress started.
     latched: Option<zgui_dom::NodeKey>,
+    /// Whether the compositor routed a step of the gesture in progress to a node.
+    routed: bool,
     /// The rail and the speed of the touchpad gesture in progress.
     track: zgui_scroll::Track,
     /// Whether a frame that only presents the compositor's scrolling was asked for.

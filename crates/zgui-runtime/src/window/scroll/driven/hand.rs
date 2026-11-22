@@ -45,6 +45,7 @@ impl Window {
                 Owner::Window
             });
             self.driven.latched = container;
+            self.driven.routed = false;
             if wheel.phase == ScrollPhase::Started {
                 self.driven.track = zgui_scroll::Track::touching();
             }
@@ -93,10 +94,15 @@ impl Window {
         };
         zgui_profile::counter::bump(zgui_profile::Counter::GesturesHanded);
         match self.compositor.scroll_input(gesture) {
-            ScrollRouting::Handled { node, .. } => self.moving(node),
+            ScrollRouting::Handled { node, .. } => {
+                self.driven.routed = true;
+                self.moving(node);
+            }
+            // A gesture that begins without moving is routed by its first movement.
+            ScrollRouting::Unhandled if wheel.phase == ScrollPhase::Started => {}
             // compositor: routing starts from an item under the point, so a gesture over a part
             // of a port that draws nothing reaches no node. The window scrolls it instead.
-            ScrollRouting::Unhandled if !continues(wheel.phase) => {
+            ScrollRouting::Unhandled if !self.driven.routed => {
                 self.driven.owner = Some(Owner::Window);
                 return false;
             }
