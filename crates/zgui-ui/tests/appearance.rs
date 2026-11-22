@@ -50,7 +50,8 @@ use crate::painted::stage::{SETTLED, Stage};
 /// wide and whose fill nothing can be measured in.
 const SHEET: &str = ":root { background-color: #ffffff; color: #101010; font-family: sans-serif }
                      .page { padding: 32px; gap: 32px; align-items: flex-start }
-                     .track { width: 240px }";
+                     .track { width: 240px }
+                     .rtl { direction: rtl }";
 
 /// How dark every channel of a pixel has to be before it counts as the solid fill.
 ///
@@ -427,6 +428,54 @@ fn dragging_a_slider_carries_its_value_with_the_pointer() {
         answers.slid.get(),
         dragged,
         "releasing the pointer moved the value again"
+    );
+}
+
+#[test]
+fn a_right_to_left_slider_runs_from_its_right_edge() {
+    let slid = Rc::new(Cell::new(0.0));
+    let built = Built::default();
+    let view = {
+        let (slid, built) = (Rc::clone(&slid), built.clone());
+        move || {
+            let slider = NodeRef::new();
+            built.keep(&[slider]);
+            let slid = Rc::clone(&slid);
+            AnyView::new(view! {
+                ThemeProvider {
+                    column(class = "page") {
+                        column(class = "track rtl") {
+                            Slider(
+                                node_ref = slider,
+                                step = 5.0,
+                                on_change = UnsyncCallback::new(move |next: f64| slid.set(next))
+                            )
+                        }
+                    }
+                }
+            })
+        }
+    };
+    let mut stage = staged!(view);
+    let slider = built.node(0);
+
+    let at = stage.along(slider, 0.25);
+    stage.click(at);
+    stage.wait(SETTLED);
+    assert_eq!(slid.get(), 75.0, "a press a quarter from the left edge");
+
+    let host = &stage.handles().host;
+    let thumb = stage
+        .census()
+        .nodes
+        .into_iter()
+        .filter(|node| host.contains(slider, node.id) && node.id != slider)
+        .find_map(|node| node.rect.filter(|rect| rect.size.width.0 == 16.0))
+        .expect("the slider has a thumb");
+    assert_eq!(
+        thumb.origin.x.0 + thumb.size.width.0 / 2.0,
+        at.x.0,
+        "the thumb is centred on the press"
     );
 }
 

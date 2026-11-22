@@ -40,6 +40,8 @@ const SHEET: &str = "zui-slider";
 /// still leaves the slider and a shortcut aimed at the surface still reaches it — see
 /// [`key_move`].
 ///
+/// In a right-to-left slider the left arrow increases the value and the right arrow decreases it.
+///
 /// # Dragging
 ///
 /// A press anywhere on the track moves the value to that point and captures the pointer, so the
@@ -136,6 +138,12 @@ pub fn Slider(
         }
         let x = x_css * track.scale();
         let fraction = f64::from((x - box_.origin.x.0) / box_.size.width.0);
+        // A right-to-left slider starts at its right edge.
+        let fraction = if track.is_rtl() {
+            1.0 - fraction
+        } else {
+            fraction
+        };
         held.set(bound.at(fraction));
     };
 
@@ -148,7 +156,14 @@ pub fn Slider(
                 if disabled.get_untracked() {
                     return;
                 }
-                let Some(asked) = key_move(&ev.key, bound) else { return };
+                // In a right-to-left slider the left arrow moves towards the end.
+                let rtl = track.is_rtl();
+                let key = match &ev.key {
+                    Key::Named(NamedKey::ArrowLeft) if rtl => Key::Named(NamedKey::ArrowRight),
+                    Key::Named(NamedKey::ArrowRight) if rtl => Key::Named(NamedKey::ArrowLeft),
+                    other => other.clone(),
+                };
+                let Some(asked) = key_move(&key, bound) else { return };
                 let next = match asked {
                     Move::By(by) => held.get_untracked() + by,
                     Move::To(to) => to,

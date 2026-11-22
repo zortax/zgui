@@ -320,6 +320,10 @@ impl ViewHost for StubHost {
         self.boxes.borrow().get(&node).copied()
     }
 
+    fn is_rtl(&self, _node: NodeId) -> bool {
+        false
+    }
+
     fn scale(&self) -> f32 {
         self.scale.get()
     }

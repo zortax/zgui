@@ -215,6 +215,10 @@ impl ViewHost for ScriptedHost {
         self.inner.window_box(node)
     }
 
+    fn is_rtl(&self, node: NodeId) -> bool {
+        self.inner.is_rtl(node)
+    }
+
     fn scale(&self) -> f32 {
         self.inner.scale()
     }
