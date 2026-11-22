@@ -566,6 +566,13 @@ impl WindowHandle {
         self.act(|surface| surface.request_attention(urgent));
     }
 
+    /// Opens the desktop's native window menu at window-local `position`, in CSS pixels.
+    pub fn show_window_menu(&self, position: Point<CssPx, Css>) {
+        self.act(|surface| {
+            let _ = surface.show_window_menu(position);
+        });
+    }
+
     /// Begins a desktop-driven move of the window.
     ///
     /// What a window drawing its own title bar calls from a pointer press on it: on a desktop that

@@ -297,6 +297,23 @@ pub fn begin_resize_drag(
     Ok(())
 }
 
+/// Opens the desktop's native window menu at surface-local `position`.
+pub fn show_window_menu(
+    surface: &WaylandSurface,
+    position: zgui_geom::Point<zgui_geom::CssPx, zgui_geom::Css>,
+) -> Result<(), Unsupported> {
+    let (seat, serial) = surface.seat().menu()?;
+    let window = surface.role().window().ok_or(Unsupported)?;
+    window.show_window_menu(
+        &seat,
+        serial,
+        position.x.0.round() as i32,
+        position.y.0.round() as i32,
+    );
+    let _ = surface.connection().flush();
+    Ok(())
+}
+
 /// The edge a resize was started from, in the shell's own numbering.
 const fn resize_edge(edge: zgui_platform::ResizeEdge) -> ResizeEdge {
     match edge {
