@@ -549,15 +549,6 @@ impl App {
         self
     }
 
-    /// Lets the compositor scroll the windows' content on its own, or makes every window write
-    /// each scroll offset itself.
-    ///
-    /// On by default.
-    pub fn with_compositor_scrolling(mut self, on: bool) -> Self {
-        self.inner = self.inner.with_compositor_scrolling(on);
-        self
-    }
-
     /// Draws the frames of each window with the renderer `make` returns for the window's first
     /// size.
     ///

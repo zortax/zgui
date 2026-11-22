@@ -78,8 +78,10 @@ fn near_the_top(steps: &mut Vec<Step>) {
 fn down_the_page(steps: &mut Vec<Step>) {
     steps.extend([
         Step::Fling(24.0),
-        Step::Drag(-260.0),
-        Step::Drag(180.0),
+        // Whole pixels per move: the compositor shows whole pixels, and a window rebuilt from
+        // nothing every turn rounds each move on its own.
+        Step::Drag(-264.0),
+        Step::Drag(176.0),
         Step::Fling(-8.0),
         Step::Press("sheet-trigger"),
         Step::Dismiss,

@@ -50,8 +50,8 @@ impl Window {
             return *sensitive;
         }
         let filter = self.engine.filter();
-        let mut document = self.document.borrow_mut();
-        let store = document.store_mut();
+        let document = self.document.borrow();
+        let store = document.store();
         let mut sensitive = false;
         let mut stack: Vec<_> = store
             .index_of(container)
@@ -122,8 +122,8 @@ impl Window {
                 .collect()
         };
         let filter = self.engine.filter();
-        let mut document = self.document.borrow_mut();
-        let store = document.store_mut();
+        let document = self.document.borrow();
+        let store = document.store();
         changed.iter().any(|key| {
             store
                 .index_of(*key)

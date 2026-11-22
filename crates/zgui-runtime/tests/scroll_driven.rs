@@ -284,6 +284,36 @@ fn a_click_during_a_fling_lands_on_the_row_the_compositor_shows() {
 }
 
 #[test]
+fn a_freeze_of_the_root_stops_a_fling_of_the_root() {
+    let _turn = zgui_profile::counter::exclusive();
+    let css = "root { display: block; width: 400px; height: 300px; overflow-y: scroll }
+               .row { display: block; height: 20px; background-color: #202020 }";
+    let mut harness = support::app_with_text(css, move |cx: &mut BuildCx<'_>| {
+        let mut page = zgui_elements::column();
+        for _ in 0..200 {
+            page = page.child(zgui_elements::column().class("row"));
+        }
+        Box::new(page.into_view().build(cx))
+    });
+    harness.settle(8);
+
+    fling(&mut harness, 20.0);
+    run(&mut harness, 3);
+    let host = harness.app().windows()[0].host().clone();
+    zgui_view::ViewHost::freeze_scrolling(&*host, true);
+    run(&mut harness, 2);
+    let frozen = offset(&harness);
+    run(&mut harness, 60);
+
+    assert!(frozen > 0.0, "the fling moved nothing before the freeze");
+    assert_eq!(
+        offset(&harness),
+        frozen,
+        "the fling went on from {frozen} after the root froze"
+    );
+}
+
+#[test]
 fn a_reader_finds_the_rows_where_a_fling_left_them() {
     use zgui_view::A11yBinding;
     use zgui_vocab::Role;

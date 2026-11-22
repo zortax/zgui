@@ -92,11 +92,10 @@ mod verify;
 
 use zgui::geom::{CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
-use zgui_platform_headless::Harness;
 
 use crate::draw::mounted_recorder;
 use crate::drive::every_size;
-use crate::gallery::{HEIGHT, STILL, WIDTH, mounted_scheme, runtime};
+use crate::gallery::{HEIGHT, STILL, WIDTH, mounted_scheme};
 use crate::inspect::{document, swatch_centres};
 
 fn main() {
@@ -186,7 +185,7 @@ fn main() {
 
     zgui_profile::latency::start_epoch();
 
-    let mut harness = Harness::new(runtime(&size));
+    let mut harness = crate::gallery::harness(&size);
     let live_scheme = mounted_scheme();
     let live_full = mounted_recorder();
     harness.deliver_to_first(SurfaceEvent::Resized(Size::new(

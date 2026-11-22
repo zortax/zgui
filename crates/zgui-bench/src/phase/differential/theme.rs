@@ -7,11 +7,10 @@
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
-use zgui_platform_headless::Harness;
 use zgui_ui_tokens::prelude::*;
 
 use crate::draw::mounted_recorder;
-use crate::gallery::{HEIGHT, WIDTH, mounted_scheme, runtime};
+use crate::gallery::{HEIGHT, WIDTH, mounted_scheme};
 
 use crate::phase::Driver;
 
@@ -38,7 +37,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
     let _ = (boxes, fragments, live_scheme, &live_full, &size);
     Some(match phase {
         "theme-check" => {
-            let mut born = Harness::new(runtime(&size));
+            let mut born = crate::gallery::harness(&size);
             let born_scheme = mounted_scheme();
             let born_full = mounted_recorder();
             born_scheme.set(ColorScheme::Dark);

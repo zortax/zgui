@@ -112,9 +112,10 @@ pub(crate) const KNOWN: &[Known] = &[
         size: "s2",
         steps: 108,
         faults: &[],
-        // Nothing rounds here any more. Every step of this document used to land the two windows a
-        // fraction of a device pixel apart at nineteen of the ninety-five; they now agree exactly.
-        roundings: &[],
+        // The notch at step 67 is scrolled by the compositor in the window that keeps running and
+        // written by the window rebuilt from nothing, and the rotated path drawn there ends 0.0001
+        // device pixels apart in the two windows.
+        roundings: &[67],
         // The one step whose disagreement cannot be asserted either way. See
         // [`A_PICKED_SWATCH_THAT_IS_NOT_ALWAYS_BORDERED_YET`]; every other step is held exactly.
         unstable: &[3],

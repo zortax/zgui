@@ -25,6 +25,19 @@ pub(crate) const WIDTH: f32 = 1600.0;
 /// How tall it opens.
 pub(crate) const HEIGHT: f32 = 1000.0;
 
+/// Opens a headless platform over the runtime for one document size.
+///
+/// The desktop animates its own wheel detents, so the compositor applies every step at once and
+/// nothing is in flight when a window forgets what it recorded.
+pub(crate) fn harness(size: &str) -> zgui_platform_headless::Harness<Runtime> {
+    let desktop = zgui::platform::scroll::ScrollSettings::desktop()
+        .with_wheel(zgui::platform::scroll::WheelMotion::Continuous);
+    zgui_platform_headless::Harness::over(
+        zgui_platform_headless::Headless::new().with_scroll_settings(desktop),
+        runtime(size),
+    )
+}
+
 /// Builds the runtime for one document size.
 pub(crate) fn runtime(size: &str) -> Runtime {
     let fonts = Fonts::system();
@@ -35,9 +48,6 @@ pub(crate) fn runtime(size: &str) -> Runtime {
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(sheet())
         .with_compositor(zgui::app::compositor(&fonts))
-        // The phases over this document check the window's own frames, and a window whose sync
-        // is forgotten every turn loses the compositor's scrolling with it.
-        .with_compositor_scrolling(false)
         .with_renderer(renderer())
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

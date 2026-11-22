@@ -22,6 +22,8 @@ pub(super) struct Driven {
     pub(super) drive: ScrollDrive,
     /// Whether gestures may scroll each axis, as `[x, y]`.
     pub(super) user: [bool; 2],
+    /// Whether the node scrolls the content no gesture may scroll.
+    pub(super) frozen: bool,
 }
 
 impl Driven {

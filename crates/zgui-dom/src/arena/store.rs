@@ -176,19 +176,27 @@ impl DocumentStore {
 
     /// Reports whether any active selector could match `index` on one of the bits of `state`.
     ///
-    /// The answer comes from [`DocumentStore::states_for`].
+    /// The answer is the one [`DocumentStore::states_for`] gives, read from its cache when it holds
+    /// one and asked of `filter` otherwise, without filling the cache.
     ///
     /// # Panics
     ///
     /// Panics if `index` names no live node of this document.
     pub fn watches(
-        &mut self,
+        &self,
         index: NodeIndex,
         filter: &dyn StyleFilter,
         state: zgui_vocab::UiState,
     ) -> bool {
-        self.states_for(index, filter)
-            .intersects(crate::node::element::state::to_engine(state))
+        let mask = if filter.is_disabled() {
+            stylo_dom::ElementState::all()
+        } else {
+            match self.columns.state_mask.get(self.key_of(index)) {
+                Some(Some(cached)) => *cached,
+                _ => filter.states_for(crate::node::handle::Node::new(self.core(index))),
+            }
+        };
+        mask.intersects(crate::node::element::state::to_engine(state))
     }
 
     /// Forgets `index`'s cached state mask.

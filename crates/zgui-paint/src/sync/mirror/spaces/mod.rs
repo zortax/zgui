@@ -207,6 +207,7 @@ impl Spaces {
         Some(Driven {
             drive,
             user: if frozen { [false; 2] } else { scroll.user },
+            frozen,
         })
     }
 
@@ -373,7 +374,8 @@ impl Spaces {
     ///
     /// `behaved` holds the new behaviour's source when the behaviour changed. A node whose port,
     /// content or behaviour changed is written whole at its base offset, so the compositor's
-    /// motion goes on. An adopted offset becomes that base first.
+    /// motion goes on. An adopted offset becomes that base first. A node that became frozen is then
+    /// scrolled to that offset, which ends its motion.
     fn write_scroll(
         &mut self,
         tx: &mut Transaction,
@@ -390,6 +392,12 @@ impl Spaces {
                 writes += 1;
             }
             tx.set_scroll_node(id, new.node(space, driven.map(Driven::behaviour)));
+            let froze = behaved.is_some_and(|behaved| behaved.is_some_and(|driven| driven.frozen))
+                && !self.driven_of(id).is_some_and(|driven| driven.frozen);
+            if froze {
+                tx.scroll_to(id, new.offset);
+                writes += 1;
+            }
             return writes;
         }
         if old.offset == new.offset {

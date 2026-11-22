@@ -10,7 +10,7 @@ use zgui::runtime::Runtime;
 use zgui_platform_headless::Harness;
 
 use crate::draw::mounted_recorder;
-use crate::gallery::{HEIGHT, WIDTH, mounted_scheme, runtime};
+use crate::gallery::{HEIGHT, WIDTH, mounted_scheme};
 use crate::input::focus_a_field;
 use crate::inspect::{document, swatch_centres};
 
@@ -52,7 +52,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
     let _ = (boxes, fragments, live_scheme, &live_full, &size);
     Some(match phase {
         "verify" => {
-            let mut cold = Harness::new(runtime(&size));
+            let mut cold = crate::gallery::harness(&size);
             let cold_scheme = mounted_scheme();
             let cold_full = mounted_recorder();
             cold.deliver_to_first(SurfaceEvent::Resized(Size::new(

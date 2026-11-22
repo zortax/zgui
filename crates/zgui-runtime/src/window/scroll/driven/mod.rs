@@ -35,8 +35,6 @@ use crate::window::Window;
 pub(crate) struct Driven {
     /// Whether the compositor routes gestures and moves scroll nodes.
     on: bool,
-    /// Whether the window lets the compositor scroll, where it can.
-    refused: bool,
     /// The newest offset each node shows that the window has not adopted.
     shown: FxHashMap<ScrollId, Shown>,
     /// The nodes the compositor moves, and how far each may move before the window records more.
@@ -104,11 +102,12 @@ impl Driven {
     }
 
     /// Forgets every node, for a client registered again without them.
+    ///
+    /// The gesture in progress and the steps of it not handed over yet are kept, and the
+    /// compositor routes them to the nodes it is given again.
     pub(crate) fn forget(&mut self) {
         self.shown.clear();
-        self.handed.clear();
         self.active.clear();
-        self.owner = None;
         self.moving = false;
         self.due = None;
     }
@@ -122,19 +121,13 @@ impl Driven {
 }
 
 impl Window {
-    /// Lets the compositor scroll this window's content on its own, or makes the window write each
-    /// scroll offset itself.
-    pub(crate) fn set_compositor_scrolling(&mut self, on: bool) {
-        self.driven.refused = !on;
-    }
-
     /// Tells the compositor how to scroll this window's content on its own.
     ///
     /// A compositor that routes gestures scrolls every node with this desktop's scroll settings,
     /// and the frozen container under none. Any other compositor scrolls only by the window's
     /// writes.
     pub(crate) fn sync_scroll_drive(&mut self) {
-        let on = !self.driven.refused && self.compositor.capabilities().scroll_input;
+        let on = self.compositor.capabilities().scroll_input;
         self.driven.on = on;
         let settings = self.scroll_settings();
         let mut bounce = Sources::NONE;
