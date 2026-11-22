@@ -460,6 +460,75 @@ fn the_expansion_settles_over_two_overlapping_blurred_panels() {
 }
 
 #[test]
+fn the_expansion_settles_when_a_bounded_damage_set_clips_a_read_extent() {
+    // A blurred panel flush with the surface edge reads past the surface. A runtime damage set is
+    // bounded to the surface, so `absorb_whole` stores the clipped source region; the fixpoint
+    // compares against that same clipped rectangle and settles.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("one")]),
+        "root { display: block; width: 400px; height: 400px }
+         one { display: block; height: 40px; filter: blur(6px) }",
+        400.0,
+        400.0,
+    );
+    harness.paint_everything();
+    harness.clear_damage();
+    let surface = rect(0, 0, harness.viewport.width, harness.viewport.height);
+    harness.damage.set_bound(Some(surface));
+    harness.damage.absorb(rect(0, 0, 10, 10));
+    let expansion = harness.expand();
+    assert_eq!(expansion.absorbed, 1);
+    assert_eq!(expansion.passes, 2);
+    assert!(
+        !expansion.escalated,
+        "one small panel overhanging the surface bound still settles"
+    );
+    assert!(!harness.damage.is_full());
+
+    let one = harness.fragment_of("one");
+    let source =
+        zgui_paint::read_extent_of(&harness.store, one, harness.scale).expect("a read extent");
+    let clipped = pixels(source.source)
+        .intersection(surface)
+        .expect("the panel lies on the surface");
+    assert!(
+        harness
+            .damage
+            .rects()
+            .iter()
+            .any(|held| held.contains_rect(clipped)),
+        "one rectangle holds the full on-surface source region"
+    );
+
+    let report = harness.paint();
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    report.assert_emission_complete(&harness.store, &harness.damage, &placements);
+}
+
+#[test]
+fn the_expansion_settles_over_two_overlapping_bounded_blurred_panels() {
+    // Two blurred panels whose read extents overhang the surface edge: absorbing the first reaches
+    // the second, and the bounded fixpoint settles once both clipped source regions are held.
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("one"), Element::new("two")]),
+        "root { display: block; width: 400px; height: 400px }
+         one { display: block; height: 60px; filter: blur(6px) }
+         two { display: block; height: 40px; filter: blur(6px) }",
+        400.0,
+        400.0,
+    );
+    harness.paint_everything();
+    harness.clear_damage();
+    let surface = rect(0, 0, harness.viewport.width, harness.viewport.height);
+    harness.damage.set_bound(Some(surface));
+    harness.damage.absorb(rect(0, 0, 10, 10));
+    let expansion = harness.expand();
+    assert_eq!(expansion.absorbed, 2);
+    assert!(!expansion.escalated);
+    assert!(!harness.damage.is_full());
+}
+
+#[test]
 fn a_replayed_ranges_indices_still_resolve_to_what_they_were_recorded_with() {
     // A replayed range carries *last* frame's clip, paint and transform indices. They resolve only
     // because the side tables are kept across frames and an entry keeps its identity while anything
