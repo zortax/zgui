@@ -61,8 +61,8 @@ pub(crate) struct Driven {
     /// Whether the client was registered again since those steps were handed, so the compositor
     /// lost them.
     lost: bool,
-    /// Whether a `:hover` rule can match an element inside each container, as of the window's
-    /// last frame.
+    /// Whether a `:hover` rule can match an element inside each container asked about since the
+    /// window's last frame.
     sensitive: FxHashMap<zgui_dom::NodeKey, bool>,
     /// Whether the compositor's scrolling moved an element a `:hover` rule can match under the
     /// pointer or out from under it since the window's last frame.

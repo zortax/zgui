@@ -98,6 +98,18 @@ impl<'doc> Edit<'doc> {
         unsafe { (document.store_exclusive(), document.edit_state().batch()) }
     }
 
+    /// Reports whether any active selector could match `node` on one of the bits of `state`.
+    ///
+    /// The answer is kept on the element, as [`DocumentStore::states_for`] keeps it.
+    pub fn watches(
+        &mut self,
+        node: crate::id::node_key::NodeIndex,
+        state: zgui_vocab::UiState,
+    ) -> bool {
+        self.watched_states(node)
+            .intersects(crate::node::element::state::to_engine(state))
+    }
+
     /// Which interaction-state bits any active selector could match `node` on.
     fn watched_states(&mut self, node: crate::id::node_key::NodeIndex) -> stylo_dom::ElementState {
         let filter = self.filter;

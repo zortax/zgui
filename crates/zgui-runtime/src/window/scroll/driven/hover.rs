@@ -36,7 +36,7 @@ impl Window {
         let Some((container, ahead)) = moved else {
             return;
         };
-        if self.hover_sensitive(container) && self.hover_moves(container, at, ahead) {
+        if self.hover_moves(container, at, ahead) {
             self.driven.hover_owed = true;
             self.request_frame();
         }
@@ -46,29 +46,36 @@ impl Window {
     ///
     /// The answer is kept until the window's next frame.
     fn hover_sensitive(&mut self, container: NodeKey) -> bool {
-        if let Some(sensitive) = self.driven.sensitive.get(&container) {
-            return *sensitive;
+        if let Some(&sensitive) = self.driven.sensitive.get(&container) {
+            return sensitive;
         }
-        let filter = self.engine.filter();
-        let document = self.document.borrow();
-        let store = document.store();
-        let mut sensitive = false;
-        let mut stack: Vec<_> = store
-            .index_of(container)
-            .and_then(|index| store.core(index).first_child())
-            .into_iter()
-            .collect();
-        while let Some(index) = stack.pop() {
-            if store.core(index).kind() == zgui_dom::NodeKind::Element
-                && store.watches(index, &filter, UiState::HOVER)
-            {
-                sensitive = true;
-                break;
-            }
-            stack.extend(store.core(index).next_sibling());
-            stack.extend(store.core(index).first_child());
-        }
-        drop(document);
+        let sensitive = {
+            let filter = self.engine.filter();
+            let document = self.document.borrow();
+            document
+                .edit(&filter, |edit| {
+                    let start = edit.document().store().index_of(container);
+                    let mut stack: Vec<_> = start
+                        .and_then(|index| edit.document().store().core(index).first_child())
+                        .into_iter()
+                        .collect();
+                    while let Some(index) = stack.pop() {
+                        let core = edit.document().store().core(index);
+                        let (element, sibling, child) = (
+                            core.kind() == zgui_dom::NodeKind::Element,
+                            core.next_sibling(),
+                            core.first_child(),
+                        );
+                        if element && edit.watches(index, UiState::HOVER) {
+                            return true;
+                        }
+                        stack.extend(sibling);
+                        stack.extend(child);
+                    }
+                    false
+                })
+                .unwrap_or(true)
+        };
         self.driven.sensitive.insert(container, sensitive);
         sensitive
     }
@@ -77,7 +84,7 @@ impl Window {
     /// element a `:hover` rule can match under the pointer at `at` or out from under it.
     ///
     /// Content shown under the pointer that lies outside the container in the window's own
-    /// layout counts as moved.
+    /// layout counts as moved if a `:hover` rule can match any element inside the container.
     fn hover_moves(
         &mut self,
         container: NodeKey,
@@ -100,7 +107,8 @@ impl Window {
                 &self.host.placements(),
             );
             if !port.is_some_and(|port| port.contains(shifted)) {
-                return true;
+                drop((document, layout));
+                return self.hover_sensitive(container);
             }
             let filter = self.engine.filter();
             let world = zgui_input::World {
