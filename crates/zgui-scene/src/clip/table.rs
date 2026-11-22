@@ -581,6 +581,10 @@ fn placed(
     let Some(matrix) = matrix else {
         return (rect, radii);
     };
+    if matrix.plane_translation() == Some((0.0, 0.0)) {
+        // Round the far edge before taking the extent, as the four-corner path does.
+        return (Rect::from_corners(rect.origin, rect.far_corner()), radii);
+    }
     let (x, y) = (rect.origin.x.0, rect.origin.y.0);
     let (width, height) = (rect.size.width.0, rect.size.height.0);
     let corners = [
