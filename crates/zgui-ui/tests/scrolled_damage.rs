@@ -98,7 +98,7 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
     // Rows that light up would make a repaint differ by the hover the next frame applies.
     let row = match item {
         Item::EasedRows => "row eased",
-        Item::Progress | Item::Field => "still",
+        Item::Tint | Item::Progress | Item::Field => "still",
         _ => "row",
     };
     let stage = Stage::open(SHEET, move || {
@@ -463,6 +463,13 @@ fn a_colour_step_in_a_scrolled_list_shows_one_colour() {
 #[test]
 fn an_opacity_step_in_a_scrolled_list_shows_one_level() {
     one_level_per_frame(Item::Fade);
+}
+
+/// Fails when any frame of a list whose boxes step their colour, also outside the port, differs
+/// from a full repaint of the same moment.
+#[test]
+fn a_colour_step_in_a_scrolled_list_matches_a_repaint() {
+    matches_a_repaint(Item::Tint);
 }
 
 /// Fails when any frame of the library's indeterminate bar in a scrolled list differs from a full
