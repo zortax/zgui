@@ -646,8 +646,26 @@ impl Stage {
     ///
     /// Panics when the node has no box.
     pub fn rect_of(&self, node: zgui::view::NodeId) -> zgui::geom::Rect<DevicePx, Device> {
-        crate::desktop::census::absolute(&self.handles, node)
+        self.shown(node)
             .unwrap_or_else(|| panic!("{node:?} is not laid out, so it covers nothing"))
+    }
+
+    /// Where `node` is in the picture the compositor shows.
+    ///
+    /// The window's own layout moved by however far the compositor scrolled each container
+    /// around `node` ahead of the window, since a frame of the compositor's scrolling runs no
+    /// frame of the window.
+    fn shown(&self, node: zgui::view::NodeId) -> Option<zgui::geom::Rect<DevicePx, Device>> {
+        let mut rect = crate::desktop::census::absolute(&self.handles, node)?;
+        let mut above = self.handles.dom.parent(node);
+        while let Some(container) = above {
+            if let Some(ahead) = crate::device::compositor::scrolled_ahead(container) {
+                rect.origin.x.0 -= ahead.width.0;
+                rect.origin.y.0 -= ahead.height.0;
+            }
+            above = self.handles.dom.parent(container);
+        }
+        Some(rect)
     }
 
     /// Every colour inside `rect` in the most recent frame that drew, one entry per pixel.
@@ -723,7 +741,8 @@ impl Stage {
     /// Panics when the node has no box, because a fixture that quietly aimed at the origin reports
     /// the same thing as a control that does not answer.
     pub fn centre_of(&self, node: zgui::view::NodeId) -> Point<DevicePx, Device> {
-        let rect = crate::desktop::census::absolute(&self.handles, node)
+        let rect = self
+            .shown(node)
             .unwrap_or_else(|| panic!("{node:?} is not laid out, so there is nowhere to aim"));
         Point::new(
             DevicePx(rect.origin.x.0 + rect.size.width.0 / 2.0),
@@ -737,7 +756,8 @@ impl Stage {
     ///
     /// Panics when the node has no box.
     pub fn along(&self, node: zgui::view::NodeId, fraction: f32) -> Point<DevicePx, Device> {
-        let rect = crate::desktop::census::absolute(&self.handles, node)
+        let rect = self
+            .shown(node)
             .unwrap_or_else(|| panic!("{node:?} is not laid out, so there is nowhere to aim"));
         Point::new(
             DevicePx(rect.origin.x.0 + rect.size.width.0 * fraction),

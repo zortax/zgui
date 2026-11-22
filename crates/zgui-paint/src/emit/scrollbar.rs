@@ -12,6 +12,7 @@
 
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
+use zgui_layout::Axis;
 use zgui_layout::fragment::ScrollbarPart;
 use zgui_space::{ClipId, SpatialId};
 
@@ -91,18 +92,34 @@ fn slim(bounds: Rect<DevicePx, Device>, thickness: f32) -> Rect<DevicePx, Device
     }
 }
 
+/// Where a thumb sits on its track, for a thumb the compositor moves with the scroll offset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThumbTrack {
+    /// The scroll container whose offset moves the thumb.
+    pub owner: zgui_dom::side::BoxKey,
+    /// The axis the thumb moves along.
+    pub axis: Axis,
+    /// How far the thumb's near edge is from the start of its travel.
+    pub along: f32,
+    /// How far the thumb moves over the whole scroll range.
+    pub free: f32,
+}
+
 /// Emits one part of one scrollbar, and returns how many quads were recorded.
 ///
 /// A scrollbar is drawn through the chain of whatever clips the *scroller*, never through the
 /// scrollport's own clip: a bar clipped by the region it scrolls would disappear the moment the
 /// content did.
+///
+/// A thumb with a `track` is recorded at the start of its travel in a node the compositor moves
+/// along the track with the offset it shows, when the compositor scrolls the container's content.
 pub fn emit(
     rec: &mut Recorder<'_>,
     part: ScrollbarPart,
     bounds: Rect<DevicePx, Device>,
     paint: ScrollbarPaint,
-    clip: ClipId,
-    transform: SpatialId,
+    (clip, transform): (ClipId, SpatialId),
+    track: Option<ThumbTrack>,
 ) -> usize {
     let color = paint.color(part);
     let bounds = match part {
@@ -112,6 +129,11 @@ pub fn emit(
     if bounds.is_empty() || color.alpha() == 0.0 {
         return 0;
     }
+    let (bounds, space) = match track.and_then(|track| Some((track, moved(rec, transform, track)?)))
+    {
+        Some((track, space)) => (at_start(bounds, track), space),
+        None => (bounds, rec.space(transform)),
+    };
     let quad = record::filled(
         bounds,
         record::flat_radii(paint.radii(part, bounds)),
@@ -119,11 +141,36 @@ pub fn emit(
     );
     let quad = compositor_types::Quad {
         clip: rec.clip(clip),
-        space: rec.space(transform),
+        space,
         ..quad
     };
     rec.quad(quad);
     1
+}
+
+/// Returns the reference of the node that moves a thumb drawn in `transform` along `track`, if
+/// the content of its container is scrolled by a scroll node.
+fn moved(
+    rec: &mut Recorder<'_>,
+    transform: SpatialId,
+    track: ThumbTrack,
+) -> Option<compositor_types::SpaceRef> {
+    let owner = zgui_space::PropertyOwner::of(track.owner).content();
+    let content = rec.tables_ref().spatial.of(owner)?;
+    let axis = match track.axis {
+        Axis::Horizontal => 0,
+        Axis::Vertical => 1,
+    };
+    rec.thumb_space(transform, content, axis, track.free)
+}
+
+/// Returns `bounds` moved back along `track` to the start of the thumb's travel.
+fn at_start(bounds: Rect<DevicePx, Device>, track: ThumbTrack) -> Rect<DevicePx, Device> {
+    let back = match track.axis {
+        Axis::Horizontal => Size::new(DevicePx(-track.along), DevicePx(0.0)),
+        Axis::Vertical => Size::new(DevicePx(0.0), DevicePx(-track.along)),
+    };
+    bounds.translate(back)
 }
 
 /// The paint a scrollbar takes when nothing has themed it.
@@ -273,8 +320,8 @@ mod tests {
                 part,
                 bar(),
                 paint,
-                ClipId::ROOT,
-                SpatialId::VIEWPORT,
+                (ClipId::ROOT, SpatialId::VIEWPORT),
+                None,
             )
         };
         let paint = default_paint();

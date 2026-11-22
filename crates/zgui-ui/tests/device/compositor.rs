@@ -1,12 +1,13 @@
 //! The compositor's reference renderer under the gallery, drawing to a texture.
 
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use compositor_api::Renderer;
 use compositor_types::{
     BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
 };
+use zgui::geom::{Device as Space, DevicePx, Size};
 use zgui_testkit_compositor::Device;
 
 use crate::device::{Log, SHIFTS, frame, real_damage};
@@ -86,11 +87,28 @@ pub fn repaint_after_next_frame() {
     RESYNC.store(true, Ordering::Relaxed);
 }
 
-/// A probe that asks for the whole repaint of [`repaint_after_next_frame`].
+/// The scroll containers the compositor showed ahead of the window after the last frame, with
+/// how far ahead.
+static AHEAD: Mutex<Vec<(zgui::view::NodeId, Size<DevicePx, Space>)>> = Mutex::new(Vec::new());
+
+/// Returns how far the compositor showed the content of the scroll container `node` ahead of the
+/// window's own offset after the last frame.
+pub fn scrolled_ahead(node: zgui::view::NodeId) -> Option<Size<DevicePx, Space>> {
+    AHEAD
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .iter()
+        .find(|(container, _)| *container == node)
+        .map(|(_, ahead)| *ahead)
+}
+
+/// A probe that asks for the whole repaint of [`repaint_after_next_frame`] and notes how far the
+/// compositor scrolled ahead of the window.
 struct Repainting;
 
 impl zgui::runtime::FrameProbe for Repainting {
     fn frame_ended(&self, window: &zgui::runtime::Window) {
+        *AHEAD.lock().unwrap_or_else(|held| held.into_inner()) = window.scrolls_ahead();
         if RESYNC.swap(false, Ordering::Relaxed) {
             WHOLE.store(true, Ordering::Relaxed);
             window.forget_compositor_sync();

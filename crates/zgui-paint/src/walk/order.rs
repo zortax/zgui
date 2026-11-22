@@ -114,6 +114,8 @@ pub struct Emission<'a> {
     pub scale: f32,
     /// How a scrollbar is painted.
     pub scrollbars: ScrollbarPaint,
+    /// Where a scrollbar thumb sits on its track, for a thumb fragment.
+    pub thumb: Option<scrollbar::ThumbTrack>,
 }
 
 /// What one fragment emitted, including the path selected for vector content.
@@ -370,8 +372,11 @@ fn content_tracked(
             part,
             fragment.border_box,
             scrollbar::resolve(emission.scrollbars, &style.scrollbar),
-            emission.box_placement.clip,
-            emission.box_placement.transform,
+            (
+                emission.box_placement.clip,
+                emission.box_placement.transform,
+            ),
+            emission.thumb,
         ),
     };
     FragmentEmission {

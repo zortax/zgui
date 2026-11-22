@@ -36,6 +36,21 @@ impl<'a> Resolver<'a> {
         self.mirror.space(self.tx, &tables.spatial, slot)
     }
 
+    /// Returns the transform node of a scrollbar thumb drawn in the coordinate system in `slot`,
+    /// which the scroll offset of the content in `content` moves `free` pixels along `axis`.
+    ///
+    /// Returns `None` when the content applies no scroll node.
+    pub(crate) fn thumb(
+        &mut self,
+        tables: &Tables,
+        (slot, content): (u32, u32),
+        axis: usize,
+        free: f32,
+    ) -> Option<TransformId> {
+        self.mirror
+            .thumb(self.tx, &tables.spatial, (slot, content), axis, free)
+    }
+
     /// Returns the clip node of the chain `clip`, or `None` for a chain that clips nothing the
     /// compositor can express.
     pub(crate) fn clip(&mut self, tables: &mut Tables, clip: zgui_space::ClipId) -> Option<ClipId> {

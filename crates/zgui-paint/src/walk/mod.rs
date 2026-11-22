@@ -354,6 +354,11 @@ impl Painter {
         self.sync.as_mut()
     }
 
+    /// Returns the attached compositor sync for reading, if any.
+    pub fn compositor_ref(&self) -> Option<&CompositorSync> {
+        self.sync.as_ref()
+    }
+
     /// Discards everything held between frames.
     ///
     /// Legal only beside emptying the caches the records hold into — a lost device, a forgotten
@@ -762,7 +767,34 @@ impl Pass<'_, '_> {
             custom_reference: self.input.store.custom_reference(fragment.box_),
             scale: self.input.scale,
             scrollbars: self.input.scrollbars,
+            thumb: self.thumb(fragment),
         }
+    }
+
+    /// Where `fragment` sits on its track, when it is a scrollbar thumb.
+    fn thumb(&self, fragment: &Fragment) -> Option<crate::emit::scrollbar::ThumbTrack> {
+        let FragmentKind::Scrollbar {
+            axis,
+            part: zgui_layout::fragment::ScrollbarPart::Thumb,
+        } = fragment.kind
+        else {
+            return None;
+        };
+        let travel = zgui_layout::scroll_region::bar::live::travel_of_box(
+            self.input.store,
+            fragment.box_,
+            axis,
+        )?;
+        let near = match axis {
+            zgui_layout::Axis::Horizontal => fragment.border_box.origin.x.0,
+            zgui_layout::Axis::Vertical => fragment.border_box.origin.y.0,
+        };
+        Some(crate::emit::scrollbar::ThumbTrack {
+            owner: fragment.box_,
+            axis,
+            along: near - travel.start,
+            free: travel.free(),
+        })
     }
 
     /// Where a line fragment was cut off by `text-overflow`, if it was.
@@ -1098,7 +1130,17 @@ impl Pass<'_, '_> {
             .sync
             .as_ref()
             .is_some_and(|sync| !sync.knows(fragment.key));
-        let reuse = if tiles_gone || unrecorded {
+        // A thumb is recorded at the start of its track, so a move along the track changes no
+        // record, while an offset would move it a second time.
+        let thumb = self.painter.sync.is_some()
+            && matches!(
+                fragment.kind,
+                FragmentKind::Scrollbar {
+                    part: zgui_layout::fragment::ScrollbarPart::Thumb,
+                    ..
+                }
+            );
+        let reuse = if tiles_gone || unrecorded || thumb {
             Reuse::Encode
         } else {
             self.painter

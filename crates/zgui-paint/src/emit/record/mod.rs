@@ -80,6 +80,25 @@ impl<'a> Recorder<'a> {
         self.space_slot(space.index())
     }
 
+    /// Returns the reference a scrollbar thumb drawn in the coordinate system `space` holds, when
+    /// the compositor moves it with the scroll offset of the content in `content`.
+    ///
+    /// The thumb moves `free` pixels along `axis` (0 for x, 1 for y) over the whole scroll range,
+    /// and is drawn where it sits at offset zero. Returns `None` when nothing moves it, so the
+    /// thumb is drawn where it sits now.
+    pub fn thumb_space(
+        &mut self,
+        space: SpatialId,
+        content: SpatialId,
+        axis: usize,
+        free: f32,
+    ) -> Option<SpaceRef> {
+        let resolver = self.resolver.as_mut()?;
+        let id = resolver.thumb(self.tables, (space.index(), content.index()), axis, free)?;
+        refer(self.items, Ref::Space(id));
+        Some(SpaceRef(id.slot()))
+    }
+
     /// Returns the reference an item drawn in the coordinate system in `slot` holds.
     pub(crate) fn space_slot(&mut self, slot: u32) -> SpaceRef {
         if slot == self.items.space.index() {

@@ -35,24 +35,20 @@ impl Window {
     /// and reports whether it did, so the window's own scrolling must leave the event alone.
     ///
     /// The step that starts a gesture decides who moves its content. The compositor does when
-    /// `container`, the innermost element that scrolls under the pointer, has a scroll node, the
-    /// compositor's frontmost item there lies inside it, and the compositor routes the step to a
-    /// node. The rest of the gesture follows that decision.
+    /// `container`, the innermost element that scrolls under the pointer, has a scroll node. The
+    /// rest of the gesture follows that decision.
     pub(crate) fn hand_scroll(&mut self, container: Option<NodeKey>, wheel: &WheelEvent) -> bool {
         if !self.driven.on {
             return false;
         }
         if !continues(wheel.phase) {
-            let driven = container.is_some_and(|container| {
-                self.has_scroll_node(container) && self.shows_inside(container, wheel)
-            });
+            let driven = container.is_some_and(|container| self.has_scroll_node(container));
             self.driven.owner = Some(if driven {
                 Owner::Compositor
             } else {
                 Owner::Window
             });
             self.driven.latched = container;
-            self.driven.routed = false;
             if wheel.phase == ScrollPhase::Started {
                 self.driven.track = zgui_scroll::Track::touching();
             }
@@ -100,32 +96,28 @@ impl Window {
             time_ns: u64::try_from(at.as_nanos()).unwrap_or(u64::MAX),
         };
         counter::bump(Counter::GesturesHanded);
-        let routed = self.compositor.scroll_input(gesture);
-        match routed {
-            // compositor: a gesture over a nested port can be routed to an outer node although the
-            // nested one could move. The window scrolls the nested one instead.
-            ScrollRouting::Handled { node, .. }
-                if !self.driven.routed && self.routed_around(node, container, delta) =>
-            {
-                self.moving(node);
-                self.driven.owner = Some(Owner::Window);
-                return false;
-            }
-            ScrollRouting::Handled { node, .. } => {
-                self.driven.routed = true;
-                self.moving(node);
-            }
-            // A gesture that begins without moving is routed by its first movement.
-            ScrollRouting::Unhandled if wheel.phase == ScrollPhase::Started => {}
-            // compositor: routing starts from an item under the point, so a gesture over a part
-            // of a port that draws nothing reaches no node. The window scrolls it instead.
-            ScrollRouting::Unhandled if !self.driven.routed => {
-                self.driven.owner = Some(Owner::Window);
-                return false;
-            }
-            ScrollRouting::Unhandled => {}
+        // compositor: a commit that acknowledges a scroll while a handed delta waits for the next
+        // build writes the node at the offset the delta reaches, and the build then moves the
+        // commit's damage by the delta a second time. So gestures go to the compositor after
+        // the frame's commit, and the content is marked as moving now, so the frame records its
+        // margin.
+        self.driven.handed.push(gesture);
+        if let Some(node) = self.scroll_node_of(units) {
+            self.moving(node);
         }
+        self.request_compositor_frame();
         true
+    }
+
+    /// Hands the gestures queued since the last frame to the compositor.
+    pub(crate) fn pass_gestures(&mut self) {
+        let mut handed = std::mem::take(&mut self.driven.handed);
+        for gesture in handed.drain(..) {
+            if let ScrollRouting::Handled { node, .. } = self.compositor.scroll_input(gesture) {
+                self.moving(node);
+            }
+        }
+        self.driven.handed = handed;
     }
 
     /// Notes that the compositor moves `node`, and asks for the frames that show it.
@@ -156,60 +148,14 @@ impl Window {
 
     /// Reports whether the content of `container` is drawn through a scroll node.
     fn has_scroll_node(&mut self, container: NodeKey) -> bool {
-        let Some(first) = self.layout.borrow().boxes_of(container).first().copied() else {
-            return false;
-        };
+        self.scroll_node_of(container).is_some()
+    }
+
+    /// Returns the scroll node the content of `container` is drawn through.
+    fn scroll_node_of(&mut self, container: NodeKey) -> Option<compositor_types::ScrollId> {
+        let first = self.layout.borrow().boxes_of(container).first().copied()?;
         let tables = &self.tables;
-        self.painter
-            .compositor()
-            .is_some_and(|sync| sync.scroll_node(tables, first).is_some())
-    }
-
-    /// Reports whether the compositor routed a step of `delta` to `node` past `container`, the
-    /// innermost element that scrolls under the pointer, although `container` could move by it.
-    fn routed_around(
-        &mut self,
-        node: compositor_types::ScrollId,
-        container: Option<NodeKey>,
-        delta: zgui_geom::Size<zgui_geom::DevicePx, zgui_geom::Device>,
-    ) -> bool {
-        let Some(container) = container else {
-            return false;
-        };
-        if self.element_of_scroll(node) == Some(container) {
-            return false;
-        }
-        let layout = self.layout.borrow();
-        let Some(region) = zgui_layout::scroll_region::region_of_element(&layout, container) else {
-            return false;
-        };
-        let limit = region.hand_limit();
-        let at = self.scroll.borrow().offset_of(container);
-        let moves =
-            |at: f32, limit: f32, by: f32| (by > 0.0 && at < limit) || (by < 0.0 && at > 0.0);
-        moves(at.x.0, limit.x.0, delta.width.0) || moves(at.y.0, limit.y.0, delta.height.0)
-    }
-
-    /// Reports whether the compositor's frontmost item under `wheel` is drawn by `container` or by
-    /// an element inside it.
-    // compositor: routing starts from the frontmost item, so a gesture over a part of a port that
-    // draws nothing reaches the node of whatever is drawn behind the port, or none.
-    fn shows_inside(&self, container: NodeKey, wheel: &WheelEvent) -> bool {
-        let at = [
-            wheel.position.x.0 * self.scale,
-            wheel.position.y.0 * self.scale,
-        ];
-        let Some(hit) = self.compositor.hit_test(at) else {
-            return false;
-        };
-        let Some(owner) = zgui_dom::side::BoxKey::from_u64(hit.chunk.owner) else {
-            return false;
-        };
-        let Some(element) = self.layout.borrow().get(owner).and_then(|node| node.source) else {
-            return false;
-        };
-        let document = self.document.borrow();
-        zgui_input::HitChain::to_root(document.store(), element).contains(container)
+        self.painter.compositor()?.scroll_node(tables, first)
     }
 
     /// The innermost element that scrolls under `wheel`, and whether its path listens to wheel

@@ -76,6 +76,21 @@ impl Mirror {
         self.spaces.ensure(tx, &mut self.holds, tree, slot)
     }
 
+    /// Returns the node of a scrollbar thumb, for the chunk being recorded.
+    ///
+    /// See [`spaces::Spaces::thumb`].
+    pub(crate) fn thumb(
+        &mut self,
+        tx: &mut Transaction,
+        tree: &zgui_space::SpatialTree,
+        slots: (u32, u32),
+        axis: usize,
+        free: f32,
+    ) -> Option<compositor_types::TransformId> {
+        self.spaces
+            .thumb(tx, &mut self.holds, tree, slots, axis, free)
+    }
+
     /// Returns the node of the clip chain `id`, for the chunk being recorded.
     ///
     /// The root chain, and a chain of links the compositor cannot express, is `None`.

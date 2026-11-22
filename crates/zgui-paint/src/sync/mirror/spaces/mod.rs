@@ -1,6 +1,7 @@
 //! Coordinate systems mirrored as transform nodes.
 
 mod drive;
+mod thumb;
 mod written;
 
 pub use self::drive::ScrollDrive;
@@ -38,6 +39,9 @@ pub(crate) struct Spaces {
     /// Whether every node is written again at the next sync, because the drive or the frozen
     /// container changed.
     restate: bool,
+    /// The thumb nodes, by the slot of the content whose offset moves them and their axis.
+    thumbs: FxHashMap<(u32, u8), thumb::Thumb>,
+    thumb_nodes: FxHashMap<TransformId, (u32, u8)>,
 }
 
 /// One mirrored slot.
@@ -208,6 +212,9 @@ impl Spaces {
 
     /// Forgets the node `id`, which was removed.
     pub(crate) fn removed(&mut self, id: TransformId) {
+        if self.removed_thumb(id) {
+            return;
+        }
         if let Some(slot) = self.nodes.remove(&id) {
             self.slots[slot as usize] = None;
         }

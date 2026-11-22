@@ -42,8 +42,6 @@ pub(crate) struct Driven {
     owner: Option<Owner>,
     /// The element that scrolled under the pointer when the gesture in progress started.
     latched: Option<zgui_dom::NodeKey>,
-    /// Whether the compositor routed a step of the gesture in progress to a node.
-    routed: bool,
     /// The rail and the speed of the touchpad gesture in progress.
     track: zgui_scroll::Track,
     /// Whether a frame that only presents the compositor's scrolling was asked for.
@@ -54,6 +52,8 @@ pub(crate) struct Driven {
     due: Option<Instant>,
     /// The buffer the compositor's events are taken into, kept for its allocation.
     events: Vec<CompositorEvent>,
+    /// The gestures to hand to the compositor before it builds its next frame.
+    handed: Vec<compositor_types::ScrollGesture>,
 }
 
 /// The newest offset one node shows.
@@ -82,7 +82,7 @@ struct Active {
 /// Who moves the content for a gesture.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Owner {
-    /// The compositor, which routed the gesture to one of its scroll nodes.
+    /// The compositor, which routes the gesture to one of its scroll nodes.
     Compositor,
     /// The window, through its own scrolling.
     Window,
@@ -97,6 +97,7 @@ impl Driven {
     /// Forgets every node, for a client registered again without them.
     pub(crate) fn forget(&mut self) {
         self.shown.clear();
+        self.handed.clear();
         self.active.clear();
         self.owner = None;
         self.moving = false;

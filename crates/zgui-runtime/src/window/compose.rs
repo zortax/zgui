@@ -44,6 +44,7 @@ impl Window {
     /// adopt.
     pub(super) fn draw_output(&mut self, at: zgui_vocab::Timestamp) -> crate::compositor::Drawn {
         let interval = self.refresh_interval();
+        self.pass_gestures();
         let drawn = self
             .compositor
             .draw(&mut *self.renderer, self.subpixel_order, at, interval);

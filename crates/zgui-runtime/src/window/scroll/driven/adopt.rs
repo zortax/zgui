@@ -1,6 +1,6 @@
 //! Taking over the offsets the compositor shows.
 
-use zgui_geom::{DevicePx, Point};
+use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_scroll::Behavior;
 
 use zgui_profile::{Counter, counter};
@@ -49,6 +49,31 @@ impl Window {
         let mut document = self.document.borrow_mut();
         zgui_scroll::mark::scrolled(&mut document, &moved);
         true
+    }
+
+    /// Returns the scroll containers the compositor moved since the window's last frame, each
+    /// with the offset the compositor shows less the window's own offset.
+    ///
+    /// The window takes these offsets over at its next frame.
+    pub fn scrolls_ahead(&self) -> Vec<(zgui_view::NodeId, Size<DevicePx, Device>)> {
+        let Some(sync) = self.painter.compositor_ref() else {
+            return Vec::new();
+        };
+        let layout = self.layout.borrow();
+        let scroll = self.scroll.borrow();
+        self.driven
+            .shown
+            .iter()
+            .filter_map(|(node, shown)| {
+                let container = layout.get(sync.scroll_container(*node)?)?.source?;
+                let at = scroll.offset_of(container);
+                let ahead = Size::new(
+                    DevicePx(shown.offset[0] - at.x.0),
+                    DevicePx(shown.offset[1] - at.y.0),
+                );
+                Some((zgui_view_dom::id::to_view(container), ahead))
+            })
+            .collect()
     }
 
     /// Composes the adopted offsets before input is routed, so a hit test reads what the
