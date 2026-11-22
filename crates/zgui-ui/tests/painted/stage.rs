@@ -374,6 +374,25 @@ impl Stage {
         self.harness.pump();
     }
 
+    /// Delivers one touchpad step of `pixels` CSS pixels down in `phase` and runs exactly one
+    /// frame.
+    #[allow(dead_code, reason = "not every fixture scrolls by touchpad phases")]
+    pub fn touchpad_in(&mut self, pixels: f32, phase: zgui::vocab::ScrollPhase) {
+        self.harness.deliver_to_first(SurfaceEvent::Wheel {
+            event: zgui::vocab::WheelEvent {
+                id: zgui::vocab::PointerId::MOUSE,
+                kind: zgui::vocab::PointerKind::Mouse,
+                position: self.pointer,
+                delta: zgui::vocab::ScrollDelta::Pixels(Size::new(CssPx(0.0), CssPx(pixels))),
+                phase,
+            },
+            modifiers: Modifiers::NONE,
+            timestamp: Timestamp::ORIGIN,
+        });
+        self.harness.advance(TICK);
+        self.harness.pump();
+    }
+
     /// Delivers one touchpad movement of `pixels` CSS pixels down and runs exactly one frame.
     ///
     /// A pixel delta is applied in the frame it arrives in, so each call is one frame of scroll.
