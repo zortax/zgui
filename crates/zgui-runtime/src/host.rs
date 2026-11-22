@@ -54,7 +54,8 @@ pub enum Command {
         /// Whether to animate getting there.
         behavior: ScrollBehavior,
     },
-    /// Route the pointer's subsequent events to this node until the button is released.
+    /// Route the pointer's subsequent events to this node until its button is released or its
+    /// contact lifts.
     CapturePointer(NodeId, zgui_vocab::PointerId),
     /// Install this style sheet at the author origin, or replace it when the name is taken.
     InstallStylesheet {
@@ -70,8 +71,9 @@ pub enum Command {
     },
     /// Stop, or let go of, the window's own scrolling, leaving it exactly where it is.
     FreezeScrolling(bool),
-    /// End a capture early.
-    ReleasePointer(NodeId),
+    /// End this node's capture of the pointer early. With no pointer, end every capture the node
+    /// holds.
+    ReleasePointer(NodeId, Option<zgui_vocab::PointerId>),
     /// Put this node's own editing model's selection here.
     ///
     /// Recording the range is not enough on its own. An editable element's caret lives in its
@@ -136,9 +138,11 @@ impl core::fmt::Debug for Command {
                 .debug_tuple("FreezeScrolling")
                 .field(frozen)
                 .finish(),
-            Self::ReleasePointer(node) => {
-                formatter.debug_tuple("ReleasePointer").field(node).finish()
-            }
+            Self::ReleasePointer(node, pointer) => formatter
+                .debug_tuple("ReleasePointer")
+                .field(node)
+                .field(pointer)
+                .finish(),
             Self::Select { node, range } => formatter
                 .debug_struct("Select")
                 .field("node", node)

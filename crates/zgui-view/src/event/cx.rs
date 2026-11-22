@@ -195,13 +195,14 @@ impl<'a, E: EventView> EventCx<'a, E> {
         self.control.default_action.set(DefaultAction::Prevented);
     }
 
-    /// Routes every subsequent pointer event to the current node until the button is released.
+    /// Routes this event's pointer to the current node until its button is released or its
+    /// contact lifts.
     pub fn capture_pointer(&mut self) {
         let node = self.current;
         self.sink.capture_pointer(node);
     }
 
-    /// Ends a capture early.
+    /// Ends the current node's capture of this event's pointer early.
     pub fn release_pointer(&mut self) {
         let node = self.current;
         self.sink.release_pointer(node);

@@ -171,6 +171,13 @@ impl Window {
                 action: zgui_vocab::PointerAction::Pressed,
                 ..
             } => self.focus_modality = zgui_input::FocusSource::Pointer,
+            // A pointer that lets go also lets go of its capture, once the release is dispatched
+            // and its commands are carried out.
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Released | zgui_vocab::PointerAction::Cancelled,
+                event,
+                ..
+            } => self.lifted.push(event.id),
             _ => {}
         }
         // A drag's motion is tracked first, so a drop's listeners already see the drag-over
@@ -731,6 +738,16 @@ impl Window {
     /// Bounded: a command that issues a command that issues a command settles or is dropped, so a
     /// handler that focuses whatever gains focus cannot hold the frame.
     pub(crate) fn carry_out_commands(&mut self, timestamp: Timestamp) {
+        self.carry_out_issued(timestamp);
+        // After the commands, so a handler for the release still had the capture it held, and a
+        // capture that a handler asked for on the release does not outlive it.
+        for pointer in core::mem::take(&mut self.lifted) {
+            self.router.capture_mut().release(pointer);
+        }
+    }
+
+    /// Carries out the commands in the queue until none are left, for at most eight rounds.
+    fn carry_out_issued(&mut self, timestamp: Timestamp) {
         for _ in 0..8u8 {
             // Before the commands are taken, because a focus move made by the event that has just
             // finished has to be announced before anything that move causes is acted on — and
@@ -782,9 +799,19 @@ impl Window {
                     self.router.capture_mut().set(pointer, key);
                 }
             }
-            Command::ReleasePointer(node) => {
-                if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    self.router.capture_mut().release_node(key);
+            Command::ReleasePointer(node, pointer) => {
+                let Some(key) = zgui_view_dom::id::to_document(node) else {
+                    return;
+                };
+                match pointer {
+                    Some(pointer) => {
+                        if self.router.capture().of(pointer) == Some(key) {
+                            self.router.capture_mut().release(pointer);
+                        }
+                    }
+                    None => {
+                        self.router.capture_mut().release_node(key);
+                    }
                 }
             }
             Command::Select { node, range } => {
