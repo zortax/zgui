@@ -808,12 +808,7 @@ impl Window {
             .driven
             .due()
             .filter(|_| !(self.occluded || self.starved))
-            .map(|at| {
-                [resize, held]
-                    .into_iter()
-                    .flatten()
-                    .fold(at, Instant::max)
-            });
+            .map(|at| [resize, held].into_iter().flatten().fold(at, Instant::max));
         [
             (render, DeadlineKind::Render),
             (compose, DeadlineKind::Compose),

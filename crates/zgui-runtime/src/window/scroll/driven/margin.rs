@@ -8,8 +8,8 @@
 
 use compositor_types::ScrollId;
 use zgui_geom::{Device, Matrix4, Point, Rect, Size};
-use zgui_space::spatial::{Anchoring, PropertyOwner};
 use zgui_space::SpatialId;
+use zgui_space::spatial::{Anchoring, PropertyOwner};
 
 use crate::window::Window;
 
@@ -56,11 +56,7 @@ impl Window {
 
     /// Records the offsets each of `margins` vouches for, from the extent the paint walk painted
     /// in each content's coordinates, `tracked`.
-    pub(crate) fn vouch(
-        &mut self,
-        margins: &[Margin],
-        tracked: &[(SpatialId, Rect<i32, Device>)],
-    ) {
+    pub(crate) fn vouch(&mut self, margins: &[Margin], tracked: &[(SpatialId, Rect<i32, Device>)]) {
         for margin in margins {
             let painted = tracked
                 .iter()
@@ -153,8 +149,14 @@ impl Margin {
         let [port_low, port_high] = self.port[axis];
         let [start, end] = self.content[axis];
         let painted = painted.map(|extent| match axis {
-            0 => [extent.origin.x as f32, (extent.origin.x + extent.size.width) as f32],
-            _ => [extent.origin.y as f32, (extent.origin.y + extent.size.height) as f32],
+            0 => [
+                extent.origin.x as f32,
+                (extent.origin.x + extent.size.width) as f32,
+            ],
+            _ => [
+                extent.origin.y as f32,
+                (extent.origin.y + extent.size.height) as f32,
+            ],
         });
         let painted_high = if high >= end {
             high
@@ -194,10 +196,26 @@ fn onto_device(world: Matrix4, [x, y]: [[f32; 2]; 2]) -> Rect<i32, Device> {
             c[0][1] * px + c[1][1] * py + c[3][1],
         )
     });
-    let left = corners.iter().map(|c| c.0).fold(f32::INFINITY, f32::min).floor();
-    let top = corners.iter().map(|c| c.1).fold(f32::INFINITY, f32::min).floor();
-    let right = corners.iter().map(|c| c.0).fold(f32::NEG_INFINITY, f32::max).ceil();
-    let bottom = corners.iter().map(|c| c.1).fold(f32::NEG_INFINITY, f32::max).ceil();
+    let left = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::INFINITY, f32::min)
+        .floor();
+    let top = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::INFINITY, f32::min)
+        .floor();
+    let right = corners
+        .iter()
+        .map(|c| c.0)
+        .fold(f32::NEG_INFINITY, f32::max)
+        .ceil();
+    let bottom = corners
+        .iter()
+        .map(|c| c.1)
+        .fold(f32::NEG_INFINITY, f32::max)
+        .ceil();
     Rect::new(
         Point::new(left as i32, top as i32),
         Size::new((right - left) as i32, (bottom - top) as i32),

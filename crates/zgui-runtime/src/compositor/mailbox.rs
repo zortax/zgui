@@ -13,7 +13,7 @@ pub(super) struct Mailbox {
 impl Mailbox {
     /// Holds `events`, leaving it empty.
     pub(super) fn hold(&mut self, events: &mut Vec<CompositorEvent>) {
-        self.held.append(events);
+        Vec::append(&mut self.held, events);
     }
 
     /// Moves the events of `client` into `out`, and drops those of `retired`.

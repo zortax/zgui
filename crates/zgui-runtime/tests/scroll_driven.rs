@@ -38,10 +38,13 @@ fn listing(rows: usize, gap: bool, clicked: &Clicked) -> Harness<Runtime> {
         let mut port = zgui_elements::column().class("port");
         for index in 0..rows {
             let reached = Rc::clone(&clicked);
-            port = port.child(zgui_elements::column().class("row").on(
-                zgui_view::events::CLICK,
-                move |_| reached.borrow_mut().push(index),
-            ));
+            port = port.child(
+                zgui_elements::column()
+                    .class("row")
+                    .on(zgui_view::events::CLICK, move |_| {
+                        reached.borrow_mut().push(index)
+                    }),
+            );
         }
         if gap {
             port = port.child(zgui_elements::column().class("gap"));
@@ -309,5 +312,9 @@ fn a_sticky_header_stays_at_the_top_of_the_port_through_a_fling() {
         moved.get(Counter::CompositorTicks) > 0 && offset(&harness) > 100.0,
         "the compositor did not carry the list"
     );
-    assert_eq!(head(&harness), before, "the header left the top of the port");
+    assert_eq!(
+        head(&harness),
+        before,
+        "the header left the top of the port"
+    );
 }

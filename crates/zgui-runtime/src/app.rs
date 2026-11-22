@@ -719,9 +719,7 @@ impl Runtime {
             menu_keys: crate::desktop::MenuKeys::default(),
             documents: crate::documents::Documents::default(),
             application_id: application_id.clone(),
-            compositor: app
-                .compositor
-                .map(crate::compositor::Shared::new),
+            compositor: app.compositor.map(crate::compositor::Shared::new),
             renderer: app.renderer.unwrap_or_else(|| {
                 Box::new(|_, _| {
                     Err(AppError::GpuUnavailable(

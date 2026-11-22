@@ -6689,6 +6689,7 @@ dependencies = [
  "zgui",
  "zgui-layout",
  "zgui-platform-headless",
+ "zgui-profile",
  "zgui-testkit-compositor",
  "zgui-testkit-view",
  "zgui-ui-icons",

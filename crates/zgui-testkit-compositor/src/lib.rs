@@ -46,7 +46,6 @@ use compositor_text::SwashRaster;
 use std::sync::Arc;
 
 pub use crate::aged::{Aged, Refusals};
-pub use crate::tierless::tierless;
 pub use crate::device::{Composed, Device, Pixels};
 pub use crate::drawing::{Drawing, Instance};
 pub use crate::kept::{Drawn, Frames, Kept};
@@ -55,6 +54,7 @@ pub use crate::output::TestOutput;
 pub use crate::screen::{Screen, Shown, drawing_of};
 pub use crate::select::{CompositorKind, RendererKind};
 pub use crate::session::{FONTS, Session, with_fake_text};
+pub use crate::tierless::tierless;
 pub use crate::unavailable::Unavailable;
 pub use crate::windows::{Pacing, Windows};
 

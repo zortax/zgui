@@ -3,6 +3,8 @@
 use zgui_geom::{DevicePx, Point};
 use zgui_scroll::Behavior;
 
+use zgui_profile::{Counter, counter};
+
 use crate::window::Window;
 
 impl Window {
@@ -25,7 +27,7 @@ impl Window {
                 self.driven.active.remove(&node);
                 continue;
             };
-            zgui_profile::counter::bump(zgui_profile::Counter::ScrollsAdopted);
+            counter::bump(Counter::ScrollsAdopted);
             if let Some(sync) = self.painter.compositor() {
                 sync.adopt_scroll(node, shown.serial);
             }
@@ -55,7 +57,8 @@ impl Window {
         let routes = self.queued.iter().any(|queued| {
             matches!(
                 queued.event,
-                zgui_platform::SurfaceEvent::Pointer { .. } | zgui_platform::SurfaceEvent::Wheel { .. }
+                zgui_platform::SurfaceEvent::Pointer { .. }
+                    | zgui_platform::SurfaceEvent::Wheel { .. }
             )
         });
         if !routes {

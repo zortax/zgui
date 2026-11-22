@@ -52,7 +52,10 @@ impl Client {
 
     /// Returns an empty transaction of the client.
     pub(crate) fn transaction(&self) -> Transaction {
-        self.compositor.compositor.borrow_mut().transaction(self.client)
+        self.compositor
+            .compositor
+            .borrow_mut()
+            .transaction(self.client)
     }
 
     /// Returns what the compositor can do.

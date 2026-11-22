@@ -4,6 +4,8 @@ use compositor_types::{GesturePhase, ScrollGesture, ScrollRouting, ScrollSource}
 use zgui_dom::NodeKey;
 use zgui_vocab::{EventKind, PointerKind, ScrollPhase, WheelEvent};
 
+use zgui_profile::{Counter, counter};
+
 use crate::window::Window;
 use crate::window::scroll::driven::Owner;
 
@@ -92,7 +94,7 @@ impl Window {
             source,
             time_ns: u64::try_from(at.as_nanos()).unwrap_or(u64::MAX),
         };
-        zgui_profile::counter::bump(zgui_profile::Counter::GesturesHanded);
+        counter::bump(Counter::GesturesHanded);
         match self.compositor.scroll_input(gesture) {
             ScrollRouting::Handled { node, .. } => {
                 self.driven.routed = true;
@@ -129,7 +131,10 @@ impl Window {
     }
 
     /// The element whose content the scroll node `node` scrolls.
-    pub(super) fn element_of_scroll(&mut self, node: compositor_types::ScrollId) -> Option<NodeKey> {
+    pub(super) fn element_of_scroll(
+        &mut self,
+        node: compositor_types::ScrollId,
+    ) -> Option<NodeKey> {
         let container = self.painter.compositor()?.scroll_container(node)?;
         self.layout.borrow().get(container)?.source
     }

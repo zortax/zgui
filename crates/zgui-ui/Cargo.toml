@@ -46,6 +46,8 @@ rustc-hash.workspace = true
 # Asserting on the tree this library *publishes* is asserting on our own structure; this applies
 # the updates the way a real client does and asks the result the questions a reader asks.
 accesskit_consumer.workspace = true
+# The frame counters, which tell the frames the window ran from those the compositor presented.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 
 [lints]
 workspace = true
