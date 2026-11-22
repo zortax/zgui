@@ -34,8 +34,7 @@ fn vs_external(@builtin(vertex_index) vertex: u32) -> ExternalVarying {
 
 @fragment
 fn fs_external(in: ExternalVarying) -> @location(0) vec4<f32> {
-    // Clip chain is in device space after the transform, like every other primitive's; the
-    // quad's own pre-transform point is wrong under a rotated ancestor.
+    // The clip chain is in device space, so it is evaluated at the real pixel.
     let coverage = clip_coverage(device_position(in.position.xy), u32(foreign.control.x));
     if coverage <= 0.0 {
         return vec4<f32>(0.0);
