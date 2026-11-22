@@ -53,8 +53,16 @@ pub(crate) struct Driven {
     due: Option<Instant>,
     /// The buffer the compositor's events are taken into, kept for its allocation.
     events: Vec<CompositorEvent>,
-    /// The gestures to hand to the compositor before it builds its next frame.
-    handed: Vec<compositor_types::ScrollGesture>,
+    /// The gestures to hand to the compositor before it builds its next frame, each with the
+    /// event it came from.
+    handed: Vec<(compositor_types::ScrollGesture, zgui_vocab::WheelEvent)>,
+    /// Whether the compositor routed a movement of the gesture in progress to a node.
+    routed: bool,
+    /// The start of the gesture in progress, while the compositor has routed none of it.
+    begin: Option<zgui_vocab::WheelEvent>,
+    /// Whether the next gesture to start was one the compositor routed to no node, which the
+    /// window scrolls itself.
+    refused: bool,
     /// Whether a `:hover` rule can match an element inside each container, as of the window's
     /// last frame.
     sensitive: FxHashMap<zgui_dom::NodeKey, bool>,
