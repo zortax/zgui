@@ -111,7 +111,7 @@ fn a_fragment_rebuilt_in_its_boxs_place_records_over_its_chunk() {
         "the fixture has to rebuild the bar's pieces: {before:?} {after:?}"
     );
     let commit = harness.compositor.commit;
-    assert!(commit.chunks_recorded >= 2, "{commit:?}");
+    assert!(commit.chunks_recorded >= 1, "{commit:?}");
     assert_eq!(
         (commit.chunks_removed, commit.keys_spliced),
         (0, 0),

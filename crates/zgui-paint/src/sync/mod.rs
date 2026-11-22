@@ -15,6 +15,7 @@
 //!
 //! Fragments outside the frame's damage are not visited, and their chunks stay as they are.
 
+mod extent;
 mod flush;
 mod key;
 mod mirror;
@@ -32,7 +33,7 @@ use crate::Tables;
 use compositor_types::{ChunkKey, OutputId, ScrollId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
-use zgui_geom::{Device, DevicePx, Size};
+use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_layout::{FragKey, Fragment, LayoutStore};
 use zgui_space::spatial::PropertyOwner;
 use zgui_space::{ClipId, SpatialId};
@@ -54,6 +55,7 @@ pub struct CompositorSync {
     outlined: FxHashMap<FragKey, ChunkKey>,
     backdropped: FxHashMap<FragKey, ChunkKey>,
     retired: FxHashSet<ChunkKey>,
+    extents: extent::Extents,
     moves: moved::Moves,
     report: SyncReport,
     forgotten: Option<Held>,
@@ -106,6 +108,7 @@ impl CompositorSync {
             outlined: FxHashMap::default(),
             backdropped: FxHashMap::default(),
             retired: FxHashSet::default(),
+            extents: extent::Extents::default(),
             moves: moved::Moves::default(),
             report: SyncReport::default(),
             forgotten: None,
@@ -136,6 +139,7 @@ impl CompositorSync {
             self.extras.remove(&key);
             transaction.remove_chunk(key);
             self.mirror.chunk_removed(key);
+            self.extents.removed(key);
             self.report.removed += 1;
             if let Some(owner) = BoxKey::from_u64(key.owner) {
                 self.order.fragments_changed(owner);
@@ -184,6 +188,12 @@ impl CompositorSync {
         if let Some(wake) = wake {
             self.set_wake(wake);
         }
+    }
+
+    /// Returns the extent the recorded chunks of fragments anchored in `space` draw over, in its
+    /// device pixels.
+    pub fn recorded_extent(&self, space: SpatialId) -> Option<Rect<i32, Device>> {
+        self.extents.of(space.index())
     }
 
     /// Returns the scroll node that applies the scroll offset of the box `container`.
@@ -278,7 +288,7 @@ impl CompositorSync {
         &mut self,
         store: &LayoutStore,
         fragment: &Fragment,
-        items: &mut Items,
+        (items, ink): (&mut Items, Rect<i32, Device>),
         tables: &mut Tables,
     ) {
         let Some(transaction) = &mut self.transaction else {
@@ -290,13 +300,32 @@ impl CompositorSync {
             && remove(transaction, &mut self.owners, previous.key, fragment.key)
         {
             self.mirror.chunk_removed(previous.key);
+            self.extents.removed(previous.key);
             self.report.removed += 1;
+        }
+        // A fragment that draws nothing records no chunk, unless it is the one its chunk holds.
+        if items.is_empty() && self.owners.get(&key) != Some(&fragment.key) {
+            // What the walk mirrored stays named for the next chunk recorded, since an outline's
+            // recording can be open around this one.
+            self.chunks.insert(
+                fragment.key,
+                Chunk {
+                    key,
+                    offset: [0.0; 2],
+                },
+            );
+            return;
         }
         // A fragment rebuilt in its box's place records the key its predecessor held, and the
         // compositor compares the two recordings.
         let replaces = self.retired.remove(&key);
         if self.owners.insert(key, fragment.key) != Some(fragment.key) && !replaces {
             self.order.fragments_changed(fragment.box_);
+        }
+        if items.is_empty() {
+            self.extents.removed(key);
+        } else {
+            self.extents.recorded(key, fragment.anchor.index(), ink);
         }
         flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
@@ -350,7 +379,13 @@ impl CompositorSync {
             && held.fragment == fragment.key
             && held.items == *items
         {
-            // The ids the emission named are the ones the chunk holds.
+            // The ids the emission named are the ones the chunk holds, with the chunk's own
+            // space and clip.
+            let mut resolver = Resolver::new(transaction, &mut self.mirror);
+            resolver.space(tables, items.space.index());
+            if !items.clip.is_root() {
+                resolver.clip(tables, items.clip);
+            }
             self.mirror.recorded(key);
             return;
         }
@@ -404,9 +439,13 @@ impl CompositorSync {
         let Some(chunk) = self.chunks.get_mut(&fragment.key) else {
             return;
         };
+        if self.owners.get(&chunk.key) != Some(&fragment.key) {
+            return;
+        }
         let offset = [offset.width.0, offset.height.0];
         if chunk.offset != offset {
             transaction.set_offset(chunk.key, offset);
+            self.extents.moved(chunk.key, offset);
             chunk.offset = offset;
             self.report.offsets += 1;
         }

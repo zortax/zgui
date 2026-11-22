@@ -674,10 +674,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// Resolved through the frame's own matrices rather than read flat, because a chain inside a
     /// transformed subtree interned its rectangles in that subtree's coordinates and the subtree
     /// moves without the links being interned again.
+    ///
+    /// The ports [`DiffScratch::widen_ports`] names admit the pixels given with them too.
     fn admits(&self, clip: ClipId) -> Rect<DevicePx, Device> {
         self.tables
             .clips
-            .bounds_placed(clip, &|id| self.resolve(id))
+            .bounds_widened(clip, &|id| self.resolve(id), &self.scratch.widened)
     }
 
     /// What a fragment's chain admits, as a region damage may be cut to.

@@ -1413,6 +1413,7 @@ impl Window {
         });
         zgui_profile::latency::mark("f.fragments");
 
+        let reach = self.widen_moving_ports();
         let mut layout = self.layout.borrow_mut();
         let Some(root) = layout.root() else {
             return;
@@ -1440,11 +1441,12 @@ impl Window {
             .recording_moves(&mut self.a11y_moves);
         counter::bump(Counter::LayoutPasses);
         // Damage the pass finds outside every extent the surface has had since the last drawn
-        // frame is cut away as it is absorbed, rather than merged first and clipped after.
-        self.damage.set_bound(
-            self.damage_extent
-                .map(|extent| zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), extent)),
-        );
+        // frame is cut away as it is absorbed, rather than merged first and clipped after. The
+        // margins of the ports the compositor moves are kept.
+        self.damage.set_bound(self.damage_extent.map(|extent| {
+            let surface = zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), extent);
+            reach.map_or(surface, |reach| surface.union(reach))
+        }));
         zgui_layout::fragment::diff::rebuild_in(
             &mut self.diff_scratch,
             &mut layout,
@@ -1561,17 +1563,20 @@ impl Window {
         capabilities.subpixel_text = self.subpixel_order.is_some();
         let vector_report;
         let transaction;
-        let (margins, bands) = self.scroll_margins();
-        let spaces: Vec<_> = margins.iter().map(|margin| margin.space()).collect();
-        let tracked;
+        let margins = self.scroll_margins();
         {
             let layout = self.layout.borrow();
             // Before anything reads the set. What a scroll absorbs is where every moved fragment
             // was and is, which for a document taller than its window reaches far past the surface
             // on both sides. Until it is cut to the surface the emit walk's subtree skip cannot
             // refuse anything, so a scroll of one screenful walks and paints the whole document.
-            self.damage
-                .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));
+            // The margins of the nodes the compositor moves are recorded beyond the surface, so
+            // the set is cut to them too.
+            let mut bound = zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport);
+            for band in &margins.bands {
+                bound = bound.union(*band);
+            }
+            self.damage.clip_to(bound);
             mark("p.expand");
             zgui_paint::expand(
                 &layout,
@@ -1592,15 +1597,10 @@ impl Window {
                     &self.host.placements(),
                 );
             }
-            // The margins of the nodes the compositor moves are recorded beyond the surface, so
-            // they are damaged after the cut.
-            let mut bound = zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport);
-            for band in &bands {
-                bound = bound.union(*band);
-            }
+            // The parts of the margins the last frame did not record are damaged after the cut.
             let cut = self.damage.bound();
             self.damage.set_bound(cut.map(|cut| cut.union(bound)));
-            for band in &bands {
+            for band in &margins.fresh {
                 self.damage.absorb(*band);
             }
             self.damage.set_bound(cut);
@@ -1668,7 +1668,6 @@ impl Window {
                 // A full set means the surface and nothing more. Without the bound, the walk visits
                 // every fragment of the document, also the rows of a long scroll container.
                 surface: Some(bound),
-                track: &spaces,
                 ..PaintInput::new(&layout, &self.damage)
             };
             zgui_profile::latency::note_with("d.postexpand", || {
@@ -1683,7 +1682,6 @@ impl Window {
             mark("p.emit");
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.tables);
-            tracked = report.tracked.clone();
             transaction = self
                 .painter
                 .compositor()
@@ -1701,7 +1699,7 @@ impl Window {
                 )
             });
         }
-        self.vouch(&margins, &tracked);
+        self.vouch(&margins.measured);
         if let Some(transaction) = transaction {
             self.submit_transaction(transaction);
         }

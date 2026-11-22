@@ -39,6 +39,12 @@ pub(crate) struct Writing<'a> {
     pub moved: Vec<SpatialId>,
     /// The surface's extent on the device.
     pub surface: zgui_geom::Size<i32, zgui_geom::Device>,
+    /// The clips that admit damage beyond what they show, as
+    /// [`ClipTable::bounds_widened`](zgui_space::ClipTable::bounds_widened) takes them.
+    pub widened: &'a [(
+        zgui_space::PropertyOwner,
+        zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
+    )],
 }
 
 impl Placer for Writing<'_> {

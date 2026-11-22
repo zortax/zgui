@@ -204,8 +204,8 @@ fn a_shape_with_a_fill_and_a_stroke_is_one_path_and_two_masks() {
             .contains(zgui_paint::VectorRoute::GeneralRaster)
     );
     assert_eq!(
-        harness.compositor.commit.chunks_recorded, 2,
-        "the root and the drawing"
+        harness.compositor.commit.chunks_recorded, 1,
+        "the drawing, and no chunk for the root, which draws nothing"
     );
     let drawing = harness.redraw();
     let shapes = shapes(&drawing);

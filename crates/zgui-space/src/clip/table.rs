@@ -458,6 +458,36 @@ impl ClipTable {
         )
     }
 
+    /// [`ClipTable::bounds_placed`] with each link named after an owner in `widened` grown to
+    /// cover the rectangle given with it.
+    pub fn bounds_widened(
+        &self,
+        id: ClipId,
+        matrix_of: &dyn Fn(SpatialId) -> Option<Matrix4>,
+        widened: &[(crate::spatial::PropertyOwner, Rect<DevicePx, Device>)],
+    ) -> Rect<DevicePx, Device> {
+        let mut aabb = ResolvedClip::unbounded().aabb;
+        let mut cursor = id;
+        while let Some(ClipNode::Link {
+            link, parent, name, ..
+        }) = self.get(cursor)
+        {
+            let ClipLink::RoundedRect {
+                rect, radii, space, ..
+            } = *link;
+            let mut rect = placed(rect, radii, matrix_of(space)).0;
+            if let Some((_, more)) = widened.iter().find(|(owner, _)| Some(*owner) == *name) {
+                rect = rect.union(*more);
+            }
+            intersect(&mut aabb, rect);
+            cursor = *parent;
+        }
+        Rect::new(
+            Point::new(DevicePx(aabb[0]), DevicePx(aabb[1])),
+            Size::new(DevicePx(aabb[2]), DevicePx(aabb[3])),
+        )
+    }
+
     /// The deepest chain that both `left` and `right` apply.
     ///
     /// Because chains are interned into a trie, this is a walk up two parent pointers and never a

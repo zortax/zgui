@@ -117,9 +117,6 @@ pub struct PaintInput<'a> {
     /// [`marks::extent`](crate::damage::marks::extent). A caller with no composed frame yet passes
     /// nothing and the marks stay untransformed, which is exact for everything upright.
     pub placements: Option<&'a zgui_space::Placements>,
-    /// The coordinate systems whose painted extent the walk reports in
-    /// [`PaintReport::tracked`].
-    pub track: &'a [zgui_space::SpatialId],
 }
 
 impl<'a> PaintInput<'a> {
@@ -148,7 +145,6 @@ impl<'a> PaintInput<'a> {
             scrollbars: crate::emit::scrollbar::default_paint(),
             record_emitted: false,
             placements: None,
-            track: &[],
         }
     }
 }
@@ -180,25 +176,6 @@ pub struct PaintReport {
     /// A caller damages them and asks for a frame, so each is encoded again until its exact layer
     /// stands. An empty list asks for nothing.
     pub layers_owed: Vec<Rect<i32, Device>>,
-    /// The ink of the visited fragments that draw something directly in each coordinate system
-    /// of [`PaintInput::track`], as one rectangle in that system's device pixels.
-    ///
-    /// A system none of whose fragments the walk visited has no entry.
-    pub tracked: Vec<(zgui_space::SpatialId, Rect<i32, Device>)>,
-}
-
-impl PaintReport {
-    /// Widens the tracked extent of `space` to cover `ink`.
-    fn track(&mut self, space: zgui_space::SpatialId, ink: Rect<DevicePx, Device>) {
-        if ink.is_empty() {
-            return;
-        }
-        let ink = pixels(ink);
-        match self.tracked.iter_mut().find(|(held, _)| *held == space) {
-            Some((_, extent)) => *extent = extent.union(ink),
-            None => self.tracked.push((space, ink)),
-        }
-    }
 }
 
 /// The vector raster paths selected for one freshly encoded element.
@@ -1049,7 +1026,6 @@ impl Pass<'_, '_> {
         if !reached {
             return;
         }
-        let tracked = self.input.track.contains(&fragment.anchor).then_some(ink);
         // Measured in the fragment's anchor, so the place stays right while that anchor moves.
         let drawn = match crate::damage::marks::extent(
             fragment,
@@ -1153,11 +1129,6 @@ impl Pass<'_, '_> {
                     .items(fragment.key)
                     .expect("a replayable fragment has a record");
                 self.report.primitives += items;
-                if items > 0
-                    && let Some(ink) = tracked
-                {
-                    self.report.track(fragment.anchor, ink);
-                }
                 self.show_replayed_tiles(fragment, offset, transform, clip);
                 self.painter.cache.replayed(fragment);
                 if let Some(sync) = &mut self.painter.sync {
@@ -1189,14 +1160,14 @@ impl Pass<'_, '_> {
                 let minted = self.tables.take_minted();
                 let items = painter.items.len();
                 if let Some(sync) = &mut painter.sync {
-                    sync.record(store, fragment, &mut painter.items, self.tables);
+                    sync.record(
+                        store,
+                        fragment,
+                        (&mut painter.items, pixels(ink)),
+                        self.tables,
+                    );
                 }
                 self.report.primitives += emitted.pushed;
-                if items > 0
-                    && let Some(ink) = tracked
-                {
-                    self.report.track(fragment.anchor, ink);
-                }
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
                     && let Some(node) = fragment.node
                 {

@@ -124,8 +124,7 @@ pub const MAX_EXTENT: f32 = 4_000_000.0;
 ///
 /// `viewport` is how tall the scrollport is and `offset` how far it has been scrolled, both in CSS
 /// pixels. `overscan` is how many rows to build beyond each edge, which is what stops a fast scroll
-/// showing a band of nothing before the next frame catches up. The rows between the window and an
-/// end of the list are built too when they are shorter than the viewport.
+/// showing a band of nothing before the next frame catches up.
 ///
 /// # The two degenerate inputs
 ///
@@ -232,18 +231,6 @@ pub fn window(
         .saturating_add(visible)
         .saturating_add(overscan)
         .min(rows);
-    // A spacer shorter than the port is built as rows, so the port never shows an end of the
-    // list the rows do not reach.
-    let first = if first as f32 * row_size < viewport {
-        0
-    } else {
-        first
-    };
-    let end = if (rows - end) as f32 * row_size < viewport {
-        rows
-    } else {
-        end
-    };
     let count = end - first;
 
     VirtualWindow {
@@ -296,15 +283,6 @@ pub fn window_ahead(
 #[cfg(test)]
 mod tests {
     use super::{VirtualWindow, window, window_ahead};
-
-    #[test]
-    fn a_spacer_shorter_than_the_port_is_built_as_rows() {
-        let near = window(10_000, 20.0, 400.0, 400.0, 2);
-        assert_eq!(near.first, 0, "a lead of 360 pixels is built");
-        let end = window(10_000, 20.0, 400.0, 199_200.0, 2);
-        assert_eq!(end.end(), 10_000, "a trail of 340 pixels is built");
-        assert_eq!(end.trail, 0.0);
-    }
 
     #[test]
     fn a_moving_port_builds_the_rows_its_motion_reaches() {

@@ -97,7 +97,9 @@ impl Writing<'_> {
                     continue;
                 };
                 let ink = fragment.on_device_in(fragment.ink, &tables.spatial);
-                let admitted = tables.clips.bounds_placed(fragment.clip, &resolve);
+                let admitted = tables
+                    .clips
+                    .bounds_widened(fragment.clip, &resolve, self.widened);
                 if let Some(rect) = ink.intersection(admitted)
                     && !rect.is_empty()
                 {

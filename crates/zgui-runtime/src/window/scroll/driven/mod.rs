@@ -27,6 +27,7 @@ use std::cell::Cell;
 use compositor_types::{CompositorEvent, ScrollId, Sources};
 use rustc_hash::FxHashMap;
 use web_time::Instant;
+use zgui_geom::{Device, Rect};
 
 use crate::window::Window;
 
@@ -87,6 +88,11 @@ struct Active {
     vouched: Option<[[f32; 2]; 2]>,
     /// The offset the node last showed.
     last: Option<[f32; 2]>,
+    /// The content the window's last frame recorded around the port, as `[low, high]` per axis
+    /// in the content's coordinates.
+    recorded: Option<margin::Span>,
+    /// The device pixels that content and the port cover.
+    reach: Option<Rect<i32, Device>>,
     /// How far the node moved between its last two events.
     step: [f32; 2],
 }

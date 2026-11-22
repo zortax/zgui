@@ -61,6 +61,7 @@ impl Window {
                 painter: &self.painter,
                 moved: Vec::new(),
                 surface,
+                widened: self.diff_scratch.widened(),
             };
             let tick = self.animator.tick(&mut document, &report, &mut writing);
             if !writing.moved.is_empty() {
