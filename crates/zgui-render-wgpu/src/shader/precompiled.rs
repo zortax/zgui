@@ -78,7 +78,7 @@ impl Module {
     /// the text it was encoded from describes what to draw, and a program that cannot read its own
     /// shaders draws nothing.
     pub fn representation(self) -> naga::Module {
-        bincode::deserialize(self.encoded())
+        postcard::from_bytes(self.encoded())
             .unwrap_or_else(|error| panic!("{}: {error}", self.label()))
     }
 }

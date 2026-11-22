@@ -197,7 +197,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
             ),
         ));
     }
-    let representation = bincode::serialize(&module).map_err(|error| {
+    let representation = postcard::to_allocvec(&module).map_err(|error| {
         syn::Error::new(
             declared.name.span(),
             format!("this shader compiled but would not encode: {error}"),
