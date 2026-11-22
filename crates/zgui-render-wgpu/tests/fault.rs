@@ -9,12 +9,12 @@
 mod support;
 
 use zgui_bits::DamageSet;
-use zgui_geom::{Point, Rect, Size};
+use zgui_geom::{Matrix4, Point, Rect, Size};
 use zgui_render::{FrameOutcome, Renderer};
-use zgui_render_wgpu::{Acquisition, wgpu};
+use zgui_render_wgpu::{Acquisition, Pixels, wgpu};
 use zgui_scene::{Quad, Scene};
 
-use support::{SIDE, opaque, plain_renderer, present, rect};
+use support::{SIDE, TestRenderer, opaque, plain_renderer, present, rect};
 
 /// A scene whose one square is at `step` pixels along.
 fn moving_square(step: i32) -> Scene {
@@ -147,22 +147,17 @@ fn a_run_of_bad_answers_still_ends_in_the_right_picture() {
     assert_eq!(recovered.max_difference(&reference), 0);
 }
 
-#[test]
-fn an_external_texture_is_drawn_where_its_quad_says_and_clipped_like_everything_else() {
-    // The one primitive whose pixels the renderer did not produce. What it shares with the rest is
-    // the clip: the same chain, evaluated by the same function, so a video inside a rounded card
-    // is clipped exactly as the card's own background is.
-    let Some(mut renderer) = plain_renderer() else {
-        return;
-    };
+/// A solid opaque blue texture, described to and attached on `renderer`.
+fn blue_external(renderer: &mut TestRenderer) -> (wgpu::Texture, zgui_scene::ExternalTextureId) {
     let gpu = std::sync::Arc::clone(renderer.gpu());
+    let extent = wgpu::Extent3d {
+        width: 2,
+        height: 2,
+        depth_or_array_layers: 1,
+    };
     let texture = gpu.device().create_texture(&wgpu::TextureDescriptor {
         label: Some("test.external"),
-        size: wgpu::Extent3d {
-            width: 2,
-            height: 2,
-            depth_or_array_layers: 1,
-        },
+        size: extent,
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -179,11 +174,7 @@ fn an_external_texture_is_drawn_where_its_quad_says_and_clipped_like_everything_
             bytes_per_row: Some(8),
             rows_per_image: Some(2),
         },
-        wgpu::Extent3d {
-            width: 2,
-            height: 2,
-            depth_or_array_layers: 1,
-        },
+        extent,
     );
 
     let id = zgui_scene::ExternalTextureId(7);
@@ -197,11 +188,17 @@ fn an_external_texture_is_drawn_where_its_quad_says_and_clipped_like_everything_
         renderer.attach_external(id, &texture),
         "a described texture accepts its resource"
     );
-    assert!(
-        !renderer.attach_external(zgui_scene::ExternalTextureId(99), &texture),
-        "and one nobody described has nothing to be drawn with"
-    );
+    (texture, id)
+}
 
+/// Draws a 64 pixel external quad at `at`, under `transform`, through the clip `(32, 32, 32, 64)`
+/// on the device, over white.
+fn clipped_external(
+    renderer: &mut TestRenderer,
+    id: zgui_scene::ExternalTextureId,
+    at: f32,
+    transform: Option<Matrix4>,
+) -> Pixels {
     let mut scene = Scene::new();
     scene.begin_frame(Size::new(SIDE, SIDE));
     let white = scene
@@ -214,12 +211,36 @@ fn an_external_texture_is_drawn_where_its_quad_says_and_clipped_like_everything_
     let clip = scene
         .clips
         .only(zgui_scene::ClipLink::rect(rect(32.0, 32.0, 32.0, 64.0)));
-    scene.push_external(
-        zgui_scene::ExternalQuad::new(rect(32.0, 32.0, 64.0, 64.0), id).clipped(clip),
-    );
+    let mut quad = zgui_scene::ExternalQuad::new(rect(at, at, 64.0, 64.0), id).clipped(clip);
+    if let Some(matrix) = transform {
+        let owner = zgui_scene::PropertyOwner::new(3).expect("a handle is never the empty word");
+        let viewport = scene.spatial.viewport();
+        quad.transform = scene.spatial.space_of(
+            viewport,
+            owner,
+            zgui_scene::OwnSpace::of(Some(matrix), None, false),
+        );
+    }
+    scene.push_external(quad);
     scene.finish(&DamageSet::full());
+    present(renderer, &scene)
+}
 
-    let pixels = present(&mut renderer, &scene);
+#[test]
+fn an_external_texture_is_drawn_where_its_quad_says_and_clipped_like_everything_else() {
+    // The one primitive whose pixels the renderer did not produce. What it shares with the rest is
+    // the clip: the same chain, evaluated by the same function, so a video inside a rounded card
+    // is clipped exactly as the card's own background is.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let (texture, id) = blue_external(&mut renderer);
+    assert!(
+        !renderer.attach_external(zgui_scene::ExternalTextureId(99), &texture),
+        "and one nobody described has nothing to be drawn with"
+    );
+
+    let pixels = clipped_external(&mut renderer, id, 32.0, None);
     assert_eq!(pixels.rgba(40, 40), [0, 0, 255, 255], "inside the clip");
     assert_eq!(
         pixels.rgba(80, 40),
@@ -230,6 +251,26 @@ fn an_external_texture_is_drawn_where_its_quad_says_and_clipped_like_everything_
         pixels.rgba(16, 16),
         [255, 255, 255, 255],
         "outside the quad"
+    );
+}
+
+#[test]
+fn a_transformed_external_texture_is_clipped_where_it_lands() {
+    // The clip chain is in device space, so the quad is clipped after its transform moved it. The
+    // picture is the same as the untransformed quad drawn at the place it moved to.
+    let Some(mut renderer) = plain_renderer() else {
+        return;
+    };
+    let (_texture, id) = blue_external(&mut renderer);
+
+    let moved = Matrix4::translation(32.0, 32.0, 0.0);
+    let pixels = clipped_external(&mut renderer, id, 0.0, Some(moved));
+    assert_eq!(pixels.rgba(40, 40), [0, 0, 255, 255], "inside the clip");
+    assert_eq!(pixels.rgba(40, 72), [0, 0, 255, 255], "inside the clip");
+    assert_eq!(
+        pixels.rgba(80, 40),
+        [255, 255, 255, 255],
+        "outside the clip"
     );
 }
 
