@@ -14,15 +14,12 @@ pub(crate) enum Part {
     Backdrop = 2,
 }
 
-/// Returns the key of `part` of `fragment`.
+/// Returns the key of `part` of `fragment`, whose box is recorded under `name`.
 ///
-/// The owner is the fragment's box and the part is the fragment's position among the box's
-/// fragments, so a fragment rebuilt in its box's place keeps its key.
-pub(crate) fn of(store: &LayoutStore, fragment: &Fragment, part: Part) -> ChunkKey {
-    ChunkKey::new(
-        fragment.box_.as_u64(),
-        ordinal(store, fragment) << 4 | part as u32,
-    )
+/// The part is the fragment's position among the box's fragments, so a fragment rebuilt in its
+/// box's place keeps its key.
+pub(crate) fn of(name: u64, store: &LayoutStore, fragment: &Fragment, part: Part) -> ChunkKey {
+    ChunkKey::new(name, ordinal(store, fragment) << 4 | part as u32)
 }
 
 /// Returns the key of `part` of the fragment at `ordinal` among the fragments of the box `owner`.

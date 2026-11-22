@@ -29,6 +29,7 @@ use zgui_space::ChangeCoverage;
 use crate::emit::group::GroupEffect;
 use crate::sync::key::{self, Part};
 use crate::sync::mirror::Mirror;
+use crate::sync::names::Names;
 use crate::walk::stacking;
 
 use self::splice::splice;
@@ -99,6 +100,8 @@ pub(crate) struct Context<'a> {
     pub(crate) store: &'a LayoutStore,
     pub(crate) mirror: &'a mut Mirror,
     pub(crate) tables: &'a mut Tables,
+    /// The names the boxes' chunks are recorded under.
+    pub(crate) names: &'a Names,
     /// Whether a box has an outline chunk.
     pub(crate) outlined: &'a dyn Fn(BoxKey) -> bool,
     /// Whether a box has a backdrop chunk.
@@ -117,6 +120,49 @@ impl Order {
 
     /// Notes that the fragments of the box `key` came or went.
     pub(crate) fn fragments_changed(&mut self, key: BoxKey) {
+        self.dirty.insert(key);
+    }
+
+    /// Reports whether a list or a node of the order tree holds the box `key`.
+    pub(crate) fn knows(&self, key: BoxKey) -> bool {
+        self.placed.contains_key(&key) || self.nodes.contains_key(&key)
+    }
+
+    /// Returns the box whose list holds the box `key`, and the place of `key` among its
+    /// children.
+    pub(crate) fn place_of(&self, key: BoxKey) -> Option<(BoxKey, u32)> {
+        let owner = self.placed.get(&key)?.owner;
+        let children = self
+            .nodes
+            .get(&owner)
+            .map_or(&[][..], |node| &node.children[..]);
+        let place = children.iter().position(|child| *child == key)?;
+        Some((owner, place as u32))
+    }
+
+    /// Gives the box `key` the order node of the box `gone`, which left.
+    ///
+    /// The node keeps its list until the next sync rebuilds it for `key`.
+    pub(crate) fn take_over(&mut self, key: BoxKey, gone: BoxKey) {
+        self.effects.remove(&gone);
+        self.restyled.remove(&gone);
+        let Some(node) = self.nodes.remove(&gone) else {
+            return;
+        };
+        for child in &node.children {
+            if let Some(place) = self.placed.get_mut(child)
+                && place.owner == gone
+            {
+                place.owner = key;
+            }
+        }
+        if self.volatile.remove(&gone) {
+            self.volatile.insert(key);
+        }
+        if node.effect.is_some() {
+            self.restyled.insert(key);
+        }
+        self.nodes.insert(key, node);
         self.dirty.insert(key);
     }
 
@@ -208,7 +254,7 @@ impl Order {
         self.top = top;
         let mut entries = Vec::new();
         if let Some(top) = top {
-            push_backdrop(context.backdropped, top, &mut entries);
+            push_backdrop(context, top, &mut entries);
             entries.push(OrderEntry::Node(self.ensure_node(context, top)));
         }
         let spliced = splice(context.tx, root, &self.root_entries, &entries);
@@ -341,17 +387,17 @@ impl Order {
         // Taken while the list is built, since a child's new node builds its own list first.
         let mut entries = std::mem::take(&mut self.scratch.entries);
         entries.clear();
-        push_chunks(store, key, &mut entries);
+        push_chunks(context.names, store, key, &mut entries);
         for &child in children.iter() {
-            push_backdrop(context.backdropped, child, &mut entries);
+            push_backdrop(context, child, &mut entries);
             if self.needs_node(store, child) {
                 entries.push(OrderEntry::Node(self.ensure_node(context, child)));
             } else {
-                push_chunks(store, child, &mut entries);
-                push_outline(context.outlined, child, &mut entries);
+                push_chunks(context.names, store, child, &mut entries);
+                push_outline(context, child, &mut entries);
             }
         }
-        push_outline(context.outlined, key, &mut entries);
+        push_outline(context, key, &mut entries);
 
         let unchanged = self
             .nodes
@@ -487,23 +533,24 @@ fn sorts_by_others(store: &LayoutStore, owner: BoxKey, child: BoxKey) -> bool {
 }
 
 /// Appends the chunk of each fragment of the box `key`.
-fn push_chunks(store: &LayoutStore, key: BoxKey, entries: &mut Vec<OrderEntry>) {
+fn push_chunks(names: &Names, store: &LayoutStore, key: BoxKey, entries: &mut Vec<OrderEntry>) {
+    let name = names.of(key);
     let count = store.fragments_of_box(key).len() as u32;
-    entries.extend(
-        (0..count).map(|ordinal| OrderEntry::Chunk(key::at(key.as_u64(), ordinal, Part::Body))),
-    );
+    entries.extend((0..count).map(|ordinal| OrderEntry::Chunk(key::at(name, ordinal, Part::Body))));
 }
 
-/// Appends the outline chunk of the box `key`, when `outlined` says it has one.
-fn push_outline(outlined: &dyn Fn(BoxKey) -> bool, key: BoxKey, entries: &mut Vec<OrderEntry>) {
-    if outlined(key) {
-        entries.push(OrderEntry::Chunk(key::at(key.as_u64(), 0, Part::Outline)));
+/// Appends the outline chunk of the box `key`, when it has one.
+fn push_outline(context: &Context<'_>, key: BoxKey, entries: &mut Vec<OrderEntry>) {
+    if (context.outlined)(key) {
+        let name = context.names.of(key);
+        entries.push(OrderEntry::Chunk(key::at(name, 0, Part::Outline)));
     }
 }
 
-/// Appends the backdrop chunk of the box `key`, when `backdropped` says it has one.
-fn push_backdrop(backdropped: &dyn Fn(BoxKey) -> bool, key: BoxKey, entries: &mut Vec<OrderEntry>) {
-    if backdropped(key) {
-        entries.push(OrderEntry::Chunk(key::at(key.as_u64(), 0, Part::Backdrop)));
+/// Appends the backdrop chunk of the box `key`, when it has one.
+fn push_backdrop(context: &Context<'_>, key: BoxKey, entries: &mut Vec<OrderEntry>) {
+    if (context.backdropped)(key) {
+        let name = context.names.of(key);
+        entries.push(OrderEntry::Chunk(key::at(name, 0, Part::Backdrop)));
     }
 }

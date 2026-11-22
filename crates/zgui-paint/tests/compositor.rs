@@ -312,3 +312,59 @@ fn a_chunk_left_where_layout_moved_it_inside_a_skipped_box_is_not_drawn() {
         }
     }
 }
+
+#[test]
+fn a_row_that_arrives_as_another_leaves_records_the_departed_rows_keys() {
+    // A virtual list's recycle: the first row leaves and a new row joins at the end, in one frame.
+    let row = |name| {
+        Element::new(name)
+            .classes(&["row"])
+            .children(vec![Element::new("cell").classes(&["cell"])])
+    };
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![Element::new("list").children(vec![
+            row("a"),
+            row("b"),
+            row("c"),
+        ])]),
+        "root { display: block; width: 200px; height: 200px }
+         list { display: block }
+         .row { display: block; height: 30px; background: #222 }
+         .cell { display: block; width: 40px; height: 10px; background: blue }",
+        200.0,
+        200.0,
+    );
+    harness.paint_everything();
+    let root = harness.document.root_index().expect("a root element");
+    // The marks of the first build, which built the whole tree.
+    zgui_layout::boxtree::retire(&mut harness.document, root);
+
+    let (list, first) = (harness.element("list"), harness.element("a"));
+    harness.edit_and_restyle(|edit| {
+        edit.remove(first);
+        let row = edit.create_element(zgui_interned::ElementName::new("d"));
+        edit.add_class(row, zgui_interned::ClassName::new("row"));
+        let cell = edit.create_element(zgui_interned::ElementName::new("cell"));
+        edit.add_class(cell, zgui_interned::ClassName::new("cell"));
+        edit.insert_before(row, cell, None);
+        edit.insert_before(list, row, None);
+    });
+    let owed = zgui_layout::boxtree::retire(&mut harness.document, root);
+    zgui_layout::boxtree::patch::rebuild(&mut harness.store, &harness.document, &owed)
+        .expect("the new row is spliced into the box tree");
+    harness.compose_from_marks(200.0, 200.0);
+    harness.paint();
+
+    let commit = harness.compositor.commit;
+    assert!(commit.chunks_recorded >= 2, "{commit:?}");
+    assert_eq!(
+        commit.chunks_removed, 0,
+        "the new row records the chunks of the row that left: {commit:?}"
+    );
+    let drawing = harness.redraw();
+    assert_eq!(
+        drawing.quads().len(),
+        6,
+        "three rows and their cells: {drawing}"
+    );
+}

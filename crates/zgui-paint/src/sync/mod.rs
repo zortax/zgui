@@ -7,7 +7,8 @@
 //! - A replayed fragment that moved has its chunk's offset written.
 //! - A box's outline and its backdrop are chunks of their own, recorded when they changed.
 //! - A retired fragment's chunks are removed at the end of the frame, unless a fragment rebuilt
-//!   in its place recorded the same keys.
+//!   in its place recorded the same keys. A box that arrives where a box left records the
+//!   departed box's keys.
 //! - The tables' changes become node and slot writes.
 //! - A changed child list, set of fragments or group effect rewrites the order nodes of the boxes
 //!   concerned.
@@ -20,6 +21,7 @@ mod flush;
 mod key;
 mod mirror;
 mod moved;
+mod names;
 mod order;
 mod resolve;
 
@@ -40,6 +42,7 @@ use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::record::{Items, Recorder};
 use crate::sync::mirror::{Held, Mirror};
+use crate::sync::names::Names;
 use crate::sync::order::Order;
 
 /// The chunks, nodes and slots one output's compositor holds for the fragments of one layout.
@@ -49,6 +52,7 @@ pub struct CompositorSync {
     transaction: Option<Transaction>,
     mirror: Mirror,
     order: Order,
+    names: Names,
     chunks: FxHashMap<FragKey, Chunk>,
     owners: FxHashMap<ChunkKey, FragKey>,
     extras: FxHashMap<ChunkKey, Extra>,
@@ -102,6 +106,7 @@ impl CompositorSync {
             transaction: None,
             mirror: Mirror::default(),
             order: Order::default(),
+            names: Names::default(),
             chunks: FxHashMap::default(),
             owners: FxHashMap::default(),
             extras: FxHashMap::default(),
@@ -141,29 +146,31 @@ impl CompositorSync {
             self.mirror.chunk_removed(key);
             self.extents.removed(key);
             self.report.removed += 1;
-            if let Some(owner) = BoxKey::from_u64(key.owner) {
+            if let Some(owner) = self.names.box_of(key.owner) {
                 self.order.fragments_changed(owner);
             }
         }
         self.report.params_written += self.mirror.params.sync(&mut transaction);
         // The walk's replays rewrite the slots of the clips they carry along.
         self.report.table_writes += self.mirror.sync(&mut transaction, tables);
-        let extras = &self.extras;
+        let (extras, names) = (&self.extras, &self.names);
         let outlined =
-            |owner: BoxKey| extras.contains_key(&key::at(owner.as_u64(), 0, Part::Outline));
+            |owner: BoxKey| extras.contains_key(&key::at(names.of(owner), 0, Part::Outline));
         let backdropped =
-            |owner: BoxKey| extras.contains_key(&key::at(owner.as_u64(), 0, Part::Backdrop));
+            |owner: BoxKey| extras.contains_key(&key::at(names.of(owner), 0, Part::Backdrop));
         let order = self.order.sync(&mut order::Context {
             tx: &mut transaction,
             store,
             mirror: &mut self.mirror,
             tables,
+            names,
             outlined: &outlined,
             backdropped: &backdropped,
         });
         self.report.order_entries += order.entries;
         self.report.table_writes += order.effects;
         self.report.released += self.mirror.settle(&mut transaction, tables);
+        self.names.settle(|key| left(store, key));
         Some(transaction)
     }
 
@@ -291,10 +298,13 @@ impl CompositorSync {
         (items, ink): (&mut Items, Rect<i32, Device>),
         tables: &mut Tables,
     ) {
+        if self.transaction.is_none() {
+            return;
+        }
+        let key = key::of(self.name(store, fragment.box_), store, fragment, Part::Body);
         let Some(transaction) = &mut self.transaction else {
             return;
         };
-        let key = key::of(store, fragment, Part::Body);
         if let Some(previous) = self.chunks.get(&fragment.key)
             && previous.key != key
             && remove(transaction, &mut self.owners, previous.key, fragment.key)
@@ -355,10 +365,13 @@ impl CompositorSync {
         items: &mut Items,
         tables: &mut Tables,
     ) {
+        if self.transaction.is_none() {
+            return;
+        }
+        let key = key::of(self.name(store, fragment.box_), store, fragment, part);
         let Some(transaction) = &mut self.transaction else {
             return;
         };
-        let key = key::of(store, fragment, part);
         let replaces = self.retired.remove(&key);
         let by_fragment = match part {
             Part::Backdrop => &mut self.backdropped,
@@ -416,7 +429,7 @@ impl CompositorSync {
         let Some(transaction) = &mut self.transaction else {
             return;
         };
-        let key = key::at(owner.as_u64(), 0, part);
+        let key = key::at(self.names.of(owner), 0, part);
         if let Some(extra) = self.extras.remove(&key) {
             self.owners.remove(&key);
             match part {
@@ -463,11 +476,60 @@ impl CompositorSync {
     ///
     /// The fragment counts as unrecorded from then on.
     pub(crate) fn withdraw(&mut self, fragment: FragKey) {
-        if let Some(chunk) = self.chunks.remove(&fragment)
-            && self.owners.get(&chunk.key) == Some(&fragment)
-        {
+        let Some(chunk) = self.chunks.remove(&fragment) else {
+            self.withdraw_extras(fragment);
+            return;
+        };
+        if self.owners.get(&chunk.key) == Some(&fragment) {
             self.retired.insert(chunk.key);
         }
+        if let Some(owner) = self.names.box_of(chunk.key.owner)
+            && let Some(place) = self.order.place_of(owner)
+        {
+            self.names.withdrawn(owner, place);
+        }
+        self.withdraw_extras(fragment);
+    }
+
+    /// Returns the name the chunks of the box `key` are recorded under.
+    ///
+    /// A box the sync has not met yet arrives first: it takes over the name of a box that left
+    /// the list it joins, once its parent arrived.
+    fn name(&mut self, store: &LayoutStore, key: BoxKey) -> u64 {
+        if !self.met(store, key) {
+            self.arrive(store, key);
+        }
+        self.names.of(key)
+    }
+
+    /// Reports whether the box `key` arrived, is listed in the order tree, or has a fragment
+    /// recorded.
+    fn met(&self, store: &LayoutStore, key: BoxKey) -> bool {
+        self.names.met(key)
+            || self.order.knows(key)
+            || store
+                .fragments_of_box(key)
+                .iter()
+                .any(|fragment| self.chunks.contains_key(fragment))
+    }
+
+    /// Lets the box `key` arrive after its parent, and hands it the order node of the box it
+    /// takes over.
+    fn arrive(&mut self, store: &LayoutStore, key: BoxKey) {
+        let Some(parent) = store.get(key).and_then(|node| node.parent) else {
+            self.names.arrive(key, key, |_| false);
+            return;
+        };
+        if !self.met(store, parent) {
+            self.arrive(store, parent);
+        }
+        if let Some(gone) = self.names.arrive(key, parent, |gone| left(store, gone)) {
+            self.order.take_over(key, gone);
+        }
+    }
+
+    /// Marks the outline and backdrop chunks of `fragment` for removal when the frame closes.
+    fn withdraw_extras(&mut self, fragment: FragKey) {
         for extras in [&mut self.outlined, &mut self.backdropped] {
             if let Some(key) = extras.remove(&fragment)
                 && self.owners.get(&key) == Some(&fragment)
@@ -502,6 +564,26 @@ pub fn record_chunk(
     ));
     flush::record(transaction, &mut mirror, tables, key, &mut items);
     mirror.recorded(key);
+}
+
+/// Reports whether the box `key` left the tree of `store`, alone or with an ancestor.
+fn left(store: &LayoutStore, key: BoxKey) -> bool {
+    let mut at = key;
+    loop {
+        let Some(node) = store.get(at) else {
+            return true;
+        };
+        let Some(parent) = node.parent else {
+            return store.root() != Some(at);
+        };
+        if !store
+            .get(parent)
+            .is_some_and(|parent| parent.children.contains(&at))
+        {
+            return true;
+        }
+        at = parent;
+    }
 }
 
 /// Removes the chunk `key` if `fragment` is what it is recorded for, and reports whether it was.

@@ -55,8 +55,8 @@ pub(super) fn splice(
 /// The change has to be one of these:
 ///
 /// - One of the lists is empty.
-/// - `new` drops entries at one end of `old` and adds entries at the other, none of them one it
-///   dropped.
+/// - `new` drops entries at one end of `old` and adds entries at the other, which may be the ones
+///   it dropped.
 ///
 /// Returns `None` and writes nothing for any other change.
 fn shifted(
@@ -76,10 +76,7 @@ fn shifted(
         .and_then(|first| old.iter().position(|e| e == first))
     {
         let kept = old.len() - dropped;
-        if new.len() >= kept
-            && old[dropped..] == new[..kept]
-            && apart(&old[..dropped], &new[kept..])
-        {
+        if new.len() >= kept && old[dropped..] == new[..kept] {
             if dropped > 0 {
                 tx.splice(node, at, dropped as u32, &[]);
             }
@@ -95,7 +92,7 @@ fn shifted(
         .and_then(|first| new.iter().position(|e| e == first))
     {
         let kept = new.len() - added;
-        if old.len() >= kept && new[added..] == old[..kept] && apart(&new[..added], &old[kept..]) {
+        if old.len() >= kept && new[added..] == old[..kept] {
             if added > 0 {
                 tx.splice(node, at, 0, &new[..added]);
             }
@@ -106,13 +103,6 @@ fn shifted(
         }
     }
     None
-}
-
-/// Reports whether `a` and `b` hold no entry in common, and `false` for long lists.
-fn apart(a: &[OrderEntry], b: &[OrderEntry]) -> bool {
-    // A recycled row changes a few entries at each end, which keeps the search short.
-    const LONGEST: usize = 1024;
-    a.len() * b.len() <= LONGEST && !a.iter().any(|entry| b.contains(entry))
 }
 
 /// Returns the positions in `old` and in `new` of the most entries both hold in the same order,
@@ -206,6 +196,8 @@ mod tests {
             (&[1, 2, 3, 4][..], &[0, 1, 2][..]),
             (&[][..], &[1, 2][..]),
             (&[1, 2][..], &[][..]),
+            (&[1, 2, 3][..], &[2, 3, 1][..]),
+            (&[1, 2, 3][..], &[3, 9, 1, 2][..]),
         ] {
             let expected: Vec<_> = new.iter().map(entry).collect();
             assert_eq!(replayed(old, new), Some(expected), "{old:?} into {new:?}");
@@ -214,11 +206,6 @@ mod tests {
             replayed(&[1, 2, 3], &[1, 5, 3]),
             None,
             "a change in the middle"
-        );
-        assert_eq!(
-            replayed(&[1, 2, 3], &[3, 9, 1, 2]),
-            None,
-            "an added entry the change dropped"
         );
     }
 }
