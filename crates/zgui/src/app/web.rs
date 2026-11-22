@@ -288,6 +288,7 @@ fn backends() -> wgpu::Backends {
 
 /// The renderer factory of a page: every canvas draws on the device that is already open.
 fn factory(graphics: SharedGraphics, precision: GroupPrecision) -> RendererFactory {
+    let paths = super::compositor::PathRenderers::default();
     Box::new(move |surface, target| {
         let Some(canvas) = zgui_platform_web::canvas_of(surface.id()) else {
             return Err(AppError::Platform(PlatformError::NoSuchSurface));
@@ -314,7 +315,11 @@ fn factory(graphics: SharedGraphics, precision: GroupPrecision) -> RendererFacto
             adapter: None,
             cache_directory: None,
         };
-        renderer.set_vector_factory(super::compositor::vectors(options), backend, "vello");
+        renderer.set_vector_factory(
+            super::compositor::vectors(options, paths.clone()),
+            backend,
+            "vello",
+        );
         Ok(Box::new(renderer) as Box<dyn Renderer>)
     })
 }

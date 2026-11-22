@@ -1,12 +1,12 @@
 //! The compositor every window is drawn through, and the renderers that draw its frames.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 
 use compositor_api::{Compositor, CompositorBudgets, Renderer};
 use compositor_core::CompositorImpl;
 use compositor_text::SwashRaster;
 use compositor_types::{RenderTarget, VectorBackend};
-use compositor_vello::VelloOptions;
+use compositor_vello::{Choice, SharedRenderer, VelloOptions, VelloRaster};
 use compositor_wgpu::{
     Gpu, LatencyMarks, PrePresent, PresentPacing, SharedGraphics, VectorFactory,
 };
@@ -48,7 +48,10 @@ pub(crate) fn factory(precision: Option<crate::GroupPrecision>) -> RendererFacto
         .or(precision)
         .unwrap_or_default()
         .wgpu();
-    Box::new(move |surface, target| renderer(&graphics, surface, target, &vello, precision))
+    let paths = PathRenderers::default();
+    Box::new(move |surface, target| {
+        renderer(&graphics, surface, target, (&vello, &paths), precision)
+    })
 }
 
 /// The variable that names the directory compiled pipelines are kept in.
@@ -90,12 +93,12 @@ pub(crate) fn wrapping(mut make: crate::app::CompositorRendererMaker) -> Rendere
 }
 
 /// Opens a renderer presenting into `surface` on the shared device, whose path rasteriser is built
-/// with `vello`.
+/// with `vello` and shares the device's path renderer in `paths`.
 fn renderer(
     graphics: &SharedGraphics,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
-    vello: &VelloOptions,
+    (vello, paths): (&VelloOptions, &PathRenderers),
     precision: compositor_wgpu::GroupPrecision,
 ) -> Result<Box<dyn Renderer>, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
@@ -118,7 +121,11 @@ fn renderer(
         .map_err(AppError::GpuUnavailable)?;
     renderer.set_group_precision(precision);
     // Without a path rasteriser, paths and glyphs on the path route draw nothing.
-    renderer.set_vector_factory(vectors(vello.clone()), VectorBackend::Compute, "vello");
+    renderer.set_vector_factory(
+        vectors(vello.clone(), paths.clone()),
+        VectorBackend::Compute,
+        "vello",
+    );
     // A platform that paces its own frames also decides when a composed frame is handed over.
     if pacing == PresentPacing::Platform {
         let gate = Arc::clone(surface);
@@ -160,8 +167,114 @@ fn pre_present(surface: &Arc<dyn Surface>) -> PrePresent {
 }
 
 /// Returns the factory of the path rasteriser a device can run, built with `options`.
-pub(crate) fn vectors(options: VelloOptions) -> VectorFactory {
-    Box::new(move |gpu: &Arc<Gpu>, size| {
-        compositor_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
-    })
+///
+/// Rasterisers on one device share the vello path renderer that `paths` keeps for it.
+pub(crate) fn vectors(options: VelloOptions, paths: PathRenderers) -> VectorFactory {
+    Box::new(
+        move |gpu: &Arc<Gpu>, size| match paths.shared(gpu, &options) {
+            Some(shared) => Box::new(VelloRaster::sharing(shared, gpu.queue())),
+            None => compositor_vello::for_device(
+                gpu.adapter(),
+                gpu.device(),
+                gpu.queue(),
+                size,
+                &options,
+            ),
+        },
+    )
+}
+
+/// The vello path renderer of the last device a window drew paths on.
+///
+/// A second window on the same device shares the renderer and its fixed buffers. The renderer is
+/// dropped with the last rasteriser that uses it.
+#[derive(Clone, Default)]
+pub(crate) struct PathRenderers {
+    held: Arc<Mutex<Option<Held>>>,
+}
+
+/// A path renderer and the device it was built on, both held weakly.
+struct Held {
+    device: Weak<Gpu>,
+    renderer: Weak<SharedRenderer>,
+}
+
+impl PathRenderers {
+    /// Returns the path renderer of `gpu`, and builds it with `options` when the device has none.
+    ///
+    /// Returns `None` when the device cannot run vello or the renderer fails to build.
+    fn shared(&self, gpu: &Arc<Gpu>, options: &VelloOptions) -> Option<Arc<SharedRenderer>> {
+        if compositor_vello::chosen(gpu.adapter()) != Choice::Compute {
+            return None;
+        }
+        let mut held = self
+            .held
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        // A replacement device after a loss is another `Gpu`, so it gets a renderer of its own.
+        if let Some(entry) = held.as_ref()
+            && entry
+                .device
+                .upgrade()
+                .is_some_and(|device| Arc::ptr_eq(&device, gpu))
+            && let Some(shared) = entry.renderer.upgrade()
+        {
+            return Some(shared);
+        }
+        let options = VelloOptions {
+            adapter: options.adapter.clone().or(Some(gpu.adapter().get_info())),
+            cache_directory: options.cache_directory.clone(),
+        };
+        let shared = SharedRenderer::new(gpu.device(), &options).ok()?;
+        *held = Some(Held {
+            device: Arc::downgrade(gpu),
+            renderer: Arc::downgrade(&shared),
+        });
+        Some(shared)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use compositor_vello::{Choice, VelloOptions};
+    use compositor_wgpu::SharedGraphics;
+
+    use super::{PathRenderers, vectors};
+
+    #[test]
+    fn two_windows_on_one_device_share_one_path_renderer() {
+        let graphics = SharedGraphics::new();
+        let Ok(gpu) = graphics.open_gpu() else {
+            eprintln!("skipped: no graphics device");
+            return;
+        };
+        if compositor_vello::chosen(gpu.adapter()) != Choice::Compute {
+            eprintln!("skipped: the device cannot run vello");
+            return;
+        }
+        let paths = PathRenderers::default();
+        let first_window = vectors(VelloOptions::default(), paths.clone());
+        let second_window = vectors(VelloOptions::default(), paths.clone());
+
+        let rasters = [
+            first_window(&gpu, [256, 256]),
+            second_window(&gpu, [256, 256]),
+        ];
+
+        let held = paths
+            .held
+            .lock()
+            .expect("no test panicked holding the lock");
+        let shared = held
+            .as_ref()
+            .and_then(|entry| entry.renderer.upgrade())
+            .expect("the windows' path renderer is alive");
+        assert_eq!(
+            Arc::strong_count(&shared),
+            rasters.len() + 1,
+            "both windows draw through the one path renderer"
+        );
+    }
 }
