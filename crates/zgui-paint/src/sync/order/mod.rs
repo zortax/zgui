@@ -17,6 +17,7 @@
 //! not change writes nothing.
 
 mod effect;
+mod ends;
 mod splice;
 
 use crate::Tables;
@@ -62,6 +63,8 @@ struct Node {
     id: OrderId,
     entries: Vec<OrderEntry>,
     children: Vec<BoxKey>,
+    /// Where the entries of each child start in `entries`, and where those of the last child end.
+    spans: Vec<u32>,
     effect: Option<effect::Written>,
 }
 
@@ -92,6 +95,11 @@ struct Scratch {
     volatile: Vec<BoxKey>,
     seen: FxHashSet<BoxKey>,
     entries: Vec<OrderEntry>,
+    spans: Vec<u32>,
+    /// The boxes the current sync was given to visit.
+    touched: FxHashSet<BoxKey>,
+    /// Whether the current sync visits every node.
+    whole: bool,
 }
 
 /// What a sync of the order tree reads and writes besides the order tree.
@@ -213,6 +221,9 @@ impl Order {
         let mut volatile = std::mem::take(&mut self.scratch.volatile);
         self.volatile_above(context.store, &work, coverage, &mut volatile);
         work.extend(self.dirty.drain());
+        self.scratch.touched.clear();
+        self.scratch.touched.extend(work.iter().copied());
+        self.scratch.whole = coverage == ChangeCoverage::All;
 
         self.scratch.visited.clear();
         let mut entries = self.sync_root(context, root);
@@ -360,6 +371,7 @@ impl Order {
                 id,
                 entries: Vec::new(),
                 children: Vec::new(),
+                spans: Vec::new(),
                 effect: None,
             },
         );
@@ -370,10 +382,15 @@ impl Order {
 
     /// Rebuilds the list of the box `key`'s node, and returns the entries spliced.
     ///
-    /// A list whose children and entries stay as they are writes nothing.
+    /// A list that keeps a run of its children unchanged is rebuilt at its ends, see
+    /// [`Order::rebuild_ends`]. A list whose children and entries stay as they are writes
+    /// nothing.
     fn rebuild(&mut self, context: &mut Context<'_>, key: BoxKey) -> usize {
         let store = context.store;
         let children = stacking::children_in_paint_order(store, key);
+        if let Some(spliced) = self.rebuild_ends(context, key, &children) {
+            return spliced;
+        }
         let volatile = children
             .iter()
             .any(|&child| sorts_by_others(store, key, child));
@@ -387,23 +404,24 @@ impl Order {
         // Taken while the list is built, since a child's new node builds its own list first.
         let mut entries = std::mem::take(&mut self.scratch.entries);
         entries.clear();
+        let mut spans = std::mem::take(&mut self.scratch.spans);
+        spans.clear();
         push_chunks(context.names, store, key, &mut entries);
         for &child in children.iter() {
-            push_backdrop(context, child, &mut entries);
-            if self.needs_node(store, child) {
-                entries.push(OrderEntry::Node(self.ensure_node(context, child)));
-            } else {
-                push_chunks(context.names, store, child, &mut entries);
-                push_outline(context, child, &mut entries);
-            }
+            spans.push(entries.len() as u32);
+            self.push_child(context, child, &mut entries);
         }
+        spans.push(entries.len() as u32);
         push_outline(context, key, &mut entries);
 
-        let unchanged = self
-            .nodes
-            .get(&key)
-            .is_none_or(|node| node.entries == entries && *node.children == *children);
-        if unchanged {
+        let Some(node) = self.nodes.get_mut(&key) else {
+            self.scratch.entries = entries;
+            self.scratch.spans = spans;
+            return 0;
+        };
+        std::mem::swap(&mut node.spans, &mut spans);
+        self.scratch.spans = spans;
+        if node.entries == entries && *node.children == *children {
             self.scratch.entries = entries;
             return 0;
         }
@@ -435,6 +453,22 @@ impl Order {
         let spliced = splice(context.tx, node.id, &node.entries, &entries);
         self.scratch.entries = std::mem::replace(&mut node.entries, entries);
         spliced
+    }
+
+    /// Appends the entries `child` takes in the list of the node that lists it.
+    fn push_child(
+        &mut self,
+        context: &mut Context<'_>,
+        child: BoxKey,
+        entries: &mut Vec<OrderEntry>,
+    ) {
+        push_backdrop(context, child, entries);
+        if self.needs_node(context.store, child) {
+            entries.push(OrderEntry::Node(self.ensure_node(context, child)));
+        } else {
+            push_chunks(context.names, context.store, child, entries);
+            push_outline(context, child, entries);
+        }
     }
 
     /// Writes the effects that changed onto the nodes of their boxes, and returns the number of
