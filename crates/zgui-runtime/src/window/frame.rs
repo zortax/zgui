@@ -357,6 +357,7 @@ impl Window {
         // What the drain settled between its own events can leave work behind, exactly as the
         // flush below it can, and a frame that forgot it would park with that work undone.
         let drained = self.drain_input(timestamp);
+        self.driven.input_drained();
         // After the drain, so that a press that started a drag is the press this ends.
         self.end_press_after_drag();
         // Timers before the reactive work, so what a callback writes settles in this same frame.

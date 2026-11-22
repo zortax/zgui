@@ -120,6 +120,12 @@ impl Driven {
         self.due = None;
     }
 
+    /// Notes that the frame dispatched its input, which holds every gesture given back to the
+    /// window.
+    pub(crate) fn input_drained(&mut self) {
+        self.refused = false;
+    }
+
     /// Notes that a whole frame started, which presents the compositor's scrolling too.
     pub(crate) fn frame_started(&mut self) {
         self.tick_owed.set(false);
