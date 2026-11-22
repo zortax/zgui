@@ -9,6 +9,8 @@
 //! The assertion is about *flicker*: once a row's picture has been decoded and shown, no later
 //! frame that draws the row may draw it without its picture. A frame that does is the blink a
 //! person sees while the glide is in flight.
+//!
+//! The window writes every scroll offset itself, so each frame is one of the window's.
 
 mod desktop;
 mod device;
@@ -40,7 +42,7 @@ const ROW: f32 = 32.0;
 /// Opens `view`, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        match Stage::open(SHEET, $view) {
+        match Stage::open_scrolling_itself(SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");

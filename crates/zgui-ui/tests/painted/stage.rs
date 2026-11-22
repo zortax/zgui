@@ -76,6 +76,26 @@ impl Stage {
         F: FnMut() -> V + 'static,
         V: IntoView,
     {
+        Self::open_with(sheet, view, true)
+    }
+
+    /// The same with a window that writes every scroll offset itself, as it does over a compositor
+    /// that does not scroll on its own.
+    #[allow(dead_code, reason = "not every fixture scrolls")]
+    pub fn open_scrolling_itself<F, V>(sheet: &str, view: F) -> Option<Self>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
+        Self::open_with(sheet, view, false)
+    }
+
+    /// Opens `view` as [`Stage::open`] does, with the compositor's own scrolling `on` or off.
+    fn open_with<F, V>(sheet: &str, view: F, on: bool) -> Option<Self>
+    where
+        F: FnMut() -> V + 'static,
+        V: IntoView,
+    {
         if !device::available() {
             return None;
         }
@@ -84,7 +104,10 @@ impl Stage {
         grab::forget();
         let log: Log = Log::default();
         let mut view = view;
-        let app = zgui::app().with_size(WIDTH, HEIGHT).with_stylesheet(sheet);
+        let app = zgui::app()
+            .with_size(WIDTH, HEIGHT)
+            .with_stylesheet(sheet)
+            .with_compositor_scrolling(on);
         let handler = device::drawn_on(app, &log)
             .into_handler(move || (Grab, view().into_view()))
             .expect("the application builds");

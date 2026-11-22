@@ -9,6 +9,8 @@
 //! Each fixture scrolls the way a wheel and a touchpad do, at the scales a desktop uses, with the
 //! real damage set. It lets every gesture come to rest without a repaint, and then compares the
 //! composed target with a full repaint of the same moment.
+//!
+//! The window writes every scroll offset itself, so each frame is one of the window's.
 
 mod desktop;
 mod device;
@@ -265,7 +267,7 @@ fn open(scale: f64, rows: Rows, extra: &str) -> Option<Opened> {
     let scroll = NodeRef::new();
     let nodes: Vec<NodeRef> = (0..MARKED + MENUS).map(|_| NodeRef::new()).collect();
     let held = nodes.clone();
-    let mut stage = Stage::open(&format!("{SHEET}\n{extra}"), move || {
+    let mut stage = Stage::open_scrolling_itself(&format!("{SHEET}\n{extra}"), move || {
         sidebar(scroll, rows, &held)
     })?;
     if (scale - 1.0).abs() > f64::EPSILON {

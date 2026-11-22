@@ -71,6 +71,17 @@ impl Client {
             .scroll_input(self.output, gesture)
     }
 
+    /// Returns the client's frontmost item under the device point `at`, as the compositor shows it.
+    pub(crate) fn hit_test(&self, at: [f32; 2]) -> Option<compositor_types::HitResult> {
+        let client = self.client;
+        self.compositor
+            .compositor
+            .borrow()
+            .hit_test(self.output, at)
+            .into_iter()
+            .find(|hit| hit.client == client)
+    }
+
     /// Moves the events the compositor reported for this client into `out`, oldest first.
     pub(crate) fn take_events(&mut self, out: &mut Vec<CompositorEvent>) {
         self.compositor

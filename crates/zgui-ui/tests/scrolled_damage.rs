@@ -7,6 +7,8 @@
 //!
 //! Each fixture reads the composed target with the real damage set after every frame and checks
 //! the boxes against what they can show at that moment.
+//!
+//! The window writes every scroll offset itself, so each frame is one of the window's.
 
 mod desktop;
 mod device;
@@ -97,7 +99,7 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
         Item::Progress | Item::Field => "still",
         _ => "row",
     };
-    let stage = Stage::open(SHEET, move || {
+    let stage = Stage::open_scrolling_itself(SHEET, move || {
         let children: Vec<AnyView> = refs
             .iter()
             .enumerate()

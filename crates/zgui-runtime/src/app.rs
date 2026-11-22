@@ -132,6 +132,8 @@ pub struct App {
     options: WindowContent,
     /// What builds the frames of every window.
     compositor: Option<Box<dyn Compositor>>,
+    /// Whether the compositor scrolls the windows' content on its own, where it can.
+    compositor_scrolling: bool,
     /// What draws them.
     renderer: Option<RendererFactory>,
     /// What shapes its text.
@@ -171,6 +173,7 @@ impl App {
             attributes: SurfaceAttributes::new("zgui"),
             options: WindowContent::default(),
             compositor: None,
+            compositor_scrolling: true,
             renderer: None,
             text: None,
             metrics: None,
@@ -374,6 +377,15 @@ impl App {
         self
     }
 
+    /// Lets the compositor scroll the windows' content on its own, or makes every window write
+    /// each scroll offset itself.
+    ///
+    /// On by default, for a compositor that routes gestures.
+    pub fn with_compositor_scrolling(mut self, on: bool) -> Self {
+        self.compositor_scrolling = on;
+        self
+    }
+
     /// Installs what builds the renderer each window draws through.
     pub fn with_renderer(mut self, factory: RendererFactory) -> Self {
         self.renderer = Some(factory);
@@ -516,6 +528,8 @@ pub struct Runtime {
     application_id: Option<zgui_vocab::SharedString>,
     /// The compositor every window draws through, when the application installed one.
     compositor: Option<crate::compositor::Shared>,
+    /// Whether the compositor scrolls the windows' content on its own, where it can.
+    compositor_scrolling: bool,
     /// What builds a renderer.
     renderer: RendererFactory,
     /// What builds a text engine.
@@ -720,6 +734,7 @@ impl Runtime {
             documents: crate::documents::Documents::default(),
             application_id: application_id.clone(),
             compositor: app.compositor.map(crate::compositor::Shared::new),
+            compositor_scrolling: app.compositor_scrolling,
             renderer: app.renderer.unwrap_or_else(|| {
                 Box::new(|_, _| {
                     Err(AppError::GpuUnavailable(
@@ -944,6 +959,7 @@ impl Runtime {
         // one travels and which way it points are both properties of the desktop, and a constant
         // above this line is a wheel that is wrong on every machine but the one it was written on.
         window.set_scroll_settings(cx.scroll_settings());
+        window.set_compositor_scrolling(self.compositor_scrolling);
         window.set_translucent(translucent);
         window.set_text_antialiasing(self.text_antialiasing);
         window.assume_surface_focus(starts_focused);
