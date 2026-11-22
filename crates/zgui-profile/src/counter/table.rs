@@ -547,6 +547,18 @@ counters! {
 
     /// Boxes those walks read.
     RepaintWalkBoxes => repaint_walk_boxes, Group::BackendNeutral;
+
+    /// Frames that ran the window's whole pipeline, from input to paint.
+    ZguiFrames => zgui_frames, Group::BackendNeutral;
+
+    /// Frames that only presented what the compositor's own scrolling moved.
+    CompositorTicks => compositor_ticks, Group::BackendNeutral;
+
+    /// Scroll gestures handed to the compositor.
+    GesturesHanded => gestures_handed, Group::BackendNeutral;
+
+    /// Scroll offsets the window took over from the compositor.
+    ScrollsAdopted => scrolls_adopted, Group::BackendNeutral;
 }
 
 impl Counter {

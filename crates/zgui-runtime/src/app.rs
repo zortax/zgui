@@ -721,7 +721,7 @@ impl Runtime {
             application_id: application_id.clone(),
             compositor: app
                 .compositor
-                .map(|compositor| Rc::new(RefCell::new(compositor))),
+                .map(crate::compositor::Shared::new),
             renderer: app.renderer.unwrap_or_else(|| {
                 Box::new(|_, _| {
                     Err(AppError::GpuUnavailable(
@@ -1612,6 +1612,9 @@ impl AppHandler for Runtime {
                 // it was asking for, now, and a park on nothing.
                 match deadline.kind {
                     crate::window::frame::DeadlineKind::Render => window.request_frame(),
+                    crate::window::frame::DeadlineKind::Compose => {
+                        window.request_compositor_frame()
+                    }
                     crate::window::frame::DeadlineKind::Maintenance => {
                         window.maintain(cx.clock().timestamp())
                     }
@@ -1647,6 +1650,9 @@ impl AppHandler for Runtime {
             if let Some(window) = self.window_mut(surface) {
                 match kind {
                     crate::window::frame::DeadlineKind::Render => window.request_frame(),
+                    crate::window::frame::DeadlineKind::Compose => {
+                        window.request_compositor_frame()
+                    }
                     crate::window::frame::DeadlineKind::Maintenance => {
                         window.maintain(cx.clock().timestamp())
                     }

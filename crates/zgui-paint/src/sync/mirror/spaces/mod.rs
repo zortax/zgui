@@ -1,6 +1,9 @@
 //! Coordinate systems mirrored as transform nodes.
 
+mod drive;
 mod written;
+
+pub use self::drive::ScrollDrive;
 
 use compositor_types::{ScrollId, Transaction, TransformId};
 use rustc_hash::FxHashMap;
@@ -9,6 +12,7 @@ use zgui_space::spatial::{PropertyOwner, SpatialId, SpatialNode, SpatialTree, Tr
 
 use crate::sync::mirror::holds::Holds;
 
+use self::drive::Driven;
 use self::written::{Scroll, Written};
 
 /// The transform node of each mirrored coordinate system, by slot.
@@ -27,6 +31,13 @@ pub(crate) struct Spaces {
     adopted: FxHashMap<ScrollId, u64>,
     version: Option<TreeVersion>,
     changed: Vec<u32>,
+    /// How the compositor scrolls the nodes on its own, or `None` for client writes only.
+    drive: Option<ScrollDrive>,
+    /// The content of the container no gesture may scroll.
+    frozen: Option<PropertyOwner>,
+    /// Whether every node is written again at the next sync, because the drive or the frozen
+    /// container changed.
+    restate: bool,
 }
 
 /// One mirrored slot.
@@ -37,6 +48,8 @@ struct Entry {
     id: TransformId,
     scroll: Option<ScrollId>,
     written: Written,
+    /// What the scroll node's behaviour was written from.
+    driven: Option<Driven>,
 }
 
 /// The container a scroll node scrolls, and the slot of its content.
@@ -80,7 +93,8 @@ impl Spaces {
 
         let (node, parent, parent_scroll) = self.value(tx, holds, tree, occupant);
         let written = Written::of(node.as_ref(), parent, parent_scroll);
-        let scroll = self.add_scroll(tx, holds, tree, slot, &written);
+        let driven = self.driven(tree, slot, &written);
+        let scroll = self.add_scroll(tx, holds, tree, slot, &written, driven);
         let id = tx.create_transform(written.node(scroll));
         holds.created(id);
         if let Some(parent) = parent {
@@ -102,6 +116,7 @@ impl Spaces {
             id,
             scroll,
             written,
+            driven,
         });
         self.nodes.insert(id, slot);
         id
@@ -119,6 +134,7 @@ impl Spaces {
         let mut changed = std::mem::take(&mut self.changed);
         changed.clear();
         let coverage = match self.version {
+            Some(_) if std::mem::take(&mut self.restate) => ChangeCoverage::All,
             Some(version) => tree.changes_since(version, &mut changed),
             None => ChangeCoverage::All,
         };
@@ -160,6 +176,34 @@ impl Spaces {
         if self.scrolls.contains_key(&scroll) {
             self.adopted.insert(scroll, serial);
         }
+    }
+
+    /// Makes the compositor scroll every node with `drive`, or only by client writes for `None`.
+    pub(crate) fn set_drive(&mut self, drive: Option<ScrollDrive>) {
+        if self.drive != drive {
+            self.drive = drive;
+            self.restate = true;
+        }
+    }
+
+    /// Stops gestures from scrolling the content `frozen`, and lets them scroll every other one.
+    pub(crate) fn set_frozen(&mut self, frozen: Option<PropertyOwner>) {
+        if self.frozen != frozen {
+            self.frozen = frozen;
+            self.restate = true;
+        }
+    }
+
+    /// Returns what the behaviour of the scroll node of `slot`, holding `written`, is written from.
+    fn driven(&self, tree: &SpatialTree, slot: u32, written: &Written) -> Option<Driven> {
+        let drive = self.drive?;
+        let scroll = written.scroll?;
+        // The slot of a scroll node is its content's, whose owner the frozen one is.
+        let frozen = self.frozen.is_some() && tree.owner_at(slot) == self.frozen;
+        Some(Driven {
+            drive,
+            user: if frozen { [false; 2] } else { scroll.user },
+        })
     }
 
     /// Forgets the node `id`, which was removed.
@@ -223,12 +267,14 @@ impl Spaces {
         }
         let (node, parent, parent_scroll) = self.value(tx, holds, tree, occupant);
         let next = Written::of(node.as_ref(), parent, parent_scroll);
-        if next == entry.written {
+        let driven = self.driven(tree, slot, &next);
+        if next == entry.written && driven == entry.driven {
             return 0;
         }
 
         let mut stored = entry;
         stored.written = next;
+        stored.driven = driven;
         let mut writes = 0;
         if next.parent != entry.written.parent {
             if let Some(old) = entry.written.parent {
@@ -254,7 +300,7 @@ impl Spaces {
             || next.scroll.is_some() != entry.written.scroll.is_some();
         if reshaped {
             self.drop_scroll(holds, &entry);
-            stored.scroll = self.add_scroll(tx, holds, tree, slot, &next);
+            stored.scroll = self.add_scroll(tx, holds, tree, slot, &next, driven);
             if let Some(scroll) = stored.scroll {
                 holds.hold(entry.id, scroll);
             }
@@ -271,14 +317,16 @@ impl Spaces {
             if let (Some(id), Some(old), Some(new), Some(space)) =
                 (entry.scroll, entry.written.scroll, next.scroll, next.parent)
             {
-                writes += self.write_scroll(tx, id, &old, &new, space);
+                let behaved = (entry.driven != driven).then_some(driven);
+                writes += self.write_scroll(tx, id, (&old, &new), space, behaved);
             }
         }
         self.slots[slot as usize] = Some(stored);
         writes
     }
 
-    /// Creates the scroll node the node of `slot` applies with the value `written`, if it has one.
+    /// Creates the scroll node the node of `slot` applies with the value `written`, if it has one,
+    /// with the behaviour written from `driven`.
     fn add_scroll(
         &mut self,
         tx: &mut Transaction,
@@ -286,9 +334,10 @@ impl Spaces {
         tree: &SpatialTree,
         slot: u32,
         written: &Written,
+        driven: Option<Driven>,
     ) -> Option<ScrollId> {
         let (scroll, space) = written.scroll.zip(written.parent)?;
-        let id = tx.create_scroll(scroll.node(space));
+        let id = tx.create_scroll(scroll.node(space, driven.map(Driven::behaviour)));
         holds.created(id);
         holds.hold(id, space);
         if let Some(owner) = tree.owner_at(slot) {
@@ -312,20 +361,29 @@ impl Spaces {
         }
     }
 
-    /// Writes what changed between two values of the scroll node `id`, and returns the number of
-    /// writes.
+    /// Writes what changed between two values `(old, new)` of the scroll node `id`, and returns
+    /// the number of writes.
+    ///
+    /// `behaved` holds the new behaviour's source when the behaviour changed. A node whose port,
+    /// content or behaviour changed is written whole at its base offset, so the compositor's
+    /// motion goes on. An adopted offset becomes that base first.
     fn write_scroll(
         &mut self,
         tx: &mut Transaction,
         id: ScrollId,
-        old: &Scroll,
-        new: &Scroll,
+        (old, new): (&Scroll, &Scroll),
         space: TransformId,
+        behaved: Option<Option<Driven>>,
     ) -> usize {
-        if old.reshaped(new) {
-            self.adopted.remove(&id);
-            tx.set_scroll_node(id, new.node(space));
-            return 1;
+        let driven = behaved.unwrap_or_else(|| self.driven_of(id));
+        if old.reshaped(new) || behaved.is_some() {
+            let mut writes = 1;
+            if let Some(serial) = self.adopted.remove(&id) {
+                tx.acknowledge_scroll(id, serial, new.offset);
+                writes += 1;
+            }
+            tx.set_scroll_node(id, new.node(space, driven.map(Driven::behaviour)));
+            return writes;
         }
         if old.offset == new.offset {
             return 0;
@@ -335,6 +393,12 @@ impl Spaces {
             None => tx.scroll_to(id, new.offset),
         }
         1
+    }
+
+    /// Returns what the behaviour of the scroll node `id` was last written from.
+    fn driven_of(&self, id: ScrollId) -> Option<Driven> {
+        let scrolled = self.scrolls.get(&id)?;
+        self.slots.get(scrolled.slot as usize)?.as_ref()?.driven
     }
 
     /// Writes the adoptions whose offset did not change, and returns the number of writes.

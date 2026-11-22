@@ -9,6 +9,17 @@ use web_time::Duration;
 
 use crate::compositor::Client;
 
+/// What drawing an output's frame did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Drawn {
+    /// What the renderer or the presenter reported.
+    pub(crate) outcome: FrameOutcome,
+    /// Whether the compositor built a frame, as opposed to finding nothing changed.
+    pub(crate) built: bool,
+    /// When the compositor next needs a frame for a scheduled change, if it found nothing changed.
+    pub(crate) wake_ns: Option<u64>,
+}
+
 impl Client {
     /// Builds the output's next frame and draws it with `renderer`.
     ///
@@ -34,11 +45,17 @@ impl Client {
         subpixel: Option<SubpixelOrder>,
         at: zgui_vocab::Timestamp,
         interval: Duration,
-    ) -> FrameOutcome {
+    ) -> Drawn {
         let caps = renderer.capabilities();
         let acquired = match acquire(renderer) {
             Ok(acquired) => acquired,
-            Err(reason) => return FrameOutcome::Skipped(reason),
+            Err(reason) => {
+                return Drawn {
+                    outcome: FrameOutcome::Skipped(reason),
+                    built: false,
+                    wake_ns: None,
+                };
+            }
         };
         let age = acquired.map_or_else(|| renderer.target_age(), |(_, age)| age);
 
@@ -53,23 +70,33 @@ impl Client {
             },
             subpixel,
         };
-        let built =
-            self.compositor
-                .borrow_mut()
-                .build_frame(self.output, &request, &mut self.frame);
-        if let Built::Idle { .. } = built {
+        let built = self.compositor.compositor.borrow_mut().build_frame(
+            self.output,
+            &request,
+            &mut self.frame,
+        );
+        if let Built::Idle { wake_ns } = built {
             if let (Some((image, _)), Some(presenter)) = (acquired, renderer.presenter()) {
                 presenter.release(image);
             }
-            return renderer.present_held();
+            return Drawn {
+                outcome: renderer.present_held(),
+                built: false,
+                wake_ns,
+            };
         }
-        self.built = Some(self.compositor.borrow().counters().frame);
+        self.built = Some(self.compositor.compositor.borrow().counters().frame);
 
         let outcome = renderer.draw(&self.frame);
         self.compositor
+            .compositor
             .borrow_mut()
             .frame_done(self.output, self.frame.id, &outcome);
-        outcome
+        Drawn {
+            outcome,
+            built: true,
+            wake_ns: None,
+        }
     }
 }
 

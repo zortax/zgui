@@ -117,6 +117,9 @@ pub struct PaintInput<'a> {
     /// [`marks::extent`](crate::damage::marks::extent). A caller with no composed frame yet passes
     /// nothing and the marks stay untransformed, which is exact for everything upright.
     pub placements: Option<&'a zgui_space::Placements>,
+    /// The coordinate systems whose painted extent the walk reports in
+    /// [`PaintReport::tracked`].
+    pub track: &'a [zgui_space::SpatialId],
 }
 
 impl<'a> PaintInput<'a> {
@@ -145,6 +148,7 @@ impl<'a> PaintInput<'a> {
             scrollbars: crate::emit::scrollbar::default_paint(),
             record_emitted: false,
             placements: None,
+            track: &[],
         }
     }
 }
@@ -176,6 +180,25 @@ pub struct PaintReport {
     /// A caller damages them and asks for a frame, so each is encoded again until its exact layer
     /// stands. An empty list asks for nothing.
     pub layers_owed: Vec<Rect<i32, Device>>,
+    /// The ink of the visited fragments drawn directly in each coordinate system of
+    /// [`PaintInput::track`], as one rectangle in that system's device pixels.
+    ///
+    /// A system none of whose fragments the walk visited has no entry.
+    pub tracked: Vec<(zgui_space::SpatialId, Rect<i32, Device>)>,
+}
+
+impl PaintReport {
+    /// Widens the tracked extent of `space` to cover `ink`.
+    fn track(&mut self, space: zgui_space::SpatialId, ink: Rect<DevicePx, Device>) {
+        if ink.is_empty() {
+            return;
+        }
+        let ink = pixels(ink);
+        match self.tracked.iter_mut().find(|(held, _)| *held == space) {
+            Some((_, extent)) => *extent = extent.union(ink),
+            None => self.tracked.push((space, ink)),
+        }
+    }
 }
 
 /// The vector raster paths selected for one freshly encoded element.
@@ -993,6 +1016,9 @@ impl Pass<'_, '_> {
                 .is_some_and(|drawn| self.reaches(drawn));
         if !reached {
             return;
+        }
+        if self.input.track.contains(&fragment.anchor) {
+            self.report.track(fragment.anchor, ink);
         }
         // Measured in the fragment's anchor, so the place stays right while that anchor moves.
         let drawn = match crate::damage::marks::extent(

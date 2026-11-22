@@ -20,6 +20,8 @@ mod gesture;
 mod glide;
 mod motion;
 
+pub use self::gesture::Track;
+
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use zgui_dom::NodeKey;

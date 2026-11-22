@@ -709,6 +709,11 @@ impl Window {
                 delta,
                 phase,
             } => {
+                if let SurfaceEvent::Wheel { event: wheel, .. } = event
+                    && self.hand_scroll(Some(container), wheel)
+                {
+                    return;
+                }
                 // The event's own stamp, which a gesture measures its speed with.
                 let sent = match event {
                     SurfaceEvent::Wheel { timestamp, .. } => *timestamp,

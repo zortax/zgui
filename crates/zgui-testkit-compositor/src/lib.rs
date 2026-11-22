@@ -35,6 +35,7 @@ mod output;
 mod screen;
 mod select;
 mod session;
+mod tierless;
 mod unavailable;
 mod windows;
 
@@ -45,6 +46,7 @@ use compositor_text::SwashRaster;
 use std::sync::Arc;
 
 pub use crate::aged::{Aged, Refusals};
+pub use crate::tierless::tierless;
 pub use crate::device::{Composed, Device, Pixels};
 pub use crate::drawing::{Drawing, Instance};
 pub use crate::kept::{Drawn, Frames, Kept};

@@ -22,6 +22,8 @@ mod moved;
 mod order;
 mod resolve;
 
+pub use self::mirror::spaces::ScrollDrive;
+
 pub(crate) use self::key::Part;
 pub(crate) use self::mirror::images::whole;
 pub(crate) use self::resolve::Resolver;
@@ -223,6 +225,21 @@ impl CompositorSync {
     /// acknowledged at the value last written.
     pub fn adopt_scroll(&mut self, scroll: ScrollId, serial: u64) {
         self.mirror.spaces.adopt(scroll, serial);
+    }
+
+    /// Makes the compositor scroll every scroll node with `drive` under gestures, or only by
+    /// client writes for `None`.
+    ///
+    /// A change is written to every scroll node by the next transaction, at its base offset.
+    pub fn set_scroll_drive(&mut self, drive: Option<ScrollDrive>) {
+        self.mirror.spaces.set_drive(drive);
+    }
+
+    /// Stops gestures from scrolling the box `frozen`, and lets them scroll every other box.
+    pub fn set_scroll_frozen(&mut self, frozen: Option<BoxKey>) {
+        self.mirror
+            .spaces
+            .set_frozen(frozen.map(|frozen| PropertyOwner::of(frozen).content()));
     }
 
     /// Gives the table holds of a mirror forgotten by `reset` back to `tables`.

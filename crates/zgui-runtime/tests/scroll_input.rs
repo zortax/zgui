@@ -37,7 +37,7 @@ root { display: block; width: 400px; height: 300px }
 
 /// A window over `platform` holding one scroll container with two hundred rows in it.
 fn listing(platform: Headless) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
-    support::app_with_text_on(platform, CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
+    support::app_scrolling_itself_on(platform, CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
         use zgui_view::{IntoView, View};
         let mut port = zgui_elements::column().class("port");
         for _ in 0..200 {

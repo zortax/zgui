@@ -46,7 +46,7 @@ fn listing_on(
     platform: Headless,
 ) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
     let mut harness =
-        support::app_with_text_on(platform, CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
+        support::app_scrolling_itself_on(platform, CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
             use zgui_view::{IntoView, View};
             let mut port = zgui_elements::column().class("port");
             for index in 0..200 {

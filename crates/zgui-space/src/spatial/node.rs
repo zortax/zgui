@@ -93,6 +93,8 @@ pub struct ScrollPort {
     pub rect: Rect<DevicePx, Device>,
     /// The largest scroll offset on each axis, never negative.
     pub limit: Size<DevicePx, Device>,
+    /// Whether a person may scroll each axis, as `[x, y]`, as opposed to code only.
+    pub user: [bool; 2],
 }
 
 impl ScrollPort {
@@ -103,6 +105,7 @@ impl ScrollPort {
             Size::new(DevicePx(0.0), DevicePx(0.0)),
         ),
         limit: Size::new(DevicePx(0.0), DevicePx(0.0)),
+        user: [false; 2],
     };
 }
 

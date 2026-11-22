@@ -879,6 +879,7 @@ dependencies = [
  "compositor-content",
  "compositor-damage",
  "compositor-geom",
+ "compositor-motion",
  "compositor-plan",
  "compositor-types",
  "kurbo",
@@ -900,6 +901,13 @@ name = "compositor-geom"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+]
+
+[[package]]
+name = "compositor-motion"
+version = "0.1.0"
+dependencies = [
+ "compositor-types",
 ]
 
 [[package]]

@@ -1106,10 +1106,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
     /// The port `key` shows its content space through: the padding box without the scrollbars,
     /// and how far the content scrolls.
     fn scroll_port(&self, key: BoxKey, placed: &Placed) -> zgui_space::ScrollPort {
-        let limit = crate::scroll_region::code_region_of(self.store, key).map_or(
+        let region = crate::scroll_region::code_region_of(self.store, key);
+        let limit = region.map_or(
             zgui_geom::Point::new(DevicePx(0.0), DevicePx(0.0)),
             |region| region.limit(),
         );
+        let user = region.map_or([false; 2], |region| [region.scrolls_x, region.scrolls_y]);
         let size = Size::new(
             DevicePx((placed.padding_box.size.width.0 - placed.scrollbar.width.0).max(0.0)),
             DevicePx((placed.padding_box.size.height.0 - placed.scrollbar.height.0).max(0.0)),
@@ -1117,6 +1119,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         zgui_space::ScrollPort {
             rect: Rect::new(placed.padding_box.origin, size),
             limit: Size::new(limit.x, limit.y),
+            user,
         }
     }
 

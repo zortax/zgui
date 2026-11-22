@@ -20,6 +20,7 @@
 
 mod asked;
 mod bar;
+pub(crate) mod driven;
 mod extent;
 mod frozen;
 
@@ -134,6 +135,9 @@ impl Window {
         at: Timestamp,
         allowed: bool,
     ) {
+        if (allowed || wheel.phase == ScrollPhase::Ended) && self.hand_scroll(None, wheel) {
+            return;
+        }
         let latched = self.scroll.borrow().latched();
         match wheel.phase {
             ScrollPhase::Ended if !self.scroll.borrow_mut().lift().is_empty() => {

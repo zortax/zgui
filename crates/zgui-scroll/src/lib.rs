@@ -50,5 +50,5 @@ pub use crate::chain::Absorbed;
 pub use crate::into_view::Align;
 pub use crate::motion::Behavior;
 pub use crate::report::Scrolled;
-pub use crate::scroller::Scroller;
+pub use crate::scroller::{Scroller, Track};
 pub use crate::stretch::Stretch;

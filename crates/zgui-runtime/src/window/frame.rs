@@ -79,6 +79,8 @@ pub struct FrameReport {
 pub(crate) enum DeadlineKind {
     /// Timers, tasks, animation, resize or presentation produce a normal frame.
     Render,
+    /// The compositor's own scrolling needs a frame, which runs no pipeline of the window's.
+    Compose,
     /// Cold-resource trimming only; no paint or presentation is requested.
     Maintenance,
 }
@@ -119,6 +121,12 @@ impl Window {
             self.starved = false;
             self.starve_backoff = crate::window::STARVE_BACKOFF_START;
             self.request_frame();
+        }
+        // A gesture the compositor moves the content for needs no frame of the window's.
+        if let zgui_platform::SurfaceEvent::Wheel { event: wheel, .. } = &event
+            && self.hand_wheel_early(wheel)
+        {
+            return false;
         }
         let wants_a_frame = match &event {
             zgui_platform::SurfaceEvent::Resized(size) => self.resized(*size, self.scale),
@@ -221,9 +229,18 @@ impl Window {
     /// thing, and in a release build a tooltip that silently never opens.
     pub fn frame(&mut self, clock: &dyn Clock) -> FrameReport {
         match self.scope.as_ref().map(|scope| scope.owner().clone()) {
-            Some(owner) => owner.with(|| self.run_frame(clock)),
-            None => self.run_frame(clock),
+            Some(owner) => owner.with(|| self.run(clock)),
+            None => self.run(clock),
         }
+    }
+
+    /// Runs the frame that was asked for: one that only presents the compositor's scrolling, or
+    /// a whole one.
+    fn run(&mut self, clock: &dyn Clock) -> FrameReport {
+        if self.only_compositor_owed() {
+            return self.tick_compositor(clock);
+        }
+        self.run_frame(clock)
     }
 
     /// What the last frame did, or `None` before the first frame.
@@ -246,7 +263,7 @@ impl Window {
     }
 
     /// Records when a frame is owed again after `outcome`, and what a presented frame resets.
-    fn settle_retry(&mut self, outcome: FrameOutcome, now: Instant) {
+    pub(crate) fn settle_retry(&mut self, outcome: FrameOutcome, now: Instant) {
         self.retry_after = match outcome {
             FrameOutcome::Skipped(SkipReason::Timeout) => {
                 self.starved = true;
@@ -280,7 +297,7 @@ impl Window {
 
     /// Shows the surface once its first frame has reached it. Where the platform reports no
     /// presentation, that frame also counts as shown.
-    fn show_first_frame(&mut self, outcome: FrameOutcome) {
+    pub(crate) fn show_first_frame(&mut self, outcome: FrameOutcome) {
         if matches!(outcome, FrameOutcome::Presented(_)) && !self.surface.reports_presentation() {
             self.handle.set_presented();
         }
@@ -321,8 +338,13 @@ impl Window {
         self.note_frame_moment(timestamp);
 
         self.frame_started();
+        counter::bump(Counter::ZguiFrames);
         self.gate.begin_frame();
         self.document.borrow().begin_frame();
+        // Before the input, so a hit test reads the offsets the compositor shows.
+        if self.adopt_compositor_scroll() {
+            self.compose_for_input();
+        }
 
         // The starvation probe. The retry deadline this frame was woken at is the one attempt the
         // latch allows, so the frame runs unlatched — its present is the probe — and the next
@@ -781,25 +803,25 @@ impl Window {
                 .flatten()
                 .fold(earliest, Instant::max)
         });
-        match (render, self.maintenance_due) {
-            (Some(render), Some(maintenance)) if render <= maintenance => Some(ScheduledDeadline {
-                at: render,
-                kind: DeadlineKind::Render,
-            }),
-            (Some(_), Some(maintenance)) => Some(ScheduledDeadline {
-                at: maintenance,
-                kind: DeadlineKind::Maintenance,
-            }),
-            (Some(render), None) => Some(ScheduledDeadline {
-                at: render,
-                kind: DeadlineKind::Render,
-            }),
-            (None, Some(maintenance)) => Some(ScheduledDeadline {
-                at: maintenance,
-                kind: DeadlineKind::Maintenance,
-            }),
-            (None, None) => None,
-        }
+        // The compositor's scrolling is paced on its own, and a whole frame due no later serves it.
+        let compose = self
+            .driven
+            .due()
+            .filter(|_| !(self.occluded || self.starved))
+            .map(|at| {
+                [resize, held]
+                    .into_iter()
+                    .flatten()
+                    .fold(at, Instant::max)
+            });
+        [
+            (render, DeadlineKind::Render),
+            (compose, DeadlineKind::Compose),
+            (self.maintenance_due, DeadlineKind::Maintenance),
+        ]
+        .into_iter()
+        .filter_map(|(at, kind)| Some(ScheduledDeadline { at: at?, kind }))
+        .min_by_key(|deadline| deadline.at)
     }
 
     /// Services a maintenance-only deadline without building or presenting a frame.
@@ -1540,6 +1562,9 @@ impl Window {
         capabilities.subpixel_text = self.subpixel_order.is_some();
         let vector_report;
         let transaction;
+        let (margins, bands) = self.scroll_margins();
+        let spaces: Vec<_> = margins.iter().map(|margin| margin.space()).collect();
+        let tracked;
         {
             let layout = self.layout.borrow();
             // Before anything reads the set. What a scroll absorbs is where every moved fragment
@@ -1567,6 +1592,13 @@ impl Window {
                     self.scale,
                     &self.host.placements(),
                 );
+            }
+            // The margins of the nodes the compositor moves are recorded beyond the surface, so
+            // they are damaged after the cut.
+            let mut bound = zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport);
+            for band in &bands {
+                self.damage.absorb(*band);
+                bound = bound.union(*band);
             }
             self.painted = self.damage;
             self.tables.begin_frame(viewport);
@@ -1631,7 +1663,8 @@ impl Window {
                 ),
                 // A full set means the surface and nothing more. Without the bound, the walk visits
                 // every fragment of the document, also the rows of a long scroll container.
-                surface: Some(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport)),
+                surface: Some(bound),
+                track: &spaces,
                 ..PaintInput::new(&layout, &self.damage)
             };
             zgui_profile::latency::note_with("d.postexpand", || {
@@ -1646,6 +1679,7 @@ impl Window {
             mark("p.emit");
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.tables);
+            tracked = report.tracked.clone();
             transaction = self
                 .painter
                 .compositor()
@@ -1663,6 +1697,7 @@ impl Window {
                 )
             });
         }
+        self.vouch(&margins, &tracked);
         if let Some(transaction) = transaction {
             self.submit_transaction(transaction);
         }
@@ -1768,29 +1803,8 @@ impl Window {
         zgui_profile::latency::note_with("p.draw", || {
             format!("{}x{}", viewport.width, viewport.height)
         });
-        let interval = self.refresh_interval();
-        let outcome = self.compositor.draw(
-            &mut *self.renderer,
-            self.subpixel_order,
-            self.painted_at.unwrap_or(zgui_vocab::Timestamp::ORIGIN),
-            interval,
-        );
-        if let Some(built) = self.compositor.take_built() {
-            crate::window::counters::built(&built);
-            crate::window::counters::held(&**self.compositor.compositor());
-            self.renderer_totals.drawn(&outcome, &*self.renderer);
-            if self.check_damage
-                && let Some(committed) = &self.committed
-            {
-                crate::window::containment::check(
-                    self.compositor.frame(),
-                    committed,
-                    self.retired,
-                    &self.painted,
-                );
-            }
-            self.retired = outcome.retires_damage();
-        }
+        let drawn = self.draw_output(self.painted_at.unwrap_or(zgui_vocab::Timestamp::ORIGIN));
+        let outcome = drawn.outcome;
         self.committed = None;
         let vector_after = self.renderer.vector_status();
         if !vector_before.initialized && vector_after.initialized {

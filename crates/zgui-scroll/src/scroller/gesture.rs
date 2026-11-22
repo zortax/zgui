@@ -143,6 +143,36 @@ impl Gesture {
     }
 }
 
+/// The rail and the speed of one touchpad gesture, measured from the steps it delivers.
+///
+/// A gesture rails to one axis as [`Scroller::drag_by`] does, for a caller that moves the
+/// content some other way.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Track(Gesture);
+
+impl Track {
+    /// Starts measuring a gesture whose fingers have just come down.
+    pub fn touching() -> Self {
+        Self(Gesture::touching())
+    }
+
+    /// Records that `delta` arrived at `at`, and returns the part of it the rail lets through.
+    pub fn moved(&mut self, delta: Size<DevicePx, Device>, at: Duration) -> Size<DevicePx, Device> {
+        self.0.moved(delta, at)
+    }
+
+    /// The speed of the gesture, in device pixels per second.
+    pub fn velocity(&self) -> Size<DevicePx, Device> {
+        self.0.velocity
+    }
+}
+
+impl Default for Track {
+    fn default() -> Self {
+        Self::touching()
+    }
+}
+
 impl Scroller {
     /// Whether a touchpad gesture has its fingers down.
     pub fn is_touching(&self) -> bool {

@@ -29,9 +29,43 @@ impl Window {
             }));
             self.painter.attach_compositor(sync);
         }
+        self.sync_scroll_drive();
         if let Some(sync) = self.painter.compositor() {
             sync.open(transaction);
         }
+    }
+
+    /// Builds the output's frame for the moment `at` and draws it.
+    ///
+    /// The counters of a built frame are bridged, and with invariants checked a frame that follows
+    /// this window's commit, and that the compositor scrolled nothing in, is held to the damage
+    /// its paint walk drew. The scroll events the build reported are taken for the next frame to
+    /// adopt.
+    pub(super) fn draw_output(&mut self, at: zgui_vocab::Timestamp) -> crate::compositor::Drawn {
+        let interval = self.refresh_interval();
+        let drawn = self
+            .compositor
+            .draw(&mut *self.renderer, self.subpixel_order, at, interval);
+        // The compositor's own scrolling moves pixels the window's walk did not visit.
+        let scrolled = self.take_scroll_events(&drawn);
+        if let Some(built) = self.compositor.take_built() {
+            crate::window::counters::built(&built);
+            crate::window::counters::held(&**self.compositor.compositor());
+            self.renderer_totals.drawn(&drawn.outcome, &*self.renderer);
+            if self.check_damage
+                && !scrolled
+                && let Some(committed) = &self.committed
+            {
+                crate::window::containment::check(
+                    self.compositor.frame(),
+                    committed,
+                    self.retired,
+                    &self.painted,
+                );
+            }
+            self.retired = drawn.outcome.retires_damage();
+        }
+        drawn
     }
 
     /// Makes the next frame drop everything this window recorded into its compositor and record

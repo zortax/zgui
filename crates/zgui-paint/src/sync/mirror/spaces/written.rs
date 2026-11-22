@@ -1,7 +1,8 @@
 //! A coordinate system's value in the compositor's vocabulary.
 
 use compositor_types::{
-    Anchor, Matrix4, ScrollId, ScrollNode, StickyAnchor, TransformId, TransformNode,
+    Anchor, Matrix4, ScrollBehaviour, ScrollId, ScrollNode, StickyAnchor, TransformId,
+    TransformNode,
 };
 use zgui_space::spatial::{Anchoring, ScrollPort, SpatialNode, StickyPort};
 
@@ -43,6 +44,8 @@ pub(crate) struct Scroll {
     pub(crate) content: [f32; 2],
     /// The offset, within the range `content` allows.
     pub(crate) offset: [f32; 2],
+    /// Whether a person may scroll each axis, as `[x, y]`.
+    pub(crate) user: [bool; 2],
 }
 
 impl Written {
@@ -113,14 +116,18 @@ impl Written {
 }
 
 impl Scroll {
-    /// Returns the scroll node measured in `space`.
-    pub(crate) fn node(&self, space: TransformId) -> ScrollNode {
+    /// Returns the scroll node measured in `space`, which the compositor scrolls with `behaviour`.
+    pub(crate) fn node(
+        &self,
+        space: TransformId,
+        behaviour: Option<ScrollBehaviour>,
+    ) -> ScrollNode {
         ScrollNode {
             space,
             port: self.port,
             content: self.content,
             offset: self.offset,
-            behaviour: None,
+            behaviour,
         }
     }
 
@@ -187,6 +194,7 @@ fn content(port: ScrollPort, local: Matrix4, parent: Option<TransformId>) -> Wri
                 port.rect.size.height.0 + limit[1].max(0.0),
             ],
             offset,
+            user: port.user,
         }),
     }
 }

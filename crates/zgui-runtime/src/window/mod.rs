@@ -168,6 +168,8 @@ pub struct Window {
     /// page keeps every scroll container, every offset and every reserved gutter it had, so
     /// opening and closing a surface over it moves nothing.
     scroll_frozen: bool,
+    /// The scrolling the compositor drives, and what the window knows of where it put things.
+    driven: crate::window::scroll::driven::Driven,
     /// When the last frame ran, so that a motion knows how much time it has to spend.
     ///
     /// A gap far longer than a refresh interval is a park rather than a slow frame, and buys a
@@ -736,6 +738,7 @@ impl Window {
             gestures: zgui_input::Gestures::new(),
             scroll_settings: zgui_platform::ScrollSettings::default(),
             scroll_frozen: false,
+            driven: crate::window::scroll::driven::Driven::default(),
             panning: Vec::new(),
             panning_pointer: None,
             lifted: Vec::new(),
@@ -942,6 +945,8 @@ impl Window {
     /// Records that the frame that was asked for is now running.
     pub(crate) fn frame_started(&mut self) {
         self.awaiting_frame.set(false);
+        // A whole frame presents the compositor's scrolling as well.
+        self.driven.frame_started();
     }
 
     /// Whether a frame offered at `now` is worth running.
