@@ -165,3 +165,167 @@ fn a_filter_allocates_a_group_target_whatever_the_geometry_says() {
         "a blur has to be composited into a target of its own"
     );
 }
+
+#[test]
+fn resizing_paints_nothing_wrappers_replays_without_reencoding_and_matches_fresh_scene() {
+    let mut recording = Recording::begin();
+    let tree = Element::new("root").children(
+        (0..30)
+            .map(|_| {
+                Element::new("row")
+                    .classes(&["wrap"])
+                    .children(vec![Element::new("span").classes(&["chip"])])
+            })
+            .collect(),
+    );
+    let css = "root { display: block }
+               .wrap { display: block; height: 24px }
+               .chip { display: block; width: 16px; height: 16px; background: #268 }";
+    let mut harness = Harness::sized(tree, css, 300.0, 800.0);
+
+    let first = recording.measure(|| {
+        harness.paint_everything();
+    });
+    let control = first.control(Counter::ChunksReencoded);
+    assert!(
+        first.get(Counter::ChunksReencoded) >= 61,
+        "root, thirty wrappers and thirty chips are encoded on the first frame"
+    );
+
+    // Widen the viewport so `root` and every `.wrap` box resize from 300px to 420px while
+    // keeping `PAINTS_NOTHING`, and every `.chip` keeps its 16x16 size.
+    harness.viewport = zgui_geom::Size::new(420, 800);
+    harness.compose(420.0, 800.0);
+
+    let resized = recording.measure(|| {
+        harness.paint_everything();
+    });
+    resized.assert_zero(Counter::ChunksReencoded, &control);
+    assert!(
+        resized.get(Counter::ChunksTranslated) >= 61,
+        "every empty wrapper and unchanged chip replayed: {}",
+        resized.get(Counter::ChunksTranslated)
+    );
+
+    // Scene output must match a cold painter encoding the resized fragment tree from scratch.
+    let mut fresh_scene = zgui_scene::Scene::new();
+    fresh_scene.begin_frame(harness.viewport);
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let full = zgui_bits::DamageSet::full();
+    let mut input = zgui_paint::PaintInput::new(&harness.store, &full);
+    input.placements = Some(&placements);
+    let mut fresh_painter = zgui_paint::Painter::new();
+    let fresh_report = fresh_painter.emit(&input, &mut fresh_scene);
+    fresh_scene.finish(&full);
+
+    assert_eq!(fresh_report.primitives, 30);
+    assert_eq!(
+        harness.scene.primitives.quads.len(),
+        fresh_scene.primitives.quads.len()
+    );
+    for (replayed, encoded) in harness
+        .scene
+        .primitives
+        .quads
+        .iter()
+        .zip(&fresh_scene.primitives.quads)
+    {
+        assert_eq!(replayed.bounds, encoded.bounds);
+        assert_eq!(replayed.order, encoded.order);
+    }
+}
+
+#[test]
+fn resizing_painted_boxes_or_boxes_that_start_painting_reencodes_at_new_size() {
+    let mut recording = Recording::begin();
+    let tree = Element::new("root").children(vec![
+        Element::new("bg").classes(&["bg"]),
+        Element::new("bordered").classes(&["bordered"]),
+        Element::new("shadowed").classes(&["shadowed"]),
+        Element::new("outlined").classes(&["outlined"]),
+        Element::new("awakened").classes(&["plain"]),
+    ]);
+    let css = "root { display: block }
+               .bg { display: block; height: 20px; background: #246 }
+               .bordered { display: block; height: 20px; border: 2px solid #333 }
+               .shadowed { display: block; height: 20px; box-shadow: 0 2px 6px #000 }
+               .outlined { display: block; height: 20px; outline: 2px solid #090 }
+               .plain { display: block; height: 20px }
+               .lit { display: block; height: 20px; background: #e33 }";
+    let mut harness = Harness::sized(tree, css, 300.0, 400.0);
+    harness.paint_everything();
+
+    let before_fragments: Vec<_> = ["root", "bg", "bordered", "shadowed", "outlined", "awakened"]
+        .map(|name| harness.fragment_of(name))
+        .into();
+
+    // Flip `awakened` from `PAINTS_NOTHING` (`.plain`) to painting (`.lit`) in place so every
+    // box keeps its `FragKey` and recorded `PaintCache` entry while resizing from 300px to 440px.
+    let target = harness.element("awakened");
+    harness.edit_and_restyle(|edit| {
+        edit.set_classes(target, &[zgui_interned::ClassName::new("lit")]);
+    });
+    zgui_layout::boxtree::patch::style::restyle(&mut harness.store, &harness.document, [target]);
+    harness.viewport = zgui_geom::Size::new(440, 400);
+    harness.compose(440.0, 400.0);
+
+    let after_fragments: Vec<_> = ["root", "bg", "bordered", "shadowed", "outlined", "awakened"]
+        .map(|name| harness.fragment_of(name))
+        .into();
+    assert_eq!(
+        before_fragments, after_fragments,
+        "patching styles in place keeps every FragKey so PaintCache::reuse tests existing records"
+    );
+
+    let resized = recording.measure(|| {
+        harness.paint_everything();
+    });
+    // `.bg`, `.bordered`, `.shadowed`, `.outlined`, and `awakened` (`.lit`) all re-encode at
+    // 440px; `.outlined`'s own box fragment has `PAINTS_NOTHING == false` (outline is in ink),
+    // so none of the five may take the empty-record bypass.
+    assert_eq!(
+        resized.get(Counter::ChunksReencoded),
+        5,
+        "all four painted boxes and the box that started painting re-encoded on resize, while \
+         only `root` replayed its empty chunk"
+    );
+    assert_eq!(resized.get(Counter::ChunksTranslated), 1);
+
+    // Every resized decoration spans the new 440px width, matching a cold painter.
+    let mut fresh_scene = zgui_scene::Scene::new();
+    fresh_scene.begin_frame(harness.viewport);
+    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let full = zgui_bits::DamageSet::full();
+    let mut input = zgui_paint::PaintInput::new(&harness.store, &full);
+    input.placements = Some(&placements);
+    let mut fresh_painter = zgui_paint::Painter::new();
+    fresh_painter.emit(&input, &mut fresh_scene);
+    fresh_scene.finish(&full);
+
+    assert_eq!(
+        harness.scene.primitives.quads.len(),
+        fresh_scene.primitives.quads.len()
+    );
+    assert_eq!(
+        harness.scene.primitives.shadows.len(),
+        fresh_scene.primitives.shadows.len()
+    );
+    for (got, expected) in harness
+        .scene
+        .primitives
+        .quads
+        .iter()
+        .zip(&fresh_scene.primitives.quads)
+    {
+        assert_eq!(got.bounds, expected.bounds);
+    }
+    for (got, expected) in harness
+        .scene
+        .primitives
+        .shadows
+        .iter()
+        .zip(&fresh_scene.primitives.shadows)
+    {
+        assert_eq!(got.bounds, expected.bounds);
+    }
+}
