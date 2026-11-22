@@ -223,14 +223,15 @@ impl NodeRef {
         }
     }
 
-    /// Asks for a frame of the window each time this scroll container's offset crosses a multiple
-    /// of `step` CSS pixels while the compositor scrolls it, or stops asking for `None`.
+    /// Asks for a frame of the window once this scroll container's vertical offset, or that offset
+    /// one step of the compositor's motion ahead, leaves `held`, `[low, high)` in CSS pixels, while
+    /// the compositor scrolls it, or stops asking for `None`.
     ///
-    /// See [`ViewHost::scroll_in_steps`](crate::ViewHost::scroll_in_steps). Nothing happens while
-    /// the handle is not bound.
-    pub fn scroll_in_steps(&self, step: Option<f32>) {
+    /// See [`ViewHost::wake_outside`](crate::ViewHost::wake_outside). Nothing happens while the
+    /// handle is not bound.
+    pub fn wake_outside(&self, held: Option<[f32; 2]>) {
         if let Some(bound) = self.bound() {
-            bound.host.scroll_in_steps(bound.node, step);
+            bound.host.wake_outside(bound.node, held);
         }
     }
 

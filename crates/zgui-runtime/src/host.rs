@@ -196,9 +196,9 @@ pub struct RuntimeHost {
     frame_callbacks: RefCell<FrameCallbacks>,
     /// What the next frame has been asked to do.
     commands: RefCell<Vec<Command>>,
-    /// The steps, in CSS pixels, at which each scroll container's offset asks for a frame while
-    /// the compositor scrolls it.
-    scroll_steps: RefCell<rustc_hash::FxHashMap<NodeKey, f32>>,
+    /// The vertical offsets, `[low, high)` in CSS pixels, outside which each scroll container
+    /// asks for a frame while the compositor scrolls it.
+    held_offsets: RefCell<rustc_hash::FxHashMap<NodeKey, [f32; 2]>>,
     /// Which node holds focus, as a reactive value.
     ///
     /// Created once, with the window, under the window's own scope. Minting it inside whichever
@@ -293,7 +293,7 @@ impl RuntimeHost {
             scroll,
             timers,
             frame_callbacks: RefCell::new(FrameCallbacks::new()),
-            scroll_steps: RefCell::default(),
+            held_offsets: RefCell::default(),
             commands: RefCell::new(Vec::new()),
             animations: RefCell::default(),
             placements: RefCell::new(zgui_space::Placements::new()),
@@ -417,10 +417,10 @@ impl RuntimeHost {
         }
     }
 
-    /// The step, in CSS pixels, at which the offset of the scroll container `key` asks for a
-    /// frame while the compositor scrolls it.
-    pub(crate) fn scroll_step(&self, key: NodeKey) -> Option<f32> {
-        self.scroll_steps.borrow().get(&key).copied()
+    /// The vertical offsets, `[low, high)` in CSS pixels, outside which the scroll container `key`
+    /// asks for a frame while the compositor scrolls it.
+    pub(crate) fn held_offsets(&self, key: NodeKey) -> Option<[f32; 2]> {
+        self.held_offsets.borrow().get(&key).copied()
     }
 
     /// Where the coordinate systems the last composed frame's fragments name ended up.
@@ -652,17 +652,17 @@ impl ViewHost for RuntimeHost {
         self.issue(Command::FreezeScrolling(frozen));
     }
 
-    fn scroll_in_steps(&self, node: NodeId, step: Option<f32>) {
+    fn wake_outside(&self, node: NodeId, held: Option<[f32; 2]>) {
         let Some(key) = zgui_view_dom::id::to_document(node) else {
             return;
         };
-        let mut steps = self.scroll_steps.borrow_mut();
-        match step.filter(|step| step.is_finite() && *step > 0.0) {
-            Some(step) => {
-                steps.insert(key, step);
+        let mut offsets = self.held_offsets.borrow_mut();
+        match held {
+            Some(held) => {
+                offsets.insert(key, held);
             }
             None => {
-                steps.remove(&key);
+                offsets.remove(&key);
             }
         }
     }

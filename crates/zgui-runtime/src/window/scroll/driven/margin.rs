@@ -74,7 +74,7 @@ impl Window {
             };
             margin.stepped = self
                 .element_of_scroll(node)
-                .is_some_and(|element| self.host.scroll_step(element).is_some());
+                .is_some_and(|element| self.host.held_offsets(element).is_some());
             let device = |band| onto_device(world, band);
             margins.bands.extend(margin.bands(None).map(device));
             margins.fresh.extend(margin.bands(recorded).map(device));

@@ -12,19 +12,23 @@ use crate::window::frame::FrameReport;
 use crate::window::scroll::driven::Shown;
 
 impl Window {
-    /// Reports whether `offset`, shown by the scroll node `node`, lies across a step of its
-    /// container from the offset the window holds.
-    fn crossed_a_step(&mut self, node: compositor_types::ScrollId, offset: [f32; 2]) -> bool {
+    /// Reports whether `offset`, shown by the scroll node `node`, or `offset` one `step` further,
+    /// lies outside the offsets its container holds.
+    fn left_held_offsets(
+        &mut self,
+        node: compositor_types::ScrollId,
+        offset: [f32; 2],
+        step: [f32; 2],
+    ) -> bool {
         let Some(container) = self.element_of_scroll(node) else {
             return false;
         };
-        let Some(step) = self.host.scroll_step(container) else {
+        let Some([low, high]) = self.host.held_offsets(container) else {
             return false;
         };
-        let step = step * self.scale;
-        let held = self.scroll.borrow().offset_of(container);
-        let row = |at: f32| (at / step).floor();
-        row(offset[0]) != row(held.x.0) || row(offset[1]) != row(held.y.0)
+        let at = offset[1] / self.scale;
+        let ahead = (offset[1] + step[1]) / self.scale;
+        [at, ahead].iter().any(|at| *at < low || *at >= high)
     }
 
     /// Asks for a frame that presents the compositor's scrolling, unless a frame was asked for.
@@ -90,8 +94,8 @@ impl Window {
     /// - A node comes to rest.
     /// - A node is about to show content the window has not recorded: its offset, or the offset
     ///   two more steps of its motion reach.
-    /// - A node's offset crossed a step its container asked to be woken at, see
-    ///   [`ViewHost::scroll_in_steps`](zgui_view::ViewHost::scroll_in_steps).
+    /// - A node's offset, or that offset one step of its motion ahead, left the offsets its
+    ///   container holds, see [`ViewHost::wake_outside`](zgui_view::ViewHost::wake_outside).
     /// - A move changes what a `:hover` rule matches under the pointer.
     ///
     /// While the compositor moves anything, each built frame asks for the next one, until one
@@ -122,15 +126,18 @@ impl Window {
                     settled,
                 },
             );
-            let crossed = self.crossed_a_step(node, offset);
             let active = self.driven.active.entry(node).or_default();
             let step = active
                 .last
                 .map_or([0.0; 2], |last| [offset[0] - last[0], offset[1] - last[1]]);
             active.step = step;
             active.last = Some(offset);
+            let left = self.left_held_offsets(node, offset, step);
+            let Some(active) = self.driven.active.get(&node) else {
+                continue;
+            };
             let ahead = [offset[0] + 2.0 * step[0], offset[1] + 2.0 * step[1]];
-            wake |= settled || !active.covers(offset) || !active.covers(ahead) || crossed;
+            wake |= settled || !active.covers(offset) || !active.covers(ahead) || left;
         }
         self.driven.events = events;
         if wake {
