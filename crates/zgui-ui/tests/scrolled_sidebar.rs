@@ -267,7 +267,7 @@ fn open(scale: f64, rows: Rows, extra: &str) -> Option<Opened> {
     let scroll = NodeRef::new();
     let nodes: Vec<NodeRef> = (0..MARKED + MENUS).map(|_| NodeRef::new()).collect();
     let held = nodes.clone();
-    let mut stage = Stage::open_scrolling_itself(&format!("{SHEET}\n{extra}"), move || {
+    let mut stage = Stage::open(&format!("{SHEET}\n{extra}"), move || {
         sidebar(scroll, rows, &held)
     })?;
     if (scale - 1.0).abs() > f64::EPSILON {

@@ -42,7 +42,7 @@ const ROW: f32 = 32.0;
 /// Opens `view`, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
     ($view:expr) => {
-        match Stage::open_scrolling_itself(SHEET, $view) {
+        match Stage::open(SHEET, $view) {
             Some(stage) => stage,
             None => {
                 eprintln!("skipped: no usable graphics device");

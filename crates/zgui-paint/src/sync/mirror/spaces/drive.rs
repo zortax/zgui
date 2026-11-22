@@ -2,15 +2,17 @@
 
 use std::sync::Arc;
 
-use compositor_types::{Overscroll, ScrollBehaviour, ScrollPhysics, SnapKind};
+use compositor_types::{ScrollBehaviour, ScrollPhysics, SnapKind, Sources};
 
 /// How the compositor moves a scroll node under gestures, without the client writing offsets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ScrollDrive {
     /// Whether a wheel step glides and a released gesture flings, as opposed to applying at once.
     pub kinetic: bool,
-    /// Whether an end stretches past itself and springs back, as opposed to stopping the content.
-    pub bounce: bool,
+    /// The input sources that stretch an end past itself, which then springs back.
+    pub bounce: Sources,
+    /// The input sources whose delta a node cannot take passes on to the node around it.
+    pub chain: Sources,
 }
 
 /// What a scroll node's behaviour was last written from.
@@ -33,13 +35,9 @@ impl Driven {
             },
             snap: Arc::new([]),
             snap_kind: SnapKind::Mandatory,
-            overscroll: if self.drive.bounce {
-                Overscroll::Bounce
-            } else {
-                Overscroll::Clamp
-            },
+            bounce: self.drive.bounce,
             user_scrollable: self.user,
-            chaining: true,
+            chain: self.drive.chain,
         }
     }
 }

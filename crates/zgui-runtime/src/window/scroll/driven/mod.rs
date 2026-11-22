@@ -21,7 +21,7 @@ mod tick;
 
 use std::cell::Cell;
 
-use compositor_types::{CompositorEvent, ScrollId};
+use compositor_types::{CompositorEvent, ScrollId, Sources};
 use rustc_hash::FxHashMap;
 use web_time::Instant;
 
@@ -126,9 +126,18 @@ impl Window {
         let on = !self.driven.refused && self.compositor.capabilities().scroll_input;
         self.driven.on = on;
         let settings = self.scroll_settings();
+        let mut bounce = Sources::NONE;
+        if settings.elastic.admits_a_detent() {
+            bounce |= Sources::WHEEL | Sources::KEYBOARD;
+        }
+        if settings.elastic.admits_a_gesture() {
+            bounce |= Sources::TOUCHPAD | Sources::TOUCH;
+        }
+        // A gesture stays on the container it latched onto, and a detent passes on.
         let drive = on.then_some(zgui_paint::ScrollDrive {
             kinetic: settings.wheel.framework_animates(),
-            bounce: settings.elastic.admits_a_gesture(),
+            bounce,
+            chain: Sources::WHEEL | Sources::KEYBOARD,
         });
         let frozen = self
             .frozen_container()

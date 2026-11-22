@@ -99,7 +99,7 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
         Item::Progress | Item::Field => "still",
         _ => "row",
     };
-    let stage = Stage::open_scrolling_itself(SHEET, move || {
+    let stage = Stage::open(SHEET, move || {
         let children: Vec<AnyView> = refs
             .iter()
             .enumerate()
