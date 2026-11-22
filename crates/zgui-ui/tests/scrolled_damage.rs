@@ -8,7 +8,8 @@
 //! Each fixture reads the composed target with the real damage set after every frame and checks
 //! the boxes against what they can show at that moment.
 //!
-//! The window writes every scroll offset itself, so each frame is one of the window's.
+//! The compositor moves the port, so most frames of a gesture are the compositor's own. The boxes
+//! are read where the compositor shows them.
 
 mod desktop;
 mod device;

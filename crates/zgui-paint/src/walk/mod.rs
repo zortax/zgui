@@ -180,8 +180,8 @@ pub struct PaintReport {
     /// A caller damages them and asks for a frame, so each is encoded again until its exact layer
     /// stands. An empty list asks for nothing.
     pub layers_owed: Vec<Rect<i32, Device>>,
-    /// The ink of the visited fragments drawn directly in each coordinate system of
-    /// [`PaintInput::track`], as one rectangle in that system's device pixels.
+    /// The ink of the visited fragments that draw something directly in each coordinate system
+    /// of [`PaintInput::track`], as one rectangle in that system's device pixels.
     ///
     /// A system none of whose fragments the walk visited has no entry.
     pub tracked: Vec<(zgui_space::SpatialId, Rect<i32, Device>)>,
@@ -1049,9 +1049,7 @@ impl Pass<'_, '_> {
         if !reached {
             return;
         }
-        if self.input.track.contains(&fragment.anchor) {
-            self.report.track(fragment.anchor, ink);
-        }
+        let tracked = self.input.track.contains(&fragment.anchor).then_some(ink);
         // Measured in the fragment's anchor, so the place stays right while that anchor moves.
         let drawn = match crate::damage::marks::extent(
             fragment,
@@ -1155,6 +1153,11 @@ impl Pass<'_, '_> {
                     .items(fragment.key)
                     .expect("a replayable fragment has a record");
                 self.report.primitives += items;
+                if items > 0
+                    && let Some(ink) = tracked
+                {
+                    self.report.track(fragment.anchor, ink);
+                }
                 self.show_replayed_tiles(fragment, offset, transform, clip);
                 self.painter.cache.replayed(fragment);
                 if let Some(sync) = &mut self.painter.sync {
@@ -1189,6 +1192,11 @@ impl Pass<'_, '_> {
                     sync.record(store, fragment, &mut painter.items, self.tables);
                 }
                 self.report.primitives += emitted.pushed;
+                if items > 0
+                    && let Some(ink) = tracked
+                {
+                    self.report.track(fragment.anchor, ink);
+                }
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
                     && let Some(node) = fragment.node
                 {

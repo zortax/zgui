@@ -1592,9 +1592,14 @@ impl Window {
             // they are damaged after the cut.
             let mut bound = zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport);
             for band in &bands {
-                self.damage.absorb(*band);
                 bound = bound.union(*band);
             }
+            let cut = self.damage.bound();
+            self.damage.set_bound(cut.map(|cut| cut.union(bound)));
+            for band in &bands {
+                self.damage.absorb(*band);
+            }
+            self.damage.set_bound(cut);
             self.painted = self.damage;
             self.tables.begin_frame(viewport);
             // No renderer is borrowed here, and none is reachable from anything the walk touches.

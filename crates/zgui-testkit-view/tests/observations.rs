@@ -27,6 +27,7 @@ fn scrolled(down: f32) -> ScrollPosition {
         offset: Point::new(DevicePx(0.0), DevicePx(down)),
         content_size: Size::<DevicePx, Device>::new(DevicePx(400.0), DevicePx(1_000.0)),
         scrollport: Size::new(DevicePx(400.0), DevicePx(300.0)),
+        ..ScrollPosition::default()
     }
 }
 

@@ -243,9 +243,57 @@ pub fn window(
     }
 }
 
+/// The rows worth building for a list whose port moves `motion` CSS pixels before the rows are
+/// built again: the rows [`window`] builds at `offset` and at `offset + motion` together.
+///
+/// The motion counts up to one `viewport` in either direction. A list too long for its container
+/// builds the rows at `offset` alone.
+#[must_use]
+pub fn window_ahead(
+    rows: usize,
+    row_size: f32,
+    viewport: f32,
+    offset: f32,
+    overscan: usize,
+    motion: f32,
+) -> VirtualWindow {
+    let here = window(rows, row_size, viewport, offset, overscan);
+    let reach = viewport.max(0.0);
+    let motion = if motion.is_finite() {
+        motion.clamp(-reach, reach)
+    } else {
+        0.0
+    };
+    if motion == 0.0 || here.row_size <= 0.0 || here.is_compressed() {
+        return here;
+    }
+    let there = window(rows, row_size, viewport, offset + motion, overscan);
+    let first = here.first.min(there.first);
+    let end = here.end().max(there.end());
+    VirtualWindow {
+        rows,
+        first,
+        count: end - first,
+        lead: first as f32 * here.row_size,
+        trail: (rows - end) as f32 * here.row_size,
+        row_size: here.row_size,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{VirtualWindow, window};
+    use super::{VirtualWindow, window, window_ahead};
+
+    #[test]
+    fn a_moving_port_builds_the_rows_its_motion_reaches() {
+        let still = window(1_000, 20.0, 400.0, 10_000.0, 2);
+        let up = window_ahead(1_000, 20.0, 400.0, 10_000.0, 2, -100.0);
+        assert_eq!(up.first, still.first - 5);
+        assert_eq!(up.end(), still.end());
+        assert_eq!(up.lead, up.first as f32 * 20.0);
+        let far = window_ahead(1_000, 20.0, 400.0, 10_000.0, 2, -10_000.0);
+        assert_eq!(far.first, still.first - 20, "the motion counts up to one port");
+    }
 
     #[test]
     fn the_spacers_and_the_rows_always_add_up_to_the_whole_list() {

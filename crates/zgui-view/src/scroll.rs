@@ -16,6 +16,7 @@ use zgui_geom::{Device, DevicePx, Point, Size};
 ///     offset: Point::new(DevicePx(0.0), DevicePx(120.0)),
 ///     content_size: Size::new(DevicePx(400.0), DevicePx(1000.0)),
 ///     scrollport: Size::new(DevicePx(400.0), DevicePx(880.0)),
+///     ..ScrollPosition::default()
 /// };
 /// assert!(position.is_at_end_vertically());
 /// ```
@@ -27,6 +28,12 @@ pub struct ScrollPosition {
     pub content_size: Size<DevicePx, Device>,
     /// The extent that is visible.
     pub scrollport: Size<DevicePx, Device>,
+    /// How far the offset moves per frame while the compositor scrolls the content without frames
+    /// of the window, signed.
+    ///
+    /// The offset moves about as far again before the window's next frame. A position observed
+    /// during such motion carries it, and every other position holds zero.
+    pub motion: Size<DevicePx, Device>,
 }
 
 impl ScrollPosition {

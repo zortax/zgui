@@ -189,7 +189,7 @@ fn a_click_during_a_fling_lands_on_the_row_the_compositor_shows() {
     harness.settle(8);
 
     fling(&mut harness, 20.0);
-    run(&mut harness, 6);
+    run(&mut harness, 3);
     let adopted = offset(&harness);
     click(&mut harness, 50.0);
     let shown = offset(&harness);

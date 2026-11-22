@@ -841,6 +841,7 @@ mod tests {
                 offset: Point::new(DevicePx(0.0), DevicePx(240.0)),
                 content_size: Size::new(DevicePx(400.0), DevicePx(10_000.0)),
                 scrollport: Size::new(DevicePx(400.0), DevicePx(600.0)),
+                ..ScrollPosition::default()
             }),
         );
         assert_eq!(offsets.get().offset.y, DevicePx(240.0));

@@ -15,7 +15,7 @@ mod window;
 
 pub use crate::virtualize::list::{VirtualList, VirtualListProps};
 pub use crate::virtualize::style::VirtualListStyle;
-pub use crate::virtualize::window::{MAX_EXTENT, VirtualWindow, window};
+pub use crate::virtualize::window::{MAX_EXTENT, VirtualWindow, window, window_ahead};
 
 use zgui::prelude::*;
 use zgui::reactive::LocalStorage;
@@ -76,7 +76,8 @@ pub struct Virtualize {
 impl Virtualize {
     /// Watches `viewport`, a scroll container holding `rows` rows of `row_size` CSS pixels each.
     ///
-    /// `overscan` is how many rows to build beyond each edge of the port.
+    /// `overscan` is how many rows to build beyond each edge of the port. A port the compositor
+    /// moves also builds the rows one frame of its motion ahead, see [`window_ahead`].
     ///
     /// The handle observes the container's scroll position, which is a share in one observation
     /// held for as long as the calling scope lives. It is taken when `viewport` binds rather than
@@ -110,12 +111,13 @@ impl Virtualize {
                 } else {
                     1.0
                 };
-                window(
+                window_ahead(
                     count,
                     size,
                     position.scrollport.height.0 / scale,
                     position.offset.y.0 / scale,
                     overscan,
+                    position.motion.height.0 / scale,
                 )
             }),
         }
@@ -156,6 +158,7 @@ mod tests {
             offset: Point::new(DevicePx(0.0), DevicePx(offset)),
             content_size: Size::new(DevicePx(200.0), DevicePx(content)),
             scrollport: Size::new(DevicePx(200.0), DevicePx(port)),
+            ..ScrollPosition::default()
         }
     }
 

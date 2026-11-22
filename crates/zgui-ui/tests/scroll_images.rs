@@ -7,10 +7,10 @@
 //! dropped.
 //!
 //! The assertion is about *flicker*: once a row's picture has been decoded and shown, no later
-//! frame that draws the row may draw it without its picture. A frame that does is the blink a
-//! person sees while the glide is in flight.
+//! frame may draw a row without its picture, or leave a row of the port empty. A frame that does
+//! is the blink a person sees while the glide is in flight.
 //!
-//! The window writes every scroll offset itself, so each frame is one of the window's.
+//! The compositor moves the list, so most frames of the glide are the compositor's own.
 
 mod desktop;
 mod device;
@@ -38,6 +38,8 @@ const ROWS: usize = 80;
 const ARTS: usize = 12;
 /// The declared row height, matching the sheet.
 const ROW: f32 = 32.0;
+/// How many rows lie wholly inside the port at any offset.
+const WHOLE_ROWS: usize = 11;
 
 /// Opens `view`, or reports the run skipped on a machine with no graphics device.
 macro_rules! staged {
@@ -120,7 +122,8 @@ fn rows_and_arts(stage: &Stage) -> (usize, usize) {
     (rows.len(), with_art)
 }
 
-/// A warm glide never draws a row without the picture it has already shown.
+/// A warm glide never draws a row without the picture it has already shown, and never leaves a
+/// row of the port empty.
 #[test]
 fn a_scroll_glide_keeps_every_warm_picture_on_its_row() {
     let dir = fixtures();
@@ -169,13 +172,13 @@ fn a_scroll_glide_keeps_every_warm_picture_on_its_row() {
     for step in 0..120 {
         stage.wheel_step(-3.0);
         let (rows, with_art) = rows_and_arts(&stage);
-        if with_art < rows {
+        if rows < WHOLE_ROWS || with_art < rows {
             flickers.push((step, rows, with_art));
         }
     }
     assert!(
         flickers.is_empty(),
-        "warm rows were drawn without their pictures mid-glide \
+        "rows were drawn without their pictures, or not at all, mid-glide \
          (step, rows drawn, rows with art): {flickers:?}"
     );
 }

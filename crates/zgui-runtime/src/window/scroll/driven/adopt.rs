@@ -76,6 +76,23 @@ impl Window {
             .collect()
     }
 
+    /// Returns how far the compositor moves the content of `container` per frame, zero while it
+    /// does not move it.
+    pub(crate) fn scroll_motion(&self, container: zgui_dom::NodeKey) -> Size<DevicePx, Device> {
+        let still = Size::new(DevicePx(0.0), DevicePx(0.0));
+        let Some(sync) = self.painter.compositor_ref() else {
+            return still;
+        };
+        let Some(first) = self.layout.borrow().boxes_of(container).first().copied() else {
+            return still;
+        };
+        sync.scroll_node(&self.tables, first)
+            .and_then(|node| self.driven.active.get(&node))
+            .map_or(still, |active| {
+                Size::new(DevicePx(active.step[0]), DevicePx(active.step[1]))
+            })
+    }
+
     /// Composes the adopted offsets before input is routed, so a hit test reads what the
     /// compositor shows.
     pub(crate) fn compose_for_input(&mut self) {

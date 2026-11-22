@@ -626,6 +626,7 @@ impl ViewHost for RuntimeHost {
             offset,
             content_size: region.content,
             scrollport: region.scrollport.size,
+            ..ScrollPosition::default()
         }
     }
 
