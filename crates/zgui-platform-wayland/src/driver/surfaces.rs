@@ -11,6 +11,7 @@ use zgui_platform::{
 use wayland_client::protocol::wl_output::WlOutput;
 
 use crate::driver::WaylandState;
+use crate::surface::role::xdg::configure::ToplevelCapabilities;
 use crate::surface::role::{Popup, Role, Toplevel, layer};
 use crate::surface::{Fractional, Links, WaylandSurface};
 
@@ -77,6 +78,18 @@ impl WaylandState {
                 crate::frame::Ahead::new(crate::frame::ahead::mode(attributes.compose_ahead));
             if let SurfaceRole::Layer(placement) = &attributes.role {
                 shared.layer = Some(placement.clone());
+            }
+            if matches!(attributes.role, SurfaceRole::Toplevel) {
+                shared.decorations =
+                    if self.xdg.draws_frames() && attributes.decorations.is_platform_drawn() {
+                        zgui_platform::DecorationSource::Platform
+                    } else {
+                        zgui_platform::DecorationSource::Application
+                    };
+                shared.wm_capabilities = ToplevelCapabilities::all();
+            } else {
+                shared.decorations = zgui_platform::DecorationSource::Application;
+                shared.wm_capabilities = ToplevelCapabilities::none();
             }
             shared.bound = bound;
             // The first frame is drawn at the scale of the output the surface opens on. The

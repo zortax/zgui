@@ -5,10 +5,11 @@ use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use accesskit::TreeUpdate;
-use zgui_geom::{Css, CssPx, Device, DevicePx, Rect, Size};
+use zgui_geom::{Css, CssPx, Device, DevicePx, Edges, Rect, Size};
 use zgui_platform::{
-    CursorStyle, Decorations, FullscreenMode, InputSerial, LayerPatch, LayerPlacement,
-    PopupPlacement, Surface, SurfaceAttributes, SurfaceId, SurfaceRole, TextInput, Unsupported,
+    CursorStyle, DecorationSource, Decorations, FullscreenMode, InputSerial, LayerPatch,
+    LayerPlacement, PopupPlacement, Surface, SurfaceAttributes, SurfaceId, SurfaceRole, TextInput,
+    Unsupported,
 };
 
 /// How many accessibility nodes the surface keeps across the updates it retains.
@@ -123,6 +124,14 @@ pub struct OffscreenSurface {
     maximized: AtomicBool,
     /// How the surface was last asked to fill the screen.
     fullscreen: Mutex<Option<FullscreenMode>>,
+    /// Which edges a test configured as tiled.
+    tiled: Mutex<Edges<bool>>,
+    /// Negotiated decoration source override set by a test, or `None` to follow requested decorations.
+    decoration_source: Mutex<Option<DecorationSource>>,
+    /// Per-surface minimise capability override set by a test.
+    can_minimize: Mutex<Option<bool>>,
+    /// Per-surface maximise capability override set by a test.
+    can_maximize: Mutex<Option<bool>>,
     /// The last title it was given.
     title: Mutex<String>,
     /// What the surface was asked to be when it was created.
@@ -156,6 +165,10 @@ impl OffscreenSurface {
             visible: AtomicBool::new(false),
             maximized: AtomicBool::new(false),
             fullscreen: Mutex::new(None),
+            tiled: Mutex::new(Edges::NONE),
+            decoration_source: Mutex::new(None),
+            can_minimize: Mutex::new(None),
+            can_maximize: Mutex::new(None),
             title: Mutex::new(String::new()),
             requested_attributes: Mutex::new(SurfaceAttributes::default()),
             input_serial: Mutex::new(None),
@@ -376,6 +389,34 @@ impl OffscreenSurface {
         self.refresh_rate_millihertz
             .store(millihertz.unwrap_or(0), Ordering::Relaxed);
     }
+
+    /// Sets which edges of the surface are tiled against a desktop grid.
+    pub fn set_tiled(&self, tiled: Edges<bool>) {
+        *self
+            .tiled
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = tiled;
+    }
+
+    /// Overrides who draws the frame for this surface, as an `xdg-decoration` configure would.
+    pub fn set_decoration_source(&self, source: Option<DecorationSource>) {
+        *self
+            .decoration_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = source;
+    }
+
+    /// Overrides whether this surface advertises minimise and maximise support.
+    pub fn set_window_capabilities(&self, minimize: Option<bool>, maximize: Option<bool>) {
+        *self
+            .can_minimize
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = minimize;
+        *self
+            .can_maximize
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = maximize;
+    }
 }
 
 impl Surface for OffscreenSurface {
@@ -427,7 +468,12 @@ impl Surface for OffscreenSurface {
         self.visible.store(visible, Ordering::Relaxed);
     }
 
-    fn set_decorations(&self, _decorations: Decorations) {}
+    fn set_decorations(&self, decorations: Decorations) {
+        self.requested_attributes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .decorations = decorations;
+    }
 
     fn set_resizable(&self, _resizable: bool) {}
 
@@ -447,6 +493,46 @@ impl Surface for OffscreenSurface {
 
     fn fullscreen(&self) -> Option<FullscreenMode> {
         *self.fullscreen.lock().expect("the state is not poisoned")
+    }
+
+    fn tiled(&self) -> Edges<bool> {
+        *self
+            .tiled
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn decoration_source(&self) -> DecorationSource {
+        if let Some(source) = *self
+            .decoration_source
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+        {
+            return source;
+        }
+        let attributes = self
+            .requested_attributes
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if attributes.decorations.is_platform_drawn() {
+            DecorationSource::Platform
+        } else {
+            DecorationSource::Application
+        }
+    }
+
+    fn can_minimize(&self) -> Option<bool> {
+        *self
+            .can_minimize
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn can_maximize(&self) -> Option<bool> {
+        *self
+            .can_maximize
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn input_serial(&self) -> Option<InputSerial> {

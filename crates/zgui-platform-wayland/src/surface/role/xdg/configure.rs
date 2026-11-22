@@ -2,7 +2,73 @@
 
 use std::num::NonZeroU32;
 
-use wayland_protocols::xdg::shell::client::xdg_toplevel::State;
+use wayland_protocols::xdg::shell::client::xdg_toplevel::{State, WmCapabilities};
+use zgui_geom::Edges;
+
+/// Which window-management actions the compositor advertised for a toplevel.
+///
+/// Sent before the first `xdg_surface.configure` on shells at version five or newer, and again
+/// whenever the compositor changes its mind. A shell older than version five never sends the
+/// event, so a toplevel starts assuming all four until a compositor says otherwise.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ToplevelCapabilities {
+    /// Whether `show_window_menu` is available.
+    pub window_menu: bool,
+    /// Whether `set_maximized` and `unset_maximized` are available.
+    pub maximize: bool,
+    /// Whether `set_fullscreen` and `unset_fullscreen` are available.
+    pub fullscreen: bool,
+    /// Whether `set_minimized` is available.
+    pub minimize: bool,
+}
+
+impl ToplevelCapabilities {
+    /// Every action supported, which is the starting point before a v5+ shell speaks.
+    pub const fn all() -> Self {
+        Self {
+            window_menu: true,
+            maximize: true,
+            fullscreen: true,
+            minimize: true,
+        }
+    }
+
+    /// No window-management actions supported, for non-toplevel surface roles.
+    pub const fn none() -> Self {
+        Self {
+            window_menu: false,
+            maximize: false,
+            fullscreen: false,
+            minimize: false,
+        }
+    }
+
+    /// Reads the `wm_capabilities` array delivered on an `xdg_toplevel`.
+    pub fn read(capabilities: &[u8]) -> Self {
+        let mut parsed = Self::none();
+        for cap in capabilities
+            .chunks_exact(4)
+            .filter_map(|chunk| <[u8; 4]>::try_from(chunk).ok())
+            .map(u32::from_ne_bytes)
+            .filter_map(|value| WmCapabilities::try_from(value).ok())
+        {
+            match cap {
+                WmCapabilities::WindowMenu => parsed.window_menu = true,
+                WmCapabilities::Maximize => parsed.maximize = true,
+                WmCapabilities::Fullscreen => parsed.fullscreen = true,
+                WmCapabilities::Minimize => parsed.minimize = true,
+                _ => {}
+            }
+        }
+        parsed
+    }
+}
+
+impl Default for ToplevelCapabilities {
+    fn default() -> Self {
+        Self::all()
+    }
+}
 
 /// A configure that has arrived and not yet been applied.
 ///
@@ -27,6 +93,8 @@ pub struct Pending {
     pub suspended: bool,
     /// Whether the window has the keyboard.
     pub activated: bool,
+    /// Which edges of the window are tiled against a grid by the compositor.
+    pub tiled: Edges<bool>,
 }
 
 impl Pending {
@@ -49,6 +117,10 @@ impl Pending {
                 State::Fullscreen => pending.fullscreen = true,
                 State::Resizing => pending.resizing = true,
                 State::Activated => pending.activated = true,
+                State::TiledTop => pending.tiled.top = true,
+                State::TiledRight => pending.tiled.right = true,
+                State::TiledBottom => pending.tiled.bottom = true,
+                State::TiledLeft => pending.tiled.left = true,
                 State::Suspended => pending.suspended = true,
                 _ => {}
             }
@@ -129,5 +201,41 @@ mod tests {
         let mut broken = states(&[State::Maximized as u32]);
         broken.push(0);
         assert!(Pending::read((0, 0), &broken).maximized);
+    }
+
+    #[test]
+    fn tiled_edges_are_read_per_side_and_report_any_or_all() {
+        use zgui_geom::Edges;
+
+        let half = states(&[State::TiledLeft as u32, State::TiledTop as u32]);
+        let read = Pending::read((960, 640), &half);
+        assert_eq!(read.tiled, Edges::new(true, false, false, true));
+        assert!(read.tiled.any());
+        assert!(!read.tiled.all());
+
+        let full = states(&[
+            State::TiledTop as u32,
+            State::TiledRight as u32,
+            State::TiledBottom as u32,
+            State::TiledLeft as u32,
+        ]);
+        assert_eq!(Pending::read((960, 640), &full).tiled, Edges::ALL);
+    }
+
+    #[test]
+    fn wm_capabilities_distinguish_a_tiling_compositor_without_minimize() {
+        use super::ToplevelCapabilities;
+        use wayland_protocols::xdg::shell::client::xdg_toplevel::WmCapabilities;
+
+        let niri_like = states(&[
+            WmCapabilities::WindowMenu as u32,
+            WmCapabilities::Maximize as u32,
+            WmCapabilities::Fullscreen as u32,
+        ]);
+        let caps = ToplevelCapabilities::read(&niri_like);
+        assert!(caps.window_menu);
+        assert!(caps.maximize);
+        assert!(caps.fullscreen);
+        assert!(!caps.minimize);
     }
 }

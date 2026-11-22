@@ -13,7 +13,7 @@ use zgui_platform::{DecorationSource, Decorations, SurfaceId};
 
 use crate::driver::WaylandState;
 use crate::surface::role::xdg::XdgShell;
-use crate::surface::role::xdg::configure::Pending;
+use crate::surface::role::xdg::configure::{Pending, ToplevelCapabilities};
 
 /// A window: the surface, the shell object over it, and the frame the compositor draws.
 #[derive(Debug)]
@@ -143,6 +143,11 @@ impl Toplevel {
         }
     }
 
+    /// Whether the compositor advertised `xdg-decoration` for this window.
+    pub const fn has_decoration_manager(&self) -> bool {
+        self.decoration.is_some()
+    }
+
     /// Hands a move of the window over to the compositor.
     pub fn begin_move(&self, seat: &WlSeat, serial: u32) {
         self.toplevel._move(seat, serial);
@@ -245,6 +250,11 @@ impl Dispatch<XdgToplevel, SurfaceId> for WaylandState {
                     "the compositor described a window"
                 );
                 state.stash_configure(*id, pending);
+            }
+            xdg_toplevel::Event::WmCapabilities { capabilities } => {
+                let parsed = ToplevelCapabilities::read(&capabilities);
+                tracing::trace!(?parsed, "the compositor stated its window capabilities");
+                state.stash_wm_capabilities(*id, parsed);
             }
             xdg_toplevel::Event::Close => {
                 state.report(*id, zgui_platform::SurfaceEvent::CloseRequested);

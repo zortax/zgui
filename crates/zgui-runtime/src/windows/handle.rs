@@ -4,7 +4,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::{Arc, Weak};
 
-use zgui_geom::{Css, CssPx, Point, Rect, Size};
+use zgui_geom::{Css, CssPx, Edges, Point, Rect, Size};
 use zgui_platform::{
     CloseReason, ColorScheme, CursorStyle, Decorations, FullscreenMode, LayerPatch,
     PlatformCapabilities, ResizeEdge, Surface, WindowIcon, WindowLevel,
@@ -77,6 +77,14 @@ pub(crate) struct WindowShared {
     pub(crate) maximized: ArcRwSignal<bool>,
     /// How the window fills the screen, if it does.
     pub(crate) fullscreen: ArcRwSignal<Option<FullscreenMode>>,
+    /// Which edges of the window are tiled against a desktop grid.
+    pub(crate) tiled: ArcRwSignal<Edges<bool>>,
+    /// Whether the desktop (compositor or window manager) draws the window's frame and title bar.
+    pub(crate) server_decorated: ArcRwSignal<bool>,
+    /// Whether this window can be minimised on the active desktop.
+    pub(crate) can_minimize: ArcRwSignal<bool>,
+    /// Whether this window can be maximised and restored on the active desktop.
+    pub(crate) can_maximize: ArcRwSignal<bool>,
     /// Why the window closed, once it has.
     pub(crate) close_reason: ArcRwSignal<Option<CloseReason>>,
     /// Which lock keys are on, as of the last change the window was told about.
@@ -99,6 +107,14 @@ impl WindowHandle {
         commands: WindowCommands,
         capabilities: Rc<RefCell<PlatformCapabilities>>,
     ) -> Self {
+        let (server_decorated, can_minimize, can_maximize) = {
+            let caps = capabilities.borrow();
+            (
+                !caps.decorations.is_application(),
+                caps.minimize,
+                caps.maximize,
+            )
+        };
         Self {
             shared: Rc::new(WindowShared {
                 id,
@@ -118,12 +134,21 @@ impl WindowHandle {
                 presented: ArcRwSignal::new(false),
                 maximized: ArcRwSignal::new(false),
                 fullscreen: ArcRwSignal::new(None),
+                tiled: ArcRwSignal::new(Edges::NONE),
+                server_decorated: ArcRwSignal::new(server_decorated),
+                can_minimize: ArcRwSignal::new(can_minimize),
+                can_maximize: ArcRwSignal::new(can_maximize),
                 close_reason: ArcRwSignal::new(None),
                 lock_keys: ArcRwSignal::new(Modifiers::NONE),
                 input_region: RefCell::new(None),
                 opaque_region: RefCell::new(None),
             }),
         }
+    }
+
+    /// Seeds window state from `surface` before the window's view is constructed.
+    pub(crate) fn seed_surface(&self, surface: &Arc<dyn Surface>) {
+        self.sync_surface_state(surface);
     }
 
     /// Gives the handle the surface its window has just been opened on.
@@ -139,8 +164,7 @@ impl WindowHandle {
             CssPx(size.width.0 / scale),
             CssPx(size.height.0 / scale),
         ));
-        self.shared.maximized.set(surface.is_maximized());
-        self.shared.fullscreen.set(surface.fullscreen());
+        self.sync_surface_state(surface);
         if let Some(region) = self.shared.input_region.borrow().as_ref() {
             let _ = surface.set_input_region(region.as_deref());
         }
@@ -224,20 +248,47 @@ impl WindowHandle {
         }
     }
 
-    /// Asks the surface again whether it is maximised or full screen.
+    /// Synchronises reactive shell states and capabilities from `surface`, writing only signals
+    /// whose values changed.
+    fn sync_surface_state(&self, surface: &Arc<dyn Surface>) {
+        let maximized = surface.is_maximized();
+        if self.shared.maximized.get_untracked() != maximized {
+            self.shared.maximized.set(maximized);
+        }
+        let fullscreen = surface.fullscreen();
+        if self.shared.fullscreen.get_untracked() != fullscreen {
+            self.shared.fullscreen.set(fullscreen);
+        }
+        let tiled = surface.tiled();
+        if self.shared.tiled.get_untracked() != tiled {
+            self.shared.tiled.set(tiled);
+        }
+        let server_decorated = !surface.decoration_source().is_application();
+        if self.shared.server_decorated.get_untracked() != server_decorated {
+            self.shared.server_decorated.set(server_decorated);
+        }
+        let (fallback_min, fallback_max) = {
+            let caps = self.shared.capabilities.borrow();
+            (caps.minimize, caps.maximize)
+        };
+        let can_minimize = surface.can_minimize().unwrap_or(fallback_min);
+        if self.shared.can_minimize.get_untracked() != can_minimize {
+            self.shared.can_minimize.set(can_minimize);
+        }
+        let can_maximize = surface.can_maximize().unwrap_or(fallback_max);
+        if self.shared.can_maximize.get_untracked() != can_maximize {
+            self.shared.can_maximize.set(can_maximize);
+        }
+    }
+
+    /// Asks the surface again whether its maximised, full-screen, tiled, decoration or window
+    /// control states moved.
     ///
-    /// Read on resize, and when the platform reports a state change. A desktop can change either
-    /// state and keep the size of the window.
+    /// Read on resize, and when the platform reports a state change. A desktop can change any of
+    /// these states while keeping the size of the window.
     pub(crate) fn refresh_window_state(&self) {
         if let Some(surface) = self.surface() {
-            let maximized = surface.is_maximized();
-            if self.shared.maximized.get_untracked() != maximized {
-                self.shared.maximized.set(maximized);
-            }
-            let fullscreen = surface.fullscreen();
-            if self.shared.fullscreen.get_untracked() != fullscreen {
-                self.shared.fullscreen.set(fullscreen);
-            }
+            self.sync_surface_state(&surface);
         }
     }
 
@@ -337,6 +388,40 @@ impl WindowHandle {
         self.shared.fullscreen.clone().into()
     }
 
+    /// Which edges of the window are tiled against a desktop grid (`xdg_toplevel` `TILED_*`).
+    ///
+    /// Use [`Edges::any`] to test whether the window is tiled on any side, or inspect individual
+    /// sides (`top`, `right`, `bottom`, `left`).
+    pub fn tiled(&self) -> Signal<Edges<bool>> {
+        self.shared.tiled.clone().into()
+    }
+
+    /// Whether the desktop draws the window's title bar and frame.
+    ///
+    /// Updated reactively when a Wayland compositor negotiates `xdg-decoration` at configure time:
+    /// a client-decorated window (`Decorations::None`) stays `false` unless the compositor forces
+    /// server-side decorations, in which case this turns `true` so client-side window controls can
+    /// step aside.
+    pub fn server_decorated(&self) -> Signal<bool> {
+        self.shared.server_decorated.clone().into()
+    }
+
+    /// Whether this window can be minimised on the active desktop.
+    ///
+    /// Updated reactively from `xdg_toplevel.wm_capabilities` on Wayland and window button flags on
+    /// desktop window managers, falling back to [`PlatformCapabilities::minimize`].
+    pub fn can_minimize(&self) -> Signal<bool> {
+        self.shared.can_minimize.clone().into()
+    }
+
+    /// Whether this window can be maximised and restored on the active desktop.
+    ///
+    /// Updated reactively from `xdg_toplevel.wm_capabilities` on Wayland and window button flags on
+    /// desktop window managers, falling back to [`PlatformCapabilities::maximize`].
+    pub fn can_maximize(&self) -> Signal<bool> {
+        self.shared.can_maximize.clone().into()
+    }
+
     /// Why the window closed, or nothing while it has not.
     ///
     /// A shell window on an output that went away closes with
@@ -419,7 +504,13 @@ impl WindowHandle {
     /// [`Decorations::NoTitleBar`] reaches a window that is already open as
     /// [`Decorations::Full`]. Ask for it in [`WindowOptions`](crate::windows::WindowOptions).
     pub fn set_decorations(&self, decorations: Decorations) {
-        self.act(|surface| surface.set_decorations(decorations));
+        self.act(|surface| {
+            surface.set_decorations(decorations);
+            let server_decorated = !surface.decoration_source().is_application();
+            if self.shared.server_decorated.get_untracked() != server_decorated {
+                self.shared.server_decorated.set(server_decorated);
+            }
+        });
     }
 
     /// Maximises or restores the window.
