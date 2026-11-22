@@ -287,6 +287,12 @@ impl Window {
             // what produces a flash of empty window at launch.
             self.surface.set_visible(true);
             self.first_frame = false;
+            if !self.surface.contents_survive_show() {
+                // Mapping can discard the hidden presentation. Include the full scene in
+                // the next paint emission so the first visible frame restores every pixel.
+                self.damage = DamageSet::full();
+                self.request_frame();
+            }
         } else if self.first_frame
             && !self.starved
             && matches!(outcome, FrameOutcome::Skipped(SkipReason::Occluded))
