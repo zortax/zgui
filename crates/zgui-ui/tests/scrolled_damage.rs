@@ -45,7 +45,8 @@ const SHEET: &str = ":root { background-color: #ffffff }
             transition: opacity 200ms steps(4, jump-end) }
     .fade.on { opacity: 0.25 }
     .slot { flex: none; padding: 4px 0; pointer-events: none }
-    .still { flex: none; height: 24px; border-radius: 6px; background-color: #2a2a2a }";
+    .still { flex: none; height: 24px; border-radius: 6px; background-color: #2a2a2a }
+    .still.tall { height: 600px }";
 
 /// The sidebar's own colour, which a ghost row shows at rest.
 const SIDE: (u8, u8, u8) = (0x1a, 0x1a, 0x1a);
@@ -496,34 +497,98 @@ fn matches_a_repaint(item: Item) {
         let side = opened
             .inside(opened.rect(opened.side), 0.0)
             .expect("the side shows");
-        let live = opened.stage.composed_colours_in(side);
-        opened.stage.redraw_from_nothing();
-        let whole = opened.stage.composed_colours_in(side);
-        let width = side.size.width.0 as usize;
-        let mut differing = 0;
-        let mut bounds = (usize::MAX, usize::MAX, 0, 0);
-        for (index, _) in live
-            .iter()
-            .zip(&whole)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-        {
-            differing += 1;
-            let (x, y) = (index % width, index / width);
-            bounds = (
-                bounds.0.min(x),
-                bounds.1.min(y),
-                bounds.2.max(x),
-                bounds.3.max(y),
-            );
-        }
-        if differing > 0 {
-            vec![format!(
-                "{differing} pixels differ in {bounds:?} of the side"
-            )]
-        } else {
-            Vec::new()
-        }
+        repaint_faults(&mut opened.stage, side)
     });
+    assert!(faults.is_empty(), "{}", faults.join("\n"));
+}
+
+/// Describes how the composed pixels inside `side` differ from a full repaint of the same moment.
+fn repaint_faults(stage: &mut Stage, side: Rect<DevicePx, Device>) -> Vec<String> {
+    let live = stage.composed_colours_in(side);
+    stage.redraw_from_nothing();
+    let whole = stage.composed_colours_in(side);
+    let width = side.size.width.0 as usize;
+    let mut differing = 0;
+    let mut bounds = (usize::MAX, usize::MAX, 0, 0);
+    for (index, _) in live
+        .iter()
+        .zip(&whole)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+    {
+        differing += 1;
+        let (x, y) = (index % width, index / width);
+        bounds = (
+            bounds.0.min(x),
+            bounds.1.min(y),
+            bounds.2.max(x),
+            bounds.3.max(y),
+        );
+    }
+    if differing > 0 {
+        vec![format!(
+            "{differing} pixels differ in {bounds:?} of the side"
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The row [`a_row_moved_far_from_the_margin_matches_a_repaint`] moves, which starts in the margin
+/// below the port.
+const MOVED: usize = 20;
+
+/// Fails when a row that layout moves from the margin below the port to far below it stays drawn
+/// where it was, or is missing where it went.
+///
+/// The row above it grows by more than the margin, which moves the row out of every damaged
+/// rectangle.
+#[test]
+fn a_row_moved_far_from_the_margin_matches_a_repaint() {
+    crate::device::use_real_damage();
+    let grown = RwSignal::new(false);
+    let side = NodeRef::new();
+    let Some(mut stage) = Stage::open(SHEET, move || {
+        view! {
+            column(class = "page") {
+                column(class = "side", node_ref = side) {
+                    ScrollArea(class = "scroll") {
+                        column(class = "rows") {
+                            for index in move || (0..ITEMS).collect::<Vec<_>>(), key = |index: &usize| *index {
+                                box(
+                                    class = if index == MOVED { "tint" } else { "still" },
+                                    class:tall = move || index + 1 == MOVED && grown.get()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }) else {
+        return;
+    };
+    let side = stage.rect_of(side.get_untracked().expect("the side was built"));
+    stage.move_to(Point::new(
+        DevicePx(side.origin.x.0 + 100.0),
+        DevicePx(side.origin.y.0 + 150.0),
+    ));
+    // The motion records the margin below the port, the moved row with it.
+    for _ in 0..3 {
+        stage.touchpad_step(20.0);
+    }
+    grown.set(true);
+    // The row's old place scrolls into the port, then its new place.
+    let mut faults = Vec::new();
+    for (what, pixels) in [("the old place", 20.0), ("the new place", 60.0)] {
+        for _ in 0..12 {
+            stage.touchpad_step(pixels);
+        }
+        faults.extend(
+            repaint_faults(&mut stage, side)
+                .into_iter()
+                .map(|fault| format!("over {what}: {fault}")),
+        );
+    }
     assert!(faults.is_empty(), "{}", faults.join("\n"));
 }
