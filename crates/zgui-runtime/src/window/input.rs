@@ -171,6 +171,13 @@ impl Window {
                 action: zgui_vocab::PointerAction::Pressed,
                 ..
             } => self.focus_modality = zgui_input::FocusSource::Pointer,
+            // A pointer that lets go also lets go of its capture, once the release is dispatched
+            // and its commands are carried out.
+            SurfaceEvent::Pointer {
+                action: zgui_vocab::PointerAction::Released | zgui_vocab::PointerAction::Cancelled,
+                event,
+                ..
+            } => self.lifted.push(event.id),
             _ => {}
         }
         // A drag's motion is tracked first, so a drop's listeners already see the drag-over
@@ -267,7 +274,11 @@ impl Window {
 
         let dispatched = {
             let host = std::rc::Rc::clone(&self.host);
-            let mut sink = HostSink::new(&host);
+            let pointer = match event {
+                SurfaceEvent::Pointer { event, .. } => event.id,
+                _ => zgui_vocab::PointerId::MOUSE,
+            };
+            let mut sink = HostSink::for_pointer(&host, pointer);
             dispatch::run(
                 self, &steps, kind, target, &payload, samples, modifiers, timestamp, &mut sink,
             )
@@ -339,9 +350,8 @@ impl Window {
             self.text_clicks.forget();
         }
         // A finger produces presses and moves and nothing else; what those *mean* is read here and
-        // acted on after the listeners, exactly as the wheel's own default is. A handler that took
-        // responsibility for the press has already stopped the reading from reaching a scroll,
-        // because the recogniser only ever sees what the platform sent.
+        // acted on after the listeners, exactly as the wheel's own default is. A handler that
+        // captured the pointer keeps the reading from reaching a scroll.
         if let SurfaceEvent::Pointer {
             action,
             event,
@@ -728,6 +738,16 @@ impl Window {
     /// Bounded: a command that issues a command that issues a command settles or is dropped, so a
     /// handler that focuses whatever gains focus cannot hold the frame.
     pub(crate) fn carry_out_commands(&mut self, timestamp: Timestamp) {
+        self.carry_out_issued(timestamp);
+        // After the commands, so a handler for the release still had the capture it held, and a
+        // capture that a handler asked for on the release does not outlive it.
+        for pointer in core::mem::take(&mut self.lifted) {
+            self.router.capture_mut().release(pointer);
+        }
+    }
+
+    /// Carries out the commands in the queue until none are left, for at most eight rounds.
+    fn carry_out_issued(&mut self, timestamp: Timestamp) {
         for _ in 0..8u8 {
             // Before the commands are taken, because a focus move made by the event that has just
             // finished has to be announced before anything that move causes is acted on — and
@@ -774,15 +794,24 @@ impl Window {
                 let key = node.and_then(zgui_view_dom::id::to_document);
                 self.move_focus(key, zgui_input::FocusSource::Script, timestamp);
             }
-            Command::CapturePointer(node) => {
+            Command::CapturePointer(node, pointer) => {
                 if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    let pointer = zgui_vocab::PointerId::MOUSE;
                     self.router.capture_mut().set(pointer, key);
                 }
             }
-            Command::ReleasePointer(node) => {
-                if let Some(key) = zgui_view_dom::id::to_document(node) {
-                    self.router.capture_mut().release_node(key);
+            Command::ReleasePointer(node, pointer) => {
+                let Some(key) = zgui_view_dom::id::to_document(node) else {
+                    return;
+                };
+                match pointer {
+                    Some(pointer) => {
+                        if self.router.capture().of(pointer) == Some(key) {
+                            self.router.capture_mut().release(pointer);
+                        }
+                    }
+                    None => {
+                        self.router.capture_mut().release_node(key);
+                    }
                 }
             }
             Command::Select { node, range } => {

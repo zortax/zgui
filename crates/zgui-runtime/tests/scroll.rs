@@ -686,6 +686,52 @@ fn a_finger_dragged_up_the_list_scrolls_it_and_a_flick_keeps_it_going() {
 }
 
 #[test]
+fn a_finger_an_element_captured_drags_that_element_and_leaves_the_list_where_it_is() {
+    // The same drag as the flick above, which is the control: there the list moves. Here the list
+    // captures the finger on the press, as a slider or a drawing surface does, and lets go only by
+    // lifting it.
+    let mut harness = support::app_with_text(CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
+        use zgui_view::{IntoView, View};
+        let mut port = zgui_elements::column()
+            .class("port")
+            .on(zgui_view::events::POINTER_DOWN, |cx| cx.capture_pointer());
+        for _ in 0..200 {
+            port = port.child(zgui_elements::column().class("row"));
+        }
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .child(port)
+                .into_view()
+                .build(cx),
+        )
+    });
+    harness.settle(8);
+    let before = topmost_row_top(window(&harness), 20.0);
+
+    drag_finger(
+        &mut harness,
+        90.0,
+        &[(70.0, 16), (50.0, 32), (30.0, 48), (10.0, 64)],
+    );
+
+    assert_eq!(
+        topmost_row_top(window(&harness), 20.0),
+        before,
+        "a captured finger also scrolled the list under it"
+    );
+    assert!(
+        !window(&harness).scroll().borrow().is_animating(),
+        "a captured finger flung the list"
+    );
+    assert_eq!(
+        window(&harness).pointer_capture(zgui_vocab::PointerId::new(1)),
+        None,
+        "lifting the finger did not end its capture, so its next contact can never pan"
+    );
+}
+
+#[test]
 fn a_drag_that_leaves_the_scrollport_keeps_carrying_the_list_it_started_on() {
     // The commonest drag there is. The content follows the contact, so the contact reaches the
     // edge of the scrollport long before the gesture ends — and a container looked up from where

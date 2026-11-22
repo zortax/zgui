@@ -335,6 +335,11 @@ pub struct Window {
     /// re-derived from where the finger is now stops naming the list as soon as the drag carries
     /// it past the edge of its own scrollport.
     panning: Vec<zgui_dom::NodeKey>,
+    /// The pointer whose drag `panning` follows.
+    panning_pointer: Option<zgui_vocab::PointerId>,
+    /// The pointers released or cancelled since the commands were last carried out, whose
+    /// captures end after those commands.
+    lifted: Vec<zgui_vocab::PointerId>,
     /// The scrolls views asked for, in the order they asked, carried out after the next layout
     /// pass so that they measure the layout that holds what the same flush added.
     owed_scrolls: Vec<(
@@ -785,6 +790,8 @@ impl Window {
             scroll_settings: zgui_platform::ScrollSettings::default(),
             scroll_frozen: false,
             panning: Vec::new(),
+            panning_pointer: None,
+            lifted: Vec::new(),
             owed_scrolls: Vec::new(),
             carried_scrolls: Vec::new(),
             long_press_due: None,

@@ -54,8 +54,9 @@ pub enum Command {
         /// Whether to animate getting there.
         behavior: ScrollBehavior,
     },
-    /// Route subsequent pointer events to this node until the button is released.
-    CapturePointer(NodeId),
+    /// Route the pointer's subsequent events to this node until its button is released or its
+    /// contact lifts.
+    CapturePointer(NodeId, zgui_vocab::PointerId),
     /// Install this style sheet at the author origin, or replace it when the name is taken.
     InstallStylesheet {
         /// What the sheet is installed under.
@@ -70,8 +71,9 @@ pub enum Command {
     },
     /// Stop, or let go of, the window's own scrolling, leaving it exactly where it is.
     FreezeScrolling(bool),
-    /// End a capture early.
-    ReleasePointer(NodeId),
+    /// End this node's capture of the pointer early. With no pointer, end every capture the node
+    /// holds.
+    ReleasePointer(NodeId, Option<zgui_vocab::PointerId>),
     /// Put this node's own editing model's selection here.
     ///
     /// Recording the range is not enough on its own. An editable element's caret lives in its
@@ -118,9 +120,11 @@ impl core::fmt::Debug for Command {
                 .field("target", target)
                 .field("behavior", behavior)
                 .finish(),
-            Self::CapturePointer(node) => {
-                formatter.debug_tuple("CapturePointer").field(node).finish()
-            }
+            Self::CapturePointer(node, pointer) => formatter
+                .debug_tuple("CapturePointer")
+                .field(node)
+                .field(pointer)
+                .finish(),
             Self::InstallStylesheet { name, css } => formatter
                 .debug_struct("InstallStylesheet")
                 .field("name", name)
@@ -134,9 +138,11 @@ impl core::fmt::Debug for Command {
                 .debug_tuple("FreezeScrolling")
                 .field(frozen)
                 .finish(),
-            Self::ReleasePointer(node) => {
-                formatter.debug_tuple("ReleasePointer").field(node).finish()
-            }
+            Self::ReleasePointer(node, pointer) => formatter
+                .debug_tuple("ReleasePointer")
+                .field(node)
+                .field(pointer)
+                .finish(),
             Self::Select { node, range } => formatter
                 .debug_struct("Select")
                 .field("node", node)

@@ -298,11 +298,22 @@ impl Window {
     /// The container a drag acts on is decided when the drag begins and not looked at again, so a
     /// finger that carries a list past the edge of its own scrollport keeps carrying that list.
     /// One drag at a time: a second contact that begins panning takes the scroll over, which is
-    /// what a second finger landing on a list is asking for.
+    /// what a second finger landing on a list is asking for. The moves and the lift of any other
+    /// contact are ignored.
+    ///
+    /// A captured pointer belongs to the element that captured it, such as a slider or a drawing
+    /// surface, and pans nothing. A capture that arrives during a drag ends the drag.
     pub(crate) fn carry_out_gestures(&mut self, read: &[zgui_input::Gesture]) {
         for gesture in read {
             match gesture {
-                zgui_input::Gesture::PanStart { from, .. } => {
+                zgui_input::Gesture::PanStart { pointer, from } => {
+                    if self.router.capture().of(*pointer).is_some() {
+                        if self.panning_pointer == Some(*pointer) {
+                            self.end_pan();
+                        }
+                        continue;
+                    }
+                    self.panning_pointer = Some(*pointer);
                     // Decided once, where the finger went down, and held for the whole drag. A
                     // container re-derived from where the finger is *now* is a list that stops
                     // following it the moment the drag leaves the scrollport — which is most
@@ -313,7 +324,14 @@ impl Window {
                         None => Vec::new(),
                     };
                 }
-                zgui_input::Gesture::PanMove { by, .. } => {
+                zgui_input::Gesture::PanMove { pointer, by } => {
+                    if self.panning_pointer != Some(*pointer) {
+                        continue;
+                    }
+                    if self.router.capture().of(*pointer).is_some() {
+                        self.end_pan();
+                        continue;
+                    }
                     if self.panning.is_empty() {
                         continue;
                     }
@@ -339,9 +357,12 @@ impl Window {
                     self.panning = chain;
                     self.mark_scrolled(&touched);
                 }
-                zgui_input::Gesture::PanEnd { velocity, .. } => {
+                zgui_input::Gesture::PanEnd { pointer, velocity } => {
+                    if self.panning_pointer != Some(*pointer) {
+                        continue;
+                    }
                     let container = self.panning.first().copied();
-                    self.panning = Vec::new();
+                    self.end_pan();
                     let Some(container) = container else {
                         continue;
                     };
@@ -359,6 +380,12 @@ impl Window {
                 _ => {}
             }
         }
+    }
+
+    /// Stops following the drag in progress.
+    fn end_pan(&mut self) {
+        self.panning = Vec::new();
+        self.panning_pointer = None;
     }
 
     /// Reports every contact that has now been held long enough to mean something else.

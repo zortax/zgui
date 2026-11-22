@@ -36,14 +36,14 @@ use crate::id::NodeId;
 /// assert_eq!(sink.0, vec!["synthesize click".to_owned()]);
 /// ```
 pub trait EventSink {
-    /// Routes every subsequent pointer event to `node` until the button is released, wherever the
-    /// pointer goes.
+    /// Routes the subsequent events of this event's pointer to `node` until its button is released
+    /// or its contact lifts, wherever the pointer goes.
     ///
     /// The capture is the framework's, not the operating system's: no portable pointer grab
     /// exists, and one that did would take the pointer away from the rest of the desktop.
     fn capture_pointer(&mut self, node: NodeId);
 
-    /// Ends a capture early.
+    /// Ends `node`'s capture of this event's pointer early.
     fn release_pointer(&mut self, node: NodeId);
 
     /// Moves focus to `node`.
