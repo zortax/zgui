@@ -44,10 +44,11 @@ impl Window {
     /// adopt.
     pub(super) fn draw_output(&mut self, at: zgui_vocab::Timestamp) -> crate::compositor::Drawn {
         let interval = self.refresh_interval();
-        self.pass_gestures();
+        self.hand_lost_steps();
         let drawn = self
             .compositor
             .draw(&mut *self.renderer, self.subpixel_order, at, interval);
+        self.steps_built();
         // The compositor's own scrolling moves pixels the window's walk did not visit.
         let scrolled = self.take_scroll_events(&drawn);
         if let Some(built) = self.compositor.take_built() {

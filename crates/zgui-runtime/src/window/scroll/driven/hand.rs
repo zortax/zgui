@@ -42,9 +42,7 @@ impl Window {
             return false;
         }
         if !continues(wheel.phase) {
-            let refused = std::mem::take(&mut self.driven.refused);
-            let driven =
-                !refused && container.is_some_and(|container| self.has_scroll_node(container));
+            let driven = container.is_some_and(|container| self.has_scroll_node(container));
             self.driven.owner = Some(if driven {
                 Owner::Compositor
             } else {
@@ -52,7 +50,6 @@ impl Window {
             });
             self.driven.latched = container;
             self.driven.routed = false;
-            self.driven.begin = None;
             if wheel.phase == ScrollPhase::Started {
                 self.driven.track = zgui_scroll::Track::touching();
             }
@@ -100,62 +97,40 @@ impl Window {
             time_ns: u64::try_from(at.as_nanos()).unwrap_or(u64::MAX),
         };
         counter::bump(Counter::GesturesHanded);
-        // compositor: a commit that acknowledges a scroll while a handed delta waits for the next
-        // build writes the node at the offset the delta reaches, and the build then moves the
-        // commit's damage by the delta a second time. So gestures go to the compositor after
-        // the frame's commit, and the content is marked as moving now, so the frame records its
-        // margin.
-        self.driven.handed.push((gesture, *wheel));
-        if let Some(node) = self.scroll_node_of(units) {
-            self.moving(node);
+        self.driven.handed.push(gesture);
+        match self.compositor.scroll_input(gesture) {
+            ScrollRouting::Handled { node, .. } => {
+                self.driven.routed = true;
+                self.moving(node);
+            }
+            // A gesture that begins without moving is routed by its first movement.
+            ScrollRouting::Unhandled if wheel.phase == ScrollPhase::Started => {}
+            // A gesture the compositor routes to no node is the window's to scroll.
+            ScrollRouting::Unhandled if !self.driven.routed => {
+                self.driven.owner = Some(Owner::Window);
+                return false;
+            }
+            ScrollRouting::Unhandled => {}
         }
-        self.request_compositor_frame();
         true
     }
 
-    /// Hands the gestures queued since the last frame to the compositor.
-    ///
-    /// A gesture whose first movement the compositor routes to no node is the window's to scroll,
-    /// so it goes back into the window's queue from its start, and the next frame scrolls it.
-    pub(crate) fn pass_gestures(&mut self) {
-        let mut handed = std::mem::take(&mut self.driven.handed);
-        for (gesture, wheel) in handed.drain(..) {
-            if self.driven.owner == Some(Owner::Window) && continues(wheel.phase) {
-                self.return_wheel(wheel);
-                continue;
-            }
-            match self.compositor.scroll_input(gesture) {
-                ScrollRouting::Handled { node, .. } => {
-                    self.driven.routed = true;
-                    self.moving(node);
-                }
-                ScrollRouting::Unhandled if wheel.phase == ScrollPhase::Started => {
-                    self.driven.begin = Some(wheel);
-                }
-                ScrollRouting::Unhandled if !self.driven.routed => {
-                    self.driven.owner = Some(Owner::Window);
-                    self.driven.refused = true;
-                    if let Some(begin) = self.driven.begin.take() {
-                        self.return_wheel(begin);
-                    }
-                    self.return_wheel(wheel);
-                }
-                ScrollRouting::Unhandled => {}
+    /// Hands the compositor again the steps it lost when the client was registered again, after
+    /// the commit that gave it the nodes again.
+    pub(crate) fn hand_lost_steps(&mut self) {
+        if !std::mem::take(&mut self.driven.lost) {
+            return;
+        }
+        for gesture in self.driven.handed.clone() {
+            if let ScrollRouting::Handled { node, .. } = self.compositor.scroll_input(gesture) {
+                self.moving(node);
             }
         }
-        self.driven.handed = handed;
     }
 
-    /// Puts `wheel` back into the window's queue, for the window's own scrolling.
-    fn return_wheel(&mut self, wheel: WheelEvent) {
-        self.queued.push(crate::window::input::Queued::new(
-            zgui_platform::SurfaceEvent::Wheel {
-                event: wheel,
-                modifiers: zgui_vocab::Modifiers::NONE,
-                timestamp: self.clock.timestamp(),
-            },
-        ));
-        self.request_frame();
+    /// Notes that the compositor built a frame, which took every step handed to it.
+    pub(crate) fn steps_built(&mut self) {
+        self.driven.handed.clear();
     }
 
     /// Notes that the compositor moves `node`, and asks for the frames that show it.
