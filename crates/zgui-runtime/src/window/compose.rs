@@ -14,6 +14,7 @@ impl Window {
     pub(super) fn open_transaction(&mut self) {
         if self.resync.take() {
             self.compositor.restart();
+            self.driven.forget();
             if let Some(sync) = self.painter.compositor() {
                 sync.reset();
             }
@@ -130,6 +131,7 @@ impl Window {
                 if let Some(sync) = self.painter.compositor() {
                     sync.reset();
                 }
+                self.driven.forget();
                 self.damage = DamageSet::full();
                 self.request_frame();
             }

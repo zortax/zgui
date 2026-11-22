@@ -132,6 +132,9 @@ pub(crate) fn opened(rows: usize, height: f32) -> Opened {
         .with_size(WIDTH, height)
         .with_stylesheet(sheet(height))
         .with_compositor(zgui::app::compositor(&fonts))
+        // The bands were recorded for a window that writes every offset itself. A glide the
+        // compositor carries runs no frame of the window's on a port its margin covers.
+        .with_compositor_scrolling(false)
         .with_renderer(Box::new(render))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

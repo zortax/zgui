@@ -94,6 +94,15 @@ impl Driven {
         self.due
     }
 
+    /// Forgets every node, for a client registered again without them.
+    pub(crate) fn forget(&mut self) {
+        self.shown.clear();
+        self.active.clear();
+        self.owner = None;
+        self.moving = false;
+        self.due = None;
+    }
+
     /// Notes that a whole frame started, which presents the compositor's scrolling too.
     pub(crate) fn frame_started(&mut self) {
         self.tick_owed.set(false);
