@@ -61,6 +61,12 @@ impl Window {
         true
     }
 
+    /// Reports whether the compositor moves a scroll container of the window that the window has
+    /// not yet seen come to rest.
+    pub fn compositor_scrolling(&self) -> bool {
+        !self.driven.active.is_empty()
+    }
+
     /// Returns the scroll containers the compositor moved since the window's last frame, each
     /// with the offset the compositor shows less the window's own offset.
     ///

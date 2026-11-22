@@ -13,7 +13,8 @@
 //!   per-box slope was fitted from.
 //! - **Keystroke.** One character into a real text field: an edit, a reshape of one paragraph, a
 //!   caret moved and a repaint of one box.
-//! - **Glide tick.** One frame of the scroll animation the framework runs after a wheel notch.
+//! - **Glide tick.** One frame of the glide that follows a wheel notch, which the compositor
+//!   carries.
 
 use zgui::geom::{CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
@@ -108,7 +109,7 @@ pub(crate) fn run() -> Outcome {
         harness.deliver_to_first(crate::input::wheel(middle, lines));
         harness.settle(64);
         let mut carried = 0;
-        while crate::input::gliding(&harness) && carried < 60 {
+        while crate::input::any_glide(&harness) && carried < 60 {
             let gpu = crate::gpu_time::phase("kitchen.glide_tick");
             let started = std::time::Instant::now();
             harness.advance(std::time::Duration::from_micros(16_667));

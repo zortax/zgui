@@ -9,7 +9,7 @@ use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
 use zgui::vocab::{KeyEvent, NamedKey, PhysicalKey, PointerAction};
 
-use crate::input::{gliding, key, key_up, pointer, typing, wheel};
+use crate::input::{any_glide, key, key_up, pointer, typing, wheel};
 
 use crate::phase::Driver;
 
@@ -119,7 +119,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 });
                 let mut carried = 0;
                 let mut ran = 0;
-                while gliding(harness) && carried < 60 {
+                while any_glide(harness) && carried < 60 {
                     ran += interaction!(ticks, {
                         harness.advance(std::time::Duration::from_micros(16_667));
                         harness.pump()
