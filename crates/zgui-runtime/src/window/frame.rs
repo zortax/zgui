@@ -1682,6 +1682,9 @@ impl Window {
             mark("p.emit");
             let before = glyph_counts();
             let report = self.painter.emit(&input, &mut self.tables);
+            if let Some(sync) = self.painter.compositor() {
+                self.driven.write_animations(sync);
+            }
             transaction = self
                 .painter
                 .compositor()

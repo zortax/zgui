@@ -70,6 +70,12 @@ impl Tween {
         self.elapsed = Duration::ZERO;
     }
 
+    /// Returns how far along its way a smooth scroll is at `progress` of its duration, both from 0
+    /// to 1.
+    pub fn eased(progress: f32) -> f32 {
+        ease(progress.clamp(0.0, 1.0))
+    }
+
     /// Advances it by `elapsed`.
     pub fn advance(&mut self, elapsed: Duration) -> Step {
         self.elapsed = (self.elapsed + elapsed).min(Self::DURATION);

@@ -483,6 +483,9 @@ impl Window {
         if self.is_frozen(container) {
             return;
         }
+        if behavior.animates() && self.animate_on_compositor(container, to) {
+            return;
+        }
         let before = self.scroll.borrow().offset_of(container);
         let moved = {
             let layout = self.layout.borrow();

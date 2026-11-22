@@ -16,6 +16,7 @@
 //!
 //! Fragments outside the frame's damage are not visited, and their chunks stay as they are.
 
+mod animate;
 mod extent;
 mod flush;
 mod key;

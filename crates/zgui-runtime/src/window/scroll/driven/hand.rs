@@ -137,7 +137,7 @@ impl Window {
     ///
     /// A node that moves for the first time asks for a frame of the window too, which records the
     /// margin around its port before the compositor shows any of it.
-    fn moving(&mut self, node: compositor_types::ScrollId) {
+    pub(super) fn moving(&mut self, node: compositor_types::ScrollId) {
         let container = self.element_of_scroll(node);
         if let Some(container) = container {
             self.scroll.borrow_mut().halt(container);
@@ -165,7 +165,10 @@ impl Window {
     }
 
     /// Returns the scroll node the content of `container` is drawn through.
-    fn scroll_node_of(&mut self, container: NodeKey) -> Option<compositor_types::ScrollId> {
+    pub(super) fn scroll_node_of(
+        &mut self,
+        container: NodeKey,
+    ) -> Option<compositor_types::ScrollId> {
         let first = self.layout.borrow().boxes_of(container).first().copied()?;
         let tables = &self.tables;
         self.painter.compositor()?.scroll_node(tables, first)

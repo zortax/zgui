@@ -12,7 +12,7 @@ use zgui_platform::SurfaceEvent;
 use zgui_platform_headless::Harness;
 use zgui_profile::Counter;
 use zgui_runtime::Runtime;
-use zgui_view::{BuildCx, IntoView, View};
+use zgui_view::{BuildCx, IntoView, View, ViewHost};
 use zgui_vocab::{
     Modifiers, PointerAction, PointerEvent, PointerId, PointerKind, ScrollDelta, ScrollPhase,
     Timestamp, WheelEvent,
@@ -162,6 +162,55 @@ fn a_fling_over_recorded_rows_runs_no_frame_of_the_window_until_it_rests() {
         "the window ran frames during the fling, beyond the one that adopts where it rests"
     );
     assert!(offset(&harness) > 0.0, "the fling moved nothing");
+}
+
+#[test]
+fn a_smooth_scroll_is_animated_by_the_compositor_and_runs_no_frame_until_it_rests() {
+    let _turn = zgui_profile::counter::exclusive();
+    let clicked = Clicked::default();
+    let mut harness = listing(10, false, &clicked);
+    harness.settle(8);
+    let port = {
+        let window = harness.app().windows().first().expect("a window");
+        let layout = window.layout().borrow();
+        layout
+            .keys()
+            .into_iter()
+            .find(|key| zgui_layout::scroll_region::region_of(&layout, *key).is_some())
+            .and_then(|key| layout.node(key).source)
+            .expect("the fixture has a scroll container")
+    };
+
+    harness
+        .app()
+        .windows()
+        .first()
+        .expect("a window")
+        .host()
+        .scroll_to(
+            zgui_view_dom::id::to_view(port),
+            zgui_view::ScrollTarget::Offset(Point::new(
+                zgui_geom::DevicePx(0.0),
+                zgui_geom::DevicePx(60.0),
+            )),
+            zgui_view::ScrollBehavior::Smooth,
+        );
+    harness.settle(8);
+    let before = zgui_profile::counter::snapshot();
+    run(&mut harness, 60);
+    let moved = before.delta(&zgui_profile::counter::snapshot());
+
+    assert!(
+        moved.get(Counter::CompositorTicks) >= 10,
+        "the scroll presented {} frames of the compositor's",
+        moved.get(Counter::CompositorTicks)
+    );
+    assert!(
+        moved.get(Counter::ZguiFrames) <= 1,
+        "the window ran {} frames while the compositor animated the scroll",
+        moved.get(Counter::ZguiFrames)
+    );
+    assert_eq!(offset(&harness), 60.0, "the scroll did not arrive");
 }
 
 /// Flings a port of 40 rows under the style sheet `css`, with the pointer over the port when

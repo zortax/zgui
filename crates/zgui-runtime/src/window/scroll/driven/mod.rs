@@ -17,6 +17,7 @@
 //! - Input arrived, which is resolved against the offsets the compositor shows.
 
 mod adopt;
+mod animate;
 mod hand;
 mod hover;
 mod margin;
@@ -67,6 +68,9 @@ pub(crate) struct Driven {
     /// Whether the compositor's scrolling moved an element a `:hover` rule can match under the
     /// pointer or out from under it since the window's last frame.
     hover_owed: bool,
+    /// The smooth scrolls handed to the compositor that the next frame writes, each with the
+    /// offsets it runs from and to.
+    animations: Vec<(ScrollId, [[f32; 2]; 2])>,
 }
 
 /// The newest offset one node shows.
