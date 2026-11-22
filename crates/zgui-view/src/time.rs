@@ -458,6 +458,10 @@ mod never {
             None
         }
 
+        fn is_rtl(&self, _node: NodeId) -> bool {
+            false
+        }
+
         fn scale(&self) -> f32 {
             1.0
         }

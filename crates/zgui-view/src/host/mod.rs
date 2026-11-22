@@ -88,9 +88,7 @@ pub trait ViewHost {
     ///
     /// False for a node that is not styled. A control that maps a pointer onto its own axis, such
     /// as a slider, reads this to run from the right edge.
-    fn is_rtl(&self, _node: NodeId) -> bool {
-        false
-    }
+    fn is_rtl(&self, node: NodeId) -> bool;
 
     /// How many device pixels one CSS pixel is on this window's surface.
     ///

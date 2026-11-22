@@ -40,6 +40,8 @@ const SHEET: &str = "zui-slider";
 /// still leaves the slider and a shortcut aimed at the surface still reaches it — see
 /// [`key_move`].
 ///
+/// In a right-to-left slider the left arrow increases the value and the right arrow decreases it.
+///
 /// # Dragging
 ///
 /// A press anywhere on the track moves the value to that point and captures the pointer, so the
@@ -155,9 +157,10 @@ pub fn Slider(
                     return;
                 }
                 // In a right-to-left slider the left arrow moves towards the end.
+                let rtl = track.is_rtl();
                 let key = match &ev.key {
-                    Key::Named(NamedKey::ArrowLeft) if track.is_rtl() => Key::Named(NamedKey::ArrowRight),
-                    Key::Named(NamedKey::ArrowRight) if track.is_rtl() => Key::Named(NamedKey::ArrowLeft),
+                    Key::Named(NamedKey::ArrowLeft) if rtl => Key::Named(NamedKey::ArrowRight),
+                    Key::Named(NamedKey::ArrowRight) if rtl => Key::Named(NamedKey::ArrowLeft),
                     other => other.clone(),
                 };
                 let Some(asked) = key_move(&key, bound) else { return };
