@@ -223,6 +223,17 @@ impl NodeRef {
         }
     }
 
+    /// Asks for a frame of the window each time this scroll container's offset crosses a multiple
+    /// of `step` CSS pixels while the compositor scrolls it, or stops asking for `None`.
+    ///
+    /// See [`ViewHost::scroll_in_steps`](crate::ViewHost::scroll_in_steps). Nothing happens while
+    /// the handle is not bound.
+    pub fn scroll_in_steps(&self, step: Option<f32>) {
+        if let Some(bound) = self.bound() {
+            bound.host.scroll_in_steps(bound.node, step);
+        }
+    }
+
     /// Moves focus to this node.
     pub fn focus(&self) {
         if let Some(bound) = self.bound() {

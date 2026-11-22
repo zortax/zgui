@@ -133,6 +133,16 @@ pub trait ViewHost {
     /// inside surfaces keeps its own count and freezes on the first hold and thaws on the last.
     fn freeze_scrolling(&self, frozen: bool);
 
+    /// Asks for a frame of the window each time the offset of the scroll container `node` crosses
+    /// a multiple of `step` CSS pixels while the compositor scrolls the content without frames of
+    /// the window, or stops asking for `None`.
+    ///
+    /// The frame delivers the offset to the container's scroll observers. A host whose frames
+    /// follow every scroll does nothing.
+    fn scroll_in_steps(&self, node: NodeId, step: Option<f32>) {
+        let _ = (node, step);
+    }
+
     /// Moves focus to this node.
     fn focus(&self, node: NodeId);
 

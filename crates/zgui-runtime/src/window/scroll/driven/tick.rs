@@ -12,6 +12,21 @@ use crate::window::frame::FrameReport;
 use crate::window::scroll::driven::Shown;
 
 impl Window {
+    /// Reports whether `offset`, shown by the scroll node `node`, lies across a step of its
+    /// container from the offset the window holds.
+    fn crossed_a_step(&mut self, node: compositor_types::ScrollId, offset: [f32; 2]) -> bool {
+        let Some(container) = self.element_of_scroll(node) else {
+            return false;
+        };
+        let Some(step) = self.host.scroll_step(container) else {
+            return false;
+        };
+        let step = step * self.scale;
+        let held = self.scroll.borrow().offset_of(container);
+        let row = |at: f32| (at / step).floor();
+        row(offset[0]) != row(held.x.0) || row(offset[1]) != row(held.y.0)
+    }
+
     /// Asks for a frame that presents the compositor's scrolling, unless a frame was asked for.
     pub(crate) fn request_compositor_frame(&self) {
         if !self.awaiting_frame.get() && !self.driven.tick_owed.replace(true) {
@@ -70,10 +85,17 @@ impl Window {
     /// Takes the compositor's events, keeps the newest offset of every node, and asks for the
     /// frames that `drawn` and those offsets owe. Reports whether any node moved.
     ///
-    /// The window is asked for a frame when a node comes to rest, when a node is about to show
-    /// content the window has not recorded (its offset, or the offset two more steps of its
-    /// motion reach), and when a move changes what a `:hover` rule matches under the pointer. While the compositor moves anything, each built frame asks for the next one,
-    /// until one finds nothing to build.
+    /// The window is asked for a frame in these cases:
+    ///
+    /// - A node comes to rest.
+    /// - A node is about to show content the window has not recorded: its offset, or the offset
+    ///   two more steps of its motion reach.
+    /// - A node's offset crossed a step its container asked to be woken at, see
+    ///   [`ViewHost::scroll_in_steps`](zgui_view::ViewHost::scroll_in_steps).
+    /// - A move changes what a `:hover` rule matches under the pointer.
+    ///
+    /// While the compositor moves anything, each built frame asks for the next one, until one
+    /// finds nothing to build.
     pub(crate) fn take_scroll_events(&mut self, drawn: &Drawn) -> bool {
         let mut events = std::mem::take(&mut self.driven.events);
         self.compositor.take_events(&mut events);
@@ -100,6 +122,7 @@ impl Window {
                     settled,
                 },
             );
+            let crossed = self.crossed_a_step(node, offset);
             let active = self.driven.active.entry(node).or_default();
             let step = active
                 .last
@@ -107,7 +130,7 @@ impl Window {
             active.step = step;
             active.last = Some(offset);
             let ahead = [offset[0] + 2.0 * step[0], offset[1] + 2.0 * step[1]];
-            wake |= settled || !active.covers(offset) || !active.covers(ahead);
+            wake |= settled || !active.covers(offset) || !active.covers(ahead) || crossed;
         }
         self.driven.events = events;
         if wake {

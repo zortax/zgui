@@ -92,6 +92,7 @@ impl Virtualize {
     ) -> Self {
         let row_size = row_size.into();
         let scroll = viewport.observe_scroll();
+        on_cleanup_local(move || viewport.scroll_in_steps(None));
         Self {
             // A list torn down while its scroll position still moves can find the count or the
             // row height gone before the observation. Every input is read so that a gone one
@@ -111,6 +112,9 @@ impl Virtualize {
                 } else {
                     1.0
                 };
+                // A port the compositor moves wakes the window at every row, so each frame of
+                // its motion builds the row that arrived.
+                viewport.scroll_in_steps(Some(size));
                 window_ahead(
                     count,
                     size,
