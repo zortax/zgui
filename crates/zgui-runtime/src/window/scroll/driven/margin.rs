@@ -82,7 +82,11 @@ impl Window {
         let Anchoring::Content(port) = content.anchoring else {
             return None;
         };
-        let world = spatial.resolve(content.parent?)?;
+        // The content of the document's own scroll container hangs from the viewport.
+        let world = match content.parent {
+            Some(parent) => spatial.resolve(parent)?,
+            None => Matrix4::IDENTITY,
+        };
         let offset = [-content.local.columns[3][0], -content.local.columns[3][1]];
         let origin = [port.rect.origin.x.0, port.rect.origin.y.0];
         let size = [port.rect.size.width.0, port.rect.size.height.0];

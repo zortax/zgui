@@ -24,6 +24,8 @@ impl Window {
         }
         let (container, listened) = self.wheel_route(wheel);
         if listened {
+            // The frame decides who moves this gesture, so its later steps wait for that frame.
+            self.driven.owner = None;
             return false;
         }
         self.hand_scroll(container, wheel)
