@@ -218,11 +218,27 @@ impl Opened {
 
     /// Puts the pointer over the list.
     fn aim(&mut self) {
+        let at = self.pointer();
+        self.stage.move_to(at);
+    }
+
+    /// Where [`Opened::aim`] puts the pointer.
+    fn pointer(&self) -> Point<DevicePx, Device> {
         let side = self.rect(self.side);
-        self.stage.move_to(Point::new(
+        Point::new(
             DevicePx(side.origin.x.0 + 100.0),
             DevicePx(side.origin.y.0 + 150.0),
-        ));
+        )
+    }
+
+    /// The ghost row under the pointer, where the compositor shows it.
+    fn under_pointer(&self) -> Option<usize> {
+        let at = self.pointer();
+        self.rows.iter().position(|row| {
+            let rect = self.rect(*row);
+            (rect.origin.x.0..rect.origin.x.0 + rect.size.width.0).contains(&at.x.0)
+                && (rect.origin.y.0..rect.origin.y.0 + rect.size.height.0).contains(&at.y.0)
+        })
     }
 }
 
@@ -275,27 +291,38 @@ fn run(
     faults
 }
 
-/// Fails when any frame shows a ghost row in two colours, or more than one row lit.
+/// Fails when any frame shows a ghost row in two colours, or a row lit that was under the pointer
+/// neither in that frame nor in the one before, or leaves a row unlit that was under the pointer
+/// in both.
 #[test]
 fn rows_that_scroll_from_under_the_pointer_lose_their_hover() {
     hover_follows_the_pointer(Item::Rows);
 }
 
-/// The same, for rows whose hover colour eases in and out.
+/// Fails when any frame shows a row whose hover colour eases in and out in two colours, or more
+/// than one row lit.
 #[test]
 fn eased_rows_that_scroll_from_under_the_pointer_lose_their_hover() {
     hover_follows_the_pointer(Item::EasedRows);
 }
 
-/// Fails when any frame shows a row of `item` in two colours, or more than one row lit.
+/// Fails when any frame shows a row of `item` in two colours, or ghost rows whose hover is more
+/// than one frame behind the rows that move under the pointer.
+///
+/// The compositor moves the rows in frames the window does not run, so the hover lands one frame
+/// after the move that brought a row under the pointer. A row that eases its colour stays lit for
+/// a while after the hover left it, so only its colours and the count of lit rows are checked.
 fn hover_follows_the_pointer(item: Item) {
     let on = RwSignal::new(false);
     let Some(mut opened) = open(item, on) else {
         return;
     };
+    opened.aim();
+    let mut before = opened.under_pointer();
     let faults = run(&mut opened, on, |opened| {
         let mut faults = Vec::new();
-        let mut lit = 0;
+        let under = opened.under_pointer();
+        let mut lit = Vec::new();
         for (index, row) in opened.rows.iter().enumerate() {
             let Some(inner) = opened.inside(opened.rect(*row), 3.0) else {
                 continue;
@@ -303,7 +330,7 @@ fn hover_follows_the_pointer(item: Item) {
             let colours = opened.stage.composed_colours_in(inner);
             let (off, common) = spread(&colours);
             if common == HOVER {
-                lit += 1;
+                lit.push(index);
             }
             if off > 0 || (item == Item::Rows && common != SIDE && common != HOVER) {
                 faults.push(format!(
@@ -312,9 +339,29 @@ fn hover_follows_the_pointer(item: Item) {
                 ));
             }
         }
-        if lit > 1 {
-            faults.push(format!("{lit} rows lit"));
+        if item == Item::EasedRows {
+            if lit.len() > 1 {
+                faults.push(format!("{} rows lit", lit.len()));
+            }
+        } else {
+            if let Some(stray) = lit
+                .iter()
+                .find(|index| Some(**index) != under && Some(**index) != before)
+            {
+                faults.push(format!(
+                    "row {stray} is lit, under the pointer {under:?} and {before:?} a frame \
+                     earlier"
+                ));
+            }
+            if let Some(held) = under.filter(|row| Some(*row) == before)
+                && !lit.contains(&held)
+            {
+                faults.push(format!(
+                    "row {held} stayed under the pointer and is not lit"
+                ));
+            }
         }
+        before = under;
         faults
     });
     assert!(faults.is_empty(), "{}", faults.join("\n"));

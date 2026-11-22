@@ -33,8 +33,13 @@ type Clicked = Rc<RefCell<Vec<usize>>>;
 
 /// A port of `rows` rows with click listeners, followed by a blank gap when `gap` is set.
 fn listing(rows: usize, gap: bool, clicked: &Clicked) -> Harness<Runtime> {
+    listing_in(CSS, rows, gap, clicked)
+}
+
+/// The same under the style sheet `css`.
+fn listing_in(css: &str, rows: usize, gap: bool, clicked: &Clicked) -> Harness<Runtime> {
     let clicked = Rc::clone(clicked);
-    support::app_with_text(CSS, move |cx: &mut BuildCx<'_>| {
+    support::app_with_text(css, move |cx: &mut BuildCx<'_>| {
         let mut port = zgui_elements::column().class("port");
         for index in 0..rows {
             let reached = Rc::clone(&clicked);
@@ -110,6 +115,17 @@ fn offset(harness: &Harness<Runtime>) -> f32 {
         .fold(0.0, f32::max)
 }
 
+/// Moves the pointer over the port, and lets the frames that asks for run.
+fn hover_port(harness: &mut Harness<Runtime>) {
+    harness.deliver_to_first(SurfaceEvent::Pointer {
+        action: PointerAction::Moved,
+        event: PointerEvent::mouse(Point::new(CssPx(200.0), CssPx(60.0))),
+        modifiers: Modifiers::NONE,
+        timestamp: Timestamp::ORIGIN,
+    });
+    harness.settle(8);
+}
+
 /// Clicks at `y` CSS pixels, with no frame before the press.
 fn click(harness: &mut Harness<Runtime>, y: f32) {
     for action in [PointerAction::Pressed, PointerAction::Released] {
@@ -146,6 +162,68 @@ fn a_fling_over_recorded_rows_runs_no_frame_of_the_window_until_it_rests() {
         "the window ran frames during the fling, beyond the one that adopts where it rests"
     );
     assert!(offset(&harness) > 0.0, "the fling moved nothing");
+}
+
+/// Flings a port of 40 rows under the style sheet `css`, with the pointer over the port when
+/// `hovering` is set, and returns how many frames the window ran and how many rows passed under
+/// the pointer.
+fn fling_under(css: &str, hovering: bool) -> (u64, u64) {
+    let clicked = Clicked::default();
+    let mut harness = listing_in(css, 40, false, &clicked);
+    harness.settle(8);
+    if hovering {
+        hover_port(&mut harness);
+    }
+
+    fling(&mut harness, 8.0);
+    let from = offset(&harness);
+    let before = zgui_profile::counter::snapshot();
+    run(&mut harness, 120);
+    let moved = before.delta(&zgui_profile::counter::snapshot());
+
+    #[expect(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let rows = ((offset(&harness) - from) / 20.0).ceil() as u64 + 1;
+    (moved.get(Counter::ZguiFrames), rows)
+}
+
+#[test]
+fn a_fling_under_the_pointer_over_rows_no_hover_rule_matches_runs_no_frame_for_the_hover() {
+    let _turn = zgui_profile::counter::exclusive();
+    let (away, _) = fling_under(CSS, false);
+    let (over, rows) = fling_under(CSS, true);
+
+    assert!(
+        rows > 3,
+        "the fling moved {rows} rows under the pointer, too few to tell"
+    );
+    assert_eq!(
+        over, away,
+        "the window ran {over} frames with the pointer over rows no :hover rule matches, and \
+         {away} with the pointer away"
+    );
+}
+
+#[test]
+fn a_fling_under_the_pointer_wakes_the_window_at_most_once_per_row_a_hover_rule_matches() {
+    let _turn = zgui_profile::counter::exclusive();
+    let css = format!("{CSS} .row:hover {{ background-color: #404040 }}");
+    let (away, _) = fling_under(&css, false);
+    let (over, rows) = fling_under(&css, true);
+
+    assert!(
+        rows > 3,
+        "the fling moved {rows} rows under the pointer, too few to tell"
+    );
+    assert!(
+        over > away,
+        "the window ran {over} frames with the pointer over the rows and {away} with it away, \
+         so the hover never followed the rows"
+    );
+    assert!(
+        over - away <= rows,
+        "the hover woke the window {} times while {rows} rows passed under the pointer",
+        over - away
+    );
 }
 
 #[test]

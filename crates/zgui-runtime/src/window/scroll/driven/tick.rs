@@ -70,9 +70,9 @@ impl Window {
     /// Takes the compositor's events, keeps the newest offset of every node, and asks for the
     /// frames that `drawn` and those offsets owe. Reports whether any node moved.
     ///
-    /// The window is asked for a frame when a node comes to rest, or when a node is about to show
-    /// content the window has not recorded: its offset, or the offset two more steps of its
-    /// motion reach. While the compositor moves anything, each built frame asks for the next one,
+    /// The window is asked for a frame when a node comes to rest, when a node is about to show
+    /// content the window has not recorded (its offset, or the offset two more steps of its
+    /// motion reach), and when a move changes what a `:hover` rule matches under the pointer. While the compositor moves anything, each built frame asks for the next one,
     /// until one finds nothing to build.
     pub(crate) fn take_scroll_events(&mut self, drawn: &Drawn) -> bool {
         let mut events = std::mem::take(&mut self.driven.events);
@@ -112,6 +112,9 @@ impl Window {
         self.driven.events = events;
         if wake {
             self.request_frame();
+        }
+        if scrolled {
+            self.wake_for_hover();
         }
         // A frame that found nothing to build and no change to come ends the motion.
         self.driven.moving &= drawn.built || drawn.wake_ns.is_some();

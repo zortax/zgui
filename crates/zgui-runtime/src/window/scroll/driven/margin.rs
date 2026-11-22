@@ -4,7 +4,8 @@
 //! scrollable edge, so the paint walk records the content there and keeps it current. The offsets
 //! at which the port shows only that content are then vouched for. Past the margin's edge they
 //! stop where the walk painted nothing, unless the margin reached the end of the content: a row
-//! that does not exist yet is not recorded.
+//! that does not exist yet is not recorded. Nothing painted between the painted content and an end
+//! the margin reaches counts as blank, so content left unbuilt there is shown blank.
 
 use compositor_types::ScrollId;
 use zgui_geom::{Device, Matrix4, Point, Rect, Size};

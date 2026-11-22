@@ -8,12 +8,22 @@ use zgui_profile::{Counter, counter};
 use crate::window::Window;
 
 impl Window {
-    /// Puts every container the compositor scrolled at the offset it shows, and reports whether
-    /// any moved.
+    /// Puts every container the compositor scrolled at the offset it shows.
     ///
     /// The frame's commit acknowledges each adopted event, which changes no pixel. A node that
-    /// came to rest stops being one the compositor moves.
-    pub(crate) fn adopt_compositor_scroll(&mut self) -> bool {
+    /// came to rest stops being one the compositor moves. When a container moved, the offsets are
+    /// composed before input is routed and before the hover is moved, see
+    /// [`Window::compose_for_input`].
+    pub(crate) fn adopt_compositor_scroll(&mut self) {
+        if self.adopt_offsets() {
+            self.compose_for_input();
+        }
+        self.driven.hover_owed = false;
+    }
+
+    /// Puts every container the compositor scrolled at the offset it shows, and reports whether
+    /// any moved.
+    fn adopt_offsets(&mut self) -> bool {
         if self.driven.shown.is_empty() {
             return false;
         }
@@ -56,6 +66,14 @@ impl Window {
     ///
     /// The window takes these offsets over at its next frame.
     pub fn scrolls_ahead(&self) -> Vec<(zgui_view::NodeId, Size<DevicePx, Device>)> {
+        self.ahead()
+            .into_iter()
+            .map(|(container, ahead)| (zgui_view_dom::id::to_view(container), ahead))
+            .collect()
+    }
+
+    /// Returns the containers of [`Window::scrolls_ahead`], by their document keys.
+    pub(super) fn ahead(&self) -> Vec<(zgui_dom::NodeKey, Size<DevicePx, Device>)> {
         let Some(sync) = self.painter.compositor_ref() else {
             return Vec::new();
         };
@@ -71,7 +89,7 @@ impl Window {
                     DevicePx(shown.offset[0] - at.x.0),
                     DevicePx(shown.offset[1] - at.y.0),
                 );
-                Some((zgui_view_dom::id::to_view(container), ahead))
+                Some((container, ahead))
             })
             .collect()
     }
@@ -93,9 +111,11 @@ impl Window {
             })
     }
 
-    /// Composes the adopted offsets before input is routed, so a hit test reads what the
-    /// compositor shows.
-    pub(crate) fn compose_for_input(&mut self) {
+    /// Composes the adopted offsets before input is routed and before the hover is moved, so a
+    /// hit test reads what the compositor shows.
+    ///
+    /// The hover moves here, before the frame's restyle, which then shows it.
+    fn compose_for_input(&mut self) {
         let routes = self.queued.iter().any(|queued| {
             matches!(
                 queued.event,
@@ -103,12 +123,16 @@ impl Window {
                     | zgui_platform::SurfaceEvent::Wheel { .. }
             )
         });
-        if !routes {
+        let hovering = self.router.pointers().all().next().is_some();
+        if !routes && !hovering {
             return;
         }
         self.restyle();
         self.update_text_brushes();
         self.build_boxes();
         self.lay_out();
+        if hovering {
+            self.rehit_if_moved();
+        }
     }
 }

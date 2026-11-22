@@ -124,7 +124,8 @@ pub const MAX_EXTENT: f32 = 4_000_000.0;
 ///
 /// `viewport` is how tall the scrollport is and `offset` how far it has been scrolled, both in CSS
 /// pixels. `overscan` is how many rows to build beyond each edge, which is what stops a fast scroll
-/// showing a band of nothing before the next frame catches up.
+/// showing a band of nothing before the next frame catches up. The rows between the window and an
+/// end of the list are built too when they are shorter than the viewport.
 ///
 /// # The two degenerate inputs
 ///
@@ -231,6 +232,18 @@ pub fn window(
         .saturating_add(visible)
         .saturating_add(overscan)
         .min(rows);
+    // A spacer shorter than the port is built as rows, so the port never shows an end of the
+    // list the rows do not reach.
+    let first = if first as f32 * row_size < viewport {
+        0
+    } else {
+        first
+    };
+    let end = if (rows - end) as f32 * row_size < viewport {
+        rows
+    } else {
+        end
+    };
     let count = end - first;
 
     VirtualWindow {
@@ -285,6 +298,15 @@ mod tests {
     use super::{VirtualWindow, window, window_ahead};
 
     #[test]
+    fn a_spacer_shorter_than_the_port_is_built_as_rows() {
+        let near = window(10_000, 20.0, 400.0, 400.0, 2);
+        assert_eq!(near.first, 0, "a lead of 360 pixels is built");
+        let end = window(10_000, 20.0, 400.0, 199_200.0, 2);
+        assert_eq!(end.end(), 10_000, "a trail of 340 pixels is built");
+        assert_eq!(end.trail, 0.0);
+    }
+
+    #[test]
     fn a_moving_port_builds_the_rows_its_motion_reaches() {
         let still = window(1_000, 20.0, 400.0, 10_000.0, 2);
         let up = window_ahead(1_000, 20.0, 400.0, 10_000.0, 2, -100.0);
@@ -292,7 +314,11 @@ mod tests {
         assert_eq!(up.end(), still.end());
         assert_eq!(up.lead, up.first as f32 * 20.0);
         let far = window_ahead(1_000, 20.0, 400.0, 10_000.0, 2, -10_000.0);
-        assert_eq!(far.first, still.first - 20, "the motion counts up to one port");
+        assert_eq!(
+            far.first,
+            still.first - 20,
+            "the motion counts up to one port"
+        );
     }
 
     #[test]
@@ -325,10 +351,10 @@ mod tests {
 
     #[test]
     fn scrolling_less_than_one_row_does_not_move_the_window() {
-        let before = window(10_000, 20.0, 400.0, 400.0, 2);
-        let after = window(10_000, 20.0, 400.0, 419.0, 2);
+        let before = window(10_000, 20.0, 400.0, 4_000.0, 2);
+        let after = window(10_000, 20.0, 400.0, 4_019.0, 2);
         assert_eq!(before, after, "a sub-row scroll rebuilds nothing");
-        let next = window(10_000, 20.0, 400.0, 420.0, 2);
+        let next = window(10_000, 20.0, 400.0, 4_020.0, 2);
         assert_eq!(
             next.first,
             before.first + 1,

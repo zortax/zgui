@@ -174,6 +174,23 @@ impl DocumentStore {
         mask
     }
 
+    /// Reports whether any active selector could match `index` on one of the bits of `state`.
+    ///
+    /// The answer comes from [`DocumentStore::states_for`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `index` names no live node of this document.
+    pub fn watches(
+        &mut self,
+        index: NodeIndex,
+        filter: &dyn StyleFilter,
+        state: zgui_vocab::UiState,
+    ) -> bool {
+        self.states_for(index, filter)
+            .intersects(crate::node::element::state::to_engine(state))
+    }
+
     /// Forgets `index`'s cached state mask.
     ///
     /// Called from inside the write that changes the element's identity, never afterwards: the

@@ -99,6 +99,7 @@ mod tests {
             offset: Point::new(DevicePx(0.0), DevicePx(offset)),
             content_size: Size::new(DevicePx(port), DevicePx(content)),
             scrollport: Size::new(DevicePx(port), DevicePx(port)),
+            ..ScrollPosition::default()
         }
     }
 
@@ -127,6 +128,7 @@ mod tests {
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
             content_size: Size::new(DevicePx(2000.0), DevicePx(100.0)),
             scrollport: Size::new(DevicePx(500.0), DevicePx(100.0)),
+            ..ScrollPosition::default()
         };
         assert!(!wide.is_at_end_horizontally());
         assert!(wide.is_at_end_vertically());

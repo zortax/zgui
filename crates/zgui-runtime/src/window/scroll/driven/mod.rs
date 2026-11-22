@@ -5,17 +5,20 @@
 //! moves. The compositor reports each offset it shows as an event. The window adopts the newest
 //! one at the start of its next frame, and that frame's commit acknowledges it.
 //!
-//! The window wakes for one of three reasons:
+//! The window wakes for one of four reasons:
 //!
 //! - The compositor is about to show content the window has not recorded. While a node moves, the
 //!   window records a margin of content around its port, so it wakes once per margin and not per
 //!   frame. A virtualised list that recycles its rows has recorded no rows past its own window,
 //!   so its rows end the margin early and it wakes at the row that needs building.
 //! - The node came to rest, so hit testing, accessibility and scroll listeners catch up.
+//! - The content moved an element a `:hover` rule can match under the pointer or out from under
+//!   it, so the hover lands one frame after the compositor showed the move.
 //! - Input arrived, which is resolved against the offsets the compositor shows.
 
 mod adopt;
 mod hand;
+mod hover;
 mod margin;
 mod tick;
 
@@ -54,6 +57,12 @@ pub(crate) struct Driven {
     events: Vec<CompositorEvent>,
     /// The gestures to hand to the compositor before it builds its next frame.
     handed: Vec<compositor_types::ScrollGesture>,
+    /// Whether a `:hover` rule can match an element inside each container, as of the window's
+    /// last frame.
+    sensitive: FxHashMap<zgui_dom::NodeKey, bool>,
+    /// Whether the compositor's scrolling moved an element a `:hover` rule can match under the
+    /// pointer or out from under it since the window's last frame.
+    hover_owed: bool,
 }
 
 /// The newest offset one node shows.
@@ -108,6 +117,7 @@ impl Driven {
     pub(crate) fn frame_started(&mut self) {
         self.tick_owed.set(false);
         self.due = None;
+        self.sensitive.clear();
     }
 }
 

@@ -342,9 +342,7 @@ impl Window {
         self.gate.begin_frame();
         self.document.borrow().begin_frame();
         // Before the input, so a hit test reads the offsets the compositor shows.
-        if self.adopt_compositor_scroll() {
-            self.compose_for_input();
-        }
+        self.adopt_compositor_scroll();
 
         // The starvation probe. The retry deadline this frame was woken at is the one attempt the
         // latch allows, so the frame runs unlatched — its present is the probe — and the next
@@ -521,11 +519,7 @@ impl Window {
         // appeared or went wrote the hit index, and a frame that wrote nothing there leaves the
         // pointer over exactly what it was over.
         mark("f.rehit");
-        if self.hit.generation() != self.rehit_seen {
-            self.rehit_seen = self.hit.generation();
-            counter::bump(Counter::HitRetests);
-            self.rehit();
-        }
+        self.rehit_if_moved();
         // After layout, because where a caret goes is a question about the lines this frame
         // produced; before the paint, because what it damages has to be in the set the emit walk
         // is gated on. A caret that blinked moves no fragment at all, so nothing else in the frame
@@ -1492,6 +1486,16 @@ impl Window {
                     .outside_content(id)
                     .is_none_or(|outside| moved.binary_search(&outside).is_ok())
             });
+        }
+    }
+
+    /// Re-tests what is under a pointer that has not moved, when the hit index changed since the
+    /// last test.
+    pub(crate) fn rehit_if_moved(&mut self) {
+        if self.hit.generation() != self.rehit_seen {
+            self.rehit_seen = self.hit.generation();
+            counter::bump(Counter::HitRetests);
+            self.rehit();
         }
     }
 
