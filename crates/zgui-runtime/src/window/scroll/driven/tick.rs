@@ -40,7 +40,7 @@ impl Window {
         self.driven.tick_owed.set(false);
         self.driven.due = None;
         counter::bump(Counter::CompositorTicks);
-        let outcome = if self.occluded || self.starved {
+        let outcome = if self.occluded {
             FrameOutcome::Skipped(SkipReason::Occluded)
         } else {
             self.draw_output(clock.timestamp()).outcome

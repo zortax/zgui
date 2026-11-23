@@ -1,5 +1,7 @@
 //! Hover under content the compositor moves.
 
+use compositor_api::OffsetRange;
+use compositor_types::ScrollId;
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_vocab::{PointerId, UiState};
@@ -42,6 +44,55 @@ impl Window {
         }
     }
 
+    /// Returns the offsets of the scroll node `node` at which the element under the pointer stays
+    /// under it, when a `:hover` rule can match an element inside the content the node scrolls.
+    ///
+    /// Returns `None` when no rule can match there, when the pointer is captured or outside the
+    /// window, and when it is over no element inside the content.
+    pub(super) fn hover_range(&mut self, node: ScrollId) -> Option<OffsetRange> {
+        if !self.router.capture().is_empty() {
+            return None;
+        }
+        let at = self.router.pointers().position_of(PointerId::MOUSE)?;
+        let container = self.element_of_scroll(node)?;
+        if !self.hover_sensitive(container) {
+            return None;
+        }
+        let offset = self.scroll.borrow().offset_of(container);
+        let document = self.document.borrow();
+        let layout = self.layout.borrow();
+        let filter = self.engine.filter();
+        let world = zgui_input::World {
+            document: &document,
+            layout: &layout,
+            hit: &self.hit,
+            clips: &self.tables.clips,
+            spatial: &self.tables.spatial,
+            scale: zgui_geom::Scale::new(self.scale),
+            filter: &filter,
+        };
+        let under = world.chain_at(at);
+        let path = under.path();
+        let inside = path.iter().position(|key| *key == container)?;
+        let leaf = *path.get(inside + 1..)?.last()?;
+        let first = layout.boxes_of(leaf).first().copied()?;
+        let placed = zgui_layout::fragment::transform::placed::window_box(
+            &layout,
+            first,
+            &self.host.placements(),
+        )?;
+        // The leaf stays under the pointer while the content moves by less than the distance
+        // from the pointer to the leaf's edges, which holds its low edge and not its high one.
+        let low = [placed.origin.x.0 - at.x.0, placed.origin.y.0 - at.y.0];
+        let size = [placed.size.width.0, placed.size.height.0];
+        let shown = [offset.x.0, offset.y.0];
+        let bounds = [0, 1].map(|axis| {
+            let from = shown[axis] + low[axis];
+            [from, (from + size[axis]).next_down()]
+        });
+        Some(OffsetRange { bounds, ahead: 0.0 })
+    }
+
     /// Reports whether a `:hover` rule can match an element inside `container`.
     ///
     /// The answer is kept until the window's next frame.
@@ -52,29 +103,25 @@ impl Window {
         let sensitive = {
             let filter = self.engine.filter();
             let document = self.document.borrow();
-            document
-                .edit(&filter, |edit| {
-                    let start = edit.document().store().index_of(container);
-                    let mut stack: Vec<_> = start
-                        .and_then(|index| edit.document().store().core(index).first_child())
-                        .into_iter()
-                        .collect();
-                    while let Some(index) = stack.pop() {
-                        let core = edit.document().store().core(index);
-                        let (element, sibling, child) = (
-                            core.kind() == zgui_dom::NodeKind::Element,
-                            core.next_sibling(),
-                            core.first_child(),
-                        );
-                        if element && edit.watches(index, UiState::HOVER) {
-                            return true;
-                        }
-                        stack.extend(sibling);
-                        stack.extend(child);
-                    }
-                    false
-                })
-                .unwrap_or(true)
+            let store = document.store();
+            let mut stack: Vec<_> = store
+                .index_of(container)
+                .and_then(|index| store.core(index).first_child())
+                .into_iter()
+                .collect();
+            let mut found = false;
+            while let Some(index) = stack.pop() {
+                let core = store.core(index);
+                if core.kind() == zgui_dom::NodeKind::Element
+                    && store.watches(index, &filter, UiState::HOVER)
+                {
+                    found = true;
+                    break;
+                }
+                stack.extend(core.next_sibling());
+                stack.extend(core.first_child());
+            }
+            found
         };
         self.driven.sensitive.insert(container, sensitive);
         sensitive

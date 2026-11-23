@@ -22,6 +22,7 @@ use crate::select::DriverKind;
 /// - `local`, the default, runs it on the test's own thread.
 /// - `threaded` runs it on a thread of its own, and waits for the driver after every step, so a
 ///   test reads each frame as it would in process.
+/// - `paced` runs it on a thread of its own at the display's rate, see [`self_paced`].
 ///
 /// # Panics
 ///
@@ -35,7 +36,13 @@ pub fn driver(compositor: Box<dyn Compositor>) -> Box<dyn CompositorClient> {
                 ThreadedCompositor::spawn_with(compositor, DriverOptions::stepped());
             Box::new(Synced(owner))
         }
+        DriverKind::Paced => self_paced(compositor),
     }
+}
+
+/// Returns `compositor` on a thread of its own that builds its frames at the display's rate.
+pub fn self_paced(compositor: Box<dyn Compositor>) -> Box<dyn CompositorClient> {
+    Box::new(ThreadedCompositor::spawn(compositor).0)
 }
 
 /// Returns a factory of the renderer `make` builds, on the thread that draws the output.

@@ -38,8 +38,19 @@ fn listing(rows: usize, gap: bool, clicked: &Clicked) -> Harness<Runtime> {
 
 /// The same under the style sheet `css`.
 fn listing_in(css: &str, rows: usize, gap: bool, clicked: &Clicked) -> Harness<Runtime> {
+    listing_over(support::client(), css, rows, gap, clicked)
+}
+
+/// The same over a compositor the driver `client` runs.
+fn listing_over(
+    client: Box<dyn compositor_api::CompositorClient>,
+    css: &str,
+    rows: usize,
+    gap: bool,
+    clicked: &Clicked,
+) -> Harness<Runtime> {
     let clicked = Rc::clone(clicked);
-    support::app_with_text(css, move |cx: &mut BuildCx<'_>| {
+    support::app_with_text_over(client, css, move |cx: &mut BuildCx<'_>| {
         let mut port = zgui_elements::column().class("port");
         for index in 0..rows {
             let reached = Rc::clone(&clicked);
@@ -155,6 +166,41 @@ fn a_fling_over_recorded_rows_runs_no_frame_of_the_window_until_it_rests() {
         moved.get(Counter::CompositorTicks) >= 10,
         "the fling presented {} frames of the compositor's",
         moved.get(Counter::CompositorTicks)
+    );
+    assert_eq!(
+        moved.get(Counter::ZguiFrames),
+        1,
+        "the window ran frames during the fling, beyond the one that adopts where it rests"
+    );
+    assert!(offset(&harness) > 0.0, "the fling moved nothing");
+}
+
+/// Pumps `harness` for `wait` of real time, for a driver that builds its frames on its own.
+fn wait_for_driver(harness: &mut Harness<Runtime>, wait: Duration) {
+    let until = std::time::Instant::now() + wait;
+    while std::time::Instant::now() < until {
+        std::thread::sleep(Duration::from_millis(2));
+        harness.pump();
+    }
+}
+
+#[test]
+fn a_fling_on_a_compositor_that_paces_itself_runs_no_frame_of_the_window_until_it_rests() {
+    let _turn = zgui_profile::counter::exclusive();
+    let clicked = Clicked::default();
+    let paced = zgui_testkit_compositor::self_paced(support::compositor());
+    let mut harness = listing_over(paced, CSS, 10, false, &clicked);
+    wait_for_driver(&mut harness, Duration::from_millis(100));
+
+    fling(&mut harness, 8.0);
+    let before = zgui_profile::counter::snapshot();
+    wait_for_driver(&mut harness, Duration::from_millis(1500));
+    let moved = before.delta(&zgui_profile::counter::snapshot());
+
+    assert_eq!(
+        moved.get(Counter::CompositorTicks),
+        0,
+        "the window woke for frames the compositor built on its own"
     );
     assert_eq!(
         moved.get(Counter::ZguiFrames),

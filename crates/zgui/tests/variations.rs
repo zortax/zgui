@@ -50,6 +50,7 @@ fn drawn() -> Drawing {
         .with_size(300.0, 200.0)
         .with_fonts(fonts)
         .with_stylesheet(SHEET)
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_compositor_renderer(Box::new(move |_size| {
             Box::new(screen.take().unwrap_or_default()) as Box<dyn compositor_api::Renderer>
         }))

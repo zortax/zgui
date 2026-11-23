@@ -61,6 +61,7 @@ fn a_root_component_called_app_does_not_take_over_the_entry_point() -> Result<()
         .with_application_id("dev.zgui.RootNamedApp")
         .with_size(200.0, 120.0)
         .with_stylesheet(":root { background-color: #101216; display: block }")
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_compositor_renderer(Box::new(move |_size| {
             Box::new(screen.take().expect("the application opens one window"))
                 as Box<dyn compositor_api::Renderer>

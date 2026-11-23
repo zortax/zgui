@@ -28,6 +28,8 @@ pub(crate) struct Client {
     shown: bool,
     /// Whether a commit was queued since the last frame drawn for the output.
     awaiting: bool,
+    /// The clock the driver was last stepped with, for a stepped driver.
+    stepped: std::cell::Cell<Option<FrameClock>>,
 }
 
 impl Client {
@@ -56,6 +58,7 @@ impl Client {
             events: Vec::new(),
             shown: false,
             awaiting: false,
+            stepped: std::cell::Cell::new(None),
         };
         if opened.status().is_some_and(|status| status.failed) {
             return Err(opened.answers().failed.unwrap_or_default());
@@ -102,6 +105,19 @@ impl Client {
     /// Returns the newest snapshot of the output and its renderer.
     pub(crate) fn status(&self) -> Option<OutputStatus> {
         self.shared.driver.borrow().output_status(self.output)
+    }
+
+    /// Returns when the driver latches its next frame on the frame clock, or `None` when no output
+    /// wants one.
+    ///
+    /// A stepped driver on a thread of its own may not have published the step it was last given,
+    /// so a frame due by that step is due one interval after it.
+    pub(crate) fn next_due(&self) -> Option<u64> {
+        let due = self.stats().next_due_ns?;
+        Some(match self.stepped.get() {
+            Some(clock) if due <= clock.now_ns => clock.now_ns + clock.interval_ns.max(1),
+            _ => due,
+        })
     }
 
     /// Returns the newest snapshot of the driver and its compositor.
@@ -285,7 +301,10 @@ impl Client {
     pub(crate) fn run_due(&self, clock: FrameClock) {
         let mut driver = self.shared.driver.borrow_mut();
         match driver.pacing() {
-            DriverPacing::Stepped => driver.step(clock),
+            DriverPacing::Stepped => {
+                driver.step(clock);
+                self.stepped.set(Some(clock));
+            }
             DriverPacing::Pumped => driver.pump(),
             DriverPacing::SelfPaced => {}
         }

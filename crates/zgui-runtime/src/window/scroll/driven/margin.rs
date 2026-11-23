@@ -134,9 +134,14 @@ impl Window {
     /// Sets the watch of the scroll node `node`, whose port shows only recorded content at the
     /// offsets `vouched`.
     ///
-    /// The watch wakes the window when the node comes to rest, when its offset two motion steps
-    /// ahead leaves `vouched`, and when its offset one step ahead leaves the offsets its
-    /// container's rows hold, see [`ViewHost::wake_outside`](zgui_view::ViewHost::wake_outside).
+    /// The watch wakes the window in these cases:
+    ///
+    /// - The node comes to rest.
+    /// - Its offset two motion steps ahead leaves `vouched`.
+    /// - Its offset one step ahead leaves the offsets its container's rows hold, see
+    ///   [`ViewHost::wake_outside`](zgui_view::ViewHost::wake_outside).
+    /// - It moves the element under the pointer out from under it, when a `:hover` rule can
+    ///   match an element in its content.
     pub(crate) fn watch_motion(&mut self, node: ScrollId, vouched: Span) {
         let mut ranges = SmallVec::new();
         ranges.push(OffsetRange {
@@ -156,6 +161,7 @@ impl Window {
                 ahead: 1.0,
             });
         }
+        ranges.extend(self.hover_range(node));
         self.compositor.watch_scroll(
             node,
             Some(ScrollWatch {

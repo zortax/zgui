@@ -18,6 +18,8 @@ pub enum DriverKind {
     Local,
     /// `compositor-thread`'s driver on a thread of its own.
     Threaded,
+    /// `compositor-thread`'s driver on a thread of its own, building frames at the display's rate.
+    Paced,
 }
 
 /// A renderer implementation.
@@ -66,7 +68,7 @@ impl DriverKind {
     ///
     /// # Errors
     ///
-    /// Fails when the variable holds a value other than `local` or `threaded`.
+    /// Fails when the variable holds a value other than `local`, `threaded` or `paced`.
     pub fn from_environment() -> Result<Self, Unavailable> {
         Self::parse(read("ZGUI_DRIVER").as_deref())
     }
@@ -75,15 +77,16 @@ impl DriverKind {
     ///
     /// # Errors
     ///
-    /// Fails when `value` is other than `local` or `threaded`.
+    /// Fails when `value` is other than `local`, `threaded` or `paced`.
     pub fn parse(value: Option<&str>) -> Result<Self, Unavailable> {
         match value {
             None | Some("local") => Ok(Self::Local),
             Some("threaded") => Ok(Self::Threaded),
+            Some("paced") => Ok(Self::Paced),
             Some(other) => Err(Unavailable::unknown(
                 "ZGUI_DRIVER",
                 other,
-                "local, threaded",
+                "local, threaded, paced",
             )),
         }
     }

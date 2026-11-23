@@ -124,7 +124,6 @@ pub use crate::timer::Timers;
 pub use crate::wake::{FrameGate, RuntimeWaker};
 pub use crate::window::anim::cadence::AnimationCadence;
 pub use crate::window::frame::FrameReport;
-pub use crate::window::present::PresentPace;
 pub use crate::window::resize::ResizePace;
 pub use crate::window::text_aa::TextAntialiasing;
 pub use crate::window::{MAINTENANCE_DELAY, Window, WindowContent};

@@ -14,7 +14,9 @@ pub struct Windows;
 
 thread_local! {
     /// The device the renderers built on this thread draw on.
-    static GRAPHICS: SharedGraphics = SharedGraphics::new();
+    // Leaked, because the renderers it opened can outlive the thread's other locals, and dropping
+    // the device after them panics at thread exit.
+    static GRAPHICS: &'static SharedGraphics = Box::leak(Box::new(SharedGraphics::new()));
 }
 
 /// When a window's frames are handed to the platform.

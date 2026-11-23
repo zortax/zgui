@@ -169,6 +169,7 @@ fn run_with(transparent: bool, antialiasing: zgui::TextAntialiasing, sheet: &str
         .with_transparent(transparent)
         .with_text_antialiasing(antialiasing)
         .with_stylesheet(sheet)
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_compositor_renderer(Box::new(factory))
         .run_on(drive, || {
             view! {

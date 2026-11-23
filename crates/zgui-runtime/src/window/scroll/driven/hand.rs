@@ -148,7 +148,10 @@ impl Window {
         match routing {
             ScrollRouting::Handled { node, .. } => self.moving(node),
             ScrollRouting::Unhandled => {
-                if self.driven.first_move == Some(gesture)
+                if self
+                    .driven
+                    .first_move
+                    .is_some_and(|first| same_step(first, gesture))
                     && self.driven.owner == Some(Owner::Compositor)
                 {
                     self.driven.owner = Some(Owner::Window);
@@ -258,4 +261,11 @@ fn continues(phase: ScrollPhase) -> bool {
         phase,
         ScrollPhase::Moved | ScrollPhase::Ended | ScrollPhase::Momentum
     )
+}
+
+/// Reports whether `a` and `b` are the same step of a gesture.
+///
+/// A driver that paces itself stamps a gesture with its own clock, so the times are not compared.
+fn same_step(a: ScrollGesture, b: ScrollGesture) -> bool {
+    a.position == b.position && a.delta == b.delta && a.phase == b.phase && a.source == b.source
 }

@@ -105,7 +105,10 @@ struct GraphicsOptions {
 
 thread_local! {
     /// The device every renderer built on this thread draws on.
-    static GRAPHICS: std::cell::OnceCell<SharedGraphics> = const { std::cell::OnceCell::new() };
+    // Leaked, because the renderers it opened can outlive the thread's other locals, and dropping
+    // the device after them panics at thread exit.
+    static GRAPHICS: std::cell::OnceCell<&'static SharedGraphics> =
+        const { std::cell::OnceCell::new() };
 }
 
 /// Returns the device every renderer built on this thread shares, opened with `options` by the
@@ -114,9 +117,12 @@ fn graphics(options: &GraphicsOptions) -> SharedGraphics {
     GRAPHICS.with(|graphics| {
         graphics
             .get_or_init(|| {
-                SharedGraphics::new()
-                    .with_options(options.pipelines.clone(), Some(Arc::clone(&options.marks)))
+                Box::leak(Box::new(SharedGraphics::new().with_options(
+                    options.pipelines.clone(),
+                    Some(Arc::clone(&options.marks)),
+                )))
             })
+            .clone()
             .clone()
     })
 }

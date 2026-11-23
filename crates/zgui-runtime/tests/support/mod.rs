@@ -46,7 +46,19 @@ pub fn app_with_text<V>(css: &str, view: V) -> Harness<Runtime>
 where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 {
-    Harness::new(text_handler(css, view, compositor()))
+    Harness::new(text_handler(css, view, client()))
+}
+
+/// The same, over a compositor the driver `client` runs.
+pub fn app_with_text_over<V>(
+    client: Box<dyn CompositorClient>,
+    css: &str,
+    view: V,
+) -> Harness<Runtime>
+where
+    V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
+{
+    Harness::new(text_handler(css, view, client))
 }
 
 /// The same again, over a platform the caller has already configured.
@@ -62,7 +74,7 @@ pub fn app_with_text_on<V>(
 where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 {
-    Harness::over(platform, text_handler(css, view, compositor()))
+    Harness::over(platform, text_handler(css, view, client()))
 }
 
 /// The same over a compositor without the compositor-driven tier, so the window scrolls with its
@@ -76,7 +88,7 @@ where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 {
     let compositor = zgui_testkit_compositor::tierless(compositor());
-    Harness::over(platform, text_handler(css, view, compositor))
+    Harness::over(platform, text_handler(css, view, driver(compositor)))
 }
 
 /// The application itself: the fixed face, the rasteriser, and the recording renderer.
@@ -85,7 +97,7 @@ where
 /// the advance of a cluster, the ascent a glyph is drawn above the baseline, the extent of its
 /// pixels — is then computable by hand, so a test can say where a glyph *must* land instead of
 /// recording where it happened to.
-fn text_handler<V>(css: &str, view: V, compositor: Box<dyn Compositor>) -> Runtime
+fn text_handler<V>(css: &str, view: V, compositor: Box<dyn CompositorClient>) -> Runtime
 where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
 {
@@ -93,7 +105,7 @@ where
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_compositor(driver(compositor))
+        .with_compositor(compositor)
         .with_renderer(Box::new(screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))

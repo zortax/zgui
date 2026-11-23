@@ -22,7 +22,6 @@ pub mod frame;
 pub mod input;
 pub mod observe;
 pub mod pointer_text;
-pub mod present;
 pub mod probe;
 pub mod query;
 pub mod resize;
@@ -58,14 +57,6 @@ use zgui_view_dom::DocumentDom;
 use crate::binding::{HostBinding, NoBinding};
 use crate::host::RuntimeHost;
 use crate::text::TextEngine;
-
-/// What the first starvation probe waits, which is also what the graphics API's acquisition is
-/// willing to block — so the first probe costs at most one such block per second.
-pub(crate) const STARVE_BACKOFF_START: Duration = Duration::from_secs(1);
-
-/// The most a starvation probe waits. A cap because the probe is also what recovers a *visible*
-/// window from a compositor hiccup no event announces the end of.
-pub(crate) const STARVE_BACKOFF_CAP: Duration = Duration::from_secs(16);
 
 /// How long after its last normal frame a window waits before it trims idle resources.
 pub const MAINTENANCE_DELAY: Duration = Duration::from_secs(2);
@@ -443,43 +434,14 @@ pub struct Window {
     configured: u64,
     /// How many offered frames were refused because the reconfiguration they owed was too early.
     declined: u64,
-    /// When a frame that has been asked for is allowed to start.
-    present: crate::window::present::PresentPace,
     /// The output refresh rate last reported, so a change in it is logged once rather than per
     /// frame. `None` inside the option is a backend that reports no rate at all.
     reported_rate: std::cell::Cell<Option<Option<u32>>>,
-    /// When to try again after a frame that did not reach the screen, if one is owed.
-    ///
-    /// A frame whose acquisition timed out, or whose surface the compositor replaced underneath it,
-    /// leaves the window showing the picture it had and owes another — but it owes it *later*. The
-    /// condition is the presentation engine having nothing to hand over, and the way that is
-    /// resolved is by the compositor coming back to the surface, not by this process asking again
-    /// sooner. Asking again straight away spends a whole pipeline and then blocks in the
-    /// acquisition for as long as the graphics API is willing to wait, on the thread that reads
-    /// input — which is how one stall becomes several and the window stops answering the pointer.
-    ///
-    /// So it is a moment rather than a request, and the park is what comes back for it.
-    retry_after: Option<Instant>,
-    /// Whether the surface is starved: the compositor stopped handing over buffers.
-    ///
-    /// Latched by an acquisition that timed out, which under a queued presentation mode is what a
-    /// surface the compositor is not drawing produces — the window sits on another workspace, or
-    /// behind something, on a platform that reports no occlusion. While it is set the window is
-    /// treated as the occluded one it very probably is: animations park, the blink stops, and a
-    /// frame that runs anyway — a timer's — skips the present that would block the loop a second.
-    /// What ends it is evidence of visibility (input, a focus, a configure) or the probe at
-    /// [`Window::retry_after`] succeeding.
+    /// Whether the presenter's frames time out waiting for an image, as the driver last
+    /// reported.
     starved: bool,
-    /// How long the next starvation probe waits, doubling to [`STARVE_BACKOFF_CAP`].
-    ///
-    /// The probe is the one attempt the latch allows: it runs the pipeline and lets the
-    /// acquisition block, so its price is up to a second of the loop — which is why the spacing
-    /// grows while the surface stays starved and resets the moment anything presents.
-    starve_backoff: Duration,
     /// One wall-clock deadline for shedding cold renderer and embed high-water resources.
     maintenance_due: Option<Instant>,
-    /// How many offered frames were held back so that they would start closer to being shown.
-    held: u64,
     /// The clock the pacing is measured on.
     ///
     /// Held here as well as inside the host because a configure arrives outside a frame, and the
@@ -791,13 +753,9 @@ impl Window {
             pace: crate::window::resize::ResizePace::new(),
             configured: 0,
             declined: 0,
-            present: crate::window::present::PresentPace::free_running(),
             reported_rate: std::cell::Cell::new(None),
-            retry_after: None,
             starved: false,
-            starve_backoff: STARVE_BACKOFF_START,
             maintenance_due: None,
-            held: 0,
             clock,
             first_frame: true,
             awaiting_frame: std::cell::Cell::new(false),
@@ -893,7 +851,8 @@ impl Window {
         &self.dom
     }
 
-    /// Whether the surface is starved: the compositor stopped handing over buffers.
+    /// Reports whether the presenter's frames time out waiting for an image, as the driver last
+    /// reported.
     pub fn is_starved(&self) -> bool {
         self.starved
     }
@@ -1004,58 +963,11 @@ impl Window {
         zgui_profile::latency::mark("f.declined");
     }
 
-    /// Whether a frame offered at `now` is being held back so that it starts closer to being shown.
-    ///
-    /// A frame is worth running long before it is worth *starting*. Started the moment it is asked
-    /// for, it composes the world as it was when the last buffer was released and then waits inside
-    /// the acquisition — on the thread that reads input — for the display to release the next one.
-    /// Everything that arrives during that wait is answered by the frame after this one.
-    ///
-    /// So the frame is held, the events keep arriving and keep being queued, and the one frame that
-    /// runs when the hold expires is built from all of them. Nothing is skipped and nothing is
-    /// presented later: what moves is how old the picture is when it appears, and how much of each
-    /// interval the loop can answer a pointer in. See [`PresentPace`](crate::PresentPace) for how
-    /// long the hold is and when there is none.
-    ///
-    /// Asking is what starts the hold, so a caller that asks must be prepared to act on the answer.
-    pub fn holds_a_frame(&self, now: Instant) -> bool {
-        self.present.holds_a_frame(now)
-    }
-
-    /// How long the next frame this window is asked for is held back before it starts.
-    ///
-    /// Zero for a window that has never been made to wait for a surface to present into, which is
-    /// every window presenting to something with an image always spare.
-    pub const fn present_hold(&self) -> std::time::Duration {
-        self.present.hold()
-    }
-
     /// Whether the desktop says this window is being interactively resized right now.
     ///
     /// Best effort: a desktop that says nothing about drags answers false for the whole of one.
     pub const fn is_resizing(&self) -> bool {
         self.resizing
-    }
-
-    /// Records that an offered frame was held back, so that the deadline can ask for it again.
-    ///
-    /// The same act as [`Window::declined_a_frame`] and for the same reason: a request left
-    /// standing is a request nothing can renew, so forgetting one was asked for is part of not
-    /// answering it.
-    pub fn held_a_frame(&mut self) {
-        self.held += 1;
-        self.awaiting_frame.set(false);
-        self.surface.redraw_declined();
-        zgui_profile::latency::mark("f.held");
-    }
-
-    /// How many offered frames were held back to start closer to the moment they would be shown.
-    ///
-    /// Nothing was skipped: each of these ran a little later in the same interval. It counts
-    /// offers rather than frames because a burst of input inside one hold offers several and they
-    /// all become the one frame that runs at the end of it.
-    pub const fn held_frames(&self) -> u64 {
-        self.held
     }
 
     /// How many offered frames were refused for a reconfiguration that could not yet be seen.

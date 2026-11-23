@@ -1401,13 +1401,6 @@ impl AppHandler for Runtime {
                     // back for it.
                     if !window.wants_a_frame(now) {
                         window.declined_a_frame();
-                    } else if window.holds_a_frame(now) {
-                        // Not a refusal. The frame is worth running and is about to be: it is
-                        // being started as late inside this interval as it can be and still
-                        // finish, so that the picture it composes is as current as it can be when
-                        // the display shows it. Everything that arrives in the meantime is queued
-                        // as usual and drawn by that same frame.
-                        window.held_a_frame();
                     } else {
                         window.frame(clock.as_ref());
                         fired = window.take_menu_actions();

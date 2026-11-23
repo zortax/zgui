@@ -100,11 +100,9 @@ impl Window {
             self.steps_built();
             crate::window::counters::held(&self.compositor);
         }
-        let now = self.clock.now();
         for (counters, outcome) in &answers.drawn {
             crate::window::counters::built(counters);
             self.renderer_totals.drawn(outcome, &self.compositor);
-            self.settle_retry(*outcome, now);
             self.show_first_frame(*outcome);
             if let Some(containment) = &self.containment {
                 containment.drawn(outcome.retires_damage());
@@ -134,7 +132,7 @@ impl Window {
 
     /// Makes the driver's next frame a deadline of the window, unless the driver paces itself.
     fn arm_driver(&mut self) {
-        let due = self.compositor.stats().next_due_ns;
+        let due = self.compositor.next_due();
         let paced = self.compositor.pacing() == compositor_api::DriverPacing::SelfPaced;
         let at = due
             .filter(|_| !paced)
