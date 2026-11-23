@@ -75,6 +75,7 @@ mod section;
 #[path = "../../zgui-ui/examples/gallery/shell.rs"]
 mod shell;
 
+mod cpu;
 mod draw;
 mod drive;
 mod gallery;

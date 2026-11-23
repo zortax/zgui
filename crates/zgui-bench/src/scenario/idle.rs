@@ -58,8 +58,10 @@ pub(crate) fn run() -> Outcome {
         harness.advance(std::time::Duration::from_micros(16_667));
         let gpu = crate::gpu_time::phase("idle.turn");
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         frames += harness.pump();
         turns.push(started.elapsed().as_secs_f64() * 1e6);
+        crate::cpu::record("idle.turn", cpu);
         drop(gpu);
     }
     let moved = before.delta(&zgui_profile::counter::snapshot());

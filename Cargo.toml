@@ -315,7 +315,7 @@ toml = "1.1"
 # through inotify for a node that arrives later. `mm` maps a dumb buffer. `event` covers the
 # eventfd a wake channel is and the `poll` a frame loop parks in. `time` reads `CLOCK_MONOTONIC`,
 # to anchor the clock an input report is stamped against to the frame loop's own origin; without
-# it the two share no zero.
+# it the two share no zero. `zgui-bench` reads the process's and a thread's CPU clocks with it.
 #
 # `zgui-platform-wayland` reads that same clock, for the timeline its presentation feedback is
 # stamped in. A workspace entry is one entry, so this list is the union and every member takes all

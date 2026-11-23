@@ -606,8 +606,7 @@ impl App {
 
     /// Runs the compositor behind the client `make` returns for it.
     ///
-    /// A client set here takes precedence over [`App::with_compositor_driver`]. A test supplies a
-    /// driver it steps over its own clock.
+    /// A client set here takes precedence over [`App::with_compositor_driver`].
     pub fn with_compositor_client(mut self, make: ClientMaker) -> Self {
         self.client_maker = Some(make);
         self

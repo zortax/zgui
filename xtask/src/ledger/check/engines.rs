@@ -117,7 +117,9 @@ const LEDGER: &[(&str, &[&str])] = &[
     // eventfd its wake channel is, the `poll` its frame loop parks in, the monotonic clock an
     // input report is stamped against, and the `fstat` its tests read an exported descriptor with.
     // `zgui-platform-wayland` is on it for a clock as well: the one the compositor stamps its
-    // presentation feedback in. A row is read by its first match, so the four share one.
+    // presentation feedback in. `zgui-bench` reads the process's and the window thread's CPU
+    // clocks, which split a frame's cost between the window's thread and the compositor's. A row
+    // is read by its first match, so the five share one.
     (
         "rustix",
         &[
@@ -125,6 +127,7 @@ const LEDGER: &[(&str, &[&str])] = &[
             "zgui-platform-drm",
             "zgui-evdev",
             "zgui-platform-wayland",
+            "zgui-bench",
         ],
     ),
     // Both uapi crates read vendored kernel headers at build time. An ioctl request number is

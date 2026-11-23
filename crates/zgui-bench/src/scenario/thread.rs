@@ -281,12 +281,14 @@ pub(crate) fn run() -> Outcome {
         let mark = counter::snapshot();
         let gpu = crate::gpu_time::phase("thread.resize");
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         harness.deliver_to_first(SurfaceEvent::Resized(wide(width)));
         harness.settle(64);
         let cost = started.elapsed().as_secs_f64() * 1e3;
         drop(gpu);
         let moved = mark.delta(&counter::snapshot());
         steps.cost_ms.push(cost);
+        crate::cpu::record("thread.resize", cpu);
         steps.relaid.push(sample(moved.nodes_relaid_out));
         steps.rebroken.push(sample(moved.text_rebroken));
         steps.kept.push(sample(moved.text_lines_kept));

@@ -213,4 +213,5 @@ pub(crate) fn print(outcome: &Outcome) {
         println!("  {measurement}");
     }
     crate::gpu_time::print(outcome.scenario);
+    crate::cpu::print(outcome.scenario);
 }

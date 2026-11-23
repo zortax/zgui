@@ -87,9 +87,11 @@ pub(crate) fn run() -> Outcome {
         let mark = zgui_profile::counter::snapshot();
         let gpu = crate::gpu_time::phase("scroll.tick");
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         harness.advance(std::time::Duration::from_micros(8_333));
         let ran = harness.pump();
         let cost = started.elapsed().as_secs_f64() * 1e6;
+        let spent = crate::cpu::Cpu::now();
         drop(gpu);
         if ran == 0 {
             continue;
@@ -106,11 +108,13 @@ pub(crate) fn run() -> Outcome {
         // in the translation bucket and be reported, which is exactly the result worth catching.
         if moved.boxes_rebuilt == 0 {
             translation.push(cost);
+            crate::cpu::record_span("scroll.translation", cpu, spent);
             stray.restyles += moved.elements_restyled;
             stray.relayouts += moved.nodes_relaid_out;
             stray.hit_index_rebuilds += moved.hit_index_rebuilds;
         } else {
             recycle.push(cost);
+            crate::cpu::record_span("scroll.recycle", cpu, spent);
             rebuild.boxes += moved.boxes_rebuilt;
             rebuild.nodes += moved.nodes_relaid_out;
             rebuild.emitted += moved.primitives_emitted;

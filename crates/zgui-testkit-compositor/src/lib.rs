@@ -39,6 +39,7 @@ mod screen;
 mod screens;
 mod select;
 mod session;
+mod synced;
 mod tierless;
 mod unavailable;
 mod windows;
