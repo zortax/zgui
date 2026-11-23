@@ -558,6 +558,7 @@ impl Window {
         // frame of its own — that would be a spin at whatever rate the machine can manage — so what
         // brings the loop back is the deadline this leaves, and a window that stopped animating
         // leaves none at all.
+        self.compose_lead.record(started.elapsed());
         self.pace_animations(now);
 
         // The one place an in-frame request becomes a real one. An occluded surface is excluded,

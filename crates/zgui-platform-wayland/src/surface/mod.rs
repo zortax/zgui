@@ -33,7 +33,7 @@ use zgui_platform::{
 };
 
 use crate::driver::WaylandState;
-use crate::frame::Presentation;
+use crate::frame::{Composer, Presentation};
 use crate::surface::state::{Bounds, Shared};
 
 /// What a surface needs from the loop it belongs to.
@@ -605,8 +605,18 @@ impl Surface for WaylandSurface {
         let mut shared = self.shared();
         // A driver thread asks from its own thread. Only a frame asked about on the loop's thread
         // during a redraw is that redraw's own.
-        let redrawing = shared.drawing && std::thread::current().id() == self.loop_thread;
-        shared.pacer.present_now(Instant::now(), redrawing)
+        let composer = if std::thread::current().id() != self.loop_thread {
+            if shared.visibility.is_hidden() {
+                Composer::Loop
+            } else {
+                Composer::Driver
+            }
+        } else if shared.drawing {
+            Composer::Redraw
+        } else {
+            Composer::Loop
+        };
+        shared.pacer.present_now(Instant::now(), composer)
     }
 
     fn redraw_declined(&self) {

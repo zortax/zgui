@@ -29,6 +29,17 @@ impl Owed {
     }
 }
 
+/// What composed a frame that asks to be presented.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Composer {
+    /// The redraw the loop is delivering.
+    Redraw,
+    /// The loop, outside a redraw, or a driver thread for a hidden surface.
+    Loop,
+    /// A driver thread, which paces its presents itself.
+    Driver,
+}
+
 /// Whether a surface may be drawn now, and what the loop should wait for if not.
 ///
 /// # The rule
@@ -87,6 +98,14 @@ impl Owed {
 /// own, for a new output and for a new extent. They are held until a redraw has run, so the
 /// surface is mapped by a frame of the window. The frame the first redraw itself presents is
 /// presented as usual.
+///
+/// # A driver paces its own frames
+///
+/// A frame a driver thread composed for a visible surface is not held for a callback. The driver
+/// holds a frame itself while an earlier present has not reached the display, and holding it here
+/// as well costs a refresh whenever the callback reaches the loop after the driver's latch. Its
+/// commit still asks for a callback, so the occlusion signal is kept, and a hidden surface's
+/// frames wait for their callbacks as before.
 ///
 /// # Not configured is a reason to refuse a frame; hidden is not
 ///
@@ -231,20 +250,20 @@ impl Pacer {
         true
     }
 
-    /// Whether a frame that has just been composed may be presented now, where `redrawing` says
-    /// whether the frame belongs to the redraw being delivered.
+    /// Whether a frame that `composer` has just composed may be presented now.
     ///
     /// The frame is held instead in two cases, and [`Pacer::take_present`] hands it over later:
     ///
     /// - If no redraw has run and the frame is not the redraw's own, it waits for the first
     ///   redraw to finish, see "Nothing is shown before the first redraw".
-    /// - If a callback for a buffer is owed, it waits for the callback to arrive or to be given
-    ///   up on. Two buffers with no callback between them is a client racing ahead of the display,
-    ///   and only the second of them is ever shown. A callback asked for with no buffer does not
-    ///   hold a frame.
-    pub fn present_now(&mut self, now: Instant, redrawing: bool) -> bool {
-        let empty = !self.drawn && !redrawing;
-        let owed = !self.resizing
+    /// - If a callback for a buffer is owed and the frame is not a driver's, it waits for the
+    ///   callback to arrive or to be given up on. Two buffers with no callback between them is a
+    ///   client racing ahead of the display, and only the second of them is ever shown. A callback
+    ///   asked for with no buffer does not hold a frame. See "A driver paces its own frames".
+    pub fn present_now(&mut self, now: Instant, composer: Composer) -> bool {
+        let empty = !self.drawn && composer != Composer::Redraw;
+        let owed = composer != Composer::Driver
+            && !self.resizing
             && matches!(self.owed, Owed::Callback(since) if !self.watchdog.expired(since, now));
         self.held = empty || owed;
         !self.held
@@ -396,7 +415,7 @@ impl Default for Pacer {
 
 #[cfg(test)]
 mod tests {
-    use super::Pacer;
+    use super::{Composer, Pacer};
     use crate::frame::visibility::Visibility;
     use std::time::{Duration, Instant};
     use zgui_platform::Watchdog;
@@ -425,7 +444,10 @@ mod tests {
         assert!(!pacer.take(&mut shown(), now), "an ordinary frame waits");
         pacer.answer_resize(true);
         assert!(pacer.take(&mut shown(), now));
-        assert!(pacer.present_now(now, true), "and it is presented at once");
+        assert!(
+            pacer.present_now(now, Composer::Redraw),
+            "and it is presented at once"
+        );
         assert!(!pacer.held());
     }
 
@@ -468,7 +490,7 @@ mod tests {
         pacer.input();
         assert!(pacer.take(&mut shown(), now), "the press draws at once");
         assert!(
-            pacer.present_now(now, true),
+            pacer.present_now(now, Composer::Redraw),
             "and its frame goes out at once"
         );
         assert!(!pacer.held());
@@ -534,7 +556,7 @@ mod tests {
             "the press composes at once"
         );
         assert!(
-            !pacer.present_now(now, true),
+            !pacer.present_now(now, Composer::Redraw),
             "and its frame waits for the callback"
         );
         pacer.press();
@@ -551,7 +573,7 @@ mod tests {
             pacer.take(&mut visibility, now),
             "the press that waited behind the held frame composes ahead"
         );
-        assert!(!pacer.present_now(now, true));
+        assert!(!pacer.present_now(now, Composer::Redraw));
         pacer.callback();
         assert!(pacer.take_present(&mut visibility, now));
         pacer.committed(now);
@@ -694,7 +716,7 @@ mod tests {
             "the window composes ahead"
         );
         assert!(
-            !pacer.present_now(now, true),
+            !pacer.present_now(now, Composer::Redraw),
             "two commits for one callback"
         );
         pacer.request();
@@ -718,17 +740,36 @@ mod tests {
         let mut pacer = Pacer::new();
         let now = Instant::now();
         let mut visibility = shown();
-        assert!(!pacer.present_now(now, false), "the empty frame went out");
+        assert!(
+            !pacer.present_now(now, Composer::Loop),
+            "the empty frame went out"
+        );
         assert!(!pacer.take_present(&mut visibility, now));
         pacer.request();
         assert!(
             pacer.take(&mut visibility, now),
             "the empty frame held back the first redraw"
         );
-        assert!(!pacer.present_now(now, false));
+        assert!(!pacer.present_now(now, Composer::Loop));
         pacer.drew();
         assert!(pacer.take_present(&mut visibility, now));
-        assert!(pacer.present_now(now, false));
+        assert!(pacer.present_now(now, Composer::Loop));
+    }
+
+    #[test]
+    fn a_driver_frame_is_not_held_for_a_callback() {
+        let mut pacer = Pacer::new();
+        pacer.drew();
+        let now = Instant::now();
+        pacer.committed(now);
+        assert!(
+            pacer.present_now(now, Composer::Driver),
+            "the driver's frame was held"
+        );
+        assert!(
+            !pacer.present_now(now, Composer::Loop),
+            "the loop's frame went out ahead of the callback"
+        );
     }
 
     #[test]
@@ -749,7 +790,7 @@ mod tests {
         let mut visibility = shown();
         pacer.drew();
         pacer.committed(now);
-        assert!(!pacer.present_now(now, true));
+        assert!(!pacer.present_now(now, Composer::Redraw));
         assert_eq!(
             pacer.deadline(visibility, now),
             Some(now + Duration::from_millis(400)),
@@ -767,7 +808,7 @@ mod tests {
         let now = Instant::now();
         let mut visibility = shown();
         pacer.committed(now);
-        assert!(!pacer.present_now(now, true));
+        assert!(!pacer.present_now(now, Composer::Redraw));
         pacer.cancel_held();
         pacer.request();
         assert!(pacer.take(&mut visibility, now));

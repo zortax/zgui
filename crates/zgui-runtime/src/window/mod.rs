@@ -176,6 +176,8 @@ pub struct Window {
     /// deadline recomputed from the present moment is pushed forward by every wake the window has
     /// for any other reason. See [`AnimationCadence`](crate::AnimationCadence).
     animation: crate::window::anim::cadence::AnimationCadence,
+    /// How long the window's frames take, which it starts that long before a driver's latch.
+    compose_lead: crate::window::anim::lead::ComposeLead,
     /// How long after the start of the last frame the stepped animations, whose values hold still,
     /// owe their next tick. Set by the animation stage and turned into `hold_due` when
     /// the frame paces its animations.
@@ -682,6 +684,7 @@ impl Window {
             painted_at: None,
             animator: zgui_anim::Animator::new(),
             animation: crate::window::anim::cadence::AnimationCadence::parked(),
+            compose_lead: crate::window::anim::lead::ComposeLead::default(),
             hold_after: None,
             hold_due: None,
             tables: Tables::new(),

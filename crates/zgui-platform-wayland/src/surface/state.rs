@@ -1039,7 +1039,11 @@ mod tests {
         // That commit carried no buffer, so a press draws and presents without the answer.
         shared.pacer.input();
         assert!(shared.pacer.take(&mut visibility, now));
-        assert!(shared.pacer.present_now(now, true));
+        assert!(
+            shared
+                .pacer
+                .present_now(now, crate::frame::Composer::Redraw)
+        );
     }
 
     #[test]
@@ -1123,7 +1127,11 @@ mod tests {
         shared.pacer.compose_ahead(true);
         shared.pacer.committed(now);
         assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Waiting);
-        assert!(!shared.pacer.present_now(now, true));
+        assert!(
+            !shared
+                .pacer
+                .present_now(now, crate::frame::Composer::Redraw)
+        );
         assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Held);
     }
 
@@ -1150,7 +1158,11 @@ mod tests {
         let mut shared = Shared::new();
         shared.resized(logical(800.0, 600.0), 1.0);
         shared.pacer.committed(Instant::now());
-        assert!(!shared.pacer.present_now(Instant::now(), true));
+        assert!(
+            !shared
+                .pacer
+                .present_now(Instant::now(), crate::frame::Composer::Redraw)
+        );
         shared.resized(logical(900.0, 600.0), 1.0);
         assert!(!shared.pacer.held());
     }

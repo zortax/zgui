@@ -16,6 +16,7 @@
 //! records that moment beside the phase.
 
 pub mod cadence;
+pub(crate) mod lead;
 mod place;
 mod recolor;
 mod trace;
@@ -116,6 +117,9 @@ impl Window {
     /// moment the frame was *for* — every animated value in it was interpolated against it — and a
     /// phase measured from the end of a frame would move with how long the frame took.
     ///
+    /// Under a driver that paces itself, the phase is moved onto the driver's latch less the time the
+    /// window's frames take, so each frame reaches the latch it is meant for.
+    ///
     /// An occluded window keeps nothing. Its animations go on running against the clock and are
     /// drawn correctly whenever it is shown again, but the phase they were on describes a rate the
     /// window was not running at, and an occlusion is not bounded by anything.
@@ -129,7 +133,22 @@ impl Window {
             self.animation.park();
             return;
         }
-        self.animation.advance(now, self.refresh_interval());
+        let interval = self.refresh_interval();
+        self.animation.advance(now, interval);
+        if let Some(latch) = self.driver_latch() {
+            self.animation
+                .align(latch.checked_sub(self.compose_lead.get()), now, interval);
+        }
+    }
+
+    /// Returns when the window's driver latches the frame this window committed last, for a driver
+    /// that paces itself.
+    fn driver_latch(&self) -> Option<web_time::Instant> {
+        if self.compositor.pacing() != compositor_api::DriverPacing::SelfPaced {
+            return None;
+        }
+        let due = self.compositor.next_due()?;
+        Some(self.frame_clock_moment(due))
     }
 
     /// Marks the animations this frame's cascade created, which its tick could not have seen.
