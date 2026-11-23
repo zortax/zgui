@@ -599,7 +599,14 @@ impl Surface for WaylandSurface {
     }
 
     fn present_now(&self) -> bool {
-        self.shared().pacer.present_now(Instant::now())
+        let mut shared = self.shared();
+        // A shell surface may commit no buffer before it acknowledges its first configure, and a
+        // frame a driver thread composed can be ready before the loop has dispatched it.
+        if self.role.xdg_surface().is_some() && !self.is_mapped() {
+            shared.pacer.hold();
+            return false;
+        }
+        shared.pacer.present_now(Instant::now())
     }
 
     fn redraw_declined(&self) {

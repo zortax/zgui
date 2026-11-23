@@ -245,6 +245,11 @@ impl Pacer {
         true
     }
 
+    /// Holds a composed frame until the surface may show it.
+    pub const fn hold(&mut self) {
+        self.held = true;
+    }
+
     /// Drops the held frame, which a new extent or scale made obsolete.
     pub const fn cancel_held(&mut self) {
         self.held = false;
