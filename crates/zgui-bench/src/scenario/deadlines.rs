@@ -4,7 +4,8 @@
 //! The seven scenarios run on a virtual clock and time the window's thread. This one runs on the
 //! wall clock, so a driver on a thread of its own builds its frames at the display's rate while
 //! the window builds the rows the glide reaches. Every frame the renderer draws is stamped, and a
-//! gap between two drawn frames longer than one and a half refresh intervals is a missed deadline.
+//! gap between two drawn frames longer than one and a half refresh intervals is a missed deadline,
+//! unless it is so long that the glide had come to rest.
 //! A miss that spans a frame in which the window rebuilt rows is one the recycle cost.
 
 use std::time::{Duration, Instant};
@@ -23,7 +24,10 @@ const RUN: Duration = Duration::from_secs(10);
 const INTERVAL: Duration = Duration::from_nanos(16_666_667);
 
 /// How often a wheel notch is delivered, so the glide never runs out.
-const NOTCH_EVERY: Duration = Duration::from_millis(667);
+const NOTCH_EVERY: Duration = Duration::from_millis(150);
+
+/// The gap past which no frame was wanted at all, so it is no missed deadline.
+const IDLE: Duration = Duration::from_millis(100);
 
 /// Runs the scenario and prints its `DEADLINE` line.
 pub(crate) fn run() {
@@ -65,8 +69,13 @@ pub(crate) fn run() {
     let mut gaps = Vec::new();
     let mut misses = 0;
     let mut recycle_misses = 0;
+    let mut rests = 0;
     for pair in stamps.windows(2) {
         let gap = pair[1] - pair[0];
+        if gap > IDLE {
+            rests += 1;
+            continue;
+        }
         gaps.push(gap.as_secs_f64() * 1e3);
         if gap > late {
             misses += 1;
@@ -83,7 +92,7 @@ pub(crate) fn run() {
     let gap = Spread::of(&mut gaps);
     println!(
         "DEADLINE\tscroll\tframes={}\trecycles={}\tmisses={misses}\trecycle_misses={recycle_misses}\t\
-         gap_p50_ms={:.2}\tgap_p99_ms={:.2}\tgap_max_ms={:.2}",
+         rests={rests}\tgap_p50_ms={:.2}\tgap_p99_ms={:.2}\tgap_max_ms={:.2}",
         stamps.len(),
         recycles.len(),
         gap.p50,

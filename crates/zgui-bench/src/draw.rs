@@ -134,17 +134,10 @@ pub(crate) fn compositor(fonts: &zgui::app::Fonts) -> Box<dyn compositor_api::Co
 }
 
 /// Returns `compositor` behind the driver `ZGUI_DRIVER` selects.
-///
-/// A run that reads frames back waits for every step's frames, so each readback is the frame the
-/// step drew. Any other run lets a driver with a thread of its own build while the window goes on.
 pub(crate) fn client(
     compositor: Box<dyn compositor_api::Compositor>,
 ) -> Box<dyn compositor_api::CompositorClient> {
-    if capturing() || WHOLE.with(Cell::get) {
-        zgui_testkit_compositor::driver(compositor)
-    } else {
-        zgui_bench::renderers::client(compositor)
-    }
+    zgui_bench::renderers::client(compositor)
 }
 
 /// Reports whether this run draws on the device and reads frames back, with `ZGUI_BENCH_CAPTURE`.

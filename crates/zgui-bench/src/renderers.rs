@@ -200,29 +200,8 @@ pub fn compositor() -> Box<dyn Compositor> {
     Box::new(compositor_core::CompositorImpl::new())
 }
 
-/// Returns `compositor` behind the driver `ZGUI_DRIVER` selects, stepped at the window's clocks
-/// unless it says otherwise.
-///
-/// - `local`, the default, steps it on the window's thread.
-/// - `threaded` steps it on a thread of its own, so its frames are built while the window goes on.
-/// - `paced` runs it on a thread of its own at the display's rate.
-///
-/// # Panics
-///
-/// Panics when the variable holds another value.
+/// Returns `compositor` behind the driver `ZGUI_DRIVER` selects, see
+/// [`zgui_testkit_compositor::driver`].
 pub fn client(compositor: Box<dyn Compositor>) -> Box<dyn CompositorClient> {
-    use compositor_driver::DriverOptions;
-    use compositor_thread::ThreadedCompositor;
-
-    match std::env::var("ZGUI_DRIVER").ok().as_deref().map(str::trim) {
-        None | Some("" | "local") => Box::new(compositor_driver::InProcess::new(
-            compositor,
-            DriverOptions::stepped(),
-        )),
-        Some("threaded") => {
-            Box::new(ThreadedCompositor::spawn_with(compositor, DriverOptions::stepped()).0)
-        }
-        Some("paced") => Box::new(ThreadedCompositor::spawn(compositor).0),
-        Some(other) => panic!("ZGUI_DRIVER={other} is none of local, threaded or paced"),
-    }
+    zgui_testkit_compositor::driver(compositor)
 }
