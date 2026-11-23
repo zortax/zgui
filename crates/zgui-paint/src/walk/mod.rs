@@ -287,6 +287,7 @@ struct WalkScratch {
     text_fills: TextFills,
     shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
     spaces: rustc_hash::FxHashMap<zgui_space::SpatialId, Option<zgui_geom::Affine2>>,
+    admitted: rustc_hash::FxHashMap<zgui_space::ClipId, Rect<DevicePx, Device>>,
 }
 
 impl WalkScratch {
@@ -298,6 +299,7 @@ impl WalkScratch {
         self.decorations.clear();
         self.text_fills.clear();
         self.shapes.clear();
+        self.admitted.clear();
         self.spaces.clear();
     }
 }
@@ -393,6 +395,7 @@ impl Painter {
             text_fills: scratch.text_fills,
             shapes: scratch.shapes,
             spaces: scratch.spaces,
+            admitted: scratch.admitted,
         };
         stacking::walk(input.store, root, &mut pass);
         let Pass {
@@ -404,6 +407,7 @@ impl Painter {
             text_fills,
             shapes,
             spaces,
+            admitted,
             ..
         } = pass;
         self.scratch = WalkScratch {
@@ -414,6 +418,7 @@ impl Painter {
             text_fills,
             shapes,
             spaces,
+            admitted,
         };
         self.scratch.clear();
         if let Some(sync) = &mut self.sync {
@@ -501,6 +506,8 @@ struct Pass<'a, 'b> {
     shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
     /// What each coordinate system resolves to in the plane, by name, for this frame.
     spaces: rustc_hash::FxHashMap<zgui_space::SpatialId, Option<zgui_geom::Affine2>>,
+    /// The device rectangle each clip admits recorded ink in, by name, for this frame.
+    admitted: rustc_hash::FxHashMap<zgui_space::ClipId, Rect<DevicePx, Device>>,
 }
 
 impl Pass<'_, '_> {
@@ -663,23 +670,28 @@ impl Pass<'_, '_> {
         }
     }
 
-    /// Adds the device rectangle `ink` of `fragment`, cut to the fragment's clip, to the ink the
-    /// walk's recordings damage.
+    /// Adds the device rectangle `ink` of `fragment`, grown by a pixel and cut to the fragment's
+    /// clip, to the ink the walk's recordings damage.
     fn damage_ink(&mut self, fragment: &Fragment, ink: Rect<DevicePx, Device>) {
-        let tables = &*self.tables;
-        // A clip's soft edge covers up to half a pixel outside its rectangle, which at a fractional
-        // edge is the next pixel.
         let edge = DevicePx(1.0);
-        let admitted = tables
-            .clips
-            .bounds_placed(fragment.clip, &|space| tables.spatial.resolve(space))
-            .outset(Edges {
-                top: edge,
-                right: edge,
-                bottom: edge,
-                left: edge,
-            });
-        if let Some(ink) = ink.intersection(admitted) {
+        let pixel = Edges {
+            top: edge,
+            right: edge,
+            bottom: edge,
+            left: edge,
+        };
+        let tables = &*self.tables;
+        // A clip's soft edge covers up to half a pixel outside its rectangle, which at a
+        // fractional edge is the next pixel.
+        let admitted = *self.admitted.entry(fragment.clip).or_insert_with(|| {
+            tables
+                .clips
+                .bounds_placed(fragment.clip, &|space| tables.spatial.resolve(space))
+                .outset(pixel)
+        });
+        // compositor: a glyph's damage is its whole raster, which at a fractional position
+        // reaches a pixel past the ink with nothing drawn there.
+        if let Some(ink) = ink.outset(pixel).intersection(admitted) {
             self.report.recorded_ink.push(pixels(ink));
         }
     }
