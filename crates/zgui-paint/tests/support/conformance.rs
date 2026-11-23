@@ -249,12 +249,12 @@ pub(crate) fn precise(shapes: &[Shape], placement: Affine2) -> Vec<Shape> {
 }
 
 /// The same shapes clipped by a path that admits everything, which keeps them frame paths.
+///
+/// A compositor may lower an unclipped path to path masks, and never lowers one with a path clip
+/// (spec "PathItem").
 pub(crate) fn framed(shapes: &[Shape]) -> Vec<Shape> {
     use kurbo::Shape as _;
 
-    // compositor: the reference renderer corrects a path mask's coverage for contrast as it does a
-    // glyph's, so a path mask is no measure of the true coverage. A path with a path clip is never
-    // lowered to masks (spec "PathItem").
     let everything = Arc::new(kurbo::Rect::new(-4096.0, -4096.0, 4096.0, 4096.0).to_path(0.1));
     shapes
         .iter()
