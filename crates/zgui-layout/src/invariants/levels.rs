@@ -244,7 +244,7 @@ fn check_fragments(store: &LayoutStore, hit: &HitIndex, key: BoxKey, out: &mut V
                 frag.index()
             )));
         }
-        if !fragment.subtree_ink.contains_rect(fragment.ink) && !fragment.ink.is_empty() {
+        if !holds(fragment.subtree_ink, fragment.ink) && !fragment.ink.is_empty() {
             out.push(Violation::new(format!(
                 "fragment {}'s subtree ink does not contain its own ink",
                 frag.index()
@@ -277,6 +277,25 @@ fn check_root(store: &LayoutStore, root: BoxKey, out: &mut Vec<Violation>) {
     if store.get(root).and_then(|node| node.parent).is_some() {
         out.push(Violation::new("the root box has a parent"));
     }
+}
+
+/// Reports whether `outer` holds `inner`, edges that differ by float rounding included.
+///
+/// A rectangle stores its origin and size, so a union's far edge is a difference added back to the
+/// origin, which can land a rounding step short of the edge it was taken from.
+fn holds(
+    outer: zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
+    inner: zgui_geom::Rect<zgui_geom::DevicePx, zgui_geom::Device>,
+) -> bool {
+    const ROUNDING: f32 = 1.0 / 256.0;
+    let left = outer.origin.x.0 - ROUNDING;
+    let top = outer.origin.y.0 - ROUNDING;
+    let right = outer.origin.x.0 + outer.size.width.0 + ROUNDING;
+    let bottom = outer.origin.y.0 + outer.size.height.0 + ROUNDING;
+    inner.origin.x.0 >= left
+        && inner.origin.y.0 >= top
+        && inner.origin.x.0 + inner.size.width.0 <= right
+        && inner.origin.y.0 + inner.size.height.0 <= bottom
 }
 
 #[cfg(test)]

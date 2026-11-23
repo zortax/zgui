@@ -1,10 +1,10 @@
-//! The check that the compositor redrew nothing the paint walk did not visit.
+//! The check that the compositor changed nothing the paint walk did not visit.
 //!
-//! Every pixel a compositor frame redraws because a chunk was recorded, removed or reordered lies
+//! Every pixel a compositor frame changes because a chunk was recorded, removed or reordered lies
 //! where the walk was gated on, because the walk only records what it visits. The compositor also
-//! redraws for reasons the walk never sees, so a frame is checked only when it has none of them:
-//! no property, paint or offset write in its commits, no compositor scrolling, no shift, a frame
-//! before it that retired its damage, and draw damage short of the whole output.
+//! changes pixels for reasons the walk never sees, so a frame is checked only when it has none of
+//! them: no property, paint or offset write in its commits, no compositor scrolling, no shift, a
+//! frame before it that retired its damage, and changes short of the whole output.
 //!
 //! The frames are checked where the driver builds them, and a violation is reported to the window
 //! when it next takes the driver's answers.
@@ -93,11 +93,14 @@ impl Containment {
     }
 }
 
-/// Describes the draw damage of `frame` that reaches a pixel outside `painted`, if any does.
+/// Describes the pixels `frame` changes that `painted` does not hold, if there are any.
 ///
-/// A frame that shifted or redraws the whole output has none.
+/// The changed pixels are those that differ from the previous image presented. A frame that
+/// shifted or changes the whole output has none.
 fn violation(frame: &Frame, painted: &DamageSet) -> Option<String> {
-    let draw = &frame.damage.draw;
+    // An image older than the last one is drawn over its older damage too, which no walk of this
+    // frame visited.
+    let draw = &frame.damage.present;
     if !frame.shifts.is_empty() || draw.is_full() || painted.is_full() {
         return None;
     }
@@ -108,7 +111,7 @@ fn violation(frame: &Frame, painted: &DamageSet) -> Option<String> {
         );
         let outside = cover::uncovered(drawn, painted.rects())?;
         Some(format!(
-            "the compositor redrew {outside:?}, which the paint walk never visited: drawn {:?}, \
+            "the compositor changed {outside:?}, which the paint walk never visited: changed {:?}, \
              painted {:?}",
             draw.rects(),
             painted.rects()

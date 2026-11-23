@@ -1573,8 +1573,19 @@ impl Window {
                 .painter
                 .compositor()
                 .and_then(|sync| sync.close(&layout, &mut self.tables));
+            let removed = self
+                .painter
+                .compositor_ref()
+                .map(|sync| sync.removed_ink().to_vec())
+                .unwrap_or_default();
             vector_report = report.vector_routes;
             self.layers_owed = report.layers_owed;
+            // The compositor measures a recording's damage on the whole device, so the ink is
+            // declared whole, also where it reaches past the surface.
+            self.recorded_ink = compositor_types::compositor_damage::DamageSet::new();
+            for ink in report.recorded_ink.iter().chain(&removed) {
+                self.recorded_ink.absorb(crate::window::declared::of(*ink));
+            }
             let after = glyph_counts();
             zgui_profile::latency::note_with("p.finish", || {
                 format!(

@@ -176,6 +176,11 @@ pub struct PaintReport {
     /// A caller damages them and asks for a frame, so each is encoded again until its exact layer
     /// stands. An empty list asks for nothing.
     pub layers_owed: Vec<Rect<i32, Device>>,
+    /// The device ink of every fragment whose chunk the walk recorded.
+    ///
+    /// A recording damages the ink of the items it changes, which can reach past the damage that
+    /// reached the fragment, such as a glyph's edge beside a selection band.
+    pub recorded_ink: Vec<Rect<i32, Device>>,
 }
 
 /// The vector raster paths selected for one freshly encoded element.
@@ -632,6 +637,51 @@ impl Pass<'_, '_> {
     /// Whether the damage reaches `rect`.
     fn reaches(&self, rect: Rect<DevicePx, Device>) -> bool {
         damage_reaches(self.input.damage, self.input.surface, pixels(rect))
+    }
+
+    /// Reports the device ink a recording of `fragment` damages: `drawn`, the fragment's ink on the
+    /// device, and `replaced`, where the chunks it replaced drew in its anchor, each cut to the
+    /// fragment's clip.
+    fn recorded(
+        &mut self,
+        fragment: &Fragment,
+        drawn: Rect<DevicePx, Device>,
+        replaced: Option<Rect<i32, Device>>,
+    ) {
+        let old = replaced.map(|old| self.where_drawn(fragment, device_px(old)));
+        for ink in std::iter::once(drawn).chain(old) {
+            self.damage_ink(fragment, ink);
+        }
+    }
+
+    /// Reports the device ink a move of `fragment`'s chunk damages: where it drew before and after
+    /// the move, `inks`, in its anchor.
+    fn moved_ink(&mut self, fragment: &Fragment, inks: [Rect<i32, Device>; 2]) {
+        for ink in inks {
+            let ink = self.where_drawn(fragment, device_px(ink));
+            self.damage_ink(fragment, ink);
+        }
+    }
+
+    /// Adds the device rectangle `ink` of `fragment`, cut to the fragment's clip, to the ink the
+    /// walk's recordings damage.
+    fn damage_ink(&mut self, fragment: &Fragment, ink: Rect<DevicePx, Device>) {
+        let tables = &*self.tables;
+        // A clip's soft edge covers up to half a pixel outside its rectangle, which at a fractional
+        // edge is the next pixel.
+        let edge = DevicePx(1.0);
+        let admitted = tables
+            .clips
+            .bounds_placed(fragment.clip, &|space| tables.spatial.resolve(space))
+            .outset(Edges {
+                top: edge,
+                right: edge,
+                bottom: edge,
+                left: edge,
+            });
+        if let Some(ink) = ink.intersection(admitted) {
+            self.report.recorded_ink.push(pixels(ink));
+        }
     }
 
     /// A rectangle widened to cover where its fragment is actually drawn.
@@ -1131,8 +1181,10 @@ impl Pass<'_, '_> {
                 self.report.primitives += items;
                 self.show_replayed_tiles(fragment, offset, transform, clip);
                 self.painter.cache.replayed(fragment);
-                if let Some(sync) = &mut self.painter.sync {
-                    sync.replayed(fragment, offset);
+                if let Some(sync) = &mut self.painter.sync
+                    && let Some(inks) = sync.replayed(fragment, offset)
+                {
+                    self.moved_ink(fragment, inks);
                 }
             }
             Reuse::Encode => {
@@ -1160,12 +1212,13 @@ impl Pass<'_, '_> {
                 let minted = self.tables.take_minted();
                 let items = painter.items.len();
                 if let Some(sync) = &mut painter.sync {
-                    sync.record(
+                    let replaced = sync.record(
                         store,
                         fragment,
                         (&mut painter.items, pixels(ink)),
                         self.tables,
                     );
+                    self.recorded(fragment, cull, replaced);
                 }
                 self.report.primitives += emitted.pushed;
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
@@ -1440,4 +1493,22 @@ impl stacking::Visitor for Pass<'_, '_> {
         self.decorations.leave();
         self.text_fills.leave();
     }
+}
+
+/// Returns `rect`, in whole device pixels, as a rectangle of device pixel lengths.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "device coordinates are far under the 2^24 an f32 holds exactly"
+)]
+fn device_px(rect: Rect<i32, Device>) -> Rect<DevicePx, Device> {
+    Rect::new(
+        zgui_geom::Point::new(
+            DevicePx(rect.origin.x as f32),
+            DevicePx(rect.origin.y as f32),
+        ),
+        zgui_geom::Size::new(
+            DevicePx(rect.size.width as f32),
+            DevicePx(rect.size.height as f32),
+        ),
+    )
 }

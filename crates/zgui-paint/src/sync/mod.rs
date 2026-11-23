@@ -61,6 +61,8 @@ pub struct CompositorSync {
     backdropped: FxHashMap<FragKey, ChunkKey>,
     retired: FxHashSet<ChunkKey>,
     extents: extent::Extents,
+    /// The device ink of the chunks the last close removed.
+    removed_ink: Vec<Rect<i32, Device>>,
     moves: moved::Moves,
     report: SyncReport,
     forgotten: Option<Held>,
@@ -115,6 +117,7 @@ impl CompositorSync {
             backdropped: FxHashMap::default(),
             retired: FxHashSet::default(),
             extents: extent::Extents::default(),
+            removed_ink: Vec::new(),
             moves: moved::Moves::default(),
             report: SyncReport::default(),
             forgotten: None,
@@ -140,11 +143,15 @@ impl CompositorSync {
     pub fn close(&mut self, store: &LayoutStore, tables: &mut Tables) -> Option<Transaction> {
         let mut transaction = self.transaction.take()?;
         self.release_forgotten(tables);
+        self.removed_ink.clear();
         for key in self.retired.drain() {
             self.owners.remove(&key);
             self.extras.remove(&key);
             transaction.remove_chunk(key);
             self.mirror.chunk_removed(key);
+            if let Some((anchor, ink)) = self.extents.placed_ink(key) {
+                self.removed_ink.push(on_device(ink, anchor, tables));
+            }
             self.extents.removed(key);
             self.report.removed += 1;
             if let Some(owner) = self.names.box_of(key.owner) {
@@ -196,6 +203,11 @@ impl CompositorSync {
         if let Some(wake) = wake {
             self.set_wake(wake);
         }
+    }
+
+    /// Returns the device ink of the chunks the last [`CompositorSync::close`] removed.
+    pub fn removed_ink(&self) -> &[Rect<i32, Device>] {
+        &self.removed_ink
     }
 
     /// Returns the extent the recorded chunks of fragments anchored in `space` draw over, in its
@@ -292,24 +304,27 @@ impl CompositorSync {
     }
 
     /// Records `items` as the painting of `fragment`, and leaves them empty.
+    ///
+    /// Returns where the chunks the recording replaced or removed drew, in the coordinate system
+    /// of `fragment`'s anchor.
     pub(crate) fn record(
         &mut self,
         store: &LayoutStore,
         fragment: &Fragment,
         (items, ink): (&mut Items, Rect<i32, Device>),
         tables: &mut Tables,
-    ) {
-        if self.transaction.is_none() {
-            return;
-        }
+    ) -> Option<Rect<i32, Device>> {
+        self.transaction.as_ref()?;
         let key = key::of(self.name(store, fragment.box_), store, fragment, Part::Body);
-        let Some(transaction) = &mut self.transaction else {
-            return;
-        };
+        let mut replaced = self.extents.ink(key);
+        let transaction = self.transaction.as_mut()?;
         if let Some(previous) = self.chunks.get(&fragment.key)
             && previous.key != key
             && remove(transaction, &mut self.owners, previous.key, fragment.key)
         {
+            if let Some(old) = self.extents.ink(previous.key) {
+                replaced = Some(replaced.map_or(old, |held| held.union(old)));
+            }
             self.mirror.chunk_removed(previous.key);
             self.extents.removed(previous.key);
             self.report.removed += 1;
@@ -325,7 +340,7 @@ impl CompositorSync {
                     offset: [0.0; 2],
                 },
             );
-            return;
+            return replaced;
         }
         // A fragment rebuilt in its box's place records the key its predecessor held, and the
         // compositor compares the two recordings.
@@ -336,7 +351,7 @@ impl CompositorSync {
         if items.is_empty() {
             self.extents.removed(key);
         } else {
-            self.extents.recorded(key, fragment.anchor.index(), ink);
+            self.extents.recorded(key, fragment.anchor, ink);
         }
         flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
@@ -348,6 +363,7 @@ impl CompositorSync {
                 offset: [0.0; 2],
             },
         );
+        replaced
     }
 
     /// Records `items` as `part` of the box whose first fragment is `fragment`: its outline or its
@@ -446,23 +462,29 @@ impl CompositorSync {
     }
 
     /// Moves the chunk of `fragment` by `offset` from where it was recorded.
-    pub(crate) fn replayed(&mut self, fragment: &Fragment, offset: Size<DevicePx, Device>) {
-        let Some(transaction) = &mut self.transaction else {
-            return;
-        };
-        let Some(chunk) = self.chunks.get_mut(&fragment.key) else {
-            return;
-        };
+    ///
+    /// Returns where the chunk drew before and after the move, in the coordinate system of
+    /// `fragment`'s anchor, when it moved.
+    pub(crate) fn replayed(
+        &mut self,
+        fragment: &Fragment,
+        offset: Size<DevicePx, Device>,
+    ) -> Option<[Rect<i32, Device>; 2]> {
+        let transaction = self.transaction.as_mut()?;
+        let chunk = self.chunks.get_mut(&fragment.key)?;
         if self.owners.get(&chunk.key) != Some(&fragment.key) {
-            return;
+            return None;
         }
         let offset = [offset.width.0, offset.height.0];
-        if chunk.offset != offset {
-            transaction.set_offset(chunk.key, offset);
-            self.extents.moved(chunk.key, offset);
-            chunk.offset = offset;
-            self.report.offsets += 1;
+        if chunk.offset == offset {
+            return None;
         }
+        let before = self.extents.ink(chunk.key);
+        transaction.set_offset(chunk.key, offset);
+        self.extents.moved(chunk.key, offset);
+        chunk.offset = offset;
+        self.report.offsets += 1;
+        Some([before?, self.extents.ink(chunk.key)?])
     }
 
     /// Marks the chunks of the fragments `keys` for removal when the frame closes, and forgets
@@ -600,4 +622,23 @@ fn remove(
     owners.remove(&key);
     transaction.remove_chunk(key);
     true
+}
+
+/// Returns `ink`, in the coordinate system `anchor`, on the device as `tables` place it.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "device coordinates are far under the 2^24 an f32 holds exactly"
+)]
+fn on_device(ink: Rect<i32, Device>, anchor: SpatialId, tables: &Tables) -> Rect<i32, Device> {
+    let Some(matrix) = tables.spatial.resolve(anchor) else {
+        return ink;
+    };
+    let rect = Rect::new(
+        zgui_geom::Point::new(DevicePx(ink.origin.x as f32), DevicePx(ink.origin.y as f32)),
+        zgui_geom::Size::new(
+            DevicePx(ink.size.width as f32),
+            DevicePx(ink.size.height as f32),
+        ),
+    );
+    zgui_layout::fragment::diff::pixels(zgui_geom::transformed_bounds(&matrix, rect))
 }

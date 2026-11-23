@@ -251,6 +251,8 @@ pub struct Window {
     containment: Option<crate::window::containment::Containment>,
     /// The target the output was last configured for.
     target: Option<compositor_types::RenderTarget>,
+    /// The device ink of the fragments the last paint walk recorded.
+    recorded_ink: compositor_types::compositor_damage::DamageSet,
     /// See [`Window::forget_compositor_sync`].
     resync: std::cell::Cell<bool>,
     /// What is hovered, pressed, focused and captured.
@@ -704,6 +706,7 @@ impl Window {
             check_damage: zgui_layout::invariants::enabled(),
             containment: None,
             target: None,
+            recorded_ink: compositor_types::compositor_damage::DamageSet::new(),
             resync: std::cell::Cell::new(false),
             router: Router::new(),
             pending_focus: Vec::new(),

@@ -184,7 +184,7 @@ impl Window {
         if declares {
             transaction.declare_damage(
                 self.compositor.output(),
-                crate::window::declared::declared(&self.painted),
+                crate::window::declared::declared(&self.painted, &self.recorded_ink),
             );
         }
         if let Some(report) = &report {
@@ -198,9 +198,10 @@ impl Window {
                 report.table_writes == 0 && report.params_written == 0 && report.offsets == 0
             }) && !self.compositor_scrolling();
             let compositor = &self.compositor;
+            let visited = crate::window::declared::visited(&self.painted, &self.recorded_ink);
             self.containment
                 .get_or_insert_with(|| crate::window::containment::Containment::observe(compositor))
-                .committed(&self.painted, fit);
+                .committed(&visited, fit);
         }
         self.compositor.commit(transaction);
     }

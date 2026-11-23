@@ -32,10 +32,19 @@ impl Window {
     /// Computes this frame's caret and selection, and damages whatever that moved.
     pub(crate) fn plan_caret(&mut self, now: Instant) {
         let (plan, drawn) = self.caret_plan(now);
+        // A mark's edges land between pixels at a fractional scale, and the compositor's
+        // antialiased edge reaches one pixel further.
+        let edge = DevicePx(1.0);
+        let reach = zgui_geom::Edges {
+            top: edge,
+            right: edge,
+            bottom: edge,
+            left: edge,
+        };
         for rect in self.carets.install(plan, drawn) {
             if !rect.is_empty() {
                 self.damage
-                    .absorb(zgui_layout::fragment::diff::pixels(rect));
+                    .absorb(zgui_layout::fragment::diff::pixels(rect.outset(reach)));
             }
         }
         // Where an input method should put its candidate window is a reading of the plan that was

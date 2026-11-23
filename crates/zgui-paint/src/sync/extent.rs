@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use compositor_types::ChunkKey;
 use rustc_hash::FxHashMap;
 use zgui_geom::{Device, Point, Rect, Size};
+use zgui_space::SpatialId;
 
 /// The extent of the recorded chunks drawn in each coordinate system, kept per chunk, so a chunk
 /// that moves or is removed changes it.
@@ -19,6 +20,8 @@ pub(crate) struct Extents {
 /// Where one chunk draws.
 #[derive(Clone, Copy, Debug)]
 struct Placed {
+    /// The coordinate system the chunk draws in.
+    anchor: SpatialId,
     slot: u32,
     /// The extent where the chunk was recorded, as `[left, top, right, bottom]`.
     recorded: [i32; 4],
@@ -41,12 +44,13 @@ impl Placed {
 }
 
 impl Extents {
-    /// Notes that the chunk `key` was recorded to draw over `ink`, in the coordinate system in
-    /// `slot`.
-    pub(crate) fn recorded(&mut self, key: ChunkKey, slot: u32, ink: Rect<i32, Device>) {
+    /// Notes that the chunk `key` was recorded to draw over `ink`, in the coordinate system
+    /// `anchor`.
+    pub(crate) fn recorded(&mut self, key: ChunkKey, anchor: SpatialId, ink: Rect<i32, Device>) {
         self.removed(key);
         let placed = Placed {
-            slot,
+            anchor,
+            slot: anchor.index(),
             recorded: [
                 ink.origin.x,
                 ink.origin.y,
@@ -68,6 +72,22 @@ impl Extents {
         placed.offset = offset.map(|axis| axis.round() as i32);
         self.add(placed);
         self.chunks.insert(key, placed);
+    }
+
+    /// Returns where the chunk `key` draws in its coordinate system, if it is recorded.
+    pub(crate) fn ink(&self, key: ChunkKey) -> Option<Rect<i32, Device>> {
+        self.placed_ink(key).map(|(_, ink)| ink)
+    }
+
+    /// Returns the coordinate system of the chunk `key` and where it draws in it, if it is
+    /// recorded.
+    pub(crate) fn placed_ink(&self, key: ChunkKey) -> Option<(SpatialId, Rect<i32, Device>)> {
+        let placed = self.chunks.get(&key)?;
+        let [left, top, right, bottom] = placed.edges();
+        Some((
+            placed.anchor,
+            Rect::new(Point::new(left, top), Size::new(right - left, bottom - top)),
+        ))
     }
 
     /// Notes that the chunk `key` is no longer recorded.
