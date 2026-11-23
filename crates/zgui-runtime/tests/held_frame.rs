@@ -7,9 +7,8 @@
 //! over a real window: a held frame asks for no other frame, the platform's word presents it
 //! exactly once, and a window is shown only by a frame that reached its surface.
 
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use compositor_api::Renderer;
 use compositor_types::{
@@ -17,7 +16,7 @@ use compositor_types::{
     SkipReason,
 };
 use zgui_platform::{Surface, SurfaceEvent};
-use zgui_runtime::{App, AppError, Runtime};
+use zgui_runtime::{App, Runtime};
 use zgui_view::{BuildCx, IntoView, View};
 
 mod support;
@@ -26,19 +25,19 @@ mod support;
 #[derive(Default)]
 struct Gate {
     /// Whether the next frames are held.
-    hold: Cell<bool>,
+    hold: AtomicBool,
     /// How many frames were drawn.
-    drawn: Cell<u32>,
+    drawn: AtomicU32,
     /// Whether a drawn frame waits to be presented.
-    held: Cell<bool>,
+    held: AtomicBool,
     /// How many held frames were presented.
-    presented: Cell<u32>,
+    presented: AtomicU32,
 }
 
 /// A recording renderer that holds its frames while the test says so.
 struct Holding {
     inner: zgui_testkit_compositor::Screen,
-    gate: Rc<Gate>,
+    gate: Arc<Gate>,
 }
 
 impl Renderer for Holding {
@@ -60,19 +59,19 @@ impl Renderer for Holding {
 
     fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let drawn = self.inner.draw(frame);
-        self.gate.drawn.set(self.gate.drawn.get() + 1);
-        if self.gate.hold.get() {
-            self.gate.held.set(true);
+        self.gate.drawn.fetch_add(1, Ordering::Relaxed);
+        if self.gate.hold.load(Ordering::Relaxed) {
+            self.gate.held.store(true, Ordering::Relaxed);
             return FrameOutcome::Skipped(SkipReason::Held);
         }
         drawn
     }
 
     fn present_held(&mut self) -> FrameOutcome {
-        if !self.gate.held.replace(false) {
+        if !self.gate.held.swap(false, Ordering::Relaxed) {
             return FrameOutcome::Skipped(SkipReason::Undamaged);
         }
-        self.gate.presented.set(self.gate.presented.get() + 1);
+        self.gate.presented.fetch_add(1, Ordering::Relaxed);
         FrameOutcome::Presented(FrameStats::default())
     }
 
@@ -82,10 +81,10 @@ impl Renderer for Holding {
 }
 
 /// A still document over a holding renderer, with nothing settled yet when `hold` is set.
-fn window(hold: bool) -> (zgui_platform_headless::Harness<Runtime>, Rc<Gate>) {
-    let gate = Rc::new(Gate::default());
-    gate.hold.set(hold);
-    let handed = Rc::clone(&gate);
+fn window(hold: bool) -> (zgui_platform_headless::Harness<Runtime>, Arc<Gate>) {
+    let gate = Arc::new(Gate::default());
+    gate.hold.store(hold, Ordering::Relaxed);
+    let handed = Arc::clone(&gate);
     let handler = App::new()
         .with_title("held")
         .with_size(400.0, 300.0)
@@ -94,15 +93,15 @@ fn window(hold: bool) -> (zgui_platform_headless::Harness<Runtime>, Rc<Gate>) {
              .block { display: block; width: 100px; height: 100px;
                       background-color: rgb(200, 200, 200) }",
         )
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
                 let mut renderer = Holding {
                     inner: zgui_testkit_compositor::Screen::new(),
-                    gate: Rc::clone(&handed),
+                    gate: Arc::clone(&handed),
                 };
                 renderer.configure(target);
-                Ok::<_, AppError>(Box::new(renderer) as Box<dyn Renderer>)
+                support::hand(renderer)
             },
         ))
         .into_handler(move |cx: &mut BuildCx<'_>| {
@@ -123,15 +122,19 @@ fn a_held_frame_asks_for_nothing_until_the_platform_is_ready() {
     let (mut harness, gate) = window(true);
     harness.settle(8);
     let id = harness.platform().offscreens()[0].id();
-    assert_eq!(gate.drawn.get(), 1, "the held frame was drawn again");
-    assert!(gate.held.get());
-    assert_eq!(gate.presented.get(), 0);
+    assert_eq!(
+        gate.drawn.load(Ordering::Relaxed),
+        1,
+        "the held frame was drawn again"
+    );
+    assert!(gate.held.load(Ordering::Relaxed));
+    assert_eq!(gate.presented.load(Ordering::Relaxed), 0);
 
     harness.deliver(id, SurfaceEvent::PresentReady);
-    assert_eq!(gate.presented.get(), 1);
+    assert_eq!(gate.presented.load(Ordering::Relaxed), 1);
     harness.deliver(id, SurfaceEvent::PresentReady);
     assert_eq!(
-        gate.presented.get(),
+        gate.presented.load(Ordering::Relaxed),
         1,
         "one held frame was presented twice"
     );
@@ -143,7 +146,10 @@ fn a_window_is_shown_by_the_first_frame_that_reaches_its_surface() {
     let (mut harness, gate) = window(true);
     harness.settle(8);
     let surface = Arc::clone(&harness.platform().offscreens()[0]);
-    assert!(gate.drawn.get() >= 1, "the first frame never ran");
+    assert!(
+        gate.drawn.load(Ordering::Relaxed) >= 1,
+        "the first frame never ran"
+    );
     assert!(
         !surface.is_visible(),
         "a window was shown before its first frame was presented"

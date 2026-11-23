@@ -50,6 +50,7 @@ impl Window {
             });
             self.driven.latched = container;
             self.driven.routed = false;
+            self.driven.first_move = None;
             if wheel.phase == ScrollPhase::Started {
                 self.driven.track = zgui_scroll::Track::touching();
             }
@@ -98,21 +99,62 @@ impl Window {
         };
         counter::bump(Counter::GesturesHanded);
         self.driven.handed.push(gesture);
-        match self.compositor.scroll_input(gesture) {
-            ScrollRouting::Handled { node, .. } => {
-                self.driven.routed = true;
+        // The window predicts the routing from its own scroll nodes, and the compositor's answer
+        // corrects it when it differs, see `Window::rerouted`.
+        let predicted = self.predicted_node();
+        self.compositor.scroll_input(gesture, predicted);
+        match predicted {
+            Some(node) => {
+                if phase != GesturePhase::Begin && !self.driven.routed {
+                    self.driven.routed = true;
+                    self.driven.first_move = Some(gesture);
+                }
                 self.moving(node);
             }
             // A gesture that begins without moving is routed by its first movement.
-            ScrollRouting::Unhandled if wheel.phase == ScrollPhase::Started => {}
+            None if wheel.phase == ScrollPhase::Started => {}
             // A gesture the compositor routes to no node is the window's to scroll.
-            ScrollRouting::Unhandled if !self.driven.routed => {
+            None if !self.driven.routed => {
                 self.driven.owner = Some(Owner::Window);
                 return false;
             }
-            ScrollRouting::Unhandled => {}
+            None => {}
         }
         true
+    }
+
+    /// Returns the scroll node the window predicts the gesture in progress moves: the node of the
+    /// element it latched to, or of the document's own scroll container.
+    fn predicted_node(&mut self) -> Option<compositor_types::ScrollId> {
+        if !self.compositor.capabilities().scroll_input {
+            return None;
+        }
+        let container = self
+            .driven
+            .latched
+            .or_else(|| zgui_view_dom::id::to_document(self.dom.root_node()))?;
+        self.scroll_node_of(container)
+    }
+
+    /// Acts on the compositor's routing of `gesture`, which differs from the window's prediction.
+    ///
+    /// The routing is acted on as follows:
+    ///
+    /// - If the compositor routed the gesture to another node, that node moves.
+    /// - If it routed the first movement of the gesture in progress to no node, the window scrolls
+    ///   the gesture from its next step on.
+    /// - Otherwise nothing changes, such as for the step that begins a gesture without moving.
+    pub(super) fn rerouted(&mut self, gesture: ScrollGesture, routing: ScrollRouting) {
+        match routing {
+            ScrollRouting::Handled { node, .. } => self.moving(node),
+            ScrollRouting::Unhandled => {
+                if self.driven.first_move == Some(gesture)
+                    && self.driven.owner == Some(Owner::Compositor)
+                {
+                    self.driven.owner = Some(Owner::Window);
+                }
+            }
+        }
     }
 
     /// Hands the compositor again the steps it lost when the client was registered again, after
@@ -121,10 +163,12 @@ impl Window {
         if !std::mem::take(&mut self.driven.lost) {
             return;
         }
+        let predicted = self.predicted_node();
         for gesture in self.driven.handed.clone() {
-            if let ScrollRouting::Handled { node, .. } = self.compositor.scroll_input(gesture) {
-                self.moving(node);
-            }
+            self.compositor.scroll_input(gesture, predicted);
+        }
+        if let Some(node) = predicted {
+            self.moving(node);
         }
     }
 

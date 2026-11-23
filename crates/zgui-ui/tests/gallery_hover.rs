@@ -217,6 +217,7 @@ fn hovering_every_gallery_button_keeps_every_label() {
     let failures = Mutex::new(Vec::new());
     device::drawn_on(
         zgui::app()
+            .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
             .with_title("gallery")
             .with_size(crate::app::WIDTH, crate::app::HEIGHT)
             .with_stylesheet(crate::shell::SHEET),

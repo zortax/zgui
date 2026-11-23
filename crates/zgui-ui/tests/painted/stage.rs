@@ -84,7 +84,10 @@ impl Stage {
         grab::forget();
         let log: Log = Log::default();
         let mut view = view;
-        let app = zgui::app().with_size(WIDTH, HEIGHT).with_stylesheet(sheet);
+        let app = zgui::app()
+            .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
+            .with_size(WIDTH, HEIGHT)
+            .with_stylesheet(sheet);
         let handler = device::drawn_on(app, &log)
             .into_handler(move || (Grab, view().into_view()))
             .expect("the application builds");

@@ -47,7 +47,7 @@ fn bar_on_first_output() -> (Harness<Runtime>, WindowHandle) {
                 .with_size(0.0, 34.0)
                 .with_monitor(MonitorId::new(1)),
         )
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .into_handler(|cx: &mut BuildCx<'_>| {
             INSIDE.with(|inside| *inside.borrow_mut() = Some(zgui_runtime::use_monitors()));

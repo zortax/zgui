@@ -169,7 +169,7 @@ fn kept_document(lit: RwSignal<bool>) -> zgui_platform_headless::Harness<zgui_ru
         .with_title("culling")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui_platform::Surface>,
              target: compositor_types::RenderTarget| {
@@ -177,7 +177,7 @@ fn kept_document(lit: RwSignal<bool>) -> zgui_platform_headless::Harness<zgui_ru
                     compositor_types::RenderCapabilities::MINIMAL,
                 );
                 compositor_api::Renderer::configure(&mut renderer, target);
-                Ok::<Box<dyn compositor_api::Renderer>, zgui_runtime::AppError>(Box::new(renderer))
+                support::hand(renderer)
             },
         ))
         .with_text_engine(Box::new(|| {

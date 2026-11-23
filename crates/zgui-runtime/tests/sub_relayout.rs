@@ -110,7 +110,7 @@ fn subject(
         .with_probe(Rc::new(Recorder {
             log: Rc::clone(log),
         }))
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             Box::new(

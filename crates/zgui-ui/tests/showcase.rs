@@ -298,6 +298,7 @@ fn run(part: Part) -> Option<&'static Opened> {
             let log: Log = Arc::new(Mutex::new(Vec::new()));
             let found = Mutex::new(Found::default());
             let app = zgui::app()
+                .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
                 .with_title("gallery")
                 .with_size(WIDTH, HEIGHT)
                 .with_stylesheet(crate::shell::SHEET);

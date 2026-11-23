@@ -34,7 +34,7 @@ fn window(rows: usize) -> Harness<Runtime> {
         .with_stylesheet(CSS)
         .with_style_threads(4)
         .with_layout_threads(4)
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))

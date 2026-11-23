@@ -22,7 +22,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use compositor_api::{Compositor, Renderer};
+use compositor_api::CompositorClient;
 use compositor_types::RenderTarget;
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
@@ -39,16 +39,18 @@ use crate::timer::Timers;
 use crate::wake::{FrameGate, RuntimeWaker};
 use crate::window::{Window, WindowContent};
 
-/// Builds the renderer that draws one surface's frames.
+/// Prepares the renderer that draws one surface's frames.
 ///
 /// It is a callback rather than a fixed type because the graphics backend is a decision an
 /// application makes, and because the whole loop has to be exercisable with a renderer that draws
 /// nowhere — which is not a fallback for a real window but a different thing entirely.
 ///
-/// Every renderer draws the frames of one output of the application's compositor, see
-/// [`App::with_compositor`].
-pub type RendererFactory =
-    Box<dyn FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, AppError>>;
+/// It runs on the window's thread when the window opens, and fails there when the surface cannot
+/// be drawn into. What it returns builds the renderer on the thread that draws the frames of the
+/// window's output of the application's compositor, see [`App::with_compositor`].
+pub type RendererFactory = Box<
+    dyn FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<compositor_api::RendererFactory, AppError>,
+>;
 
 /// Builds the text engine a window shapes with.
 pub type TextFactory = Box<dyn FnMut() -> Box<dyn TextEngine>>;
@@ -131,7 +133,7 @@ pub struct App {
     /// What the window should hold.
     options: WindowContent,
     /// What builds the frames of every window.
-    compositor: Option<Box<dyn Compositor>>,
+    compositor: Option<Box<dyn CompositorClient>>,
     /// What draws them.
     renderer: Option<RendererFactory>,
     /// What shapes its text.
@@ -365,11 +367,11 @@ impl App {
         self
     }
 
-    /// Installs the compositor every window draws through.
+    /// Installs the driver of the compositor every window draws through.
     ///
     /// Each window is a client of it with an output of its own. Without a compositor no window
     /// opens.
-    pub fn with_compositor(mut self, compositor: Box<dyn Compositor>) -> Self {
+    pub fn with_compositor(mut self, compositor: Box<dyn CompositorClient>) -> Self {
         self.compositor = Some(compositor);
         self
     }
@@ -881,7 +883,8 @@ impl Runtime {
         };
         let compositor = self.compositor.clone().ok_or(AppError::NoCompositor)?;
         let renderer = (self.renderer)(&surface, target)?;
-        let compositor = crate::compositor::Client::open(compositor, target);
+        let compositor = crate::compositor::Client::open(compositor, target, renderer)
+            .map_err(AppError::GpuUnavailable)?;
         // Before the view is built, not after: a view that asks for anything while it is being
         // built asks through a waker that has to already know which surface it belongs to.
         let waker = Arc::clone(
@@ -920,7 +923,6 @@ impl Runtime {
             Window::open(
                 Arc::clone(&surface),
                 document.take().expect("the document is taken once"),
-                renderer,
                 compositor,
                 text,
                 metrics,

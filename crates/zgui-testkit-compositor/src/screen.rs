@@ -22,12 +22,21 @@ pub struct Screen {
 
 /// What a [`Screen`]'s output shows, readable after the screen has been handed away.
 #[derive(Clone, Debug, Default)]
-pub struct Shown(Arc<Mutex<Option<Drawing>>>);
+pub struct Shown(Arc<Mutex<Showing>>);
+
+/// The last frame a [`Screen`] drew, and how many it drew.
+#[derive(Debug, Default)]
+struct Showing {
+    drawing: Option<Drawing>,
+    frames: u64,
+}
 
 impl Shown {
-    /// Replaces what the output shows.
-    pub(crate) fn set(&self, drawing: Drawing) {
-        *self.0.lock().unwrap_or_else(|held| held.into_inner()) = Some(drawing);
+    /// Replaces what the output shows, with the frame drawn the `frames`th.
+    pub(crate) fn set(&self, drawing: Drawing, frames: u64) {
+        let mut showing = self.0.lock().unwrap_or_else(|held| held.into_inner());
+        showing.drawing = Some(drawing);
+        showing.frames = frames;
     }
 
     /// Returns what the output shows, or `None` before the first frame.
@@ -35,7 +44,16 @@ impl Shown {
         self.0
             .lock()
             .unwrap_or_else(|held| held.into_inner())
+            .drawing
             .clone()
+    }
+
+    /// Returns how many frames the screen drew.
+    pub fn frames(&self) -> u64 {
+        self.0
+            .lock()
+            .unwrap_or_else(|held| held.into_inner())
+            .frames
     }
 }
 
@@ -89,7 +107,8 @@ impl Renderer for Screen {
     fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let outcome = self.capture.draw(frame);
         if let Some(captured) = self.capture.last() {
-            self.shown.set(Drawing::of(captured.drawing.clone()));
+            self.shown
+                .set(Drawing::of(captured.drawing.clone()), self.capture.frames());
         }
         outcome
     }

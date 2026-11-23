@@ -10,7 +10,9 @@
 //! reaches an end of the content vouches for every offset past it. For content built in steps,
 //! such as the rows of a virtual list, that holds only once its paint reaches the end.
 
+use compositor_api::{OffsetRange, ScrollWatch};
 use compositor_types::ScrollId;
+use compositor_types::smallvec::SmallVec;
 use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
 use zgui_space::SpatialId;
 use zgui_space::spatial::{Anchoring, PropertyOwner};
@@ -114,7 +116,7 @@ impl Window {
     }
 
     /// Records the offsets each of `margins` vouches for, from the extent the recorded chunks of
-    /// each content draw over.
+    /// each content draw over, and watches the motion of each node that leaves them.
     pub(crate) fn vouch(&mut self, margins: &[Margin]) {
         for margin in margins {
             let painted = self
@@ -125,7 +127,43 @@ impl Window {
             if let Some(active) = self.driven.active.get_mut(&margin.node) {
                 active.vouched = Some(vouched);
             }
+            self.watch_motion(margin.node, vouched);
         }
+    }
+
+    /// Sets the watch of the scroll node `node`, whose port shows only recorded content at the
+    /// offsets `vouched`.
+    ///
+    /// The watch wakes the window when the node comes to rest, when its offset two motion steps
+    /// ahead leaves `vouched`, and when its offset one step ahead leaves the offsets its
+    /// container's rows hold, see [`ViewHost::wake_outside`](zgui_view::ViewHost::wake_outside).
+    pub(crate) fn watch_motion(&mut self, node: ScrollId, vouched: Span) {
+        let mut ranges = SmallVec::new();
+        ranges.push(OffsetRange {
+            bounds: vouched,
+            ahead: 2.0,
+        });
+        let held = self
+            .element_of_scroll(node)
+            .and_then(|container| self.host.held_offsets(container));
+        if let Some([low, high]) = held {
+            // The rows hold `[low, high)` in CSS pixels, and a range holds its bounds.
+            ranges.push(OffsetRange {
+                bounds: [
+                    [f32::NEG_INFINITY, f32::INFINITY],
+                    [low * self.scale, (high * self.scale).next_down()],
+                ],
+                ahead: 1.0,
+            });
+        }
+        self.compositor.watch_scroll(
+            node,
+            Some(ScrollWatch {
+                ranges,
+                stride: [0.0; 2],
+                settle: true,
+            }),
+        );
     }
 
     /// Measures the margin of `node`, which scrolls the box `container` and moved by `step` in its

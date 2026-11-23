@@ -36,39 +36,114 @@ impl Window {
         }
     }
 
-    /// Builds the output's frame for the moment `at` and draws it.
+    /// Runs the frames of the output that are due on the window's thread for the moment `at`, and
+    /// takes what the driver answered since the last call.
     ///
-    /// The counters of a built frame are bridged, and with invariants checked a frame that follows
-    /// this window's commit, and that the compositor scrolled nothing in, is held to the damage
-    /// its paint walk drew. The scroll events the build reported are taken for the next frame to
-    /// adopt.
+    /// A driver with a thread of its own builds and draws on its own, and the answers are what it
+    /// did so far. The outcome is the last frame drawn for the output, or that the window's work
+    /// was handed over when none was drawn yet.
     pub(super) fn draw_output(&mut self, at: zgui_vocab::Timestamp) -> crate::compositor::Drawn {
         let interval = self.refresh_interval();
         self.hand_lost_steps();
-        let drawn = self
-            .compositor
-            .draw(&mut *self.renderer, self.subpixel_order, at, interval);
-        self.steps_built();
-        // The compositor's own scrolling moves pixels the window's walk did not visit.
-        let scrolled = self.take_scroll_events(&drawn);
-        if let Some(built) = self.compositor.take_built() {
-            crate::window::counters::built(&built);
-            crate::window::counters::held(&**self.compositor.compositor());
-            self.renderer_totals.drawn(&drawn.outcome, &*self.renderer);
-            if self.check_damage
-                && !scrolled
-                && let Some(committed) = &self.committed
-            {
-                crate::window::containment::check(
-                    self.compositor.frame(),
-                    committed,
-                    self.retired,
-                    &self.painted,
-                );
-            }
-            self.retired = drawn.outcome.retires_damage();
+        self.compositor.run_due(compositor_types::FrameClock {
+            now_ns: nanos(at.since_origin()),
+            present_ns: nanos(at.since_origin()),
+            interval_ns: nanos(interval),
+        });
+        self.take_answers()
+    }
+
+    /// Returns the moment of the window's clock that `ns` on the driver's frame clock is.
+    ///
+    /// A stepped driver's frame clock is the window's own clock, which the window steps it with.
+    pub(crate) fn frame_clock_moment(&self, ns: u64) -> web_time::Instant {
+        if self.compositor.pacing() == compositor_api::DriverPacing::Stepped {
+            return self.clock.origin() + web_time::Duration::from_nanos(ns);
         }
+        let now = compositor_api::now_ns();
+        let ahead = web_time::Duration::from_nanos(ns.saturating_sub(now));
+        let behind = web_time::Duration::from_nanos(now.saturating_sub(ns));
+        self.clock.now() + ahead - behind.min(self.clock.now() - self.clock.origin())
+    }
+
+    /// Returns when the frame started at `at` is predicted to be shown, which animations are
+    /// sampled at.
+    ///
+    /// A stepped driver shows the frame at the clock the window steps it with, which is `at`. A
+    /// driver that paces itself shows it at its next display time, and at `at` when it predicts
+    /// none.
+    pub(crate) fn shown_at(&self, at: zgui_vocab::Timestamp) -> zgui_vocab::Timestamp {
+        if self.compositor.pacing() == compositor_api::DriverPacing::Stepped {
+            return at;
+        }
+        let Some(display) = self.compositor.stats().next_display_ns else {
+            return at;
+        };
+        at + web_time::Duration::from_nanos(display.saturating_sub(compositor_api::now_ns()))
+    }
+
+    /// Takes what the driver answered since the last call and acts on it.
+    ///
+    /// Drawn frames feed the counters and the window's first show, a rejected commit makes the
+    /// next frame record everything again, and the compositor's scrolling is taken for the next
+    /// frame to adopt.
+    pub(crate) fn take_answers(&mut self) -> crate::compositor::Drawn {
+        let mut answers = self.compositor.answers();
+        if answers.rejected.is_some() {
+            self.restart_after_rejection();
+        }
+        for report in &answers.committed {
+            crate::window::counters::committed(report);
+        }
+        let drawn = crate::compositor::Drawn::of(&answers);
+        if !answers.drawn.is_empty() {
+            self.steps_built();
+            crate::window::counters::held(&self.compositor);
+        }
+        let now = self.clock.now();
+        for (counters, outcome) in &answers.drawn {
+            crate::window::counters::built(counters);
+            self.renderer_totals.drawn(outcome, &self.compositor);
+            self.settle_retry(*outcome, now);
+            self.show_first_frame(*outcome);
+            // The window's retry runs the driver again, which then draws the frame it could not.
+            if outcome.wants_another_frame() {
+                self.compositor.request_frame();
+            }
+            if let Some(containment) = &self.containment {
+                containment.drawn(outcome.retires_damage());
+            }
+        }
+        if let Some(containment) = &self.containment {
+            containment.assert_contained();
+        }
+        if answers.shown {
+            self.show_first_frame(compositor_types::FrameOutcome::Presented(
+                compositor_types::FrameStats::default(),
+            ));
+        }
+        if let Some((starved, _occluded)) = answers.presenter {
+            self.starved = starved;
+        }
+        if let Some(error) = &answers.failed {
+            tracing::error!(target: "zgui::compositor", ?error, "the window's renderer failed");
+        }
+        if self.check_damage {
+            crate::window::counters::check_declared(&answers.compositor);
+        }
+        self.take_scroll_events(&mut answers, &drawn);
         drawn
+    }
+
+    /// Records everything again from the next frame on, after the driver rejected a commit.
+    fn restart_after_rejection(&mut self) {
+        self.compositor.restart();
+        if let Some(sync) = self.painter.compositor() {
+            sync.reset();
+        }
+        self.driven.forget();
+        self.damage = DamageSet::full();
+        self.request_frame();
     }
 
     /// Makes the next frame drop everything this window recorded into its compositor and record
@@ -81,22 +156,15 @@ impl Window {
 
     /// Commits the transaction the embed host wrote into.
     ///
-    /// A rejected transaction leaves the compositor with nothing of this window, as a rejected
-    /// frame does.
+    /// A rejection is answered later, as a rejected frame is.
     pub(super) fn submit_embed_transaction(&mut self, transaction: compositor_types::Transaction) {
-        if self.compositor.commit(transaction).is_err() {
-            if let Some(sync) = self.painter.compositor() {
-                sync.reset();
-            }
-            self.damage = DamageSet::full();
-            self.request_frame();
-        }
+        self.compositor.commit(transaction);
     }
 
     /// Commits the frame's transaction.
     ///
-    /// A rejected transaction leaves the compositor with nothing of this window, so the sync
-    /// forgets what it recorded and the next frame records the whole surface again.
+    /// A rejected transaction is answered later and leaves the compositor with nothing of this
+    /// window, so the frame after the answer records the whole surface again.
     ///
     /// A transaction that writes no node, slot or parameter block declares the damage the frame's
     /// paint walk drew, which holds every pixel the walk's recordings and offsets change. With
@@ -114,32 +182,26 @@ impl Window {
                 crate::window::declared::declared(&self.painted),
             );
         }
-        let violations = self.compositor.compositor().counters().damage_violations;
-        match self.compositor.commit(transaction) {
-            Ok(committed) => {
-                if self.check_damage {
-                    let after = self.compositor.compositor().counters().damage_violations;
-                    assert_eq!(
-                        after, violations,
-                        "the frame's paint damage misses pixels its transaction changes"
-                    );
-                }
-                if let Some(report) = &report {
-                    crate::window::counters::committed(&committed, report);
-                }
-                self.committed = Some(committed.counters);
-            }
-            Err(_) => {
-                if let Some(sync) = self.painter.compositor() {
-                    sync.reset();
-                }
-                self.driven.forget();
-                self.damage = DamageSet::full();
-                self.request_frame();
-            }
-        }
-        if let Some(report) = report {
+        if let Some(report) = &report {
+            crate::window::counters::synced(report);
             tracing::debug!(target: "zgui::compositor", ?report, "transaction committed");
         }
+        if self.check_damage {
+            // Property, paint and offset writes, and the compositor's own scrolling, redraw
+            // pixels the walk never visited.
+            let fit = report.is_some_and(|report| {
+                report.table_writes == 0 && report.params_written == 0 && report.offsets == 0
+            }) && !self.compositor_scrolling();
+            let compositor = &self.compositor;
+            self.containment
+                .get_or_insert_with(|| crate::window::containment::Containment::observe(compositor))
+                .committed(&self.painted, fit);
+        }
+        self.compositor.commit(transaction);
     }
+}
+
+/// Returns `duration` in whole nanoseconds, saturating.
+fn nanos(duration: web_time::Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }

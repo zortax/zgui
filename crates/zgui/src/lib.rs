@@ -136,7 +136,7 @@ pub mod prelude;
 
 /// How precisely the default renderer holds a plain group, see [`App::with_group_precision`].
 pub use crate::app::GroupPrecision;
-pub use crate::app::{App, CompositorRendererMaker, app};
+pub use crate::app::{App, ClientMaker, CompositorDriver, CompositorRendererMaker, app};
 pub use crate::error::Error;
 /// How a window antialiases its text, see [`App::with_text_antialiasing`].
 pub use zgui_runtime::TextAntialiasing;

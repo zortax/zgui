@@ -1,36 +1,18 @@
 //! Frames that only present what the compositor's scrolling moved.
 
+use compositor_api::WatchCause;
 use compositor_types::{CompositorEvent, FrameOutcome, ScrollPhase, SkipReason};
 use web_time::{Duration, Instant};
 use zgui_bits::DamageSet;
 use zgui_platform::Clock;
 use zgui_profile::{Counter, counter};
 
-use crate::compositor::Drawn;
+use crate::compositor::{Answers, Drawn};
 use crate::window::Window;
 use crate::window::frame::FrameReport;
 use crate::window::scroll::driven::Shown;
 
 impl Window {
-    /// Reports whether `offset`, shown by the scroll node `node`, or `offset` one `step` further,
-    /// lies outside the offsets its container holds.
-    fn left_held_offsets(
-        &mut self,
-        node: compositor_types::ScrollId,
-        offset: [f32; 2],
-        step: [f32; 2],
-    ) -> bool {
-        let Some(container) = self.element_of_scroll(node) else {
-            return false;
-        };
-        let Some([low, high]) = self.host.held_offsets(container) else {
-            return false;
-        };
-        let at = offset[1] / self.scale;
-        let ahead = (offset[1] + step[1]) / self.scale;
-        [at, ahead].iter().any(|at| *at < low || *at >= high)
-    }
-
     /// Asks for a frame that presents the compositor's scrolling, unless a frame was asked for.
     pub(crate) fn request_compositor_frame(&self) {
         if !self.awaiting_frame.get() && !self.driven.tick_owed.replace(true) {
@@ -51,10 +33,10 @@ impl Window {
             && self.damage.is_empty()
     }
 
-    /// Builds and presents the compositor's next frame without running the window's pipeline.
+    /// Runs the compositor's frames that are due and takes what the driver answered, without
+    /// running the window's pipeline.
     pub(crate) fn tick_compositor(&mut self, clock: &dyn Clock) -> FrameReport {
         let started = Instant::now();
-        let now = clock.now();
         self.driven.tick_owed.set(false);
         self.driven.due = None;
         counter::bump(Counter::CompositorTicks);
@@ -63,12 +45,6 @@ impl Window {
         } else {
             self.draw_output(clock.timestamp()).outcome
         };
-        let cost = clock.now().saturating_duration_since(now);
-        let interval = self.refresh_interval();
-        self.present
-            .observed(self.renderer.acquire_block(), cost, interval);
-        self.settle_retry(outcome, now);
-        self.show_first_frame(outcome);
         let report = FrameReport {
             elapsed: started.elapsed(),
             paint_elapsed: Duration::ZERO,
@@ -86,26 +62,20 @@ impl Window {
         report
     }
 
-    /// Takes the compositor's events, keeps the newest offset of every node, and asks for the
-    /// frames that `drawn` and those offsets owe. Reports whether any node moved.
+    /// Keeps the newest offset of every node the compositor's scrolling moved, acts on the
+    /// gestures it routed otherwise than predicted, and asks for the frames the watches that fired
+    /// owe. Reports whether any node moved.
     ///
-    /// The window is asked for a frame in these cases:
+    /// The window is asked for a frame when a watch fires, see
+    /// [`Window::watch_motion`]: a node comes to rest, is about to show content the window has
+    /// not recorded, or leaves the offsets its rows hold. A move that changes what a `:hover` rule
+    /// matches under the pointer asks for one too.
     ///
-    /// - A node comes to rest.
-    /// - A node is about to show content the window has not recorded: its offset, or the offset
-    ///   two more steps of its motion reach.
-    /// - A node's offset, or that offset one step of its motion ahead, left the offsets its
-    ///   container holds, see [`ViewHost::wake_outside`](zgui_view::ViewHost::wake_outside).
-    /// - A move changes what a `:hover` rule matches under the pointer.
-    ///
-    /// While the compositor moves anything, each built frame asks for the next one, until one
-    /// finds nothing to build.
-    pub(crate) fn take_scroll_events(&mut self, drawn: &Drawn) -> bool {
-        let mut events = std::mem::take(&mut self.driven.events);
-        self.compositor.take_events(&mut events);
-        let mut wake = false;
+    /// On a driver that runs on the window's thread, each frame the compositor wants is a deadline
+    /// of the window, until none is wanted. `drawn` is what the frames since the last call did.
+    pub(crate) fn take_scroll_events(&mut self, answers: &mut Answers, drawn: &Drawn) -> bool {
         let mut scrolled = false;
-        for event in events.drain(..) {
+        for event in answers.compositor.drain(..) {
             let CompositorEvent::Scroll {
                 node,
                 offset,
@@ -126,36 +96,44 @@ impl Window {
                     settled,
                 },
             );
+            // Queued events of a node coalesce, so the step is the motion since the offset the
+            // window last saw, which is one driver frame on a driver that runs on this thread.
             let active = self.driven.active.entry(node).or_default();
-            let step = active
-                .last
-                .map_or([0.0; 2], |last| [offset[0] - last[0], offset[1] - last[1]]);
-            active.step = step;
+            if !settled {
+                active.step = active
+                    .last
+                    .map_or([0.0; 2], |last| [offset[0] - last[0], offset[1] - last[1]]);
+            }
             active.last = Some(offset);
-            let left = self.left_held_offsets(node, offset, step);
-            let Some(active) = self.driven.active.get(&node) else {
-                continue;
-            };
-            let ahead = [offset[0] + 2.0 * step[0], offset[1] + 2.0 * step[1]];
-            wake |= settled || !active.covers(offset) || !active.covers(ahead) || left;
         }
-        self.driven.events = events;
+        for (gesture, routing) in std::mem::take(&mut answers.rerouted) {
+            self.rerouted(gesture, routing);
+        }
+        let wake = !answers.watched.is_empty();
+        for &(node, cause, _, step) in &answers.watched {
+            if cause == WatchCause::Settled {
+                self.driven
+                    .shown
+                    .entry(node)
+                    .and_modify(|shown| shown.settled = true);
+            } else if let Some(active) = self.driven.active.get_mut(&node) {
+                active.step = step;
+            }
+        }
         if wake {
             self.request_frame();
         }
         if scrolled {
             self.wake_for_hover();
         }
-        // A frame that found nothing to build and no change to come ends the motion.
-        self.driven.moving &= drawn.built || drawn.wake_ns.is_some();
-        let interval = self.refresh_interval();
-        self.driven.due = if self.driven.moving && drawn.built {
-            Some(self.clock.now() + interval)
-        } else {
-            drawn
-                .wake_ns
-                .map(|wake| self.clock.origin() + Duration::from_nanos(wake))
-        };
+        let stats = self.compositor.stats();
+        let local = self.compositor.pacing() != compositor_api::DriverPacing::SelfPaced;
+        // A self-paced driver builds its frames on its own, and the window waits for its watches.
+        self.driven.moving &= drawn.built || stats.next_due_ns.is_some();
+        self.driven.due = stats
+            .next_due_ns
+            .filter(|_| local && self.driven.moving)
+            .map(|due| self.frame_clock_moment(due));
         scrolled
     }
 }

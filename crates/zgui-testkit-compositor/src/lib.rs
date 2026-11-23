@@ -5,6 +5,8 @@
 //!
 //! - `ZGUI_COMPOSITOR` selects the compositor: `core`, the default, or `naive`.
 //! - `ZGUI_RENDERER` selects the renderer: `capture`, the default, `wgpu`, `cpu` or `null`.
+//! - `ZGUI_DRIVER` selects the driver the compositor runs behind: `local`, the default, or
+//!   `threaded`, see [`driver`].
 //!
 //! An implementation that does not exist yet, an unknown value, and a device that cannot be
 //! opened are reported as [`Unavailable`]. The factory never substitutes another implementation.
@@ -29,6 +31,7 @@
 mod aged;
 mod device;
 mod drawing;
+mod driver;
 mod kept;
 mod null;
 mod output;
@@ -48,11 +51,12 @@ use std::sync::Arc;
 pub use crate::aged::{Aged, Refusals};
 pub use crate::device::{Composed, Device, Pixels};
 pub use crate::drawing::{Drawing, Instance};
+pub use crate::driver::{driver, factory};
 pub use crate::kept::{Drawn, Frames, Kept};
 pub use crate::null::NullRenderer;
 pub use crate::output::TestOutput;
 pub use crate::screen::{Screen, Shown, drawing_of};
-pub use crate::select::{CompositorKind, RendererKind};
+pub use crate::select::{CompositorKind, DriverKind, RendererKind};
 pub use crate::session::{FONTS, Session, with_fake_text};
 pub use crate::tierless::tierless;
 pub use crate::unavailable::Unavailable;

@@ -255,11 +255,9 @@ impl Window {
     /// The frame was composed and its damage retired when it ran. This is only the copy to the
     /// surface and the handover, and what the answer to that means for the next frame.
     pub fn present_held(&mut self, clock: &dyn Clock) {
-        let now = clock.now();
-        let outcome = self.renderer.present_held();
+        self.compositor.request_frame();
+        let outcome = self.draw_output(clock.timestamp()).outcome;
         zgui_profile::latency::note_with("f.present_held", || format!("{outcome:?}"));
-        self.settle_retry(outcome, now);
-        self.show_first_frame(outcome);
     }
 
     /// Records when a frame is owed again after `outcome`, and what a presented frame resets.
@@ -388,7 +386,7 @@ impl Window {
         // cascade again are marked before the traversal goes looking for work, and the values it
         // writes for the ones that do not are in place before anything is painted.
         mark("f.animate");
-        let animated = self.animate(timestamp);
+        let animated = self.animate(self.shown_at(timestamp));
 
         // Which changes can affect a computed style is answered from an index the restyle
         // repopulates, so the frame in which the sheets changed takes the full path throughout.
@@ -549,8 +547,9 @@ impl Window {
         // only thing that knows how much of the interval it gave away.
         let cost = clock.now().saturating_duration_since(now);
         let interval = self.refresh_interval();
+        // The driver latches the frames it draws, so nothing here waited for an image.
         self.present
-            .observed(self.renderer.acquire_block(), cost, interval);
+            .observed(web_time::Duration::ZERO, cost, interval);
         // Named for what it counts. A window with nothing moving in it is supposed to leave this
         // alone, so the assertion written against it — that a still document draws nothing over
         // three hundred refreshes — reads as zero when it holds rather than as three hundred.
@@ -563,10 +562,7 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
-            self.damage_extent = self
-                .renderer
-                .target()
-                .map(|target| device_size(target.size));
+            self.damage_extent = self.target.map(|target| device_size(target.size));
         }
         // A drawing drawn from a stretched layer, or deferred by the layer budget, is encoded
         // again on the next frame that reaches it. Its rectangles are what reaches it, and the
@@ -617,37 +613,6 @@ impl Window {
         let needs_another_frame =
             owed || changed_during || flush.needs_another_frame || drained || observed;
 
-        // The renderer's own answer is a source too, and it is the only one that speaks for the
-        // frame *after* the work was submitted. An acquisition that timed out, one against a surface
-        // the compositor has replaced underneath the frame, one the graphics API rejected and a
-        // device that had to be rebuilt all leave the window showing the picture it had before —
-        // while the damage that would have corrected it is retired, because the work *was* submitted
-        // and the composed target does hold this frame's pixels. Nothing else in the list above
-        // knows a frame is owed: the document did not change, no timer is due, and the reactive
-        // graph is settled. So the window stops redrawing until something unrelated happens to ask,
-        // which is a freeze that ends when the pointer crosses the window, or never.
-        //
-        // It is owed *later* rather than now, and that is the whole difference between this source
-        // and every other one. What these outcomes report is the presentation engine having nothing
-        // to hand over, and that is resolved by the compositor coming back to the surface rather
-        // than by this process asking again sooner. Asked again straight away, the frame runs the
-        // whole pipeline and then waits inside the acquisition for as long as the graphics API is
-        // willing to wait — on the thread that reads input — and the next one does it again: one
-        // stall becomes a run of them, and the window answers nothing throughout.
-        //
-        // [`FrameOutcome::wants_another_frame`] is what decides, and it is false for exactly the
-        // outcomes that must not ask at all: an occluded surface, a frame that damaged nothing, and
-        // a device that could not be rebuilt.
-        //
-        // A timed-out acquisition is the exception, and it is the starvation latch's to answer. The
-        // old rule — try again one refresh interval later — re-enters the block immediately: a
-        // surface the compositor stopped drawing makes every acquisition wait the whole of what
-        // the graphics API allows, on the thread that reads input, and one stall becomes an
-        // unbounded run of them. So a timeout latches the window as starved and owes a probe at a
-        // growing distance instead, and a frame that ran under the latch leaves the probe's moment
-        // where it was.
-        self.settle_retry(outcome, now);
-
         // Measured from when the last normal frame finished, so a continuously active document
         // never trims a working set and a parked one gets exactly one maintenance wake.
         self.maintenance_due = Some(clock.now() + crate::window::MAINTENANCE_DELAY);
@@ -666,8 +631,6 @@ impl Window {
         if needs_another_frame && outcome != FrameOutcome::Skipped(SkipReason::Occluded) {
             self.request_frame();
         }
-
-        self.show_first_frame(outcome);
 
         // Last, with everything this frame produced still standing: the scene it emitted, the
         // damage it answered, the layout it computed, and this report. The handle is cloned out
@@ -816,9 +779,9 @@ impl Window {
     /// Services a maintenance-only deadline without building or presenting a frame.
     pub(crate) fn maintain(&mut self, timestamp: zgui_vocab::Timestamp) {
         self.maintenance_due = None;
-        self.renderer.release_idle_resources();
+        self.compositor.release_idle_resources();
         let mut cx = crate::embed::EmbedMaintenanceCx {
-            renderer: &mut *self.renderer,
+            renderer: crate::embed::RendererQueue(&self.compositor),
             content: &mut self.content,
             timestamp,
         };
@@ -834,7 +797,7 @@ impl Window {
             document: &self.document,
             layout: &self.layout,
             placements: &placements,
-            renderer: &mut *self.renderer,
+            renderer: crate::embed::RendererQueue(&self.compositor),
             content: &mut self.content,
             transaction: &mut transaction,
             damage: &mut damage,
@@ -947,7 +910,11 @@ impl Window {
     /// window moves between displays. A change of the answer changes every glyph on the surface,
     /// so the whole surface is damaged.
     fn settle_text_coverage(&mut self) {
-        let order = if self.renderer.capabilities().subpixel_text && !self.translucent {
+        let device = self
+            .compositor
+            .status()
+            .is_some_and(|status| status.caps.subpixel_text);
+        let order = if device && !self.translucent {
             self.text_antialiasing
                 .order(self.surface.subpixel_layout(), self.scale)
         } else {
@@ -964,7 +931,7 @@ impl Window {
             layout = ?self.surface.subpixel_layout(),
             scale = self.scale,
             translucent = self.translucent,
-            device = self.renderer.capabilities().subpixel_text,
+            device,
             "text is drawn with {}",
             match order {
                 Some(SubpixelOrder::RedToBlue) => {
@@ -977,9 +944,7 @@ impl Window {
             }
         );
         self.subpixel_order = order;
-        if let Some(order) = order {
-            self.renderer.set_subpixel_order(order);
-        }
+        self.compositor.set_subpixel_order(order);
         self.damage = DamageSet::full();
     }
 
@@ -1024,8 +989,7 @@ impl Window {
             scale: self.scale,
             opaque: !self.translucent,
         };
-        let was = self.renderer.target();
-        self.renderer.configure(target);
+        let was = self.target.replace(target);
         self.compositor.configure(target);
         let widest = |a: Size<i32, zgui_geom::Device>, b: Size<i32, zgui_geom::Device>| {
             Size::new(a.width.max(b.width), a.height.max(b.height))
@@ -1543,7 +1507,11 @@ impl Window {
     /// which is not a blank glyph but whichever glyph occupied the rectangle before.
     fn paint_and_draw(&mut self) -> FrameOutcome {
         use zgui_profile::latency::mark;
-        let vector_before = self.renderer.vector_status();
+        let vector_before = self
+            .compositor
+            .status()
+            .map(|status| status.vector)
+            .unwrap_or_default();
         self.open_transaction();
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
@@ -1558,7 +1526,12 @@ impl Window {
         let retired = self.layout.borrow_mut().drain_retired_paint();
         // Read before the sink is borrowed, because what the device can do changes what is
         // *emitted* and not only how it is drawn.
-        let mut capabilities = self.renderer.capabilities();
+        let mut capabilities = self
+            .compositor
+            .status()
+            .map_or(compositor_types::RenderCapabilities::MINIMAL, |status| {
+                status.caps
+            });
         // What the device can blend is narrowed to what this window draws on its display.
         capabilities.subpixel_text = self.subpixel_order.is_some();
         let vector_report;
@@ -1810,8 +1783,11 @@ impl Window {
         });
         let drawn = self.draw_output(self.painted_at.unwrap_or(zgui_vocab::Timestamp::ORIGIN));
         let outcome = drawn.outcome;
-        self.committed = None;
-        let vector_after = self.renderer.vector_status();
+        let vector_after = self
+            .compositor
+            .status()
+            .map(|status| status.vector)
+            .unwrap_or_default();
         if !vector_before.initialized && vector_after.initialized {
             // Once per renderer: the build is the costliest single step a frame can take, so the
             // log names what asked for it.

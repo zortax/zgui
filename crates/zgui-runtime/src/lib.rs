@@ -107,6 +107,7 @@ pub use crate::commands::{
 pub use crate::editing::Editors;
 pub use crate::embed::{
     EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport, NoEmbeds,
+    RendererQueue,
 };
 pub use crate::error::AppError;
 pub use crate::frame_callbacks::FrameCallbacks;

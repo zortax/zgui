@@ -104,6 +104,7 @@ fn draw<V: IntoView + 'static>(
     let log: device::Log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
     device::drawn_on(
         zgui::app()
+            .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
             .with_title("vectors")
             .with_size(width, height)
             .with_stylesheet(css),

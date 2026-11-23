@@ -4,10 +4,12 @@
 //! read right after this window's own commit and its own build. The renderer's named statistics
 //! are running totals, so each frame adds what moved since the last one.
 
-use compositor_api::{CommitReport, Compositor, Renderer};
-use compositor_types::{FrameCounters, FrameOutcome};
+use compositor_api::CommitReport;
+use compositor_types::{CompositorEvent, FrameCounters, FrameOutcome};
 use zgui_paint::SyncReport;
 use zgui_profile::{Counter, counter};
+
+use crate::compositor::Client;
 
 /// What one window last read of its renderer's running totals.
 ///
@@ -19,31 +21,47 @@ pub(crate) struct Totals {
     seen: [u64; 4],
 }
 
-/// Adds what a commit did to the counters.
-pub(crate) fn committed(report: &CommitReport, sync: &SyncReport) {
+/// Adds what the sync wrote into a commit to the counters.
+pub(crate) fn synced(sync: &SyncReport) {
+    counter::add(Counter::OrderEntriesDiffed, sync.order_entries as u64);
+}
+
+/// Adds what an applied commit did to the counters.
+pub(crate) fn committed(report: &CommitReport) {
     counter::add(
         Counter::ChunksIdentical,
         u64::from(report.counters.chunks_identical),
     );
-    counter::add(Counter::OrderEntriesDiffed, sync.order_entries as u64);
     counter::add(
         Counter::GlyphsRasterised,
         u64::from(report.counters.glyphs_rasterised),
     );
 }
 
-/// Sets the live counters of what `compositor` holds: the tiles in its atlas and the bytes of its
-/// chunks.
+/// Sets the live counters of what the compositor of `client` holds: the tiles in its atlas and
+/// the bytes of its chunks.
 ///
 /// The atlas tiles are read from the implementation's `content.live_tiles` statistic, and stay
 /// unchanged under a compositor that reports none.
-pub(crate) fn held(compositor: &dyn Compositor) {
-    counter::set(Counter::PaintChunkBytes, compositor.memory().chunk_bytes);
-    compositor.extra_stats(&mut |name, value| {
+pub(crate) fn held(client: &Client) {
+    counter::set(Counter::PaintChunkBytes, client.stats().memory.chunk_bytes);
+    client.extra_stats(&mut |name, value| {
         if name == "content.live_tiles" {
             counter::set(Counter::AtlasEntriesLive, value);
         }
     });
+}
+
+/// Panics when the compositor found a commit's declared damage short of what it changed.
+pub(crate) fn check_declared(events: &[CompositorEvent]) {
+    for event in events {
+        if let CompositorEvent::DamageUndeclared { derived, .. } = event {
+            panic!(
+                "the frame's paint damage misses pixels its transaction changes: the compositor \
+                 derived {derived:?}"
+            );
+        }
+    }
 }
 
 /// Adds what a frame the compositor built did to the counters.
@@ -57,7 +75,7 @@ pub(crate) fn built(frame: &FrameCounters) {
 
 impl Totals {
     /// Adds what drawing a frame cost the renderer to the counters.
-    pub(crate) fn drawn(&mut self, outcome: &FrameOutcome, renderer: &dyn Renderer) {
+    pub(crate) fn drawn(&mut self, outcome: &FrameOutcome, client: &Client) {
         if let Some(stats) = outcome.stats() {
             counter::add(Counter::DrawCalls, u64::from(stats.draw_calls));
             counter::add(Counter::BatchesCulled, u64::from(stats.batches_culled));
@@ -70,7 +88,7 @@ impl Totals {
             counter::set(Counter::ChunksResident, u64::from(stats.chunks_resident));
         }
         let seen = &mut self.seen;
-        renderer.extra_stats(&mut |name, value| {
+        client.renderer_stats(&mut |name, value| {
             let mut moved = |index: usize| {
                 let moved = value.saturating_sub(seen[index]);
                 seen[index] = value;

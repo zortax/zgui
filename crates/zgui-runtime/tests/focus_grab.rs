@@ -22,7 +22,7 @@ use zgui_view::{BuildCx, IntoView, View};
 fn shell(grabs: bool) -> (Harness<Runtime>, WindowHandle, WindowHandle, WindowHandle) {
     let handler = App::new()
         .with_layer(LayerOptions::top().with_size(0.0, 34.0))
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::column().into_view().build(cx))
@@ -80,7 +80,7 @@ fn a_grab_made_during_setup_starts_once_the_platform_is_there() {
     let setup = Rc::clone(&kept);
     let handler = App::new()
         .with_layer(LayerOptions::top().with_size(0.0, 34.0))
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .with_context(move || {
             let popover = zgui_runtime::use_windows().open(

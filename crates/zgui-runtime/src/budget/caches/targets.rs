@@ -1,6 +1,6 @@
 //! The reusable targets the renderer composes isolated content in.
 
-use compositor_api::Renderer;
+use compositor_api::OutputStatus;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};
@@ -15,8 +15,8 @@ use crate::budget::report::{CacheId, CacheReport, CacheUnit, rebuild};
 /// the length of one reallocation. The targets isolated content is composed in are the cache — how
 /// many exist follows from how deeply the document nests filters and stacking contexts, they
 /// outlive the frame that asked for one, and a document that has stopped isolating anything keeps
-/// every one it ever needed. This is the second kind alone, and
-/// [`Renderer::target_pool`] is the seam it is read through.
+/// every one it ever needed. This is the second kind alone, and the output's snapshot
+/// ([`OutputStatus::target_pool`]) is the seam it is read through.
 ///
 /// # It states no level, and the pool is why
 ///
@@ -31,16 +31,26 @@ use crate::budget::report::{CacheId, CacheReport, CacheUnit, rebuild};
 /// everything else the window is spending, and for [`forget`](Budgeted::forget), which is how a
 /// window is put into the state a freshly opened one is in.
 pub struct RenderTargetsBudget<'a> {
-    /// What owns the pool.
-    renderer: &'a mut dyn Renderer,
+    /// The newest snapshot of the output whose renderer owns the pool.
+    status: Option<OutputStatus>,
+    /// Queues the release of every pooled target that is not lent out.
+    release: &'a mut dyn FnMut(),
     /// This cache's own history.
     tracked: &'a mut Tracked,
 }
 
 impl<'a> RenderTargetsBudget<'a> {
-    /// The adapter over one window's renderer.
-    pub fn new(renderer: &'a mut dyn Renderer, tracked: &'a mut Tracked) -> Self {
-        Self { renderer, tracked }
+    /// The adapter over the snapshot of one window's output, whose pool `release` empties.
+    pub fn new(
+        status: Option<OutputStatus>,
+        release: &'a mut dyn FnMut(),
+        tracked: &'a mut Tracked,
+    ) -> Self {
+        Self {
+            status,
+            release,
+            tracked,
+        }
     }
 }
 
@@ -55,7 +65,10 @@ impl Budgeted for RenderTargetsBudget<'_> {
     }
 
     fn report(&self) -> CacheReport {
-        let pool = self.renderer.target_pool();
+        let pool = self
+            .status
+            .map(|status| status.target_pool)
+            .unwrap_or_default();
         CacheReport {
             resident: pool.resident,
             // What is lent out is being composited into right now. Between frames this is zero,
@@ -72,21 +85,26 @@ impl Budgeted for RenderTargetsBudget<'_> {
     }
 
     fn observe(&mut self, epoch: SceneEpoch) {
-        self.tracked
-            .note(epoch, self.renderer.target_pool().leases, false);
+        let leases = self.status.map_or(0, |status| status.target_pool.leases);
+        self.tracked.note(epoch, leases, false);
     }
 
-    /// Frees every target that is not lent out.
+    /// Frees every target that is not lent out, once the driver applies the release.
     ///
     /// Reached only by a caller enforcing a level this cache does not state, so in a window driven
-    /// by the frame loop it is not reached at all — [`forget`](Budgeted::forget) is. It is here
-    /// rather than answering zero because "free what you can" has a real answer for a pool, and one
-    /// that answered zero would be a cache the budget could not get memory back from under pressure.
+    /// by the frame loop it is not reached at all — [`forget`](Budgeted::forget) is. The release is
+    /// queued, so what it frees shows in the next snapshot and this answers what is resident now.
     fn evict(&mut self, _units: u64, _epoch: SceneEpoch) -> u64 {
-        self.renderer.release_cached_targets()
+        (self.release)();
+        self.status.map_or(0, |status| {
+            status
+                .target_pool
+                .resident
+                .saturating_sub(status.target_pool.lent)
+        })
     }
 
     fn forget(&mut self) {
-        self.renderer.release_cached_targets();
+        (self.release)();
     }
 }

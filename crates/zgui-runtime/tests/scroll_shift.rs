@@ -22,7 +22,7 @@ use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::Surface;
 use zgui_platform::SurfaceEvent;
 use zgui_platform_headless::Harness;
-use zgui_runtime::{App, AppError, Runtime};
+use zgui_runtime::{App, Runtime};
 use zgui_testkit_compositor::{Frames, Kept};
 use zgui_view::{Anchor, BuildCx};
 use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
@@ -80,13 +80,13 @@ fn listing(
         })
         .recording_into(handed.clone());
         renderer.configure(target);
-        Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
+        support::hand(renderer)
     };
     let handler = App::new()
         .with_title("scroll-shift")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(renderer))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))

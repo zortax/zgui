@@ -60,15 +60,18 @@ impl CacheRegistry for Window {
             drawings,
             self.budgets.tracked(CacheId::VectorResources),
         ));
+        let status = self.compositor.status();
+        let compositor = &self.compositor;
         visit(&mut RenderTargetsBudget::new(
-            &mut *self.renderer,
+            status,
+            &mut || compositor.release_cached_targets(),
             self.budgets.tracked(CacheId::RenderTargets),
         ));
         // Last, and not a cache: everything else the renderer holds on the device. It frees
         // nothing and states no level; what it does is make the registry's total the process's
         // total rather than the small part of it that happens to be reproducible.
         visit(&mut DeviceMemoryBudget::new(
-            &mut *self.renderer,
+            status,
             embed_memory.callback_owned,
             self.budgets.tracked(CacheId::DeviceMemory),
         ));

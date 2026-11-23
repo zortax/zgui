@@ -19,7 +19,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use compositor_api::Renderer;
+use compositor_api::RendererTask;
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
 use zgui_geom::{Device, Size};
@@ -45,9 +45,9 @@ pub struct EmbedSyncCx<'a> {
     pub layout: &'a Rc<RefCell<LayoutStore>>,
     /// The drawn frame's matrices, which put a fragment's ink on the device.
     pub placements: &'a zgui_space::Placements,
-    /// The window's renderer, reached through [`Renderer::as_any_mut`] for what a backend
-    /// companion needs that the contract cannot name.
-    pub renderer: &'a mut dyn Renderer,
+    /// Work on the window's renderer, for what a backend companion needs that the contract
+    /// cannot name.
+    pub renderer: RendererQueue<'a>,
     /// Where a surface node's external texture is attached for the emit walk to find.
     pub content: &'a mut ContentCache,
     /// A transaction of the window's compositor client, committed once the sync step returns.
@@ -80,12 +80,27 @@ pub struct EmbedSyncCx<'a> {
 
 /// The resources a maintenance-only deadline may trim without painting or presenting.
 pub struct EmbedMaintenanceCx<'a> {
-    /// The window's renderer, for releasing callback-owned textures.
-    pub renderer: &'a mut dyn Renderer,
+    /// Work on the window's renderer, for releasing callback-owned textures.
+    pub renderer: RendererQueue<'a>,
     /// Replaced attachments, for detaching released callback textures.
     pub content: &'a mut ContentCache,
     /// The same monotonic clock frames use.
     pub timestamp: Timestamp,
+}
+
+/// Work queued on a window's renderer.
+///
+/// The tasks run between frames on the thread that draws them, after the commits queued before
+/// them, and are dropped when the window's output has no renderer.
+#[derive(Clone, Copy)]
+pub struct RendererQueue<'a>(pub(crate) &'a crate::compositor::Client);
+
+impl RendererQueue<'_> {
+    /// Queues `task` on the renderer, which it reaches through
+    /// [`Renderer::as_any_mut`](compositor_api::Renderer::as_any_mut).
+    pub fn queue(&self, task: RendererTask) {
+        self.0.with_renderer(task);
+    }
 }
 
 /// Device texture bytes retained by embeds, split by allocation ownership.

@@ -1,36 +1,30 @@
 //! The compositor windows draw through.
 //!
-//! One compositor serves every window of an application. Each window is a client of it with an
-//! output of its own, and the window's renderer draws that output's frames.
+//! One driver of a compositor serves every window of an application. Each window is a client of
+//! it with an output of its own, and the driver's renderer draws that output's frames.
 
 mod client;
-mod draw;
-mod mailbox;
+mod events;
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use compositor_api::Compositor;
+use compositor_api::CompositorClient;
 
 pub(crate) use self::client::Client;
-pub(crate) use self::draw::Drawn;
+pub(crate) use self::events::{Answers, Drawn};
 
-use self::mailbox::Mailbox;
-
-/// The compositor every window of an application draws through, and the events it reported that
-/// no window took yet.
+/// The driver every window of an application draws through.
 #[derive(Clone)]
 pub(crate) struct Shared {
-    compositor: Rc<RefCell<Box<dyn Compositor>>>,
-    mailbox: Rc<RefCell<Mailbox>>,
+    driver: Rc<RefCell<Box<dyn CompositorClient>>>,
 }
 
 impl Shared {
-    /// Shares `compositor` between the windows of an application.
-    pub(crate) fn new(compositor: Box<dyn Compositor>) -> Self {
+    /// Shares `driver` between the windows of an application.
+    pub(crate) fn new(driver: Box<dyn CompositorClient>) -> Self {
         Self {
-            compositor: Rc::new(RefCell::new(compositor)),
-            mailbox: Rc::default(),
+            driver: Rc::new(RefCell::new(driver)),
         }
     }
 }

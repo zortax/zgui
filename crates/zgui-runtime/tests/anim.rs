@@ -255,7 +255,7 @@ where
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
         .with_probe(std::rc::Rc::new(DamageLog))
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))

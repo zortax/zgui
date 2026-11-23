@@ -11,6 +11,15 @@ pub enum CompositorKind {
     Naive,
 }
 
+/// A driver of the compositor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DriverKind {
+    /// `compositor-driver`'s driver on the test's own thread.
+    Local,
+    /// `compositor-thread`'s driver on a thread of its own.
+    Threaded,
+}
+
 /// A renderer implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RendererKind {
@@ -47,6 +56,34 @@ impl CompositorKind {
                 "ZGUI_COMPOSITOR",
                 other,
                 "core, naive",
+            )),
+        }
+    }
+}
+
+impl DriverKind {
+    /// Returns the kind `ZGUI_DRIVER` selects.
+    ///
+    /// # Errors
+    ///
+    /// Fails when the variable holds a value other than `local` or `threaded`.
+    pub fn from_environment() -> Result<Self, Unavailable> {
+        Self::parse(read("ZGUI_DRIVER").as_deref())
+    }
+
+    /// Returns the kind `value` names, `Local` when there is no value.
+    ///
+    /// # Errors
+    ///
+    /// Fails when `value` is other than `local` or `threaded`.
+    pub fn parse(value: Option<&str>) -> Result<Self, Unavailable> {
+        match value {
+            None | Some("local") => Ok(Self::Local),
+            Some("threaded") => Ok(Self::Threaded),
+            Some(other) => Err(Unavailable::unknown(
+                "ZGUI_DRIVER",
+                other,
+                "local, threaded",
             )),
         }
     }

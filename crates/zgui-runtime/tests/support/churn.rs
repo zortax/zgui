@@ -54,7 +54,7 @@ impl Churn {
             return None;
         }
         let text = RwSignal::new_local(String::from("start"));
-        let mut compositor = crate::support::compositor();
+        let mut compositor = crate::support::client();
         compositor.set_budgets(CompositorBudgets { atlas_bytes });
         let handler = App::new()
             .with_title("churn")
@@ -102,7 +102,9 @@ impl Churn {
 
     /// The bytes of atlas pages the window's renderer holds.
     pub fn atlas_bytes(&self) -> u64 {
-        self.harness.app().windows()[0].renderer().memory().atlas
+        self.harness.app().windows()[0]
+            .output_status()
+            .map_or(0, |status| status.memory.atlas)
     }
 }
 
@@ -110,11 +112,13 @@ impl Churn {
 fn device(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut device = zgui_testkit_compositor::Device::open(target.size)
-        .expect("a device opens, which `Churn::open` answered beforehand");
-    device.configure(target);
-    Ok(Box::new(device))
+) -> Result<compositor_api::RendererFactory, AppError> {
+    Ok(Box::new(move || {
+        let mut device = zgui_testkit_compositor::Device::open(target.size)
+            .expect("a device opens, which `Churn::open` answered beforehand");
+        device.configure(target);
+        Ok(Box::new(device) as Box<dyn Renderer>)
+    }))
 }
 
 /// What the counters did between `before` and now.

@@ -167,6 +167,7 @@ fn the_data_table_fits_the_box_it_is_given() {
     let text = Rc::new(RefCell::new(String::new()));
     let probe = Rc::new(TreeGrab(Rc::clone(&text)));
     let handler = zgui::app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_size(1000.0, 900.0)
         .with_stylesheet(
             ":root { background-color: #fff; color: #111; font-family: sans-serif; overflow: auto }
@@ -267,6 +268,7 @@ fn an_end_justified_row_keeps_its_items_inside() {
         Rc::new(RefCell::new(None));
     let handed = Rc::clone(&words);
     let handler = zgui::app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_size(1000.0, 900.0)
         .with_stylesheet(
             ":root { background-color: #fff; color: #111; font-family: sans-serif; overflow: auto }
@@ -360,6 +362,7 @@ fn print_the_data_section_s_layout() {
     let text = Rc::new(RefCell::new(String::new()));
     let probe = Rc::new(TreeGrab(Rc::clone(&text)));
     let handler = zgui::app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_size(1000.0, 900.0)
         .with_stylesheet(crate::shell::SHEET)
         .with_renderer(Box::new(crate::desktop::renderer::build))

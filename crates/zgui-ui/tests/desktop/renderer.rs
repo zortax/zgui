@@ -80,8 +80,10 @@ impl Renderer for Counting {
 pub fn build(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = Counting::default();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
+) -> Result<compositor_api::RendererFactory, AppError> {
+    Ok(zgui_testkit_compositor::factory(move || {
+        let mut renderer = Counting::default();
+        renderer.configure(target);
+        renderer
+    }))
 }

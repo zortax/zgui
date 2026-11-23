@@ -126,7 +126,8 @@ impl Renderer for Device {
         self.capture.draw(frame);
         let outcome = self.wgpu.draw(frame);
         if let Some(captured) = self.capture.last() {
-            self.shown.set(Drawing::of(captured.drawing.clone()));
+            self.shown
+                .set(Drawing::of(captured.drawing.clone()), self.capture.frames());
         }
         *self
             .composed

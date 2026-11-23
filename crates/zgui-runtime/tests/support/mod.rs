@@ -9,9 +9,10 @@
 
 pub mod churn;
 
+use std::cell::RefCell;
 use std::sync::Arc;
 
-use compositor_api::{Compositor, Renderer};
+use compositor_api::{Compositor, CompositorClient, Renderer};
 use compositor_types::RenderTarget;
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
@@ -28,7 +29,7 @@ where
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_compositor(compositor())
+        .with_compositor(client())
         .with_renderer(Box::new(screen))
         .into_handler(view)
         .expect("the reactive runtime installs");
@@ -92,7 +93,7 @@ where
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_compositor(compositor)
+        .with_compositor(driver(compositor))
         .with_renderer(Box::new(screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
@@ -191,14 +192,62 @@ pub fn compositor() -> Box<dyn Compositor> {
     compositor
 }
 
+/// Returns a factory that hands the driver `renderer`, for a window's output.
+pub fn hand<R>(renderer: R) -> Result<compositor_api::RendererFactory, AppError>
+where
+    R: Renderer + Send + 'static,
+{
+    Ok(Box::new(
+        move || Ok(Box::new(renderer) as Box<dyn Renderer>),
+    ))
+}
+
+/// Returns a [`compositor`] behind the driver the environment selects.
+pub fn client() -> Box<dyn CompositorClient> {
+    driver(compositor())
+}
+
+/// Returns `compositor` behind the driver the environment selects.
+pub fn driver(compositor: Box<dyn Compositor>) -> Box<dyn CompositorClient> {
+    zgui_testkit_compositor::driver(compositor)
+}
+
+thread_local! {
+    /// What each surface's [`screen`] shows, in the order the screens were made.
+    static SCREENS: RefCell<Vec<(zgui_platform::SurfaceId, zgui_testkit_compositor::Shown)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
 /// A recording renderer whose last frame is what the window shows.
 pub fn screen(
-    _surface: &Arc<dyn Surface>,
+    surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_compositor::Screen::new();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
+) -> Result<compositor_api::RendererFactory, AppError> {
+    let shown = zgui_testkit_compositor::Shown::default();
+    SCREENS.with(|screens| screens.borrow_mut().push((surface.id(), shown.clone())));
+    Ok(Box::new(move || {
+        let mut renderer = zgui_testkit_compositor::Screen::new().showing_into(shown);
+        renderer.configure(target);
+        Ok(Box::new(renderer) as Box<dyn Renderer>)
+    }))
+}
+
+/// Returns what the [`screen`] of `window` shows.
+///
+/// # Panics
+///
+/// Panics when the window does not draw onto a [`screen`].
+pub fn shown(window: &zgui_runtime::window::Window) -> zgui_testkit_compositor::Shown {
+    let surface = window.surface().id();
+    SCREENS.with(|screens| {
+        screens
+            .borrow()
+            .iter()
+            .rev()
+            .find(|(of, _)| *of == surface)
+            .map(|(_, shown)| shown.clone())
+            .expect("the window draws onto a screen")
+    })
 }
 
 /// What `window` shows, as the compositor last drew it.
@@ -207,7 +256,7 @@ pub fn screen(
 ///
 /// Panics when the window does not draw onto a [`screen`], or has drawn no frame.
 pub fn drawing(window: &zgui_runtime::window::Window) -> zgui_testkit_compositor::Drawing {
-    zgui_testkit_compositor::drawing_of(window.renderer()).expect("the window drew a frame")
+    shown(window).drawing().expect("the window drew a frame")
 }
 
 /// Returns how many frames the renderer of `window` has drawn.
@@ -216,12 +265,7 @@ pub fn drawing(window: &zgui_runtime::window::Window) -> zgui_testkit_compositor
 ///
 /// Panics when the window does not draw onto a [`screen`].
 pub fn frames_drawn(window: &zgui_runtime::window::Window) -> u64 {
-    window
-        .renderer()
-        .as_any()
-        .and_then(|any| any.downcast_ref::<zgui_testkit_compositor::Screen>())
-        .expect("the window draws onto a screen")
-        .frames()
+    shown(window).frames()
 }
 
 /// Returns the bounds of `instance` in window space, as `[x, y, width, height]`.

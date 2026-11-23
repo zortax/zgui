@@ -23,10 +23,13 @@ include.workspace = true
 tracing.workspace = true
 web-time.workspace = true
 # The compositor every window draws through, chosen here and nowhere else: the reference
-# compositor, the wgpu renderer and the swash glyph rasteriser.
+# compositor, the wgpu renderer and the swash glyph rasteriser, driven on a thread of its own or
+# on the window's.
 compositor-api.workspace = true
 compositor-core.workspace = true
+compositor-driver.workspace = true
 compositor-text.workspace = true
+compositor-thread.workspace = true
 compositor-types.workspace = true
 compositor-vello.workspace = true
 compositor-wgpu.workspace = true

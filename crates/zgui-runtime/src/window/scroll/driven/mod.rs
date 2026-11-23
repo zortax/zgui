@@ -25,7 +25,7 @@ mod tick;
 
 use std::cell::Cell;
 
-use compositor_types::{CompositorEvent, ScrollId, Sources};
+use compositor_types::{ScrollId, Sources};
 use rustc_hash::FxHashMap;
 use web_time::Instant;
 use zgui_geom::{Device, Rect};
@@ -53,10 +53,12 @@ pub(crate) struct Driven {
     moving: bool,
     /// When the compositor's motion needs its next frame.
     due: Option<Instant>,
-    /// The buffer the compositor's events are taken into, kept for its allocation.
-    events: Vec<CompositorEvent>,
-    /// Whether the compositor routed a movement of the gesture in progress to a node.
+    /// Whether a movement of the gesture in progress was handed to the compositor with a node
+    /// predicted for it.
     routed: bool,
+    /// The first movement of the gesture in progress handed with a node predicted for it, which
+    /// decides who moves the gesture when the compositor routes it to no node.
+    first_move: Option<compositor_types::ScrollGesture>,
     /// The gesture steps handed to the compositor since it last built a frame.
     handed: Vec<compositor_types::ScrollGesture>,
     /// Whether the client was registered again since those steps were handed, so the compositor
@@ -167,17 +169,5 @@ impl Window {
             sync.set_scroll_drive(drive);
             sync.set_scroll_frozen(frozen);
         }
-    }
-}
-
-impl Active {
-    /// Reports whether the port at `offset` shows only recorded content.
-    fn covers(&self, offset: [f32; 2]) -> bool {
-        self.vouched.is_some_and(|vouched| {
-            (0..2).all(|axis| {
-                let [low, high] = vouched[axis];
-                (low..=high).contains(&offset[axis])
-            })
-        })
     }
 }

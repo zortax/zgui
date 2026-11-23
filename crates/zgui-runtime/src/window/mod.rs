@@ -42,7 +42,6 @@ use std::rc::Rc;
 use std::sync::Arc;
 use web_time::{Duration, Instant};
 
-use compositor_api::Renderer;
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
 use zgui_geom::{CssPx, Device, DevicePx, Scale, Size};
@@ -250,20 +249,19 @@ pub struct Window {
     text_slots: crate::window::brushes::TextSlots,
     /// The text engine.
     text: Box<dyn TextEngine>,
-    /// What draws the frames the compositor builds for this window's output.
-    renderer: Box<dyn Renderer>,
     /// This window's client of the compositor, and its output.
     compositor: crate::compositor::Client,
     /// What the window last read of its renderer's running totals.
     renderer_totals: crate::window::counters::Totals,
     /// See [`Window::set_check_damage_containment`].
     check_damage: bool,
-    /// What the last commit did, until the frame it belongs to is checked.
-    committed: Option<compositor_types::CommitCounters>,
+    /// The check of the output's frames against the walks' damage, once a checked commit started
+    /// it.
+    containment: Option<crate::window::containment::Containment>,
+    /// The target the output was last configured for.
+    target: Option<compositor_types::RenderTarget>,
     /// See [`Window::forget_compositor_sync`].
     resync: std::cell::Cell<bool>,
-    /// Whether the last frame the compositor built retired its damage.
-    retired: bool,
     /// What is hovered, pressed, focused and captured.
     router: Router,
     /// Focus moves that have happened and have not yet been announced to the document.
@@ -564,7 +562,6 @@ impl Window {
     pub(crate) fn open(
         surface: Arc<dyn Surface>,
         document: Document,
-        renderer: Box<dyn Renderer>,
         compositor: crate::compositor::Client,
         text: Box<dyn TextEngine>,
         metrics: Arc<dyn zgui_text::FontMetricsSource>,
@@ -591,8 +588,12 @@ impl Window {
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
         // A photo the device can hold is decoded whole rather than clamped to the smallest
         // supported device's limit.
-        let max_texture_size =
-            i32::try_from(renderer.capabilities().max_texture_size).unwrap_or(i32::MAX);
+        let max_texture_size = i32::try_from(
+            compositor
+                .status()
+                .map_or(0, |status| status.caps.max_texture_size),
+        )
+        .unwrap_or(i32::MAX);
         let images = crate::images::ImageLoader::new(
             Arc::clone(&replaced_images),
             (max_texture_size - 2).max(1) as u32,
@@ -680,6 +681,18 @@ impl Window {
         });
         built.mount(&dom_handle, root, None);
 
+        let mut compositor = compositor;
+        // A self-paced driver answers on its own thread, and the answers that need the window,
+        // such as a watch that fired, ask it for a frame. Every other driver answers during the
+        // window's own calls, whose answers the window takes right after them.
+        if compositor.pacing() == compositor_api::DriverPacing::SelfPaced {
+            let woken = Arc::clone(&waker);
+            compositor.set_waker(Arc::new(move || zgui_reactive::FrameWaker::wake(&*woken)));
+        }
+        if zgui_layout::invariants::enabled() {
+            compositor.set_verification(true);
+        }
+
         Self {
             surface,
             document,
@@ -724,13 +737,12 @@ impl Window {
             damage_extent: None,
             text_slots: crate::window::brushes::TextSlots::default(),
             text,
-            renderer,
             compositor,
             renderer_totals: crate::window::counters::Totals::default(),
             check_damage: zgui_layout::invariants::enabled(),
-            committed: None,
+            containment: None,
+            target: None,
             resync: std::cell::Cell::new(false),
-            retired: false,
             router: Router::new(),
             pending_focus: Vec::new(),
             pending_crossings: Vec::new(),
@@ -1158,9 +1170,9 @@ impl Window {
         &self.damage
     }
 
-    /// The renderer, for a caller that wants to ask it something directly.
-    pub fn renderer(&self) -> &dyn Renderer {
-        self.renderer.as_ref()
+    /// The newest snapshot of the output the window draws into and of its renderer.
+    pub fn output_status(&self) -> Option<compositor_api::OutputStatus> {
+        self.compositor.status()
     }
 
     /// The painter and the paint records it holds, for a memory report.

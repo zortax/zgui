@@ -64,7 +64,8 @@ pub fn real_damage() -> bool {
 /// Returns `app` drawing every window through the compositor onto the device, with each frame
 /// written into `log`.
 pub fn drawn_on(app: zgui::App, log: &Log) -> zgui::App {
-    app.with_compositor_renderer(compositor::factory(log))
+    app.with_compositor_client(Box::new(zgui_testkit_compositor::driver))
+        .with_compositor_renderer(compositor::factory(log))
         .with_probe(compositor::repainting())
 }
 

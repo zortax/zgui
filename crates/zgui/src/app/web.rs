@@ -288,40 +288,64 @@ fn backends() -> wgpu::Backends {
 
 /// The renderer factory of a page: every canvas draws on the device that is already open.
 fn factory(graphics: SharedGraphics, precision: GroupPrecision) -> RendererFactory {
+    PAGE_GRAPHICS.with(|page| *page.borrow_mut() = Some(graphics));
     let paths = super::compositor::PathRenderers::default();
     Box::new(move |surface, target| {
-        let Some(canvas) = zgui_platform_web::canvas_of(surface.id()) else {
+        let id = surface.id();
+        if zgui_platform_web::canvas_of(id).is_none() {
             return Err(AppError::Platform(PlatformError::NoSuchSurface));
-        };
-        // The page presents a canvas when the callback that drew it returns, so the display
-        // paces every frame and nothing is told before a present.
-        let mut renderer = graphics
-            .renderer_for_surface(
-                target.size,
-                target.opaque,
-                Canvas(canvas),
-                PresentPacing::Display,
-                None,
-            )
-            .map_err(AppError::GpuUnavailable)?;
-        renderer.set_group_precision(precision.wgpu());
-        // Without a path rasteriser, paths and glyphs on the path route draw nothing.
-        let backend = if renderer.gpu().capabilities().vector_compute {
-            VectorBackend::Compute
-        } else {
-            VectorBackend::Raster
-        };
-        let options = VelloOptions {
-            adapter: None,
-            cache_directory: None,
-        };
-        renderer.set_vector_factory(
-            super::compositor::vectors(options, paths.clone()),
-            backend,
-            "vello",
-        );
-        Ok(Box::new(renderer) as Box<dyn Renderer>)
+        }
+        let paths = paths.clone();
+        Ok(Box::new(move || {
+            canvas_renderer(id, target, precision, &paths)
+        }))
     })
+}
+
+thread_local! {
+    /// The device every canvas of the page draws on.
+    static PAGE_GRAPHICS: std::cell::RefCell<Option<SharedGraphics>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Opens a renderer presenting into the canvas of the surface `id` on the page's device.
+fn canvas_renderer(
+    id: zgui_platform::SurfaceId,
+    target: compositor_types::RenderTarget,
+    precision: GroupPrecision,
+    paths: &super::compositor::PathRenderers,
+) -> Result<Box<dyn Renderer>, compositor_types::GpuUnavailable> {
+    let graphics = PAGE_GRAPHICS
+        .with(|page| page.borrow().clone())
+        .ok_or_else(compositor_types::GpuUnavailable::default)?;
+    let canvas = zgui_platform_web::canvas_of(id)
+        .ok_or_else(|| compositor_types::GpuUnavailable::default().rejected("canvas", "gone"))?;
+    // The page presents a canvas when the callback that drew it returns, so the display
+    // paces every frame and nothing is told before a present.
+    let mut renderer = graphics.renderer_for_surface(
+        target.size,
+        target.opaque,
+        Canvas(canvas),
+        PresentPacing::Display,
+        None,
+    )?;
+    renderer.set_group_precision(precision.wgpu());
+    // Without a path rasteriser, paths and glyphs on the path route draw nothing.
+    let backend = if renderer.gpu().capabilities().vector_compute {
+        VectorBackend::Compute
+    } else {
+        VectorBackend::Raster
+    };
+    let options = VelloOptions {
+        adapter: None,
+        cache_directory: None,
+    };
+    renderer.set_vector_factory(
+        super::compositor::vectors(options, paths.clone()),
+        backend,
+        "vello",
+    );
+    Ok(Box::new(renderer))
 }
 
 /// The images of a page: the browser loads, decodes and scales each one.

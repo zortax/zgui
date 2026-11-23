@@ -1,6 +1,7 @@
 //! An application: a window, what is in it, and what draws it.
 
 mod compositor;
+mod driver;
 pub mod fonts;
 mod precision;
 #[cfg(target_arch = "wasm32")]
@@ -13,12 +14,21 @@ use zgui_view::{Anchor, BuildCx, IntoView, View};
 pub use crate::app::compositor::{
     PIPELINE_DIRECTORY_VARIABLE, compositor, latency_marks, pipeline_directory,
 };
+pub use crate::app::driver::CompositorDriver;
 pub use crate::app::fonts::Fonts;
 pub use crate::app::precision::GroupPrecision;
 
+/// A function that runs a compositor behind a driver.
+pub type ClientMaker = Box<
+    dyn FnOnce(Box<dyn compositor_api::Compositor>) -> Box<dyn compositor_api::CompositorClient>,
+>;
+
 /// A maker of the renderer a window's compositor draws with, given the window's first size in
 /// device pixels.
-pub type CompositorRendererMaker = Box<dyn FnMut([u32; 2]) -> Box<dyn compositor_api::Renderer>>;
+///
+/// It runs on the thread that draws the window's frames.
+pub type CompositorRendererMaker =
+    Box<dyn FnMut([u32; 2]) -> Box<dyn compositor_api::Renderer> + Send>;
 #[cfg(target_arch = "wasm32")]
 pub use crate::app::web::Mounted;
 #[cfg(target_arch = "wasm32")]
@@ -175,6 +185,10 @@ pub struct App {
     compositor_renderer: Option<CompositorRendererMaker>,
     /// How precisely the default renderer holds a plain group, when the application set it.
     group_precision: Option<crate::GroupPrecision>,
+    /// The thread the compositor runs on.
+    compositor_driver: CompositorDriver,
+    /// What runs the compositor behind a driver, when the application supplied it.
+    client_maker: Option<ClientMaker>,
     /// The application's own context setup, held until the faces are known.
     ///
     /// Held here rather than passed straight down because the faces are provided in the same scope
@@ -205,6 +219,8 @@ impl App {
             renderer: None,
             compositor_renderer: None,
             group_precision: None,
+            compositor_driver: CompositorDriver::default(),
+            client_maker: None,
             context: None,
         }
     }
@@ -579,6 +595,24 @@ impl App {
         self
     }
 
+    /// Sets the thread the compositor runs on.
+    ///
+    /// The default is [`CompositorDriver::Threaded`]. The `ZGUI_DRIVER` environment variable
+    /// (`threaded` or `local`) overrides this value.
+    pub fn with_compositor_driver(mut self, driver: CompositorDriver) -> Self {
+        self.compositor_driver = driver;
+        self
+    }
+
+    /// Runs the compositor behind the client `make` returns for it.
+    ///
+    /// A client set here takes precedence over [`App::with_compositor_driver`]. A test supplies a
+    /// driver it steps over its own clock.
+    pub fn with_compositor_client(mut self, make: ClientMaker) -> Self {
+        self.client_maker = Some(make);
+        self
+    }
+
     /// How every window antialiases its text.
     ///
     /// The default is [`TextAntialiasing::Auto`](crate::TextAntialiasing::Auto), which follows
@@ -699,6 +733,8 @@ impl App {
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
         let group_precision = self.group_precision;
+        let compositor_driver = self.compositor_driver;
+        let client_maker = self.client_maker;
         let compositor_renderer = self.compositor_renderer;
         let renderer = self.renderer.unwrap_or_else(|| match compositor_renderer {
             Some(make) => compositor::wrapping(make),
@@ -717,7 +753,10 @@ impl App {
                     setup();
                 }
             })
-            .with_compositor(compositor::compositor(&fonts))
+            .with_compositor(match client_maker {
+                Some(make) => make(compositor::compositor(&fonts)),
+                None => compositor::driven(compositor::compositor(&fonts), compositor_driver),
+            })
             .with_renderer(renderer)
             .with_metrics(Box::new({
                 let fonts = fonts.clone();

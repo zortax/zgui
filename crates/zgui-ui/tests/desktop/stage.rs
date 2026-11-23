@@ -75,6 +75,7 @@ impl Stage {
         grab::forget();
         let mut view = view;
         let handler = zgui::app()
+            .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
             .with_size(WIDTH, HEIGHT)
             .with_stylesheet(sheet)
             .with_renderer(Box::new(crate::desktop::renderer::build))

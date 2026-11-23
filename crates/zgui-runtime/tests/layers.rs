@@ -41,7 +41,7 @@ fn mount(
         .with_title("layers")
         .with_size(800.0, 600.0)
         .with_stylesheet(css)
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .with_probe(support::watched(move || {
             let log = Rc::clone(&factory);

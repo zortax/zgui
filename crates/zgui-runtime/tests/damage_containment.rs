@@ -15,7 +15,7 @@ use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_runtime::{App, AppError, Runtime};
+use zgui_runtime::{App, Runtime};
 use zgui_testkit_compositor::{Frames, Kept};
 use zgui_view::{BuildCx, IntoView, View};
 
@@ -41,7 +41,7 @@ fn window(
         .with_title("containment")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
                 let mut renderer = Kept::new(RenderCapabilities {
@@ -50,7 +50,7 @@ fn window(
                 })
                 .recording_into(handed.clone());
                 renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
+                support::hand(renderer)
             },
         ))
         .with_text_engine(Box::new(|| {

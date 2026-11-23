@@ -30,7 +30,7 @@ fn every_application_sheet_applies_and_the_later_one_wins() {
             "root { display: block } .panel { display: block; height: 60px; width: 120px }",
         )
         .with_stylesheet(".panel { width: 250px }")
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .into_handler(|cx: &mut BuildCx<'_>| {
             let view = zgui_elements::r#box().class("panel").into_view();

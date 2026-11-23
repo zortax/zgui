@@ -39,7 +39,7 @@
 
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use compositor_types::{ClientId, TextureDesc, TextureId};
 use compositor_wgpu::{Gpu, WgpuRenderer};
@@ -49,7 +49,7 @@ use zgui_dom::host::replaced::{Intrinsic, ReplacedId};
 use zgui_geom::{Css, CssPx, Device, Size};
 use zgui_reactive::FrameWaker;
 use zgui_runtime::embed::{
-    EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport,
+    EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport, RendererQueue,
 };
 use zgui_runtime::wake::RuntimeWaker;
 use zgui_vocab::{PropKey, PropValue, Timestamp};
@@ -570,6 +570,8 @@ pub struct WgpuSurfaces {
     generation: u64,
     /// Slots no element is drawn from any more, removed at the next sync.
     retired: Vec<Slot>,
+    /// The device of the window's renderer, as the renderer last reported it.
+    gpu: Arc<Mutex<Option<Arc<Gpu>>>>,
 }
 
 impl WgpuSurfaces {
@@ -581,6 +583,7 @@ impl WgpuSurfaces {
             device: None,
             generation: 0,
             retired: Vec::new(),
+            gpu: Arc::default(),
         }
     }
 }
@@ -609,7 +612,7 @@ impl EmbedHost for WgpuSurfaces {
         // doing bookkeeping only: elements bind and claim intrinsics so layout is truthful, and
         // nothing is attached because there is nothing to attach to. The share is taken here and
         // the borrow dropped, because everything below borrows the context again.
-        let share = gpu_of(cx).map(|gpu| GpuShare {
+        let share = self.gpu_of(cx).map(|gpu| GpuShare {
             gpu,
             generation: self.generation,
         });
@@ -681,10 +684,8 @@ impl EmbedHost for WgpuSurfaces {
             binding.content_attached = false;
             cx.content.remove_image(ReplacedId::new(node));
             // The slot stays, and is bound again once the element is visible and drawn.
-            if let Some(slot) = binding.slot
-                && let Some(renderer) = wgpu_renderer(&mut *cx.renderer)
-            {
-                renderer.unbind_external(slot.client, slot.id);
+            if let Some(slot) = binding.slot {
+                unbind(&cx.renderer, slot);
             }
         }
     }
@@ -1123,10 +1124,13 @@ fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
     let Some(slot) = *ask.slot else {
         return;
     };
-    let Some(renderer) = wgpu_renderer(&mut *cx.renderer) else {
-        return;
-    };
-    renderer.bind_external(slot.client, slot.id, ask.texture, ask.premultiplied);
+    let texture = ask.texture.clone();
+    let premultiplied = ask.premultiplied;
+    cx.renderer.queue(Box::new(move |renderer| {
+        if let Some(renderer) = wgpu_renderer(renderer) {
+            renderer.bind_external(slot.client, slot.id, &texture, premultiplied);
+        }
+    }));
     cx.transaction.texture_frame(slot.id);
     if !*ask.content_attached {
         cx.content.set_external(ReplacedId::new(ask.node), slot.id);
@@ -1140,10 +1144,17 @@ fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
 
 /// Removes the texture of `slot` from the window's renderer, and adds the slot to `retired`.
 fn retire(cx: &mut EmbedSyncCx<'_>, slot: Slot, retired: &mut Vec<Slot>) {
-    if let Some(renderer) = wgpu_renderer(&mut *cx.renderer) {
-        renderer.unbind_external(slot.client, slot.id);
-    }
+    unbind(&cx.renderer, slot);
     retired.push(slot);
+}
+
+/// Queues the removal of the texture of `slot` from the window's renderer.
+fn unbind(renderer: &RendererQueue<'_>, slot: Slot) {
+    renderer.queue(Box::new(move |renderer| {
+        if let Some(renderer) = wgpu_renderer(renderer) {
+            renderer.unbind_external(slot.client, slot.id);
+        }
+    }));
 }
 
 /// Exact allocated texel bytes for a texture's mip chain and sample count.
@@ -1168,14 +1179,33 @@ fn texture_bytes(texture: &wgpu::Texture) -> u64 {
     total
 }
 
-/// The device behind the frame's renderer, if the renderer has one to give.
-///
-/// A short borrow on purpose: the caller needs the context back the moment this answers.
-fn gpu_of(cx: &mut EmbedSyncCx<'_>) -> Option<Arc<Gpu>> {
-    cx.renderer
-        .as_any_mut()
-        .and_then(|any| any.downcast_mut::<WgpuRenderer>())
-        .map(|renderer| Arc::clone(renderer.gpu()))
+impl WgpuSurfaces {
+    /// Returns the device behind the window's renderer, as the renderer last reported it, and asks
+    /// it again.
+    ///
+    /// The renderer reports between frames, so a new device reaches the host one frame late and
+    /// wakes the window for that frame. A renderer with no device reports none.
+    fn gpu_of(&self, cx: &EmbedSyncCx<'_>) -> Option<Arc<Gpu>> {
+        let reported = Arc::clone(&self.gpu);
+        let waker = Arc::clone(cx.waker);
+        cx.renderer.queue(Box::new(move |renderer| {
+            let gpu = wgpu_renderer(renderer).map(|renderer| Arc::clone(renderer.gpu()));
+            let mut held = reported.lock().unwrap_or_else(PoisonError::into_inner);
+            let same = match (&*held, &gpu) {
+                (Some(held), Some(gpu)) => Arc::ptr_eq(held, gpu),
+                (held, gpu) => held.is_none() && gpu.is_none(),
+            };
+            if !same {
+                *held = gpu;
+                drop(held);
+                FrameWaker::wake(&*waker);
+            }
+        }));
+        self.gpu
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
 }
 
 /// Returns the window's renderer as the compositor's wgpu renderer, when it is one.

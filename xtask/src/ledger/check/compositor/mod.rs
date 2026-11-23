@@ -1,8 +1,8 @@
 //! The compositor ledger.
 //!
 //! zgui draws through the shared compositor's interface, `compositor-types` and `compositor-api`,
-//! and holds every implementation as a `Box<dyn Compositor>`, `Box<dyn Renderer>` or
-//! `Box<dyn Presenter>`. The implementations are chosen in a few crates only: the umbrella's app
+//! and holds every implementation as a `Box<dyn CompositorClient>`, `Box<dyn Compositor>`,
+//! `Box<dyn Renderer>` or `Box<dyn Presenter>`. The implementations are chosen in a few crates only: the umbrella's app
 //! wiring, the crates that are wgpu by nature, the bench binaries and the test kit's factory. Any
 //! other crate that names an implementation, or downcasts to one of its renderers or presenters,
 //! could come to rely on behaviour the contract does not promise, and would then break with a
@@ -36,6 +36,7 @@ const IMPLEMENTATIONS: &[&str] = &[
     "compositor-upload",
     "compositor-text",
     "compositor-capture",
+    "compositor-driver",
     "compositor-thread",
     "compositor-naive",
 ];

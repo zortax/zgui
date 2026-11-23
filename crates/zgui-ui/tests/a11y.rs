@@ -57,10 +57,12 @@ mod nowhere {
     pub(crate) fn build(
         _: &Arc<dyn Surface>,
         target: RenderTarget,
-    ) -> Result<Box<dyn Renderer>, AppError> {
-        let mut renderer = zgui_testkit_compositor::NullRenderer::default();
-        renderer.configure(target);
-        Ok(Box::new(renderer))
+    ) -> Result<compositor_api::RendererFactory, AppError> {
+        Ok(zgui_testkit_compositor::factory(move || {
+            let mut renderer = zgui_testkit_compositor::NullRenderer::default();
+            renderer.configure(target);
+            renderer
+        }))
     }
 }
 
@@ -124,6 +126,7 @@ fn settled() -> Found {
     };
 
     zgui::app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_title("gallery")
         .with_size(crate::app::WIDTH, crate::app::HEIGHT)
         .with_stylesheet(crate::shell::SHEET)

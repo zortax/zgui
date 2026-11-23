@@ -72,7 +72,7 @@ fn window(
         .with_probe(Rc::new(Recorder {
             log: Rc::clone(log),
         }))
-        .with_compositor(support::compositor())
+        .with_compositor(support::client())
         .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
