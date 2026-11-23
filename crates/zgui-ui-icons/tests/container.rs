@@ -26,6 +26,7 @@ fn buffers(handler: Box<dyn AppHandler>) -> Result<(), PlatformError> {
 #[test]
 fn a_container_sets_the_size_of_the_icons_under_it_through_the_step() {
     app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_title("icon")
         .with_size(200.0, 120.0)
         .with_stylesheet(".card { display: flex; padding: 8px }")

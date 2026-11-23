@@ -45,15 +45,12 @@ impl SurfaceRenderer for Clear {
 ///
 /// Returns `None` when no device opens.
 fn app() -> Option<(Harness<Runtime>, Shown)> {
-    let device = match Device::open([200, 100]) {
-        Ok(device) => device,
-        Err(failure) => {
-            eprintln!("skipped: no usable graphics device ({failure})");
-            return None;
-        }
-    };
-    let shown = device.shown();
-    let mut device = Some(device);
+    if let Err(failure) = Device::open([200, 100]) {
+        eprintln!("skipped: no usable graphics device ({failure})");
+        return None;
+    }
+    let shown = Shown::default();
+    let into = shown.clone();
     let handler = App::new()
         .with_title("resized")
         .with_size(200.0, 100.0)
@@ -61,12 +58,19 @@ fn app() -> Option<(Harness<Runtime>, Shown)> {
             "root { display: block; width: 100%; height: 100% } \
              surface { display: block; width: 50%; height: 40px }",
         )
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut device = device.take().expect("one window asks for one renderer");
-                compositor_api::Renderer::configure(&mut device, target);
-                Ok(Box::new(device) as Box<dyn compositor_api::Renderer>)
+            move |_surface: &Arc<dyn Surface>, target: compositor_types::RenderTarget| {
+                let into = into.clone();
+                Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
+                    let mut device = Device::open(target.size)
+                        .expect("a device opens, which the test answered beforehand")
+                        .showing_into(into);
+                    compositor_api::Renderer::configure(&mut device, target);
+                    device
+                }))
             },
         ))
         .with_text_engine(Box::new(|| {

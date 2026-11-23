@@ -98,7 +98,8 @@ mod run {
             // `None` is the copied path. A machine that cannot make these images is an ordinary
             // machine rather than a failure to start.
             let gpu = console::scanout_device(&graphics);
-            self.with_renderer(console::factory(graphics, displays.clone()))
+            self.with_compositor_client(Box::new(console::driver))
+                .with_renderer(console::factory(graphics, displays.clone()))
                 .run_on(
                     move |handler| zgui_platform_drm::run(handler, &displays, gpu.as_deref()),
                     view,

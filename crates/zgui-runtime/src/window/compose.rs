@@ -106,10 +106,6 @@ impl Window {
             self.renderer_totals.drawn(outcome, &self.compositor);
             self.settle_retry(*outcome, now);
             self.show_first_frame(*outcome);
-            // The window's retry runs the driver again, which then draws the frame it could not.
-            if outcome.wants_another_frame() {
-                self.compositor.request_frame();
-            }
             if let Some(containment) = &self.containment {
                 containment.drawn(outcome.retires_damage());
             }
@@ -131,8 +127,19 @@ impl Window {
         if self.check_damage {
             crate::window::counters::check_declared(&answers.compositor);
         }
-        self.take_scroll_events(&mut answers, &drawn);
+        self.take_scroll_events(&mut answers);
+        self.arm_driver();
         drawn
+    }
+
+    /// Makes the driver's next frame a deadline of the window, unless the driver paces itself.
+    fn arm_driver(&mut self) {
+        let due = self.compositor.stats().next_due_ns;
+        let paced = self.compositor.pacing() == compositor_api::DriverPacing::SelfPaced;
+        let at = due
+            .filter(|_| !paced)
+            .map(|due| self.frame_clock_moment(due));
+        self.driven.arm(at);
     }
 
     /// Records everything again from the next frame on, after the driver rejected a commit.

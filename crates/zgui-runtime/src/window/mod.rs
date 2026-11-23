@@ -1170,6 +1170,18 @@ impl Window {
         &self.damage
     }
 
+    /// Runs `inspect` on the window's renderer, on the thread that draws the window's frames, and
+    /// returns its answer.
+    ///
+    /// The call waits for the driver to run it. Returns `None` when the window's output has no
+    /// renderer.
+    pub fn inspect_renderer<T: Send + 'static>(
+        &self,
+        inspect: impl FnOnce(&mut dyn compositor_api::Renderer) -> T + Send + 'static,
+    ) -> Option<T> {
+        self.compositor.inspect(inspect)
+    }
+
     /// The newest snapshot of the output the window draws into and of its renderer.
     pub fn output_status(&self) -> Option<compositor_api::OutputStatus> {
         self.compositor.status()

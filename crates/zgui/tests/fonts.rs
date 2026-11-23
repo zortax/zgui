@@ -116,10 +116,13 @@ fn a_component_resolves_the_applications_faces() {
         .with_title("fonts")
         .with_size(320.0, 200.0)
         .with_fonts(shipped())
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
-            let mut renderer = Nowhere::default();
-            compositor_api::Renderer::configure(&mut renderer, target);
-            Ok::<_, AppError>(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
+            Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
+                let mut renderer = Nowhere::default();
+                compositor_api::Renderer::configure(&mut renderer, target);
+                renderer
+            }))
         }))
         .run_on(buffers, || {
             let fonts = use_context::<Fonts>().expect("the application provides its faces");
@@ -160,10 +163,13 @@ fn the_applications_own_setup_resolves_the_faces() {
         .with_context(|| {
             SEEN.store(use_context::<Fonts>().is_some(), Ordering::SeqCst);
         })
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
-            let mut renderer = Nowhere::default();
-            compositor_api::Renderer::configure(&mut renderer, target);
-            Ok::<_, AppError>(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
+            Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
+                let mut renderer = Nowhere::default();
+                compositor_api::Renderer::configure(&mut renderer, target);
+                renderer
+            }))
         }))
         .run_on(buffers, || view! { column { text {"x"} } })
         .expect("the application ran");

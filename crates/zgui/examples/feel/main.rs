@@ -41,7 +41,7 @@ fn main() -> Result<(), zgui::Error> {
     let out = PathBuf::from(
         std::env::var("ZGUI_FEEL_TAPE").unwrap_or_else(|_| "target/feel.jsonl".to_owned()),
     );
-    let tape = tape::Tape::new(out);
+    let tape = tape::Tape::shared(out);
     let id = std::env::var("ZGUI_DIAG_APPID").unwrap_or_else(|_| "zgui-diag-feel".to_owned());
     let view = std::env::var("ZGUI_FEEL_VIEW").unwrap_or_default();
 

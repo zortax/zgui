@@ -96,6 +96,20 @@ impl Device {
     pub fn composed(&self) -> Composed {
         self.composed.clone()
     }
+
+    /// Returns the device showing its frames through `shown`.
+    #[must_use]
+    pub fn showing_into(mut self, shown: Shown) -> Self {
+        self.shown = shown;
+        self
+    }
+
+    /// Returns the device keeping its composed target in `composed`.
+    #[must_use]
+    pub fn composing_into(mut self, composed: Composed) -> Self {
+        self.composed = composed;
+        self
+    }
 }
 
 impl core::fmt::Debug for Device {

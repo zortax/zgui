@@ -760,7 +760,7 @@ impl Window {
                 .flatten()
                 .fold(earliest, Instant::max)
         });
-        // The compositor's scrolling is paced on its own, and a whole frame due no later serves it.
+        // The driver's frames are paced on their own, and a whole frame due no later serves them.
         let compose = self
             .driven
             .due()

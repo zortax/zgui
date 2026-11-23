@@ -35,8 +35,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use compositor_api::Renderer;
@@ -93,16 +91,20 @@ const SHEET: &str = zgui::css!(
 
 /// Opens a document of `rows` rows, every one of them an element.
 fn opened(rows: usize) -> (Harness<Runtime>, watch::Log) {
-    let damage: watch::Log = Rc::new(RefCell::new(Vec::new()));
-    let for_renderer = Rc::clone(&damage);
+    let damage = watch::Log::default();
+    let for_renderer = damage.clone();
     let render = move |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
                        target: RenderTarget|
-          -> Result<Box<dyn Renderer>, AppError> {
-        let mut inner = zgui_bench::renderers::NullRenderer::default();
-        inner.configure(target);
-        let mut watching = Watching::new(Box::new(inner), Rc::clone(&for_renderer));
-        watching.configure(target);
-        Ok(Box::new(watching))
+          -> Result<compositor_api::RendererFactory, AppError> {
+        let for_renderer = for_renderer.clone();
+        let factory: compositor_api::RendererFactory = Box::new(move || {
+            let mut inner = zgui_bench::renderers::NullRenderer::default();
+            inner.configure(target);
+            let mut watching = Watching::new(Box::new(inner), for_renderer);
+            watching.configure(target);
+            Ok(Box::new(watching) as Box<dyn Renderer>)
+        });
+        Ok(factory)
     };
     let fonts = Fonts::system();
     let metrics = fonts.clone();
@@ -111,7 +113,7 @@ fn opened(rows: usize) -> (Harness<Runtime>, watch::Log) {
         .with_title("unvirtualised-probe")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(SHEET)
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(Box::new(render))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

@@ -32,10 +32,13 @@ fn run(fonts: Option<Fonts>) {
         application = application.with_fonts(fonts);
     }
     application
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
-            let mut renderer = Nowhere::default();
-            compositor_api::Renderer::configure(&mut renderer, target);
-            Ok::<_, AppError>(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
+            Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
+                let mut renderer = Nowhere::default();
+                compositor_api::Renderer::configure(&mut renderer, target);
+                renderer
+            }))
         }))
         .run_on(buffers, || view! { column { text {"x"} } })
         .expect("the application ran");

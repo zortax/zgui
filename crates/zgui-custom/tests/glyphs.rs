@@ -56,12 +56,12 @@ where
         .with_title("glyphs")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
             |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = zgui_testkit_compositor::Screen::new();
-                compositor_api::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
+                Ok(zgui_testkit_compositor::screen(target))
             },
         ))
         .with_text_engine(Box::new(|| {
@@ -101,9 +101,11 @@ impl CustomElement for Label {
     }
 }
 
-/// The glyphs the window shows, as `[x, y, width, height]` and colour.
-fn glyphs(app: &Harness<Runtime>) -> Vec<([f32; 4], Option<String>)> {
-    zgui_testkit_compositor::drawing_of(app.app().windows()[0].renderer())
+/// The glyphs the window drawn onto the test's first screen shows, as `[x, y, width, height]` and
+/// colour.
+fn glyphs() -> Vec<([f32; 4], Option<String>)> {
+    zgui_testkit_compositor::screens()[0]
+        .drawing()
         .expect("the window drew a frame")
         .glyphs()
         .into_iter()
@@ -160,7 +162,7 @@ fn an_elements_own_run_is_drawn_where_it_asked() {
     let mut app = label_app();
     app.settle(16);
 
-    let drawn = glyphs(&app);
+    let drawn = glyphs();
     assert_eq!(
         drawn.len(),
         GLYPHS.len(),
@@ -213,7 +215,7 @@ fn repainting_the_whole_surface_draws_the_same_glyphs_in_the_same_places() {
     PAINTS.store(0, Ordering::SeqCst);
     let mut app = label_app();
     app.settle(16);
-    let first = glyphs(&app);
+    let first = glyphs();
     assert_eq!(first.len(), GLYPHS.len());
 
     // Coming back from occlusion asks for every pixel again while changing no input to any of
@@ -232,7 +234,7 @@ fn repainting_the_whole_surface_draws_the_same_glyphs_in_the_same_places() {
     app.settle(8);
 
     assert_eq!(
-        glyphs(&app),
+        glyphs(),
         first,
         "the repaint drew the element's glyphs at the same places in the same colour"
     );

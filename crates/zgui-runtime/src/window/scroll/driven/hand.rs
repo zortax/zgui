@@ -190,7 +190,6 @@ impl Window {
         if active.vouched.is_none() {
             self.request_frame();
         }
-        self.driven.moving = true;
         self.request_compositor_frame();
     }
 

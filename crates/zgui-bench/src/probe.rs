@@ -6,11 +6,10 @@
 //! offscreen, and with `ZGUI_GPU_TIMING=1` as well each draw's GPU time is recorded. A probe gates
 //! nothing: it prints what it saw.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::rc::Rc;
-use std::sync::Arc;
+
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use compositor_api::Renderer;
@@ -151,7 +150,20 @@ impl Draws {
 }
 
 /// The record a window's renderer writes, shared with the probe that opened it.
-pub type DrawLog = Rc<RefCell<Draws>>;
+#[derive(Clone, Default)]
+pub struct DrawLog(Arc<Mutex<Draws>>);
+
+impl DrawLog {
+    /// Returns the record, for one read.
+    pub fn borrow(&self) -> MutexGuard<'_, Draws> {
+        self.borrow_mut()
+    }
+
+    /// Returns the record, for one write.
+    pub fn borrow_mut(&self) -> MutexGuard<'_, Draws> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// A renderer that records each draw and, when it can, the draw's GPU time.
 struct Counted {
@@ -171,7 +183,7 @@ impl Counted {
 
     /// Files every GPU result that has arrived under the draw that made it.
     fn collect(&mut self) {
-        let log = Rc::clone(&self.log);
+        let log = self.log.clone();
         let Some(device) = self.device() else {
             return;
         };
@@ -283,27 +295,27 @@ fn renderer(device: Device, log: DrawLog) -> zgui::runtime::RendererFactory {
     Box::new(
         move |_surface: &Arc<dyn Surface>,
               target: RenderTarget|
-              -> Result<Box<dyn Renderer>, AppError> {
-            let inner: Box<dyn Renderer> = match device {
-                Device::Capture => Box::new(crate::renderers::NullRenderer::new(target)),
-                Device::Gpu => {
-                    let timed = crate::renderers::gpu_timing_requested();
-                    if timed {
-                        compositor_wgpu::enable_gpu_timing();
+              -> Result<compositor_api::RendererFactory, AppError> {
+            let log = log.clone();
+            Ok(Box::new(move || {
+                let inner: Box<dyn Renderer> = match device {
+                    Device::Capture => Box::new(crate::renderers::NullRenderer::new(target)),
+                    Device::Gpu => {
+                        let timed = crate::renderers::gpu_timing_requested();
+                        if timed {
+                            compositor_wgpu::enable_gpu_timing();
+                        }
+                        let gpu = crate::renderers::device(target)?;
+                        if timed && !gpu.gpu_timing_enabled() {
+                            eprintln!(
+                                "GPU timing was asked for, but {} has no timestamp queries",
+                                gpu.gpu().describe()
+                            );
+                        }
+                        Box::new(gpu)
                     }
-                    let gpu = crate::renderers::device(target)?;
-                    if timed && !gpu.gpu_timing_enabled() {
-                        eprintln!(
-                            "GPU timing was asked for, but {} has no timestamp queries",
-                            gpu.gpu().describe()
-                        );
-                    }
-                    Box::new(gpu)
-                }
-            };
-            Ok(Box::new(Counted {
-                inner,
-                log: Rc::clone(&log),
+                };
+                Ok(Box::new(Counted { inner, log }) as Box<dyn Renderer>)
             }))
         },
     )
@@ -347,8 +359,8 @@ where
         .with_title(title)
         .with_size(width, height)
         .with_stylesheet(sheet)
-        .with_compositor(zgui::app::compositor(&fonts))
-        .with_renderer(renderer(device, Rc::clone(&draws)))
+        .with_compositor(crate::renderers::client(zgui::app::compositor(&fonts)))
+        .with_renderer(renderer(device, draws.clone()))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))

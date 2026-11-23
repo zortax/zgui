@@ -160,15 +160,19 @@ fn opened() -> Harness<Runtime> {
         .with_title("diff-glide")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(SHEET)
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<Box<dyn Renderer>, AppError> {
-                // A renderer that moves composed pixels it does not hold: the compositor's decision
-                // to shift narrows a frame's damage, and the walk and replays that follow from the
-                // narrowing are what this probe measures.
-                Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target)))
+             -> Result<compositor_api::RendererFactory, AppError> {
+                let factory: compositor_api::RendererFactory = Box::new(move || {
+                    // A renderer that moves composed pixels it does not hold: the compositor's decision
+                    // to shift narrows a frame's damage, and the walk and replays that follow from the
+                    // narrowing are what this probe measures.
+                    Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target))
+                        as Box<dyn Renderer>)
+                });
+                Ok(factory)
             },
         ))
         .with_metrics(Box::new(move || metrics.metrics()))

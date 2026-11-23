@@ -11,8 +11,7 @@
 //! frame identical to the last damages nothing and is refused, and counting a refused frame would
 //! report a fraction the surface never showed.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use compositor_api::Renderer;
 use compositor_types::{
@@ -38,8 +37,26 @@ pub struct Damaged {
     pub rects: usize,
 }
 
-/// The frames a run drew, in order.
-pub type Log = Rc<RefCell<Vec<Damaged>>>;
+/// The frames a run drew, in order, written on the thread that draws them.
+#[derive(Clone, Debug, Default)]
+pub struct Log(Arc<Mutex<Vec<Damaged>>>);
+
+impl Log {
+    /// Returns a log holding `frames`.
+    pub fn of(frames: Vec<Damaged>) -> Self {
+        Self(Arc::new(Mutex::new(frames)))
+    }
+
+    /// Returns the frames, for one read.
+    pub fn borrow(&self) -> MutexGuard<'_, Vec<Damaged>> {
+        self.borrow_mut()
+    }
+
+    /// Returns the frames, for one write.
+    pub fn borrow_mut(&self) -> MutexGuard<'_, Vec<Damaged>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// The mean damage fraction over `log`, or `None` when nothing was drawn.
 ///
@@ -136,13 +153,10 @@ impl Renderer for Watching {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use super::{Damaged, Log, full_frames, mean_fraction};
 
     fn log_of(fractions: &[(f64, bool)]) -> Log {
-        Rc::new(RefCell::new(
+        Log::of(
             fractions
                 .iter()
                 .map(|&(fraction, full)| Damaged {
@@ -151,7 +165,7 @@ mod tests {
                     rects: 1,
                 })
                 .collect(),
-        ))
+        )
     }
 
     #[test]

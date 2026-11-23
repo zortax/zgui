@@ -39,6 +39,8 @@ zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
 compositor-api.workspace = true
 compositor-capture.workspace = true
 compositor-core.workspace = true
+compositor-driver.workspace = true
+compositor-thread.workspace = true
 compositor-types.workspace = true
 compositor-vello.workspace = true
 compositor-wgpu.workspace = true

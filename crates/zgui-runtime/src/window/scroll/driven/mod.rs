@@ -49,9 +49,7 @@ pub(crate) struct Driven {
     track: zgui_scroll::Track,
     /// Whether a frame that only presents the compositor's scrolling was asked for.
     tick_owed: Cell<bool>,
-    /// Whether the compositor may be moving content, since a gesture was handed to it.
-    moving: bool,
-    /// When the compositor's motion needs its next frame.
+    /// When the driver latches its next frame on the window's thread.
     due: Option<Instant>,
     /// Whether a movement of the gesture in progress was handed to the compositor with a node
     /// predicted for it.
@@ -113,9 +111,14 @@ enum Owner {
 }
 
 impl Driven {
-    /// When the compositor's motion needs its next frame, if it does.
+    /// When the driver latches its next frame on the window's thread, if it does.
     pub(crate) fn due(&self) -> Option<Instant> {
         self.due
+    }
+
+    /// Sets when the driver latches its next frame on the window's thread.
+    pub(crate) fn arm(&mut self, due: Option<Instant>) {
+        self.due = due;
     }
 
     /// Forgets every node, for a client registered again without them.
@@ -127,7 +130,6 @@ impl Driven {
         self.shown.clear();
         self.lost = !self.handed.is_empty();
         self.active.clear();
-        self.moving = false;
         self.due = None;
     }
 

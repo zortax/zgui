@@ -28,7 +28,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use compositor_api::Renderer;
 use compositor_types::RenderTarget;
 use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, WakeReason,
@@ -295,8 +294,8 @@ impl<A: AppHandler> AppHandler for StopAfter<A> {
 }
 
 /// Returns the compositor every window of a test application draws through.
-pub(crate) fn compositor() -> Box<dyn compositor_api::Compositor> {
-    zgui_testkit_compositor::fake_text_compositor()
+pub(crate) fn compositor() -> Box<dyn compositor_api::CompositorClient> {
+    zgui_testkit_compositor::driver(zgui_testkit_compositor::fake_text_compositor())
 }
 
 /// The renderer factory every window of this program draws through.
@@ -304,8 +303,7 @@ pub(crate) fn compositor() -> Box<dyn compositor_api::Compositor> {
 /// One device behind all of them, as in the application. So a property about several windows
 /// exercises the path that a shell with a bar, pop-ups and lock windows runs on.
 pub(crate) fn renderers() -> zgui_runtime::RendererFactory {
-    let windows = Windows::new();
-    Box::new(move |surface, target| renderer(&windows, surface, target))
+    Box::new(move |surface, target| renderer(Windows::new(), surface, target))
 }
 
 /// Builds whatever this surface can actually be drawn through.
@@ -314,10 +312,10 @@ pub(crate) fn renderers() -> zgui_runtime::RendererFactory {
 /// itself gets presentation that never blocks, and is told when a buffer is about to be committed
 /// so that it can ask the compositor for the next frame.
 fn renderer(
-    windows: &Windows,
+    windows: Windows,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
+) -> Result<compositor_api::RendererFactory, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Err(AppError::Platform(PlatformError::Backend(
             "this surface offers no handles a graphics API can draw into".to_owned(),
@@ -336,12 +334,15 @@ fn renderer(
         );
         notified.pre_present_frame(size, f64::from(target.scale));
     });
-    windows
-        .renderer(target, handles, pacing, Some(pre_present))
-        .map_err(|unavailable| {
-            NO_DEVICE.store(true, Ordering::Relaxed);
-            AppError::Platform(PlatformError::Backend(unavailable.to_string()))
-        })
+    Ok(Box::new(move || {
+        windows
+            .renderer(target, handles, pacing, Some(pre_present))
+            .map_err(|unavailable| {
+                NO_DEVICE.store(true, Ordering::Relaxed);
+                compositor_types::GpuUnavailable::default()
+                    .rejected("window", unavailable.to_string())
+            })
+    }))
 }
 
 /// The identifier every window these properties open is grouped under.
@@ -368,7 +369,7 @@ fn styled(title: &'static str, css: &'static str) -> Result<zgui_runtime::Runtim
         .with_application_id(APP_ID)
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(compositor())
         .with_renderer(renderers())
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(

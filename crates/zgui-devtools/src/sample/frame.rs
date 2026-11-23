@@ -150,7 +150,10 @@ pub(crate) fn sample_frame(
         full_damage: damage.is_full(),
         surface: (viewport.width, viewport.height),
         counters,
-        memory: window.renderer().memory(),
+        memory: window
+            .output_status()
+            .map(|status| status.memory)
+            .unwrap_or_default(),
         budget: window
             .last_budget_report()
             .lines()
@@ -164,7 +167,10 @@ pub(crate) fn sample_frame(
             .collect(),
         nodes,
         document,
-        vector: window.renderer().vector_status(),
+        vector: window
+            .output_status()
+            .map(|status| status.vector)
+            .unwrap_or_default(),
         vello_causes: window
             .vello_initializers()
             .iter()

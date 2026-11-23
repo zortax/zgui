@@ -12,7 +12,7 @@ use compositor_types::{
 use zgui_testkit_compositor::{Drawing, Instance, Screen};
 
 /// What a frame drew, handed over after every frame.
-pub type Watch = Box<dyn FnMut(&Drawing)>;
+pub type Watch = Box<dyn FnMut(&Drawing) + Send>;
 
 /// A recording renderer that hands each frame's transcript to a watcher.
 struct Watching {
@@ -51,7 +51,7 @@ impl compositor_api::Renderer for Watching {
 }
 
 /// Returns a renderer maker whose renderers hand every frame to the watcher `make` builds.
-pub fn watched(mut make: impl FnMut() -> Watch + 'static) -> zgui::CompositorRendererMaker {
+pub fn watched(mut make: impl FnMut() -> Watch + Send + 'static) -> zgui::CompositorRendererMaker {
     Box::new(move |_size: [u32; 2]| {
         Box::new(Watching {
             screen: Screen::new(),

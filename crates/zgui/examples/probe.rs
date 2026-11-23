@@ -287,24 +287,28 @@ fn renderer(
     target: RenderTarget,
     start: Instant,
     dir: &Path,
-) -> Result<Box<dyn Renderer>, AppError> {
+) -> Result<compositor_api::RendererFactory, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Err(AppError::Platform(PlatformError::Backend(
             "this window offers no handles a graphics API can draw into".to_owned(),
         )));
     };
-    // The notify only when asked for, matching the application default.
-    let builder = Builder::new();
-    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
-        let presented = Arc::clone(surface);
-        builder.with_pre_present(Box::new(move |_| {
-            presented.pre_present_notify();
-        }))
-    } else {
-        builder
-    };
-    let inner = builder.for_surface(target.size, target.opaque, handles)?;
-    Ok(Box::new(Probe::new(inner, start, dir.to_path_buf())))
+    let surface = Arc::clone(surface);
+    let dir = dir.to_path_buf();
+    Ok(Box::new(move || {
+        // The notify only when asked for, matching the application default.
+        let builder = Builder::new();
+        let notify = matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify");
+        let builder = if notify {
+            builder.with_pre_present(Box::new(move |_| {
+                surface.pre_present_notify();
+            }))
+        } else {
+            builder
+        };
+        let inner = builder.for_surface(target.size, target.opaque, handles)?;
+        Ok(Box::new(Probe::new(inner, start, dir)) as Box<dyn Renderer>)
+    }))
 }
 
 fn main() -> Result<(), zgui::Error> {

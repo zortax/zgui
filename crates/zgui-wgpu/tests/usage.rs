@@ -79,7 +79,10 @@ impl SurfaceRenderer for ReadBack {
 }
 
 /// A window drawn by the compositor's wgpu renderer into an offscreen texture.
-fn app(renderer: WgpuRenderer, surface: ReadBack) -> Harness<Runtime> {
+fn app(
+    renderer: impl FnOnce() -> WgpuRenderer + Send + 'static,
+    surface: ReadBack,
+) -> Harness<Runtime> {
     let mut renderer = Some(renderer);
     let mut surface = Some(surface);
     let handler = App::new()
@@ -88,12 +91,17 @@ fn app(renderer: WgpuRenderer, surface: ReadBack) -> Harness<Runtime> {
         .with_stylesheet(
             "root { display: block; width: 64px; height: 64px } surface { width: 32px; height: 32px }",
         )
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = renderer.take().expect("one window asks for one renderer");
-                compositor_api::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
+                let make = renderer.take().expect("one window asks for one renderer");
+                Ok(zgui_testkit_compositor::factory(move || {
+                    let mut renderer = make();
+                    compositor_api::Renderer::configure(&mut renderer, target);
+                    renderer
+                }))
             },
         ))
         .with_text_engine(Box::new(|| {
@@ -119,16 +127,14 @@ fn app(renderer: WgpuRenderer, surface: ReadBack) -> Harness<Runtime> {
 
 #[test]
 fn a_renderer_asking_for_copy_src_can_copy_its_texture_to_a_buffer() {
-    let renderer = match Builder::new().offscreen([64, 64], wgpu::TextureFormat::Bgra8Unorm) {
-        Ok(renderer) => renderer,
-        Err(failure) => {
-            eprintln!("skipped: no usable graphics device ({failure})");
-            return;
-        }
-    };
+    let open = || Builder::new().offscreen([64, 64], wgpu::TextureFormat::Bgra8Unorm);
+    if let Err(failure) = open() {
+        eprintln!("skipped: no usable graphics device ({failure})");
+        return;
+    }
     let read = Arc::new(Mutex::new(None));
     let mut app = app(
-        renderer,
+        move || open().expect("a device opens, which the test answered beforehand"),
         ReadBack {
             read: Arc::clone(&read),
         },

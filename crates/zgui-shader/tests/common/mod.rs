@@ -162,12 +162,14 @@ where
         .with_title("shader")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_compositor(zgui_testkit_compositor::compositor().expect("the test compositor exists"))
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::compositor().expect("the test compositor exists"),
+        ))
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
                 let mut renderer = Shading::new(&screens);
                 compositor_api::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn compositor_api::Renderer>)
+                Ok(zgui_testkit_compositor::factory(move || renderer))
             },
         ))
         .with_text_engine(Box::new(|| {

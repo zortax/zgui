@@ -114,10 +114,13 @@ fn main() -> Result<(), zgui::Error> {
         .with_size(560.0, 420.0)
         .with_stylesheet(SHEET)
         .with_renderer(Box::new(move |surface, target| {
-            Ok(Box::new(Stamping::new(
-                open_device(surface, target)?,
-                Arc::clone(&counted),
-            )))
+            let open = zgui_bench::renderers::window(surface, target)?;
+            let counted = Arc::clone(&counted);
+            let factory: compositor_api::RendererFactory =
+                Box::new(
+                    move || Ok(Box::new(Stamping::new(open()?, counted)) as Box<dyn Renderer>),
+                );
+            Ok(factory)
         }))
         .run_on(
             // This desktop's own backend, so that `ZGUI_PLATFORM` selects which one is measured.
@@ -390,14 +393,6 @@ fn report(counted: &[Counted], stamps: &[Instant]) -> String {
         SCROLLS.load(Ordering::Relaxed),
         offsets.join(",")
     )
-}
-
-/// Opens the graphics device for `surface`, exactly as a window of this framework opens one.
-fn open_device(
-    surface: &Arc<dyn zgui::platform::Surface>,
-    target: RenderTarget,
-) -> Result<Box<dyn Renderer>, zgui::Error> {
-    Ok(Box::new(zgui_bench::renderers::window(surface, target)?))
 }
 
 /// A renderer that stamps every frame it presents and then draws it.

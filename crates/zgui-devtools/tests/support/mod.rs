@@ -67,10 +67,12 @@ pub(crate) fn sheet() -> String {
 fn blind(
     _surface: &std::sync::Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_compositor::NullRenderer::default();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
+) -> Result<compositor_api::RendererFactory, AppError> {
+    Ok(zgui_testkit_compositor::factory(move || {
+        let mut renderer = zgui_testkit_compositor::NullRenderer::default();
+        renderer.configure(target);
+        renderer
+    }))
 }
 
 /// Opens an 800x600 window with a two-element page and the inspector in it.
@@ -89,7 +91,9 @@ pub(crate) fn sized(
         .with_size(size.width.0, size.height.0)
         .with_stylesheet(sheet())
         .with_probe(tools.probe())
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(blind))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(
@@ -116,7 +120,9 @@ pub(crate) fn mounted<V: IntoView + 'static>(
         .with_size(size.width.0, size.height.0)
         .with_stylesheet(sheet())
         .with_probe(tools.probe())
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(blind))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let view = view.clone();

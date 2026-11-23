@@ -191,7 +191,11 @@ pub(crate) fn sample_element(window: &Window, node: NodeId, restyle: bool) -> Op
     let vector = (!subtree.is_empty()).then(|| VectorRendering {
         direct,
         subtree,
-        backend: window.renderer().vector_status().backend,
+        backend: window
+            .output_status()
+            .map(|status| status.vector)
+            .unwrap_or_default()
+            .backend,
         initialized_vello: window.vello_initializers().contains(&key),
     });
     Some(Element {

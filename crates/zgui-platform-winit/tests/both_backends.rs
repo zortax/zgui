@@ -21,7 +21,6 @@ mod support;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use compositor_api::Renderer;
 use compositor_types::RenderTarget;
 use zgui_platform::{AppHandler, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId};
 use zgui_platform_headless::Harness;
@@ -109,11 +108,9 @@ impl<A: AppHandler> AppHandler for StopWhenDrawn<A> {
 fn renderer(
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
+) -> Result<compositor_api::RendererFactory, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
-        let mut recording = zgui_testkit_compositor::Screen::new();
-        recording.configure(target);
-        return Ok(Box::new(recording));
+        return Ok(zgui_testkit_compositor::screen(target));
     };
 
     // The notify only when asked for, matching the application default.
@@ -126,19 +123,22 @@ fn renderer(
     // The surface has to be created from the instance the device is opened from, which is why the
     // window's handles are handed to the renderer rather than the other way round. The shared
     // handle keeps the window alive for as long as anything draws through it.
-    zgui_testkit_compositor::Windows::new()
-        .renderer(
-            target,
-            handles,
-            zgui_testkit_compositor::Pacing::Display,
-            pre_present,
-        )
-        .map_err(|unavailable| {
-            // A machine with no usable device is a fact about the machine, not a defect. It is
-            // recorded so the program can say so out loud rather than report a silent zero.
-            NO_DEVICE.store(true, Ordering::Relaxed);
-            AppError::Platform(PlatformError::Backend(unavailable.to_string()))
-        })
+    Ok(Box::new(move || {
+        zgui_testkit_compositor::Windows::new()
+            .renderer(
+                target,
+                handles,
+                zgui_testkit_compositor::Pacing::Display,
+                pre_present,
+            )
+            .map_err(|unavailable| {
+                // A machine with no usable device is a fact about the machine, not a defect. It is
+                // recorded so the program can say so out loud rather than report a silent zero.
+                NO_DEVICE.store(true, Ordering::Relaxed);
+                compositor_types::GpuUnavailable::default()
+                    .rejected("window", unavailable.to_string())
+            })
+    }))
 }
 
 /// The application, built the same way for both backends.
@@ -147,7 +147,9 @@ fn application() -> Result<zgui_runtime::Runtime, AppError> {
         .with_title("both backends")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(renderer))
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(

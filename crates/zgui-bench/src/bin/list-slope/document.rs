@@ -1,7 +1,5 @@
 //! The document: [`zgui_ui::virtualize::VirtualList`], at a row count and a port height.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::time::Duration;
 
 use compositor_api::Renderer;
@@ -109,16 +107,20 @@ pub(crate) struct Opened {
 /// pointer was over.
 pub(crate) fn opened(rows: usize, height: f32) -> Opened {
     let repaint: Repaint = RwSignal::new_local(false);
-    let damage: watch::Log = Rc::new(RefCell::new(Vec::new()));
-    let for_renderer = Rc::clone(&damage);
+    let damage = watch::Log::default();
+    let for_renderer = damage.clone();
     let render = move |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
                        target: RenderTarget|
-          -> Result<Box<dyn Renderer>, AppError> {
-        let mut inner = zgui_bench::renderers::NullRenderer::default();
-        inner.configure(target);
-        let mut watching = Watching::new(Box::new(inner), Rc::clone(&for_renderer));
-        watching.configure(target);
-        Ok(Box::new(watching))
+          -> Result<compositor_api::RendererFactory, AppError> {
+        let for_renderer = for_renderer.clone();
+        let factory: compositor_api::RendererFactory = Box::new(move || {
+            let mut inner = zgui_bench::renderers::NullRenderer::default();
+            inner.configure(target);
+            let mut watching = Watching::new(Box::new(inner), for_renderer);
+            watching.configure(target);
+            Ok(Box::new(watching) as Box<dyn Renderer>)
+        });
+        Ok(factory)
     };
     // The real font stack, because a wheel notch is measured in *lines* and a line's height is read
     // off the scrolled container's own strut. A window with no text engine behind it resolves that
@@ -131,7 +133,7 @@ pub(crate) fn opened(rows: usize, height: f32) -> Opened {
         .with_title("list-slope")
         .with_size(WIDTH, height)
         .with_stylesheet(sheet(height))
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(Box::new(render))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

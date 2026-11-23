@@ -109,14 +109,19 @@ fn opened(beat: zgui::reactive::RwSignal<usize, zgui::reactive::LocalStorage>) -
         .with_title("clip-sweep")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(SHEET)
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_testkit_compositor::driver(zgui::app::compositor(
+            &fonts,
+        )))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = zgui_bench::renderers::NullRenderer::default();
-                inner.configure(target);
-                Ok(Box::new(inner))
+             -> Result<compositor_api::RendererFactory, AppError> {
+                let factory: compositor_api::RendererFactory = Box::new(move || {
+                    let mut inner = zgui_bench::renderers::NullRenderer::default();
+                    inner.configure(target);
+                    Ok(Box::new(inner) as Box<dyn Renderer>)
+                });
+                Ok(factory)
             },
         ))
         .with_metrics(Box::new(move || metrics.metrics()))

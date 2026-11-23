@@ -255,12 +255,16 @@ impl Args {
 /// Builds the renderer the window draws through, charged to [`Tag::Renderer`].
 fn renderer(gpu: bool) -> zgui::runtime::RendererFactory {
     Box::new(move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-        alloc_tag::scope(Tag::Renderer, || -> Result<Box<dyn Renderer>, AppError> {
-            if !gpu {
-                return Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target)));
-            }
-            Ok(Box::new(zgui_bench::renderers::device(target)?))
-        })
+        let factory: compositor_api::RendererFactory = Box::new(move || {
+            alloc_tag::scope(Tag::Renderer, || {
+                if !gpu {
+                    return Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target))
+                        as Box<dyn Renderer>);
+                }
+                Ok(Box::new(zgui_bench::renderers::device(target)?) as Box<dyn Renderer>)
+            })
+        });
+        Ok::<_, AppError>(factory)
     })
 }
 
@@ -281,7 +285,7 @@ fn open<R: ProbeRow>(args: &Args) -> Result<(Harness<Runtime>, Ctx<R>), String> 
         .with_stylesheet(row::SHEET)
         .with_style_threads(0)
         .with_layout_threads(0)
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(renderer(args.gpu))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

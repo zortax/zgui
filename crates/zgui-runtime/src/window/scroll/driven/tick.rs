@@ -7,7 +7,7 @@ use zgui_bits::DamageSet;
 use zgui_platform::Clock;
 use zgui_profile::{Counter, counter};
 
-use crate::compositor::{Answers, Drawn};
+use crate::compositor::Answers;
 use crate::window::Window;
 use crate::window::frame::FrameReport;
 use crate::window::scroll::driven::Shown;
@@ -70,10 +70,7 @@ impl Window {
     /// [`Window::watch_motion`]: a node comes to rest, is about to show content the window has
     /// not recorded, or leaves the offsets its rows hold. A move that changes what a `:hover` rule
     /// matches under the pointer asks for one too.
-    ///
-    /// On a driver that runs on the window's thread, each frame the compositor wants is a deadline
-    /// of the window, until none is wanted. `drawn` is what the frames since the last call did.
-    pub(crate) fn take_scroll_events(&mut self, answers: &mut Answers, drawn: &Drawn) -> bool {
+    pub(crate) fn take_scroll_events(&mut self, answers: &mut Answers) -> bool {
         let mut scrolled = false;
         for event in answers.compositor.drain(..) {
             let CompositorEvent::Scroll {
@@ -126,14 +123,6 @@ impl Window {
         if scrolled {
             self.wake_for_hover();
         }
-        let stats = self.compositor.stats();
-        let local = self.compositor.pacing() != compositor_api::DriverPacing::SelfPaced;
-        // A self-paced driver builds its frames on its own, and the window waits for its watches.
-        self.driven.moving &= drawn.built || stats.next_due_ns.is_some();
-        self.driven.due = stats
-            .next_due_ns
-            .filter(|_| local && self.driven.moving)
-            .map(|due| self.frame_clock_moment(due));
         scrolled
     }
 }

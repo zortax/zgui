@@ -157,16 +157,17 @@ fn open(
         .with_title("scale-capture")
         .with_size(gallery::WIDTH, gallery::HEIGHT)
         .with_stylesheet(gallery::SHEET)
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_testkit_compositor::driver(zgui::app::compositor(
+            &fonts,
+        )))
         .with_renderer(Box::new(move |_surface: &Arc<dyn Surface>, target| {
-            let mut inner = Builder::new()
-                .offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)
-                .map_err(zgui_runtime::AppError::GpuUnavailable)?;
-            inner.configure(target);
-            Ok(Box::new(Recording {
-                inner,
-                into: Arc::clone(&into),
-            }) as Box<dyn Renderer>)
+            let into = Arc::clone(&into);
+            Ok::<compositor_api::RendererFactory, zgui_runtime::AppError>(Box::new(move || {
+                let mut inner =
+                    Builder::new().offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)?;
+                inner.configure(target);
+                Ok(Box::new(Recording { inner, into }) as Box<dyn Renderer>)
+            }))
         }))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

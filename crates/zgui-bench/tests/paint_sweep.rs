@@ -12,7 +12,6 @@
 
 use std::time::Duration;
 
-use compositor_api::Renderer;
 use compositor_types::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
@@ -23,7 +22,7 @@ use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::{component, view};
 use zgui_platform_headless::Harness;
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
-use zgui_testkit_compositor::{Drawing, Screen};
+use zgui_testkit_compositor::Drawing;
 
 /// How many animated boxes one generation mounts.
 const BOXES: usize = 40;
@@ -90,14 +89,14 @@ fn opened(
         .with_title("paint-sweep")
         .with_size(800.0, 600.0)
         .with_stylesheet(SHEET)
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_testkit_compositor::driver(zgui::app::compositor(
+            &fonts,
+        )))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = Screen::new();
-                inner.configure(target);
-                Ok(Box::new(inner))
+             -> Result<compositor_api::RendererFactory, AppError> {
+                Ok(zgui_testkit_compositor::screen(target))
             },
         ))
         .with_metrics(Box::new(move || metrics.metrics()))
@@ -155,7 +154,7 @@ fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
         earlier >= 1_024,
         "the churn never filled the table to the size where sweeps run: {earlier} entries"
     );
-    let drawing = drawing(&harness);
+    let drawing = drawing();
     let quads = drawing.quads();
     assert!(!quads.is_empty(), "the last frame drew no box");
     for quad in quads {
@@ -184,8 +183,10 @@ fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
     );
 }
 
-/// Returns what the window of `harness` shows.
-fn drawing(harness: &Harness<Runtime>) -> Drawing {
-    zgui_testkit_compositor::drawing_of(harness.app().windows()[0].renderer())
+/// Returns what the window opened last on this thread shows.
+fn drawing() -> Drawing {
+    zgui_testkit_compositor::screens()
+        .last()
+        .and_then(zgui_testkit_compositor::Shown::drawing)
         .expect("the window drew a frame")
 }

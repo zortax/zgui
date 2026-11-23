@@ -69,10 +69,12 @@ impl Signals {
 fn capture(
     _surface: &std::sync::Arc<dyn zgui::platform::Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_bench::renderers::NullRenderer::default();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
+) -> Result<compositor_api::RendererFactory, AppError> {
+    Ok(Box::new(move || {
+        let mut renderer = zgui_bench::renderers::NullRenderer::default();
+        renderer.configure(target);
+        Ok(Box::new(renderer) as Box<dyn Renderer>)
+    }))
 }
 
 /// Opens a document of `controls` controls, settled and warm.
@@ -81,7 +83,9 @@ pub(crate) fn opened(controls: usize, signals: Signals) -> Harness<Runtime> {
         .with_title("static-slope")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(SHEET)
-        .with_compositor(zgui_bench::renderers::compositor())
+        .with_compositor(zgui_bench::renderers::client(
+            zgui_bench::renderers::compositor(),
+        ))
         .with_renderer(Box::new(capture))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let hot = signals.hot;

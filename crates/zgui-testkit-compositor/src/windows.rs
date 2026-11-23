@@ -8,9 +8,13 @@ use crate::Unavailable;
 
 /// What builds the renderers of a test's windows, each presenting into its window's surface.
 ///
-/// Every renderer it builds draws on one device, as an application's windows do.
-pub struct Windows {
-    graphics: SharedGraphics,
+/// Every renderer built on one thread draws on one device, as an application's windows do.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Windows;
+
+thread_local! {
+    /// The device the renderers built on this thread draw on.
+    static GRAPHICS: SharedGraphics = SharedGraphics::new();
 }
 
 /// When a window's frames are handed to the platform.
@@ -23,11 +27,9 @@ pub enum Pacing {
 }
 
 impl Windows {
-    /// Returns a builder that has opened no device yet.
+    /// Returns the builder.
     pub fn new() -> Self {
-        Self {
-            graphics: SharedGraphics::new(),
-        }
+        Self
     }
 
     /// Returns a renderer presenting into the window `handles` name, configured for `target`.
@@ -48,17 +50,18 @@ impl Windows {
             Pacing::Display => PresentPacing::Display,
             Pacing::Platform => PresentPacing::Platform,
         };
-        let mut renderer = self
-            .graphics
-            .renderer_for_surface(target.size, target.opaque, handles, pacing, pre_present)
+        let mut renderer = GRAPHICS
+            .with(|graphics| {
+                graphics.renderer_for_surface(
+                    target.size,
+                    target.opaque,
+                    handles,
+                    pacing,
+                    pre_present,
+                )
+            })
             .map_err(|error| Unavailable::window(&error))?;
         renderer.configure(target);
         Ok(Box::new(renderer))
-    }
-}
-
-impl Default for Windows {
-    fn default() -> Self {
-        Self::new()
     }
 }

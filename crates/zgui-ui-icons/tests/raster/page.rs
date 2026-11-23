@@ -157,6 +157,7 @@ pub fn runs() -> Option<&'static Runs> {
 fn run<V: IntoView + 'static>(title: &str, view: impl FnMut() -> V + 'static) -> Vec<Recorded> {
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     zgui::app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_title(title)
         .with_size(SURFACE as f32, SURFACE as f32)
         .with_stylesheet(SHEET)

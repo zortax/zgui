@@ -72,8 +72,10 @@ fn placements() -> String {
 fn nowhere(
     _surface: &std::sync::Arc<dyn zgui::platform::Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target)))
+) -> Result<compositor_api::RendererFactory, AppError> {
+    Ok(Box::new(move || {
+        Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target)) as Box<dyn Renderer>)
+    }))
 }
 
 /// The text of one label at one zoom step, different at every step and from every other label.
@@ -91,7 +93,7 @@ fn opened(zoom: RwSignal<usize, LocalStorage>) -> Harness<Runtime> {
         .with_title("label-churn")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(format!("{SHEET}\n{}", placements()))
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(Box::new(nowhere))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

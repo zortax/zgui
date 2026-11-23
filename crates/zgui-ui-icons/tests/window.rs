@@ -72,6 +72,7 @@ const SHEET: &str = ":root { color: rgb(0, 128, 255) }
 #[test]
 fn an_icon_mounted_in_a_window_paints_a_shape_the_size_its_own_sheet_gave_it() {
     app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_title("icon")
         .with_size(200.0, 120.0)
         .with_stylesheet(SHEET)

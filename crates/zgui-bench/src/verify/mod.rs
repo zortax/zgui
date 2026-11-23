@@ -40,7 +40,7 @@ mod capture;
 pub(crate) mod gradient;
 
 pub(crate) use crate::verify::apart::{Apart, GRID};
-pub(crate) use crate::verify::capture::{Capture, Recorded};
+pub(crate) use crate::verify::capture::{Capture, Recorded, lock};
 
 use zgui::geom::{Device, DevicePx, Rect};
 use zgui_platform_headless::Harness;

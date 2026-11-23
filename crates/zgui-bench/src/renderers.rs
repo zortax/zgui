@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use compositor_api::{Compositor, Renderer};
+use compositor_api::{Compositor, CompositorClient, Renderer};
 use compositor_types::{
     BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
     VectorBackend,
@@ -89,10 +89,9 @@ impl Renderer for NullRenderer {
 /// # Errors
 ///
 /// Fails when no adapter opens a device.
-pub fn device(target: RenderTarget) -> Result<WgpuRenderer, AppError> {
-    let mut gpu = compositor_wgpu::Builder::new()
-        .offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)
-        .map_err(AppError::GpuUnavailable)?;
+pub fn device(target: RenderTarget) -> Result<WgpuRenderer, compositor_types::GpuUnavailable> {
+    let mut gpu =
+        compositor_wgpu::Builder::new().offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)?;
     attach_vello(&mut gpu);
     gpu.configure(target);
     Ok(gpu)
@@ -141,14 +140,30 @@ pub fn gpu_timing_requested() -> bool {
 ///
 /// # Errors
 ///
-/// Fails when the window offers no handles a graphics API can draw into, or no adapter presents
-/// to it.
-pub fn window(surface: &Arc<dyn Surface>, target: RenderTarget) -> Result<WgpuRenderer, AppError> {
+/// Fails when the window offers no handles a graphics API can draw into. The renderer fails to
+/// build when no adapter presents to the window.
+pub fn window(
+    surface: &Arc<dyn Surface>,
+    target: RenderTarget,
+) -> Result<compositor_api::RendererFactory, AppError> {
     let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
         AppError::Platform(PlatformError::Backend(
             "this window offers no handles a graphics API can draw into".to_owned(),
         ))
     })?;
+    let surface = Arc::clone(surface);
+    Ok(Box::new(move || {
+        let renderer = presenting(&surface, handles, target)?;
+        Ok(Box::new(renderer) as Box<dyn Renderer>)
+    }))
+}
+
+/// Opens a renderer presenting into `surface` through `handles`, with vello filling paths.
+fn presenting(
+    surface: &Arc<dyn Surface>,
+    handles: Arc<dyn zgui::platform::GpuSurface>,
+    target: RenderTarget,
+) -> Result<WgpuRenderer, compositor_types::GpuUnavailable> {
     let platform = matches!(
         surface.present_pacing(),
         zgui::platform::PresentPacing::Platform
@@ -169,9 +184,7 @@ pub fn window(surface: &Arc<dyn Surface>, target: RenderTarget) -> Result<WgpuRe
             presented.pre_present_frame(size, f64::from(target.scale));
         }));
     }
-    let mut renderer = builder
-        .for_surface(target.size, target.opaque, handles)
-        .map_err(AppError::GpuUnavailable)?;
+    let mut renderer = builder.for_surface(target.size, target.opaque, handles)?;
     if platform {
         let gate = Arc::clone(surface);
         renderer.set_present_gate(Box::new(move || gate.present_now()));
@@ -185,4 +198,31 @@ pub fn window(surface: &Arc<dyn Surface>, target: RenderTarget) -> Result<WgpuRe
 #[must_use]
 pub fn compositor() -> Box<dyn Compositor> {
     Box::new(compositor_core::CompositorImpl::new())
+}
+
+/// Returns `compositor` behind the driver `ZGUI_DRIVER` selects, stepped at the window's clocks
+/// unless it says otherwise.
+///
+/// - `local`, the default, steps it on the window's thread.
+/// - `threaded` steps it on a thread of its own, so its frames are built while the window goes on.
+/// - `paced` runs it on a thread of its own at the display's rate.
+///
+/// # Panics
+///
+/// Panics when the variable holds another value.
+pub fn client(compositor: Box<dyn Compositor>) -> Box<dyn CompositorClient> {
+    use compositor_driver::DriverOptions;
+    use compositor_thread::ThreadedCompositor;
+
+    match std::env::var("ZGUI_DRIVER").ok().as_deref().map(str::trim) {
+        None | Some("" | "local") => Box::new(compositor_driver::InProcess::new(
+            compositor,
+            DriverOptions::stepped(),
+        )),
+        Some("threaded") => {
+            Box::new(ThreadedCompositor::spawn_with(compositor, DriverOptions::stepped()).0)
+        }
+        Some("paced") => Box::new(ThreadedCompositor::spawn(compositor).0),
+        Some(other) => panic!("ZGUI_DRIVER={other} is none of local, threaded or paced"),
+    }
 }

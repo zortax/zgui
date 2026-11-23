@@ -214,6 +214,33 @@ impl Client {
             .with_renderer(self.output, task);
     }
 
+    /// Runs `inspect` on the output's renderer and returns its answer, waiting for the driver.
+    ///
+    /// Returns `None` when the output has no renderer.
+    pub(crate) fn inspect<T: Send + 'static>(
+        &self,
+        inspect: impl FnOnce(&mut dyn compositor_api::Renderer) -> T + Send + 'static,
+    ) -> Option<T> {
+        let answer = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let answered = std::sync::Arc::clone(&answer);
+        let mut driver = self.shared.driver.borrow_mut();
+        driver.with_renderer(
+            self.output,
+            Box::new(move |renderer| {
+                let value = inspect(renderer);
+                *answered
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(value);
+            }),
+        );
+        driver.sync();
+        drop(driver);
+        answer
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+
     /// Queues the release of the pooled targets the output's renderer keeps.
     pub(crate) fn release_cached_targets(&self) {
         self.shared

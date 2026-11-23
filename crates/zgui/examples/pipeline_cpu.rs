@@ -276,10 +276,12 @@ const SHEET: &str = css!(
 fn renderer(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_compositor::NullRenderer::default();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
+) -> Result<compositor_api::RendererFactory, AppError> {
+    Ok(zgui_testkit_compositor::factory(move || {
+        let mut renderer = zgui_testkit_compositor::NullRenderer::default();
+        renderer.configure(target);
+        renderer
+    }))
 }
 
 /// The centre of every 34x34 box in the window, which is what the swatches are.
@@ -332,7 +334,9 @@ fn main() {
         .with_title("pipeline-cpu")
         .with_size(1080.0, 720.0)
         .with_stylesheet(SHEET)
-        .with_compositor(zgui::app::compositor(&fonts))
+        .with_compositor(zgui_testkit_compositor::driver(zgui::app::compositor(
+            &fonts,
+        )))
         .with_renderer(Box::new(renderer))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {

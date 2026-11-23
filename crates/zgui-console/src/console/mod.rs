@@ -283,7 +283,35 @@ impl Renderer for DrmRenderer {
 /// frame, naming every one that was tried, and [`AppError::Platform`] when the surface it is handed
 /// belongs to no running frame loop, which is the answer a factory installed on its own gets.
 pub(crate) fn factory(graphics: SharedGraphics, displays: Displays) -> RendererFactory {
-    Box::new(move |surface, target| renderer(&graphics, &displays, surface, target))
+    Box::new(move |surface, target| {
+        let renderer = renderer(&graphics, &displays, surface, target)?;
+        HANDED.with(|handed| *handed.borrow_mut() = Some(renderer));
+        Ok(Box::new(|| {
+            HANDED
+                .with(|handed| handed.borrow_mut().take())
+                .ok_or_else(|| {
+                    compositor_types::GpuUnavailable::default()
+                        .rejected("display", "drawn on a thread other than its frame loop's")
+                })
+        }))
+    })
+}
+
+/// Runs a compositor on the frame loop's thread, which drives the displays.
+pub(crate) fn driver(
+    compositor: Box<dyn compositor_api::Compositor>,
+) -> Box<dyn compositor_api::CompositorClient> {
+    Box::new(compositor_driver::InProcess::new(
+        compositor,
+        compositor_driver::DriverOptions::default(),
+    ))
+}
+
+thread_local! {
+    // A display's commit and scanout state belong to the frame loop's thread, so its renderer is
+    // built there and handed to the driver, which builds it on the same thread.
+    static HANDED: std::cell::RefCell<Option<Box<dyn Renderer>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 /// Opens a renderer for `surface` on the shared graphics.

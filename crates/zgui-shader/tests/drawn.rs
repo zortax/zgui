@@ -61,25 +61,29 @@ static SWAP: ShaderEffect<NoParams> = shader! {
 ///
 /// Returns `None` when no device opens.
 fn app(css: &str) -> Option<(Harness<Runtime>, Composed)> {
-    let device = match Device::open([200, 200]) {
-        Ok(device) => device,
-        Err(failure) => {
-            eprintln!("skipped: no usable graphics device ({failure})");
-            return None;
-        }
-    };
-    let composed = device.composed();
-    let mut device = Some(device);
+    if let Err(failure) = Device::open([200, 200]) {
+        eprintln!("skipped: no usable graphics device ({failure})");
+        return None;
+    }
+    let composed = Composed::default();
+    let into = composed.clone();
     let handler = App::new()
         .with_title("drawn")
         .with_size(200.0, 200.0)
         .with_stylesheet(css)
-        .with_compositor(zgui_testkit_compositor::fake_text_compositor())
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut device = device.take().expect("one window asks for one renderer");
-                compositor_api::Renderer::configure(&mut device, target);
-                Ok(Box::new(device) as Box<dyn compositor_api::Renderer>)
+            move |_surface: &Arc<dyn Surface>, target: compositor_types::RenderTarget| {
+                let into = into.clone();
+                Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
+                    let mut device = Device::open(target.size)
+                        .expect("a device opens, which the test answered beforehand")
+                        .composing_into(into);
+                    compositor_api::Renderer::configure(&mut device, target);
+                    device
+                }))
             },
         ))
         .with_text_engine(Box::new(|| {

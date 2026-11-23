@@ -149,7 +149,15 @@ fn objects(window: &Window) -> Group {
 
 /// What the renderer reports, and the device's own allocator when the renderer has a device.
 fn gpu(window: &Window, vram_mib: Option<u64>) -> Group {
-    let renderer = window.renderer();
+    let mut group = window.inspect_renderer(renderer_group).unwrap_or_default();
+    if let Some(mib) = vram_mib {
+        group.push(("nvidia_used_bytes", mib * 1024 * 1024));
+    }
+    group
+}
+
+/// What `renderer` reports, and its device's own allocator when it has a device.
+fn renderer_group(renderer: &mut dyn compositor_api::Renderer) -> Group {
     let memory = renderer.memory();
     let mut group = vec![
         ("renderer_fixed_bytes", memory.fixed),
@@ -168,9 +176,6 @@ fn gpu(window: &Window, vram_mib: Option<u64>) -> Group {
         group.push(("allocator_reserved_bytes", report.total_reserved_bytes));
         group.push(("allocator_blocks", report.blocks.len() as u64));
         group.push(("allocator_allocations", report.allocations.len() as u64));
-    }
-    if let Some(mib) = vram_mib {
-        group.push(("nvidia_used_bytes", mib * 1024 * 1024));
     }
     group
 }

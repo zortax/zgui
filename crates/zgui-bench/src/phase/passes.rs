@@ -8,8 +8,6 @@
 //! function of the damage it answered, and by the time the loop has gone quiet the damage has been
 //! retired and the last plan is the empty one belonging to a frame that redrew nothing.
 
-use std::cell::RefCell;
-
 use compositor_api::Renderer;
 use compositor_types::{
     BufferAge, Frame as Built, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
@@ -36,18 +34,23 @@ struct Frame {
     full: bool,
 }
 
-thread_local! {
-    /// Every frame drawn while the measurement is running.
-    ///
-    /// A thread local because the renderer a window draws through is built before any phase exists
-    /// and knows nothing about which one is running; `None` is what makes every other phase pay
-    /// nothing at all for this one.
-    static FRAMES: RefCell<Option<Vec<Frame>>> = const { RefCell::new(None) };
+/// Every frame drawn while the measurement is running.
+///
+/// A static because the renderer a window draws through is built before any phase exists and
+/// knows nothing about which one is running; `None` is what makes every other phase pay nothing at
+/// all for this one.
+static FRAMES: std::sync::Mutex<Option<Vec<Frame>>> = std::sync::Mutex::new(None);
+
+/// Runs `f` on the measured frames.
+fn with_frames<T>(f: impl FnOnce(&mut Option<Vec<Frame>>) -> T) -> T {
+    f(&mut FRAMES
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner))
 }
 
 /// Records what one frame's vector work costs, when the measurement is running.
 fn observe(frame: &Built) {
-    FRAMES.with_borrow_mut(|held| {
+    with_frames(|held| {
         let Some(frames) = held.as_mut() else {
             return;
         };
@@ -114,7 +117,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
     }
     let middle = driver.middle;
     let mut drawn = 0;
-    FRAMES.with_borrow_mut(|held| *held = Some(Vec::new()));
+    with_frames(|held| *held = Some(Vec::new()));
     // A whole repaint first and last, because that is where the pass count is largest: a scrolled
     // frame is damage-culled to the strip that moved, and the frame that plans hundreds of passes is
     // the one that redraws the document.
@@ -129,7 +132,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
         drawn += driver.harness.settle(64);
     }
     repaint_everything(&mut driver.harness);
-    let frames = FRAMES.with_borrow_mut(Option::take).unwrap_or_default();
+    let frames = with_frames(Option::take).unwrap_or_default();
     report("REPAINT", &frames, true);
     report("SCROLL", &frames, false);
     Some(drawn)

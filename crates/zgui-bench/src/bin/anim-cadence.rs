@@ -104,10 +104,13 @@ fn main() -> Result<(), zgui::Error> {
         .with_size(560.0, 140.0)
         .with_stylesheet(SHEET)
         .with_renderer(Box::new(move |surface, target| {
-            Ok(Box::new(Stamping::new(
-                open_device(surface, target)?,
-                Arc::clone(&counted),
-            )))
+            let open = zgui_bench::renderers::window(surface, target)?;
+            let counted = Arc::clone(&counted);
+            let factory: compositor_api::RendererFactory =
+                Box::new(
+                    move || Ok(Box::new(Stamping::new(open()?, counted)) as Box<dyn Renderer>),
+                );
+            Ok(factory)
         }));
     if idle {
         app.run(move || {
@@ -256,17 +259,6 @@ fn serialise(gaps: &[f64]) -> String {
     }
     out.push(']');
     out
-}
-
-/// Opens the graphics device for `surface`, exactly as a window of this framework opens one.
-///
-/// Repeated here rather than reached for, because what builds a window's renderer is the
-/// application's own decision and the one this makes differs only by what it wraps the result in.
-fn open_device(
-    surface: &Arc<dyn zgui::platform::Surface>,
-    target: RenderTarget,
-) -> Result<Box<dyn Renderer>, zgui::Error> {
-    Ok(Box::new(zgui_bench::renderers::window(surface, target)?))
 }
 
 /// A renderer that stamps every frame it is asked to draw and then draws it.

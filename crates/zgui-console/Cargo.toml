@@ -22,6 +22,7 @@ zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 # The window renderer's contract, and the device renderer and path rasteriser a display is drawn
 # with.
 compositor-api.workspace = true
+compositor-driver.workspace = true
 compositor-types.workspace = true
 compositor-vello.workspace = true
 compositor-wgpu.workspace = true
