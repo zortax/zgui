@@ -142,6 +142,11 @@ impl Client {
         self.shared.driver.borrow().stats()
     }
 
+    /// Returns the memory the compositor holds.
+    pub(crate) fn memory(&self) -> compositor_api::CompositorMemory {
+        self.shared.driver.borrow().memory()
+    }
+
     /// Calls `out` with each implementation-specific counter of the compositor.
     pub(crate) fn extra_stats(&self, out: &mut dyn FnMut(&'static str, u64)) {
         self.shared.driver.borrow().extra_stats(out);

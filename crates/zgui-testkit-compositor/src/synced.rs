@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use compositor_api::{
     ClientEvent, CommitId, CompositorBudgets, CompositorCapabilities, CompositorClient,
-    DriverPacing, DriverStats, EventWaker, FontRegistry, FrameObserver, OutputConfig, OutputStatus,
-    OutputWatch, RendererFactory, RendererTask, ScrollWatch,
+    CompositorMemory, DriverPacing, DriverStats, EventWaker, FontRegistry, FrameObserver,
+    OutputConfig, OutputStatus, OutputWatch, RendererFactory, RendererTask, ScrollWatch,
 };
 use compositor_types::smallvec::SmallVec;
 use compositor_types::{
@@ -135,6 +135,10 @@ impl<C: CompositorClient> CompositorClient for Synced<C> {
 
     fn stats(&self) -> DriverStats {
         self.0.stats()
+    }
+
+    fn memory(&self) -> CompositorMemory {
+        self.0.memory()
     }
 
     fn output_status(&self, output: OutputId) -> Option<OutputStatus> {

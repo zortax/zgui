@@ -140,8 +140,7 @@ impl Window {
     /// - Its offset two motion steps ahead leaves `vouched`.
     /// - Its offset one step ahead leaves the offsets its container's rows hold, see
     ///   [`ViewHost::wake_outside`](zgui_view::ViewHost::wake_outside).
-    /// - It moves the element under the pointer out from under it, when a `:hover` rule can
-    ///   match an element in its content.
+    /// - It moves the element under the pointer out from under it.
     pub(crate) fn watch_motion(&mut self, node: ScrollId, vouched: Span) {
         let mut ranges = SmallVec::new();
         ranges.push(OffsetRange {
@@ -161,7 +160,13 @@ impl Window {
                 ahead: 1.0,
             });
         }
-        ranges.extend(self.hover_range(node));
+        let hover = self.hover_range(node).map(|range| {
+            ranges.push(range);
+            ranges.len() - 1
+        });
+        if let Some(active) = self.driven.active.get_mut(&node) {
+            active.hover = hover;
+        }
         self.compositor.watch_scroll(
             node,
             Some(ScrollWatch {

@@ -44,20 +44,22 @@ impl Window {
         }
     }
 
-    /// Returns the offsets of the scroll node `node` at which the element under the pointer stays
-    /// under it, when a `:hover` rule can match an element inside the content the node scrolls.
+    /// Returns the offsets of the scroll node `node` at which the element the compositor shows
+    /// under the pointer stays under it.
     ///
-    /// Returns `None` when no rule can match there, when the pointer is captured or outside the
-    /// window, and when it is over no element inside the content.
+    /// Returns `None` when the pointer is captured or outside the window, and when it is over no
+    /// element inside the content.
     pub(super) fn hover_range(&mut self, node: ScrollId) -> Option<OffsetRange> {
         if !self.router.capture().is_empty() {
             return None;
         }
         let at = self.router.pointers().position_of(PointerId::MOUSE)?;
         let container = self.element_of_scroll(node)?;
-        if !self.hover_sensitive(container) {
-            return None;
-        }
+        let ahead = self
+            .ahead()
+            .into_iter()
+            .find(|(moved, _)| *moved == container)
+            .map_or([0.0; 2], |(_, ahead)| [ahead.width.0, ahead.height.0]);
         let offset = self.scroll.borrow().offset_of(container);
         let document = self.document.borrow();
         let layout = self.layout.borrow();
@@ -71,7 +73,12 @@ impl Window {
             scale: zgui_geom::Scale::new(self.scale),
             filter: &filter,
         };
-        let under = world.chain_at(at);
+        // The window's layout at its own offset shows there what the compositor shows under the
+        // pointer.
+        let under = world.chain_at(Point::new(
+            DevicePx(at.x.0 + ahead[0]),
+            DevicePx(at.y.0 + ahead[1]),
+        ));
         let path = under.path();
         let inside = path.iter().position(|key| *key == container)?;
         let leaf = *path.get(inside + 1..)?.last()?;

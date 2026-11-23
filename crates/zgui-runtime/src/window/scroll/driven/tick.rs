@@ -1,7 +1,8 @@
 //! Frames that only present what the compositor's scrolling moved.
 
 use compositor_api::WatchCause;
-use compositor_types::{CompositorEvent, FrameOutcome, ScrollPhase, SkipReason};
+use compositor_types::smallvec::SmallVec;
+use compositor_types::{CompositorEvent, FrameOutcome, ScrollId, ScrollPhase, SkipReason};
 use web_time::{Duration, Instant};
 use zgui_bits::DamageSet;
 use zgui_platform::Clock;
@@ -69,7 +70,8 @@ impl Window {
     /// The window is asked for a frame when a watch fires, see
     /// [`Window::watch_motion`]: a node comes to rest, is about to show content the window has
     /// not recorded, or leaves the offsets its rows hold. A move that changes what a `:hover` rule
-    /// matches under the pointer asks for one too.
+    /// matches under the pointer asks for one too. Any other move of an element out from under the
+    /// pointer only sets the watch again, for the element now under it.
     pub(crate) fn take_scroll_events(&mut self, answers: &mut Answers) -> bool {
         let mut scrolled = false;
         for event in answers.compositor.drain(..) {
@@ -106,15 +108,24 @@ impl Window {
         for (gesture, routing) in std::mem::take(&mut answers.rerouted) {
             self.rerouted(gesture, routing);
         }
-        let wake = !answers.watched.is_empty();
+        let mut wake = false;
+        let mut hovered: SmallVec<[ScrollId; 2]> = SmallVec::new();
         for &(node, cause, _, step) in &answers.watched {
             if cause == WatchCause::Settled {
                 self.driven
                     .shown
                     .entry(node)
                     .and_modify(|shown| shown.settled = true);
+                wake = true;
             } else if let Some(active) = self.driven.active.get_mut(&node) {
                 active.step = step;
+                if matches!(cause, WatchCause::Left(range) if active.hover == Some(range)) {
+                    hovered.push(node);
+                } else {
+                    wake = true;
+                }
+            } else {
+                wake = true;
             }
         }
         if wake {
@@ -122,6 +133,20 @@ impl Window {
         }
         if scrolled {
             self.wake_for_hover();
+        }
+        // An element left the pointer that no `:hover` rule matches, so the watch follows the
+        // element now under it, and no frame runs for it.
+        if !self.awaiting_frame.get() {
+            for node in hovered {
+                if let Some(vouched) = self
+                    .driven
+                    .active
+                    .get(&node)
+                    .and_then(|active| active.vouched)
+                {
+                    self.watch_motion(node, vouched);
+                }
+            }
         }
         scrolled
     }

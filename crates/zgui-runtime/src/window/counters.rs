@@ -44,7 +44,10 @@ pub(crate) fn committed(report: &CommitReport) {
 /// The atlas tiles are read from the implementation's `content.live_tiles` statistic, and stay
 /// unchanged under a compositor that reports none.
 pub(crate) fn held(client: &Client) {
-    counter::set(Counter::PaintChunkBytes, client.stats().memory.chunk_bytes);
+    if !zgui_profile::COUNTERS_ENABLED {
+        return;
+    }
+    counter::set(Counter::PaintChunkBytes, client.memory().chunk_bytes);
     client.extra_stats(&mut |name, value| {
         if name == "content.live_tiles" {
             counter::set(Counter::AtlasEntriesLive, value);

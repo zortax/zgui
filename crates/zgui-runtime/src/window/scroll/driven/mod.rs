@@ -99,6 +99,8 @@ struct Active {
     reach: Option<Rect<i32, Device>>,
     /// How far the node moved between its last two events.
     step: [f32; 2],
+    /// The index of the range in the node's watch that holds the element under the pointer.
+    hover: Option<usize>,
 }
 
 /// Who moves the content for a gesture.
