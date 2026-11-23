@@ -80,6 +80,14 @@ impl Owed {
 /// the newer one is shown. The runtime answers at most one configure per refresh interval, so this
 /// adds at most one commit per refresh.
 ///
+/// # Nothing is shown before the first redraw
+///
+/// A frame composed before the surface's first redraw has finished shows none of the window's
+/// content, and presenting it maps the surface empty. A driver thread composes such frames on its
+/// own, for a new output and for a new extent. They are held until a redraw has run, so the
+/// surface is mapped by a frame of the window. The frame the first redraw itself presents is
+/// presented as usual.
+///
 /// # Not configured is a reason to refuse a frame; hidden is not
 ///
 /// The two look alike and are opposites. A surface the compositor has never configured may not be
@@ -129,6 +137,8 @@ pub struct Pacer {
     /// Whether the next redraw answers a new extent, so it neither waits for nor is held behind an
     /// owed callback.
     resizing: bool,
+    /// Whether a redraw has run, see "Nothing is shown before the first redraw".
+    drawn: bool,
 }
 
 impl Pacer {
@@ -145,6 +155,7 @@ impl Pacer {
             press: false,
             for_input: false,
             resizing: false,
+            drawn: false,
         }
     }
 
@@ -196,7 +207,8 @@ impl Pacer {
         // by closing the connection. The request is kept, and the first configure delivers it.
         //
         // A held frame is the one frame allowed ahead of the compositor, so nothing more is
-        // composed until it is presented.
+        // composed until it is presented. A frame held before the first redraw waits for that
+        // redraw instead.
         let owed = match self.owed {
             Owed::Nothing => false,
             Owed::Bare(_) => !self.input,
@@ -204,7 +216,7 @@ impl Pacer {
             Owed::Spent(_) => true,
         };
         let waiting = owed && !self.ahead && !self.resizing;
-        if !self.wanted || !visibility.configured || self.held || waiting {
+        if !self.wanted || !visibility.configured || (self.held && self.drawn) || waiting {
             return false;
         }
         if let Owed::Bare(since) = self.owed
@@ -219,17 +231,23 @@ impl Pacer {
         true
     }
 
-    /// Whether a frame that has just been composed may be presented now.
+    /// Whether a frame that has just been composed may be presented now, where `redrawing` says
+    /// whether the frame belongs to the redraw being delivered.
     ///
-    /// Not while a callback for a buffer is owed: two buffers with no callback between them is a
-    /// client racing ahead of the display, and only the second of them is ever shown. The frame
-    /// is held instead, and [`Pacer::take_present`] hands it over when the callback arrives or is
-    /// given up on. A callback asked for with no buffer does not hold a frame.
-    pub fn present_now(&mut self, now: Instant) -> bool {
+    /// The frame is held instead in two cases, and [`Pacer::take_present`] hands it over later:
+    ///
+    /// - If no redraw has run and the frame is not the redraw's own, it waits for the first
+    ///   redraw to finish, see "Nothing is shown before the first redraw".
+    /// - If a callback for a buffer is owed, it waits for the callback to arrive or to be given
+    ///   up on. Two buffers with no callback between them is a client racing ahead of the display,
+    ///   and only the second of them is ever shown. A callback asked for with no buffer does not
+    ///   hold a frame.
+    pub fn present_now(&mut self, now: Instant, redrawing: bool) -> bool {
+        let empty = !self.drawn && !redrawing;
         let owed = !self.resizing
             && matches!(self.owed, Owed::Callback(since) if !self.watchdog.expired(since, now));
-        self.held = owed;
-        !owed
+        self.held = empty || owed;
+        !self.held
     }
 
     /// Whether the held frame should be presented now, taking it if so.
@@ -238,16 +256,16 @@ impl Pacer {
     /// the frame after it is composed while the compositor answers for it.
     pub fn take_present(&mut self, visibility: &mut Visibility, now: Instant) -> bool {
         self.expire(visibility, now);
-        if !self.held || self.owes_callback() {
+        if !self.held || !self.drawn || self.owes_callback() {
             return false;
         }
         self.held = false;
         true
     }
 
-    /// Holds a composed frame until the surface may show it.
-    pub const fn hold(&mut self) {
-        self.held = true;
+    /// Records that a delivered redraw ran.
+    pub const fn drew(&mut self) {
+        self.drawn = true;
     }
 
     /// Drops the held frame, which a new extent or scale made obsolete.
@@ -407,7 +425,7 @@ mod tests {
         assert!(!pacer.take(&mut shown(), now), "an ordinary frame waits");
         pacer.answer_resize(true);
         assert!(pacer.take(&mut shown(), now));
-        assert!(pacer.present_now(now), "and it is presented at once");
+        assert!(pacer.present_now(now, true), "and it is presented at once");
         assert!(!pacer.held());
     }
 
@@ -449,7 +467,10 @@ mod tests {
         );
         pacer.input();
         assert!(pacer.take(&mut shown(), now), "the press draws at once");
-        assert!(pacer.present_now(now), "and its frame goes out at once");
+        assert!(
+            pacer.present_now(now, true),
+            "and its frame goes out at once"
+        );
         assert!(!pacer.held());
         pacer.committed(now);
         pacer.input();
@@ -499,6 +520,7 @@ mod tests {
         let mut pacer = Pacer::new();
         let now = Instant::now();
         let mut visibility = shown();
+        pacer.drew();
         pacer.committed(now);
         pacer.input();
         pacer.request();
@@ -512,7 +534,7 @@ mod tests {
             "the press composes at once"
         );
         assert!(
-            !pacer.present_now(now),
+            !pacer.present_now(now, true),
             "and its frame waits for the callback"
         );
         pacer.press();
@@ -529,7 +551,7 @@ mod tests {
             pacer.take(&mut visibility, now),
             "the press that waited behind the held frame composes ahead"
         );
-        assert!(!pacer.present_now(now));
+        assert!(!pacer.present_now(now, true));
         pacer.callback();
         assert!(pacer.take_present(&mut visibility, now));
         pacer.committed(now);
@@ -664,13 +686,17 @@ mod tests {
         pacer.compose_ahead(true);
         let now = Instant::now();
         let mut visibility = shown();
+        pacer.drew();
         pacer.committed(now);
         pacer.request();
         assert!(
             pacer.take(&mut visibility, now),
             "the window composes ahead"
         );
-        assert!(!pacer.present_now(now), "two commits for one callback");
+        assert!(
+            !pacer.present_now(now, true),
+            "two commits for one callback"
+        );
         pacer.request();
         assert!(
             !pacer.take(&mut visibility, now),
@@ -685,6 +711,24 @@ mod tests {
             pacer.take(&mut visibility, now),
             "the next frame is composed"
         );
+    }
+
+    #[test]
+    fn a_frame_composed_before_the_first_redraw_is_held_until_it_ran() {
+        let mut pacer = Pacer::new();
+        let now = Instant::now();
+        let mut visibility = shown();
+        assert!(!pacer.present_now(now, false), "the empty frame went out");
+        assert!(!pacer.take_present(&mut visibility, now));
+        pacer.request();
+        assert!(
+            pacer.take(&mut visibility, now),
+            "the empty frame held back the first redraw"
+        );
+        assert!(!pacer.present_now(now, false));
+        pacer.drew();
+        assert!(pacer.take_present(&mut visibility, now));
+        assert!(pacer.present_now(now, false));
     }
 
     #[test]
@@ -703,8 +747,9 @@ mod tests {
         pacer.compose_ahead(true);
         let now = Instant::now();
         let mut visibility = shown();
+        pacer.drew();
         pacer.committed(now);
-        assert!(!pacer.present_now(now));
+        assert!(!pacer.present_now(now, true));
         assert_eq!(
             pacer.deadline(visibility, now),
             Some(now + Duration::from_millis(400)),
@@ -722,7 +767,7 @@ mod tests {
         let now = Instant::now();
         let mut visibility = shown();
         pacer.committed(now);
-        assert!(!pacer.present_now(now));
+        assert!(!pacer.present_now(now, true));
         pacer.cancel_held();
         pacer.request();
         assert!(pacer.take(&mut visibility, now));

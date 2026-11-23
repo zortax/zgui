@@ -398,8 +398,11 @@ impl Shared {
     pub(crate) fn redrawn(&mut self, began: Instant, now: Instant, again: bool) -> EndOfRedraw {
         let end = self.end_of_redraw(began, now, again);
         let answering = std::mem::take(&mut self.answering_resize);
-        if end != EndOfRedraw::Declined && !answering {
-            self.ahead.redrawn(now.saturating_duration_since(began));
+        if end != EndOfRedraw::Declined {
+            self.pacer.drew();
+            if !answering {
+                self.ahead.redrawn(now.saturating_duration_since(began));
+            }
         }
         end
     }
@@ -1036,7 +1039,7 @@ mod tests {
         // That commit carried no buffer, so a press draws and presents without the answer.
         shared.pacer.input();
         assert!(shared.pacer.take(&mut visibility, now));
-        assert!(shared.pacer.present_now(now));
+        assert!(shared.pacer.present_now(now, true));
     }
 
     #[test]
@@ -1120,7 +1123,7 @@ mod tests {
         shared.pacer.compose_ahead(true);
         shared.pacer.committed(now);
         assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Waiting);
-        assert!(!shared.pacer.present_now(now));
+        assert!(!shared.pacer.present_now(now, true));
         assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Held);
     }
 
@@ -1147,7 +1150,7 @@ mod tests {
         let mut shared = Shared::new();
         shared.resized(logical(800.0, 600.0), 1.0);
         shared.pacer.committed(Instant::now());
-        assert!(!shared.pacer.present_now(Instant::now()));
+        assert!(!shared.pacer.present_now(Instant::now(), true));
         shared.resized(logical(900.0, 600.0), 1.0);
         assert!(!shared.pacer.held());
     }

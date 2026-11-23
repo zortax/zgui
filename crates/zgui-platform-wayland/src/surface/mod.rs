@@ -113,6 +113,8 @@ pub struct WaylandSurface {
     shell: Arc<crate::surface::role::xdg::XdgShell>,
     /// The channel an assistive technology talks to.
     a11y: A11y,
+    /// The thread the loop runs on.
+    loop_thread: std::thread::ThreadId,
     /// The seat's own requests, which belong to the loop rather than to this surface.
     ///
     /// A cursor shape and an interactive drag are both asked of a *seat*, and there is one seat
@@ -148,6 +150,7 @@ impl WaylandSurface {
             placement,
             parent_extent,
             reposition_token: std::sync::atomic::AtomicU32::new(1),
+            loop_thread: std::thread::current().id(),
             shell: links.shell,
             a11y: A11y::open(id, links.waker),
             seat: links.seat,
@@ -600,13 +603,10 @@ impl Surface for WaylandSurface {
 
     fn present_now(&self) -> bool {
         let mut shared = self.shared();
-        // A shell surface may commit no buffer before it acknowledges its first configure, and a
-        // frame a driver thread composed can be ready before the loop has dispatched it.
-        if self.role.xdg_surface().is_some() && !self.is_mapped() {
-            shared.pacer.hold();
-            return false;
-        }
-        shared.pacer.present_now(Instant::now())
+        // A driver thread asks from its own thread. Only a frame asked about on the loop's thread
+        // during a redraw is that redraw's own.
+        let redrawing = shared.drawing && std::thread::current().id() == self.loop_thread;
+        shared.pacer.present_now(Instant::now(), redrawing)
     }
 
     fn redraw_declined(&self) {
