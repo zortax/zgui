@@ -311,3 +311,67 @@ fn nothing_reachable_from_this_crate_is_a_font_engine() {
         );
     }
 }
+
+/// The line geometry and the glyphs of `text` with `boxes`, shaped at `scale`.
+fn shaped_at(
+    text: &str,
+    boxes: &[InlineBoxGeometry],
+    scale: f32,
+) -> (BrokenParagraph, Vec<(f32, f32)>) {
+    use zgui_text::ParagraphShaper;
+    let mut map = TextMap::new();
+    map.push(0..text.len(), 0, 0);
+    let runs = vec![StyledRun {
+        text: 0..text.len(),
+        style: Arc::new(TextStyle::initial()),
+        brush: PaintSlot(0),
+    }];
+    let paragraph = ParagraphStyle::initial();
+    let content = ParagraphContent {
+        text,
+        map: &map,
+        runs: &runs,
+        boxes,
+        paragraph: &paragraph,
+        scale,
+    };
+    let mut shaper = MonoShaper::new();
+    let mut cache = ParagraphCache::new();
+    let request = BreakRequest::new(&content, None);
+    let (shaped, broken) = lay_out(&mut shaper, &mut cache, &content, &request);
+    let mut glyphs = Vec::new();
+    shaper.visit_line(shaped, 0, &mut |run| {
+        glyphs.extend(run.glyphs.iter().map(|glyph| (glyph.x, glyph.y)));
+    });
+    (broken, glyphs)
+}
+
+#[test]
+fn the_geometry_and_the_glyphs_are_in_device_pixels_at_any_scale() {
+    // Inline boxes come from a layout that measures in device pixels.
+    let inline = |scale: f32| InlineBoxGeometry {
+        id: 1,
+        offset: 1,
+        width: CssPx(20.0 * scale),
+        height: CssPx(40.0 * scale),
+        ascent: CssPx(40.0 * scale),
+        shift: CssPx::ZERO,
+    };
+    let (once, once_glyphs) = shaped_at("ab", &[inline(1.0)], 1.0);
+    let (twice, twice_glyphs) = shaped_at("ab", &[inline(2.0)], 2.0);
+    let line = |broken: &BrokenParagraph| {
+        let line = &broken.geometry.lines[0];
+        [line.baseline.0, line.height.0, line.width.0]
+    };
+    assert_eq!(line(&twice), line(&once).map(|value| value * 2.0));
+    let origin = |broken: &BrokenParagraph| {
+        let origin = broken.boxes[0].origin;
+        [origin.x.0, origin.y.0]
+    };
+    assert_eq!(origin(&twice), origin(&once).map(|value| value * 2.0));
+    let doubled: Vec<_> = once_glyphs
+        .iter()
+        .map(|(x, y)| (x * 2.0, y * 2.0))
+        .collect();
+    assert_eq!(twice_glyphs, doubled);
+}

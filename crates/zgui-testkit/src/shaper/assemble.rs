@@ -15,7 +15,11 @@ pub fn geometry(
     shaped: &ShapedParagraph<MonoLayout>,
     request: &BreakRequest<'_>,
 ) -> BrokenParagraph {
-    let strut = shaped.strut();
+    // The geometry is in device pixels, like the advances and the inline boxes it is built from,
+    // and the strut is in CSS pixels, so the ratio the paragraph was shaped at converts it.
+    let scale = shaped.engine.scale;
+    let strut_ascent = shaped.strut().ascent().0 * scale;
+    let strut_descent = shaped.strut().descent().0 * scale;
     let clusters = &shaped.engine.clusters;
     let mut lines = Vec::new();
     let mut boxes: SmallVec<[InlineBoxPlacement; 2]> = SmallVec::new();
@@ -39,12 +43,16 @@ pub fn geometry(
         // A line box is at least as tall as the strut, and taller where an inline box reaches past
         // it. The shifted height is what an inline box occupies above the baseline, which is where
         // `vertical-align` has already been folded in.
-        let ascent = on_line.iter().fold(strut.ascent(), |tallest, geometry| {
-            CssPx(tallest.0.max(geometry.shaper_height().0))
-        });
-        let descent = on_line.iter().fold(strut.descent(), |deepest, geometry| {
-            CssPx(deepest.0.max(geometry.below_baseline().0))
-        });
+        let ascent = on_line
+            .iter()
+            .fold(CssPx(strut_ascent), |tallest, geometry| {
+                CssPx(tallest.0.max(geometry.shaper_height().0))
+            });
+        let descent = on_line
+            .iter()
+            .fold(CssPx(strut_descent), |deepest, geometry| {
+                CssPx(deepest.0.max(geometry.below_baseline().0))
+            });
 
         let text_advance: f32 = clusters[start..end].iter().map(|held| held.advance.0).sum();
         let box_advance: f32 = on_line.iter().map(|geometry| geometry.width.0).sum();
