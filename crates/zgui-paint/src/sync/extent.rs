@@ -27,6 +27,9 @@ struct Placed {
     recorded: [i32; 4],
     /// The offset the chunk is drawn at, in whole device pixels.
     offset: [i32; 2],
+    /// The largest emboldening of the chunk's glyph runs in device pixels, or `None` when it draws
+    /// no glyphs.
+    glyphs: Option<f32>,
 }
 
 /// How many chunks of one coordinate system have each of their edges at each place.
@@ -45,8 +48,15 @@ impl Placed {
 
 impl Extents {
     /// Notes that the chunk `key` was recorded to draw over `ink`, in the coordinate system
-    /// `anchor`.
-    pub(crate) fn recorded(&mut self, key: ChunkKey, anchor: SpatialId, ink: Rect<i32, Device>) {
+    /// `anchor`, with glyph runs emboldened by at most `glyphs` device pixels among what it draws,
+    /// or none for `None`.
+    pub(crate) fn recorded(
+        &mut self,
+        key: ChunkKey,
+        anchor: SpatialId,
+        ink: Rect<i32, Device>,
+        glyphs: Option<f32>,
+    ) {
         self.removed(key);
         let placed = Placed {
             anchor,
@@ -58,6 +68,7 @@ impl Extents {
                 ink.origin.y + ink.size.height,
             ],
             offset: [0, 0],
+            glyphs,
         };
         self.add(placed);
         self.chunks.insert(key, placed);
@@ -88,6 +99,12 @@ impl Extents {
             placed.anchor,
             Rect::new(Point::new(left, top), Size::new(right - left, bottom - top)),
         ))
+    }
+
+    /// Returns the largest emboldening of the glyph runs of the chunk `key`, or `None` when it is
+    /// not recorded or draws no glyphs.
+    pub(crate) fn glyphs(&self, key: ChunkKey) -> Option<f32> {
+        self.chunks.get(&key).and_then(|placed| placed.glyphs)
     }
 
     /// Notes that the chunk `key` is no longer recorded.

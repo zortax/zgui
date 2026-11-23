@@ -670,8 +670,8 @@ impl Pass<'_, '_> {
         }
     }
 
-    /// Adds the device rectangle `ink` of `fragment`, grown by a pixel and cut to the fragment's
-    /// clip, to the ink the walk's recordings damage.
+    /// Adds the device rectangle `ink` of `fragment`, cut to the fragment's clip, to the ink the
+    /// walk's recordings damage.
     fn damage_ink(&mut self, fragment: &Fragment, ink: Rect<DevicePx, Device>) {
         let edge = DevicePx(1.0);
         let pixel = Edges {
@@ -689,9 +689,7 @@ impl Pass<'_, '_> {
                 .bounds_placed(fragment.clip, &|space| tables.spatial.resolve(space))
                 .outset(pixel)
         });
-        // compositor: a glyph's damage is its whole raster, which at a fractional position
-        // reaches a pixel past the ink with nothing drawn there.
-        if let Some(ink) = ink.outset(pixel).intersection(admitted) {
+        if let Some(ink) = ink.intersection(admitted) {
             self.report.recorded_ink.push(pixels(ink));
         }
     }

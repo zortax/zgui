@@ -207,15 +207,20 @@ impl Window {
     /// A rejected transaction is answered later and leaves the compositor with nothing of this
     /// window, so the frame after the answer records the whole surface again.
     ///
-    /// A transaction that writes no node, slot or parameter block declares the damage the frame's
-    /// paint walk drew, which holds every pixel the walk's recordings and offsets change. With
-    /// invariants checked, a declaration the compositor's verification finds short is a defect.
+    /// A transaction that writes no node, slot or parameter block, and changes no chunk that draws
+    /// glyphs, declares the damage the frame's paint walk drew, which holds every pixel the walk's
+    /// recordings and offsets change. With invariants checked, a declaration the compositor's
+    /// verification finds short is a defect.
     pub(super) fn submit_transaction(&mut self, mut transaction: compositor_types::Transaction) {
         let report = self.painter.compositor().map(|sync| sync.report());
         // Table writes, such as a transform or a colour an animation moves, change pixels the
-        // walk's damage does not hold.
+        // walk's damage does not hold, and so do hinted glyphs, whose bitmaps only the
+        // compositor's rasteriser places.
         let declares = report.is_some_and(|report| {
-            report.table_writes == 0 && report.params_written == 0 && report.released == 0
+            report.table_writes == 0
+                && report.params_written == 0
+                && report.released == 0
+                && report.glyphs_changed.is_none()
         });
         if declares {
             transaction.declare_damage(
@@ -234,13 +239,24 @@ impl Window {
                 report.table_writes == 0 && report.params_written == 0 && report.offsets == 0
             }) && !self.compositor_scrolling();
             let compositor = &self.compositor;
-            let visited = crate::window::declared::visited(&self.painted, &self.recorded_ink);
+            let mut visited = crate::window::declared::visited(&self.painted, &self.recorded_ink);
+            if let Some(embolden) = report.and_then(|report| report.glyphs_changed) {
+                visited = crate::window::declared::grown(&visited, glyph_allowance(embolden));
+            }
             self.containment
                 .get_or_insert_with(|| crate::window::containment::Containment::observe(compositor))
                 .committed(&visited, fit);
         }
         self.compositor.commit(transaction);
     }
+}
+
+/// Returns how far, in device pixels, the bitmaps of glyph runs emboldened by at most `embolden`
+/// device pixels can reach past the ink the walk measures for them.
+fn glyph_allowance(embolden: f32) -> i32 {
+    // ink's sweep of the reference rasteriser: hinting moves a bitmap's edge by up to 3 rows,
+    // emboldening adds its width on each side, and a stroke's spike at a sharp corner one more.
+    3 + embolden.max(0.0).ceil() as i32 + 1
 }
 
 /// Returns the refresh interval in nanoseconds of a rate in thousandths of a hertz.

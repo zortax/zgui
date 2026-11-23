@@ -83,7 +83,7 @@ struct Extra {
 }
 
 /// What the sync wrote into the transaction since it was opened.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct SyncReport {
     /// Chunks recorded.
     pub recorded: usize,
@@ -99,6 +99,12 @@ pub struct SyncReport {
     pub released: usize,
     /// Shared parameter blocks written because they changed.
     pub params_written: usize,
+    /// The largest emboldening, in device pixels, of the glyph runs of the chunks recorded,
+    /// replaced, moved or removed, or `None` when none of them draws glyphs.
+    ///
+    /// The pixels such a change damages are the boxes of the glyphs' hinted bitmaps, which only the
+    /// compositor's rasteriser knows.
+    pub glyphs_changed: Option<f32>,
 }
 
 impl CompositorSync {
@@ -152,6 +158,8 @@ impl CompositorSync {
             if let Some((anchor, ink)) = self.extents.placed_ink(key) {
                 self.removed_ink.push(on_device(ink, anchor, tables));
             }
+            self.report.glyphs_changed =
+                max_glyphs(self.report.glyphs_changed, self.extents.glyphs(key));
             self.extents.removed(key);
             self.report.removed += 1;
             if let Some(owner) = self.names.box_of(key.owner) {
@@ -317,6 +325,15 @@ impl CompositorSync {
         self.transaction.as_ref()?;
         let key = key::of(self.name(store, fragment.box_), store, fragment, Part::Body);
         let mut replaced = self.extents.ink(key);
+        let glyphs = items
+            .glyph_runs
+            .iter()
+            .map(|run| run.embolden)
+            .reduce(f32::max);
+        self.report.glyphs_changed = max_glyphs(
+            max_glyphs(self.report.glyphs_changed, self.extents.glyphs(key)),
+            glyphs,
+        );
         let transaction = self.transaction.as_mut()?;
         if let Some(previous) = self.chunks.get(&fragment.key)
             && previous.key != key
@@ -325,6 +342,10 @@ impl CompositorSync {
             if let Some(old) = self.extents.ink(previous.key) {
                 replaced = Some(replaced.map_or(old, |held| held.union(old)));
             }
+            self.report.glyphs_changed = max_glyphs(
+                self.report.glyphs_changed,
+                self.extents.glyphs(previous.key),
+            );
             self.mirror.chunk_removed(previous.key);
             self.extents.removed(previous.key);
             self.report.removed += 1;
@@ -351,7 +372,7 @@ impl CompositorSync {
         if items.is_empty() {
             self.extents.removed(key);
         } else {
-            self.extents.recorded(key, fragment.anchor, ink);
+            self.extents.recorded(key, fragment.anchor, ink, glyphs);
         }
         flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
@@ -480,6 +501,8 @@ impl CompositorSync {
             return None;
         }
         let before = self.extents.ink(chunk.key);
+        let moved_glyphs = self.extents.glyphs(chunk.key);
+        self.report.glyphs_changed = max_glyphs(self.report.glyphs_changed, moved_glyphs);
         transaction.set_offset(chunk.key, offset);
         self.extents.moved(chunk.key, offset);
         chunk.offset = offset;
@@ -622,6 +645,14 @@ fn remove(
     owners.remove(&key);
     transaction.remove_chunk(key);
     true
+}
+
+/// Returns the larger emboldening of `held` and `changed`, either of which is `None` for no glyphs.
+fn max_glyphs(held: Option<f32>, changed: Option<f32>) -> Option<f32> {
+    match (held, changed) {
+        (Some(held), Some(changed)) => Some(held.max(changed)),
+        (held, changed) => held.or(changed),
+    }
 }
 
 /// Returns `ink`, in the coordinate system `anchor`, on the device as `tables` place it.
