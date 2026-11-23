@@ -883,8 +883,7 @@ impl Runtime {
         };
         let compositor = self.compositor.clone().ok_or(AppError::NoCompositor)?;
         let renderer = (self.renderer)(&surface, target)?;
-        let compositor = crate::compositor::Client::open(compositor, target, renderer)
-            .map_err(AppError::GpuUnavailable)?;
+        let compositor = crate::compositor::Client::open(compositor, target, renderer);
         // Before the view is built, not after: a view that asks for anything while it is being
         // built asks through a waker that has to already know which surface it belongs to.
         let waker = Arc::clone(
@@ -1222,6 +1221,30 @@ impl Runtime {
     ///
     /// The window stops being one the application wants, which is what tells this apart from a
     /// platform taking every surface away: a window closed here does not come back on resume.
+    /// Closes the windows whose renderer could not be built before they showed a frame.
+    ///
+    /// The window the application launched with failing so is the application failing.
+    fn close_unopened(&mut self, cx: &dyn PlatformCx) {
+        let unopened: Vec<_> = self
+            .windows
+            .iter_mut()
+            .filter_map(|window| Some((window.surface().id(), window.take_unopened()?)))
+            .collect();
+        for (surface, error) in unopened {
+            let error = AppError::GpuUnavailable(error);
+            tracing::error!(target: "zgui::app", %error, "the window could not be opened");
+            let primary = self
+                .live_for_surface(surface)
+                .is_some_and(|index| Some(self.live[index].token) == self.primary);
+            if primary {
+                self.failure.record(error);
+                cx.request_exit();
+                return;
+            }
+            self.close_window(cx, surface, CloseReason::Desktop);
+        }
+    }
+
     fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, reason: CloseReason) {
         // The pop-ups placed against the window close first: a desktop takes a parent down only
         // after its pop-ups.
@@ -1592,6 +1615,7 @@ impl AppHandler for Runtime {
     }
 
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
+        self.close_unopened(cx);
         let now = cx.clock().now();
         let mut policy = IdlePolicy::Block;
         self.parked.clear();

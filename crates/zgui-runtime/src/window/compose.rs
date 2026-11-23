@@ -132,8 +132,12 @@ impl Window {
         if let Some((starved, _occluded)) = answers.presenter {
             self.starved = starved;
         }
-        if let Some(error) = &answers.failed {
-            tracing::error!(target: "zgui::compositor", ?error, "the window's renderer failed");
+        if let Some(error) = answers.failed.take() {
+            if self.compositor.shown() {
+                tracing::error!(target: "zgui::compositor", ?error, "the window's renderer failed");
+            } else {
+                self.unopened = Some(error);
+            }
         }
         if self.check_damage {
             crate::window::counters::check_declared(&answers.compositor);
@@ -141,6 +145,29 @@ impl Window {
         self.take_scroll_events(&mut answers);
         self.arm_driver();
         drawn
+    }
+
+    /// Waits for the output's renderer once, and then applies what the window reads of the device:
+    /// the largest image it decodes and the coverage its text is drawn with.
+    pub(crate) fn await_renderer(&mut self) {
+        if self.renderer_known {
+            return;
+        }
+        self.compositor.await_renderer();
+        self.renderer_known = true;
+        let Some(status) = self.compositor.status() else {
+            return;
+        };
+        // A photo the device can hold is decoded whole rather than clamped to the smallest
+        // supported device's limit.
+        self.images
+            .set_max_dimension(status.caps.max_texture_size.saturating_sub(2).max(1));
+        self.settle_text_coverage();
+    }
+
+    /// Takes why the window's renderer could not be built, if the window never showed a frame.
+    pub(crate) const fn take_unopened(&mut self) -> Option<compositor_types::GpuUnavailable> {
+        self.unopened.take()
     }
 
     /// Takes the driver's answers that woke the window between its frames.

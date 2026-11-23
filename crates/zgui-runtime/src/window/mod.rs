@@ -454,6 +454,10 @@ pub struct Window {
     clock: Arc<dyn zgui_platform::Clock>,
     /// Whether the next frame is the first one.
     first_frame: bool,
+    /// Why the renderer could not be built, for a window that never showed a frame.
+    unopened: Option<compositor_types::GpuUnavailable>,
+    /// Whether the window has read what its output's renderer can do.
+    renderer_known: bool,
     /// Whether a frame has been asked for and has not run yet.
     ///
     /// The platform coalesces repeated requests into one frame, so a second request costs nothing
@@ -552,18 +556,8 @@ impl Window {
             ]),
         ));
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
-        // A photo the device can hold is decoded whole rather than clamped to the smallest
-        // supported device's limit.
-        let max_texture_size = i32::try_from(
-            compositor
-                .status()
-                .map_or(0, |status| status.caps.max_texture_size),
-        )
-        .unwrap_or(i32::MAX);
-        let images = crate::images::ImageLoader::new(
-            Arc::clone(&replaced_images),
-            (max_texture_size - 2).max(1) as u32,
-        );
+        // The device's limit is set once the renderer is built, before the first decode.
+        let images = crate::images::ImageLoader::new(Arc::clone(&replaced_images), u32::MAX);
         let sources = images.source_queue();
         let secure_changes: Rc<RefCell<Vec<zgui_dom::NodeKey>>> = Rc::default();
         let secure_heard = Rc::clone(&secure_changes);
@@ -769,6 +763,8 @@ impl Window {
             maintenance_due: None,
             clock,
             first_frame: true,
+            unopened: None,
+            renderer_known: false,
             awaiting_frame: std::cell::Cell::new(false),
             gate,
             timers,

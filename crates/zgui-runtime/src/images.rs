@@ -339,6 +339,11 @@ impl ImageLoader {
         }
     }
 
+    /// Decodes no larger than `max_dimension` from now on.
+    pub(crate) const fn set_max_dimension(&mut self, max_dimension: u32) {
+        self.limits.max_dimension = max_dimension;
+    }
+
     /// The queue the attribute hook pushes `src` changes into.
     pub(crate) fn source_queue(&self) -> SourceQueue {
         Rc::clone(&self.pending)

@@ -423,6 +423,8 @@ impl Window {
                 self.damage.rects()
             )
         });
+        // Not before, so the cascade and the layout run while a driver thread builds the renderer.
+        self.await_renderer();
         // After layout, because a picture's demand *is* its laid-out content box: this is the
         // first moment the loader can know how many device pixels each image actually needs, and
         // the decode it kicks is sized by the answer.
@@ -821,7 +823,7 @@ impl Window {
     /// with horizontal stripes in a known order. The display is asked on every frame, because a
     /// window moves between displays. A change of the answer changes every glyph on the surface,
     /// so the whole surface is damaged.
-    fn settle_text_coverage(&mut self) {
+    pub(super) fn settle_text_coverage(&mut self) {
         let device = self
             .compositor
             .status()

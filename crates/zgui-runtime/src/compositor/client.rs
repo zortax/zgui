@@ -6,8 +6,8 @@ use compositor_api::{
     ScrollWatch,
 };
 use compositor_types::{
-    ClientId, FrameClock, GpuUnavailable, OutputId, RenderTarget, ScrollGesture, ScrollId,
-    ScrollRouting, SubpixelOrder, Transaction,
+    ClientId, FrameClock, OutputId, RenderTarget, ScrollGesture, ScrollId, ScrollRouting,
+    SubpixelOrder, Transaction,
 };
 
 use crate::compositor::{Answers, Shared};
@@ -36,21 +36,16 @@ impl Client {
     /// Registers a client of `shared` with an output configured for `target`, whose renderer
     /// `renderer` builds.
     ///
-    /// # Errors
-    ///
-    /// Fails, and leaves nothing registered, when the renderer could not be built.
-    pub(crate) fn open(
-        shared: Shared,
-        target: RenderTarget,
-        renderer: RendererFactory,
-    ) -> Result<Self, GpuUnavailable> {
+    /// A driver thread builds the renderer after the call returns. A renderer that could not be
+    /// built is reported by the answers.
+    pub(crate) fn open(shared: Shared, target: RenderTarget, renderer: RendererFactory) -> Self {
         let (client, output) = {
             let mut driver = shared.driver.borrow_mut();
             let (client, _ids) = driver.register_client();
             let output = driver.create_output(config(target), renderer);
             (client, output)
         };
-        let mut opened = Self {
+        let opened = Self {
             shared,
             client,
             output,
@@ -60,11 +55,8 @@ impl Client {
             awaiting: false,
             stepped: std::cell::Cell::new(None),
         };
-        if opened.status().is_some_and(|status| status.failed) {
-            return Err(opened.answers().failed.unwrap_or_default());
-        }
         opened.watch();
-        Ok(opened)
+        opened
     }
 
     /// Watches the client's output: every frame drawn, its first presented one, and its
@@ -211,6 +203,18 @@ impl Client {
             .driver
             .borrow_mut()
             .observe_frames(self.output, observer);
+    }
+
+    /// Waits until the driver has published the output's renderer, if it has not yet.
+    pub(crate) fn await_renderer(&self) {
+        if self.status().is_none() {
+            self.shared.driver.borrow_mut().sync();
+        }
+    }
+
+    /// Reports whether the output presented a frame since it was created.
+    pub(crate) const fn shown(&self) -> bool {
+        self.shown
     }
 
     /// Takes what the driver queued for the client since the last call.
