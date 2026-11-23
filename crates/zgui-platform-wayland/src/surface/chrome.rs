@@ -244,7 +244,7 @@ pub fn set_pointer_passthrough(
 pub fn pre_present(surface: &WaylandSurface, size: Size<i32, Device>, scale: f64) {
     let (metadata, fractional) = {
         let mut shared = surface.shared();
-        shared.presented = true;
+        shared.presenting(std::time::Instant::now());
         shared.mapped = true;
         shared.shown = true;
         shared.committing_frame(size);

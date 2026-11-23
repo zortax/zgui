@@ -417,8 +417,8 @@ impl WaylandSurface {
 
     /// Ends a delivered [`SurfaceEvent::PresentReady`].
     /// `began` is when the present began.
-    pub(crate) fn finish_present(&self, began: Instant, now: Instant) {
-        self.shared().end_of_present(began, now);
+    pub(crate) fn finish_present(&self, began: Instant) {
+        self.shared().end_of_present(began);
         self.end_drawing();
     }
 

@@ -259,7 +259,7 @@ impl<A: AppHandler> WaylandApp<A> {
                 self.handler
                     .surface_event(&cx, id, SurfaceEvent::PresentReady);
             }
-            surface.finish_present(began, self.state.live.clock.now());
+            surface.finish_present(began);
         }
     }
 
