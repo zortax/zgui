@@ -159,6 +159,10 @@ fn main() {
         crate::scenario::vector::main(&size, variant.as_deref());
         return;
     }
+    if phase == "scroll-deadlines" {
+        crate::scenario::deadlines::run();
+        return;
+    }
     if phase == "scenario" {
         zgui_profile::latency::start_epoch();
         let outcome = crate::scenario::run(&size);

@@ -16,6 +16,7 @@
 
 pub(crate) mod band;
 mod cold;
+pub(crate) mod deadlines;
 mod fixture;
 mod hover;
 mod idle;

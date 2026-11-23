@@ -64,6 +64,8 @@ compositor-color = { path = "../compositor/compositor/crates/color", version = "
 compositor-core = { path = "../compositor/compositor/crates/core", version = "0.1.0" }
 compositor-wgpu = { path = "../compositor/compositor/crates/wgpu", version = "0.1.0" }
 compositor-capture = { path = "../compositor/compositor/crates/capture", version = "0.1.0" }
+compositor-cpu = { path = "../compositor/compositor/crates/cpu", version = "0.1.0" }
+compositor-naive = { path = "../compositor/compositor/crates/naive", version = "0.1.0" }
 compositor-text = { path = "../compositor/compositor/crates/text", version = "0.1.0" }
 compositor-vector = { path = "../compositor/compositor/crates/vector", version = "0.1.0" }
 compositor-vello = { path = "../compositor/compositor/crates/vello", version = "0.1.0" }

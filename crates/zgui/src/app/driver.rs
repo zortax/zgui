@@ -15,7 +15,7 @@ pub enum CompositorDriver {
 impl CompositorDriver {
     /// The variable that names the driver, overriding the one the application chose.
     ///
-    /// Set `ZGUI_DRIVER=threaded` for [`CompositorDriver::Threaded`] or `local` for
+    /// Set `ZGUI_DRIVER=threaded` or `paced` for [`CompositorDriver::Threaded`], and `local` for
     /// [`CompositorDriver::InProcess`]. Case and surrounding spaces are ignored. Other values are
     /// ignored with a warning.
     pub const VARIABLE: &str = "ZGUI_DRIVER";
@@ -39,10 +39,10 @@ impl CompositorDriver {
         })
     }
 
-    /// The driver `value` names: `threaded` or `local`, in any case.
+    /// The driver `value` names: `threaded`, `paced` or `local`, in any case.
     fn parse(value: &str) -> Option<Self> {
         let value = value.trim();
-        if value.eq_ignore_ascii_case("threaded") {
+        if value.eq_ignore_ascii_case("threaded") || value.eq_ignore_ascii_case("paced") {
             Some(Self::Threaded)
         } else if value.eq_ignore_ascii_case("local") {
             Some(Self::InProcess)

@@ -804,6 +804,9 @@ name = "color"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ec7c5eb7a16992b1904d76c517d170ab353b0e0b3d5a0c81a8a0cd1037893cf"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "color_quant"
@@ -891,6 +894,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "compositor-cpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "compositor-api",
+ "compositor-color",
+ "compositor-damage",
+ "compositor-geom",
+ "compositor-types",
+ "kurbo",
+ "smallvec",
+ "vello_cpu",
+]
+
+[[package]]
 name = "compositor-damage"
 version = "0.1.0"
 dependencies = [
@@ -918,6 +936,15 @@ name = "compositor-motion"
 version = "0.1.0"
 dependencies = [
  "compositor-types",
+]
+
+[[package]]
+name = "compositor-naive"
+version = "0.1.0"
+dependencies = [
+ "compositor-api",
+ "compositor-types",
+ "zeno",
 ]
 
 [[package]]
@@ -1502,6 +1529,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fearless_simd"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4beca3cb2444e3304ac30843cc091f44ed58932353cd492ce740067bfce6b12"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1779,6 +1812,22 @@ dependencies = [
  "khronos_api",
  "log",
  "xml-rs",
+]
+
+[[package]]
+name = "glifo"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1218dedd5348c1b166ec3b8b3cbca49d2f527bd43b3fa072ea5123c523ed3f"
+dependencies = [
+ "bytemuck",
+ "foldhash",
+ "hashbrown 0.17.1",
+ "log",
+ "peniko",
+ "skrifa",
+ "smallvec",
+ "vello_common",
 ]
 
 [[package]]
@@ -3056,6 +3105,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "839c8299360d2e998bdb106dc0a6cd71dcc5f4df51df1b620361bf50e283cca6"
 dependencies = [
+ "bytemuck",
  "color",
  "kurbo",
  "linebender_resource_handle",
@@ -4758,6 +4808,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "vello_common"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73c2fbe53548bcd25c8ff42f75a93770a8611a16b37bee56d7ef7b44e36027f1"
+dependencies = [
+ "bytemuck",
+ "fearless_simd",
+ "guillotiere",
+ "log",
+ "peniko",
+ "smallvec",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "vello_cpu"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed1fec424fbba6acf6cbc78bb526447eb77590d95f40419d598870fe37535212"
+dependencies = [
+ "bytemuck",
+ "glifo",
+ "hashbrown 0.17.1",
+ "vello_common",
+]
+
+[[package]]
 name = "vello_encoding"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5938,6 +6015,8 @@ dependencies = [
  "compositor-capture",
  "compositor-core",
  "compositor-driver",
+ "compositor-naive",
+ "compositor-text",
  "compositor-thread",
  "compositor-types",
  "compositor-vello",
@@ -6622,7 +6701,9 @@ dependencies = [
  "compositor-api",
  "compositor-capture",
  "compositor-core",
+ "compositor-cpu",
  "compositor-driver",
+ "compositor-naive",
  "compositor-testing",
  "compositor-text",
  "compositor-thread",

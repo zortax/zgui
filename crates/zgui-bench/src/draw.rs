@@ -11,7 +11,7 @@ use compositor_wgpu::WgpuRenderer;
 use zgui::platform::Surface;
 use zgui::runtime::{AppError, RendererFactory};
 use zgui_bench::renderers::NullRenderer;
-use zgui_testkit_compositor::{Screen, Shown};
+use zgui_testkit_compositor::Shown;
 
 use crate::verify::FullFrame;
 
@@ -50,9 +50,36 @@ pub(crate) fn age(kept: BufferAge) -> BufferAge {
     }
 }
 
-/// Notes that a window drew a frame, which answers [`next_whole`].
+/// Notes that a window drew a frame, which answers [`next_whole`], and stamps it when
+/// [`stamp_frames`] is on.
 pub(crate) fn drew() {
     NEXT_WHOLE.store(false, Ordering::Relaxed);
+    if let Some(stamps) = STAMPS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .as_mut()
+    {
+        stamps.push(std::time::Instant::now());
+    }
+}
+
+/// When each frame was drawn while stamping is on, on whichever thread draws.
+static STAMPS: std::sync::Mutex<Option<Vec<std::time::Instant>>> = std::sync::Mutex::new(None);
+
+/// Starts stamping every frame a window draws.
+pub(crate) fn stamp_frames() {
+    *STAMPS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Vec::new());
+}
+
+/// Stops stamping and returns when each frame was drawn since [`stamp_frames`].
+pub(crate) fn take_stamps() -> Vec<std::time::Instant> {
+    STAMPS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take()
+        .unwrap_or_default()
 }
 
 /// Makes the windows built from now on draw every frame over the whole output and record it, or
@@ -76,6 +103,34 @@ pub(crate) fn mounted_recorder() -> Rc<FullFrame> {
             .pop()
             .expect("an application was built with a recorder")
     })
+}
+
+/// Returns the compositor `ZGUI_COMPOSITOR` selects, drawing text in `fonts`: the application's
+/// own, or `naive`, the second implementation, with the same fonts and glyph rasteriser.
+///
+/// # Panics
+///
+/// Panics when the variable names another compositor.
+pub(crate) fn compositor(fonts: &zgui::app::Fonts) -> Box<dyn compositor_api::Compositor> {
+    match std::env::var("ZGUI_COMPOSITOR")
+        .ok()
+        .as_deref()
+        .map(str::trim)
+    {
+        None | Some("" | "core") => zgui::app::compositor(fonts),
+        Some("naive") => {
+            let mut compositor = compositor_naive::NaiveCompositor::new();
+            // The application's compositor holds the fonts the way it reads them.
+            let registry = zgui::app::compositor(fonts).font_registry();
+            compositor_api::Compositor::use_font_registry(&mut compositor, registry);
+            compositor_api::Compositor::use_glyph_raster(
+                &mut compositor,
+                Arc::new(compositor_text::SwashRaster::new()),
+            );
+            Box::new(compositor)
+        }
+        Some(other) => panic!("ZGUI_COMPOSITOR={other} is neither core nor naive"),
+    }
 }
 
 /// Returns `compositor` behind the driver `ZGUI_DRIVER` selects.
@@ -123,9 +178,7 @@ pub(crate) fn renderer() -> RendererFactory {
                     );
                 }
                 if whole {
-                    let mut screen = Screen::new().showing_into(shown);
-                    screen.configure(target);
-                    return Ok(Box::new(screen));
+                    return Ok(zgui_testkit_compositor::showing(shown, target));
                 }
                 if !gpu {
                     return Ok(Box::new(crate::phase::Planned::new(NullRenderer::new(

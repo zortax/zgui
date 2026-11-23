@@ -20,7 +20,7 @@ pub(crate) struct Client {
     shared: Shared,
     client: ClientId,
     output: OutputId,
-    /// The waker the client's events wake, set again on every registration.
+    /// The function the client's waking events call, set again on every registration.
     waker: Option<EventWaker>,
     /// The buffer the driver's events are drained into, kept for its allocation.
     events: Vec<ClientEvent>,

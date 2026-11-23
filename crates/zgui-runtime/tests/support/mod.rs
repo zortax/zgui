@@ -238,9 +238,7 @@ pub fn screen(
     let shown = zgui_testkit_compositor::Shown::default();
     SCREENS.with(|screens| screens.borrow_mut().push((surface.id(), shown.clone())));
     Ok(Box::new(move || {
-        let mut renderer = zgui_testkit_compositor::Screen::new().showing_into(shown);
-        renderer.configure(target);
-        Ok(Box::new(renderer) as Box<dyn Renderer>)
+        Ok(zgui_testkit_compositor::showing(shown, target))
     }))
 }
 

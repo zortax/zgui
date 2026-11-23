@@ -7,14 +7,6 @@ use core::fmt;
 pub struct Unavailable(String);
 
 impl Unavailable {
-    /// An implementation that `variable=value` selects and that is not written yet.
-    pub(crate) fn not_written(variable: &str, value: &str) -> Self {
-        Self(format!(
-            "{variable}={value} selects an implementation that does not exist yet; \
-             unset {variable} or choose another value"
-        ))
-    }
-
     /// A value of `variable` that names no implementation.
     pub(crate) fn unknown(variable: &str, value: &str, known: &str) -> Self {
         Self(format!(
