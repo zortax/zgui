@@ -103,25 +103,33 @@ impl Window {
         let sensitive = {
             let filter = self.engine.filter();
             let document = self.document.borrow();
-            let store = document.store();
-            let mut stack: Vec<_> = store
-                .index_of(container)
-                .and_then(|index| store.core(index).first_child())
-                .into_iter()
-                .collect();
-            let mut found = false;
-            while let Some(index) = stack.pop() {
-                let core = store.core(index);
-                if core.kind() == zgui_dom::NodeKind::Element
-                    && store.watches(index, &filter, UiState::HOVER)
-                {
-                    found = true;
-                    break;
-                }
-                stack.extend(core.next_sibling());
-                stack.extend(core.first_child());
-            }
-            found
+            // The answers are kept on the elements, so the rows a list keeps are matched once.
+            document
+                .edit(&filter, |edit| {
+                    let store = edit.document().store();
+                    let mut stack: Vec<_> = store
+                        .index_of(container)
+                        .and_then(|index| store.core(index).first_child())
+                        .into_iter()
+                        .collect();
+                    while let Some(index) = stack.pop() {
+                        let (element, sibling, child) = {
+                            let core = edit.document().store().core(index);
+                            (
+                                core.kind() == zgui_dom::NodeKind::Element,
+                                core.next_sibling(),
+                                core.first_child(),
+                            )
+                        };
+                        if element && edit.watches(index, UiState::HOVER) {
+                            return true;
+                        }
+                        stack.extend(sibling);
+                        stack.extend(child);
+                    }
+                    false
+                })
+                .unwrap_or(true)
         };
         self.driven.sensitive.insert(container, sensitive);
         sensitive
