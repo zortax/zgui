@@ -71,6 +71,10 @@ impl<C: CompositorClient> CompositorClient for Synced<C> {
         self.0.set_refresh(output, refresh_ns);
     }
 
+    fn report_presented(&mut self, output: OutputId, presented_ns: u64) {
+        self.0.report_presented(output, presented_ns);
+    }
+
     fn destroy_output(&mut self, output: OutputId) {
         self.0.destroy_output(output);
     }

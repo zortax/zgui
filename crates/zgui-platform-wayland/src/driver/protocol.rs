@@ -105,10 +105,12 @@ impl Dispatch<WlCallback, FrameCallback> for WaylandState {
         let unreported = !state.presentation.reports();
         let events = state.live.surface(frame.surface).map(|surface| {
             let mut shared = surface.shared();
-            shared.frame_callback(
-                frame.serial,
-                zgui_platform::Clock::now(state.live.clock.as_ref()),
-            );
+            let now = zgui_platform::Clock::now(state.live.clock.as_ref());
+            shared.frame_callback(frame.serial, now);
+            if unreported {
+                // The answer comes as the compositor repaints, which is the phase of its refreshes.
+                shared.presented(now, std::time::Duration::ZERO);
+            }
             [
                 shared.visibility_edge(),
                 shared.presentation_edge(unreported),

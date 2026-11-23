@@ -66,6 +66,32 @@ impl Window {
         }
     }
 
+    /// Reports to the driver when a frame last reached the display, if the platform said so since
+    /// the last report.
+    fn report_presented(&mut self) {
+        let Some(at) = self
+            .surface
+            .presentation_timing()
+            .and_then(|timing| timing.last_presented)
+        else {
+            return;
+        };
+        if self.reported_presented.replace(at) == Some(at) {
+            return;
+        }
+        self.compositor.report_presented(self.frame_clock_ns(at));
+    }
+
+    /// Returns where the moment `at` of the window's clock falls on the driver's frame clock.
+    fn frame_clock_ns(&self, at: web_time::Instant) -> u64 {
+        if self.compositor.pacing() == compositor_api::DriverPacing::Stepped {
+            let since = at.saturating_duration_since(self.clock.origin());
+            return u64::try_from(since.as_nanos()).unwrap_or(u64::MAX);
+        }
+        let ago = self.clock.now().saturating_duration_since(at);
+        compositor_api::now_ns().saturating_sub(u64::try_from(ago.as_nanos()).unwrap_or(u64::MAX))
+    }
+
     /// Returns the moment of the window's clock that `ns` on the driver's frame clock is.
     ///
     /// A stepped driver's frame clock is the window's own clock, which the window steps it with.
@@ -101,6 +127,7 @@ impl Window {
     /// next frame record everything again, and the compositor's scrolling is taken for the next
     /// frame to adopt.
     pub(crate) fn take_answers(&mut self) -> crate::compositor::Drawn {
+        self.report_presented();
         let mut answers = self.compositor.answers();
         if answers.rejected.is_some() {
             self.restart_after_rejection();

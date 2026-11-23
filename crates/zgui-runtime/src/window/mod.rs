@@ -458,6 +458,8 @@ pub struct Window {
     unopened: Option<compositor_types::GpuUnavailable>,
     /// Whether the window has read what its output's renderer can do.
     renderer_known: bool,
+    /// When the last frame the driver was told about reached the display.
+    reported_presented: Option<web_time::Instant>,
     /// Whether a frame has been asked for and has not run yet.
     ///
     /// The platform coalesces repeated requests into one frame, so a second request costs nothing
@@ -765,6 +767,7 @@ impl Window {
             first_frame: true,
             unopened: None,
             renderer_known: false,
+            reported_presented: None,
             awaiting_frame: std::cell::Cell::new(false),
             gate,
             timers,

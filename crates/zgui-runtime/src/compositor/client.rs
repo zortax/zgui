@@ -205,6 +205,14 @@ impl Client {
             .observe_frames(self.output, observer);
     }
 
+    /// Reports that a frame of the output reached the display at `presented_ns` on the frame clock.
+    pub(crate) fn report_presented(&self, presented_ns: u64) {
+        self.shared
+            .driver
+            .borrow_mut()
+            .report_presented(self.output, presented_ns);
+    }
+
     /// Waits until the driver has published the output's renderer, if it has not yet.
     pub(crate) fn await_renderer(&self) {
         if self.status().is_none() {
