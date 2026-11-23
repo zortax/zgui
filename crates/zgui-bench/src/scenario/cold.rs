@@ -50,6 +50,10 @@ pub(crate) fn run() -> Outcome {
         DevicePx(crate::gallery::HEIGHT),
     )));
     harness.settle(256);
+    // The first frame is painted once a driver on a thread of its own has drawn it, and the
+    // window has taken what it answered.
+    crate::draw::wait_for_driver();
+    harness.settle(256);
     let elapsed = started.elapsed();
     drop(gpu);
     let moved = before.delta(&zgui_profile::counter::snapshot());

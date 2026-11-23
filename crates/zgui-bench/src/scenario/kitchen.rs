@@ -113,7 +113,13 @@ pub(crate) fn run() -> Outcome {
         harness.deliver_to_first(crate::input::wheel(middle, lines));
         harness.settle(64);
         let mut carried = 0;
-        while crate::input::any_glide(&harness) && carried < 60 {
+        loop {
+            // Outside the measured span, as a refresh interval of real time would let the driver
+            // finish the tick before.
+            crate::draw::wait_for_driver();
+            if !crate::input::any_glide(&harness) || carried == 60 {
+                break;
+            }
             let gpu = crate::gpu_time::phase("kitchen.glide_tick");
             let started = std::time::Instant::now();
             let cpu = crate::cpu::Cpu::now();

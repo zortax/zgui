@@ -1483,6 +1483,11 @@ impl AppHandler for Runtime {
             // Something asked for a window, or for the application to stop. Nothing else here can
             // carry that out: a surface is made from a platform context, and this is one.
             WakeReason::AppWork => {}
+            WakeReason::CompositorAnswered(surface) => {
+                if let Some(window) = self.window_mut(surface) {
+                    window.take_woken_answers();
+                }
+            }
             WakeReason::ReactiveWork { surfaces } => {
                 for id in surfaces.iter() {
                     if let Some(window) = self.window_mut(*id) {
@@ -1591,9 +1596,18 @@ impl AppHandler for Runtime {
         let mut policy = IdlePolicy::Block;
         self.parked.clear();
         for window in &mut self.windows {
-            let Some(deadline) = window.scheduled_deadline(now) else {
+            let Some(mut deadline) = window.scheduled_deadline(now) else {
                 continue;
             };
+            // A driver on a thread of its own may have published a later frame since the deadline
+            // was set.
+            if deadline.at <= now && deadline.kind == crate::window::frame::DeadlineKind::Compose {
+                window.arm_driver();
+                let Some(rearmed) = window.scheduled_deadline(now) else {
+                    continue;
+                };
+                deadline = rearmed;
+            }
             if deadline.at > now {
                 self.parked
                     .push((window.surface().id(), deadline.at, deadline.kind));
@@ -1643,9 +1657,7 @@ impl AppHandler for Runtime {
             if let Some(window) = self.window_mut(surface) {
                 match kind {
                     crate::window::frame::DeadlineKind::Render => window.request_frame(),
-                    crate::window::frame::DeadlineKind::Compose => {
-                        window.request_compositor_frame()
-                    }
+                    crate::window::frame::DeadlineKind::Compose => window.compositor_due(now),
                     crate::window::frame::DeadlineKind::Maintenance => {
                         window.maintain(cx.clock().timestamp())
                     }

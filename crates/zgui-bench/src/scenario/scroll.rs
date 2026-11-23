@@ -18,6 +18,9 @@ use crate::scenario::band::{
 use crate::scenario::fixture::{self, Fixture};
 use crate::scenario::{Outcome, counters, quiet};
 
+/// The refresh interval of a 120 Hz output.
+const TICK: std::time::Duration = std::time::Duration::from_nanos(8_333_333);
+
 /// How many ticks of the refresh the list is carried for.
 const TICKS: usize = 600;
 
@@ -55,6 +58,14 @@ struct Rebuild {
 /// Runs the scenario.
 pub(crate) fn run() -> Outcome {
     let mut harness = crate::drive::harness(fixture::runtime(Fixture::LongList));
+    // The compositor's own motion is due one refresh interval after its last frame, so the
+    // output refreshes at the rate the loop ticks at.
+    harness
+        .platform()
+        .offscreens()
+        .first()
+        .expect("the application opened its window")
+        .set_refresh_rate_millihertz(Some(120_000));
     quiet(&mut harness);
 
     let middle = Point::new(
@@ -80,15 +91,18 @@ pub(crate) fn run() -> Outcome {
         if tick % NOTCH_EVERY == 0 {
             harness.deliver_to_first(crate::input::wheel(middle, 6.0));
             harness.settle(64);
-            harness.advance(std::time::Duration::from_micros(8_333));
+            harness.advance(TICK);
             harness.pump();
             continue;
         }
+        // Outside the measured span, as a refresh interval of real time would let the driver
+        // finish the tick before.
+        crate::draw::wait_for_driver();
         let mark = zgui_profile::counter::snapshot();
         let gpu = crate::gpu_time::phase("scroll.tick");
         let started = std::time::Instant::now();
         let cpu = crate::cpu::Cpu::now();
-        harness.advance(std::time::Duration::from_micros(8_333));
+        harness.advance(TICK);
         let ran = harness.pump();
         let cost = started.elapsed().as_secs_f64() * 1e6;
         let spent = crate::cpu::Cpu::now();

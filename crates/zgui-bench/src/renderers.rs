@@ -200,8 +200,17 @@ pub fn compositor() -> Box<dyn Compositor> {
     Box::new(compositor_core::CompositorImpl::new())
 }
 
-/// Returns `compositor` behind the driver `ZGUI_DRIVER` selects, see
-/// [`zgui_testkit_compositor::driver`].
+/// Returns `compositor` behind the driver `ZGUI_DRIVER` selects, waiting for a threaded driver
+/// after every step, see [`zgui_testkit_compositor::driver`].
 pub fn client(compositor: Box<dyn Compositor>) -> Box<dyn CompositorClient> {
     zgui_testkit_compositor::driver(compositor)
+}
+
+/// Returns `compositor` behind the driver `ZGUI_DRIVER` selects, returning from every step
+/// without waiting for a threaded driver, and a wait for that driver, see
+/// [`zgui_testkit_compositor::unsynced_driver`].
+pub fn unsynced_client(
+    compositor: Box<dyn Compositor>,
+) -> (Box<dyn CompositorClient>, zgui_testkit_compositor::Waiter) {
+    zgui_testkit_compositor::unsynced_driver(compositor)
 }

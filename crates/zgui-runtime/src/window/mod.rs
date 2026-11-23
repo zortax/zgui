@@ -439,6 +439,8 @@ pub struct Window {
     /// The output refresh rate last reported, so a change in it is logged once rather than per
     /// frame. `None` inside the option is a backend that reports no rate at all.
     reported_rate: std::cell::Cell<Option<Option<u32>>>,
+    /// The output refresh rate last told to the driver, with the same meaning.
+    told_rate: Option<Option<u32>>,
     /// Whether the presenter's frames time out waiting for an image, as the driver last
     /// reported.
     starved: bool,
@@ -646,16 +648,21 @@ impl Window {
         built.mount(&dom_handle, root, None);
 
         let mut compositor = compositor;
-        // A self-paced driver answers on its own thread, and the answers that need the window,
-        // such as a watch that fired, ask it for a frame. Every other driver answers during the
-        // window's own calls, whose answers the window takes right after them.
-        if compositor.pacing() == compositor_api::DriverPacing::SelfPaced {
+        // A driver on a thread of its own answers there, and the window takes the answers that
+        // wake it on its next turn. A driver on this thread answers during the window's own calls,
+        // whose answers the window takes right after them.
+        if compositor.capabilities().threaded {
             let woken = Arc::clone(&waker);
-            compositor.set_waker(Arc::new(move || zgui_reactive::FrameWaker::wake(&*woken)));
+            let id = surface.id();
+            compositor.set_waker(Arc::new(move || woken.answered(id)));
         }
         if zgui_layout::invariants::enabled() {
             compositor.set_verification(true);
         }
+        // Before the output's first frame, so a paced driver never builds one at a rate it
+        // assumed while the platform reports the real one.
+        let told_rate = surface.refresh_rate_millihertz().filter(|rate| *rate > 0);
+        compositor.set_refresh(compose::refresh_ns(told_rate));
 
         Self {
             surface,
@@ -757,6 +764,7 @@ impl Window {
             configured: 0,
             declined: 0,
             reported_rate: std::cell::Cell::new(None),
+            told_rate: Some(told_rate),
             starved: false,
             maintenance_due: None,
             clock,

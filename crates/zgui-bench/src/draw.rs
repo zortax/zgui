@@ -26,6 +26,9 @@ thread_local! {
     /// last, and the differential opens two.
     static FULL_FRAMES: RefCell<Vec<Rc<FullFrame>>> = const { RefCell::new(Vec::new()) };
 
+    /// The wait for the driver of the client [`client`] built last.
+    static WAITER: RefCell<Option<zgui_testkit_compositor::Waiter>> = const { RefCell::new(None) };
+
     /// Whether the windows built from now on draw every frame whole and record it.
     static WHOLE: Cell<bool> = const { Cell::new(false) };
 }
@@ -134,10 +137,28 @@ pub(crate) fn compositor(fonts: &zgui::app::Fonts) -> Box<dyn compositor_api::Co
 }
 
 /// Returns `compositor` behind the driver `ZGUI_DRIVER` selects.
+///
+/// A threaded driver is waited for after every step only by windows that read their frames back,
+/// which [`draw_whole`] or `ZGUI_BENCH_CAPTURE` turns on.
 pub(crate) fn client(
     compositor: Box<dyn compositor_api::Compositor>,
 ) -> Box<dyn compositor_api::CompositorClient> {
-    zgui_bench::renderers::client(compositor)
+    if WHOLE.with(Cell::get) || capturing() {
+        return zgui_bench::renderers::client(compositor);
+    }
+    let (client, waiter) = zgui_bench::renderers::unsynced_client(compositor);
+    WAITER.with(|held| *held.borrow_mut() = Some(waiter));
+    client
+}
+
+/// Waits until the driver of the client [`client`] built last has applied every call queued so
+/// far and published what they caused.
+pub(crate) fn wait_for_driver() {
+    WAITER.with(|held| {
+        if let Some(waiter) = held.borrow_mut().as_mut() {
+            waiter.wait();
+        }
+    });
 }
 
 /// Reports whether this run draws on the device and reads frames back, with `ZGUI_BENCH_CAPTURE`.

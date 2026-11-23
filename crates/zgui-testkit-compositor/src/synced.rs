@@ -14,6 +14,8 @@ use compositor_types::{
 };
 
 /// A driver that waits after every step until the frames of the step are drawn and published.
+///
+/// It wakes no client, since a client reads every answer of a step once the step returns.
 pub(crate) struct Synced<C>(pub(crate) C);
 
 impl<C: CompositorClient> CompositorClient for Synced<C> {
@@ -63,6 +65,10 @@ impl<C: CompositorClient> CompositorClient for Synced<C> {
 
     fn set_subpixel_order(&mut self, output: OutputId, order: Option<SubpixelOrder>) {
         self.0.set_subpixel_order(output, order);
+    }
+
+    fn set_refresh(&mut self, output: OutputId, refresh_ns: Option<u64>) {
+        self.0.set_refresh(output, refresh_ns);
     }
 
     fn destroy_output(&mut self, output: OutputId) {
@@ -119,8 +125,8 @@ impl<C: CompositorClient> CompositorClient for Synced<C> {
         self.0.release_idle_resources(output);
     }
 
-    fn set_waker(&mut self, client: ClientId, waker: Option<EventWaker>) {
-        self.0.set_waker(client, waker);
+    fn set_waker(&mut self, _client: ClientId, _waker: Option<EventWaker>) {
+        // Every step answers before it returns, as in process, so no answer needs a wake.
     }
 
     fn drain_events(&mut self, client: ClientId, out: &mut Vec<ClientEvent>) {

@@ -215,6 +215,10 @@ impl Window {
     /// Runs the frame that was asked for: one that only presents the compositor's scrolling, or
     /// a whole one.
     fn run(&mut self, clock: &dyn Clock) -> FrameReport {
+        // Before the kind of frame is chosen, so an answer that asks for a frame makes this one a
+        // whole one, and before a whole frame counts as started and adopts the offsets the
+        // compositor shows.
+        self.take_answers();
         if self.only_compositor_owed() {
             return self.tick_compositor(clock);
         }
@@ -284,9 +288,6 @@ impl Window {
         let timestamp = clock.timestamp();
         // Read before anything this frame does, so every stage of it is told the same moment.
         self.note_frame_moment(timestamp);
-        // Before the frame counts as started, so an answer that asks for a frame asks for this one,
-        // and before the offsets the compositor shows are adopted.
-        self.take_answers();
 
         self.frame_started();
         counter::bump(Counter::ZguiFrames);

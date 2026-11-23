@@ -132,12 +132,16 @@ pub(crate) fn median(samples: &mut [f64]) -> f64 {
 /// A document that has just opened owes a first cascade, a first layout, a first shaping of every
 /// run and a first emission of every primitive. Measuring an interaction before that has settled
 /// measures the opening.
+///
+/// A driver on a thread of its own is waited for before every turn, so it is at rest too.
 pub(crate) fn quiet(harness: &mut Harness<Runtime>) {
     harness.settle(256);
     for _ in 0..8 {
+        crate::draw::wait_for_driver();
         harness.advance(std::time::Duration::from_micros(16_667));
         harness.pump();
     }
+    crate::draw::wait_for_driver();
     harness.settle(256);
     zgui_profile::counter::reset();
 }

@@ -6,7 +6,7 @@
 mod client;
 mod events;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use compositor_api::CompositorClient;
@@ -18,6 +18,8 @@ pub(crate) use self::events::{Answers, Drawn};
 #[derive(Clone)]
 pub(crate) struct Shared {
     driver: Rc<RefCell<Box<dyn CompositorClient>>>,
+    /// The steps the windows gave the driver.
+    steps: Rc<Cell<u64>>,
 }
 
 impl Shared {
@@ -25,6 +27,7 @@ impl Shared {
     pub(crate) fn new(driver: Box<dyn CompositorClient>) -> Self {
         Self {
             driver: Rc::new(RefCell::new(driver)),
+            steps: Rc::new(Cell::new(0)),
         }
     }
 }

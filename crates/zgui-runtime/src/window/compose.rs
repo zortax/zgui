@@ -44,6 +44,7 @@ impl Window {
     /// was handed over when none was drawn yet.
     pub(super) fn draw_output(&mut self, at: zgui_vocab::Timestamp) -> crate::compositor::Drawn {
         let interval = self.refresh_interval();
+        self.tell_refresh();
         self.hand_lost_steps();
         self.compositor.run_due(compositor_types::FrameClock {
             now_ns: nanos(at.since_origin()),
@@ -51,6 +52,18 @@ impl Window {
             interval_ns: nanos(interval),
         });
         self.take_answers()
+    }
+
+    /// Tells the driver the refresh rate the platform reports for the window's output, when it
+    /// changed.
+    fn tell_refresh(&mut self) {
+        let rate = self
+            .surface
+            .refresh_rate_millihertz()
+            .filter(|rate| *rate > 0);
+        if self.told_rate.replace(rate) != Some(rate) {
+            self.compositor.set_refresh(refresh_ns(rate));
+        }
     }
 
     /// Returns the moment of the window's clock that `ns` on the driver's frame clock is.
@@ -130,8 +143,31 @@ impl Window {
         drawn
     }
 
+    /// Takes the driver's answers that woke the window between its frames.
+    ///
+    /// The answers ask for the frames they need, and a change of the presenter's state asks for
+    /// one too.
+    pub(crate) fn take_woken_answers(&mut self) {
+        let starved = self.starved;
+        self.take_answers();
+        if self.starved != starved {
+            self.request_frame();
+        }
+    }
+
+    /// Asks for a frame that runs the driver's frames, if the driver's newest snapshot still has
+    /// one due by `now`.
+    ///
+    /// Otherwise the driver's next frame becomes the window's deadline again.
+    pub(crate) fn compositor_due(&mut self, now: web_time::Instant) {
+        self.arm_driver();
+        if self.driven.due().is_some_and(|due| due <= now) {
+            self.request_compositor_frame();
+        }
+    }
+
     /// Makes the driver's next frame a deadline of the window, unless the driver paces itself.
-    fn arm_driver(&mut self) {
+    pub(crate) fn arm_driver(&mut self) {
         let due = self.compositor.next_due();
         let paced = self.compositor.pacing() == compositor_api::DriverPacing::SelfPaced;
         let at = due
@@ -205,6 +241,11 @@ impl Window {
         }
         self.compositor.commit(transaction);
     }
+}
+
+/// Returns the refresh interval in nanoseconds of a rate in thousandths of a hertz.
+pub(super) fn refresh_ns(millihertz: Option<u32>) -> Option<u64> {
+    millihertz.map(|rate| 1_000_000_000_000 / u64::from(rate))
 }
 
 /// Returns `duration` in whole nanoseconds, saturating.

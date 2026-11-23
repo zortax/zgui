@@ -110,14 +110,31 @@ impl Client {
     /// Returns when the driver latches its next frame on the frame clock, or `None` when no output
     /// wants one.
     ///
-    /// A stepped driver on a thread of its own may not have published the step it was last given,
-    /// so a frame due by that step is due one interval after it.
+    /// A stepped driver on a thread of its own may not have published the last step it was given.
+    /// Its snapshot is read as follows:
+    ///
+    /// - If the snapshot predates that step, a frame is due one interval after the step at the
+    ///   latest, or earlier when the snapshot has one due then.
+    /// - If it has a frame due by that step, the frame is due one interval after the step.
+    /// - Otherwise the frame is due when the snapshot says.
     pub(crate) fn next_due(&self) -> Option<u64> {
-        let due = self.stats().next_due_ns?;
-        Some(match self.stepped.get() {
-            Some(clock) if due <= clock.now_ns => clock.now_ns + clock.interval_ns.max(1),
-            _ => due,
-        })
+        let stats = self.stats();
+        let Some(clock) = self.stepped.get() else {
+            return stats.next_due_ns;
+        };
+        let next = clock.now_ns + clock.interval_ns.max(1);
+        // A step can only bring the next frame forward to one interval after it.
+        if stats.steps < self.shared.steps.get() {
+            return Some(
+                stats
+                    .next_due_ns
+                    .filter(|due| *due > clock.now_ns)
+                    .map_or(next, |due| due.min(next)),
+            );
+        }
+        stats
+            .next_due_ns
+            .map(|due| if due <= clock.now_ns { next } else { due })
     }
 
     /// Returns the newest snapshot of the driver and its compositor.
@@ -289,6 +306,15 @@ impl Client {
             .set_subpixel_order(self.output, order);
     }
 
+    /// Sets the refresh interval of the display the output is shown on, or `None` when the
+    /// platform reports none.
+    pub(crate) fn set_refresh(&self, refresh_ns: Option<u64>) {
+        self.shared
+            .driver
+            .borrow_mut()
+            .set_refresh(self.output, refresh_ns);
+    }
+
     /// Asks for a frame of the output, such as when the platform is ready for the one it holds.
     pub(crate) fn request_frame(&self) {
         self.shared.driver.borrow_mut().request_frame(self.output);
@@ -304,6 +330,7 @@ impl Client {
             DriverPacing::Stepped => {
                 driver.step(clock);
                 self.stepped.set(Some(clock));
+                self.shared.steps.set(self.shared.steps.get() + 1);
             }
             DriverPacing::Pumped => driver.pump(),
             DriverPacing::SelfPaced => {}

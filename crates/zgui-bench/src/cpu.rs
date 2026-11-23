@@ -58,11 +58,14 @@ pub(crate) fn print(scenario: &str) {
             if process.is_empty() {
                 continue;
             }
+            let process_total: f64 = process.iter().sum();
+            let thread_total: f64 = thread.iter().sum();
             let process = Spread::of(process);
             let thread = Spread::of(thread);
             println!(
                 "CPU\t{scenario}\t{band}\tprocess_p50={:.2}\tprocess_p95={:.2}\tprocess_p99={:.2}\t\
-                 thread_p50={:.2}\tthread_p95={:.2}\tthread_p99={:.2}\tn={}",
+                 thread_p50={:.2}\tthread_p95={:.2}\tthread_p99={:.2}\tn={}\t\
+                 process_total={process_total:.0}\tthread_total={thread_total:.0}",
                 process.p50,
                 process.p95,
                 process.p99,

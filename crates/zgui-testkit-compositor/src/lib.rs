@@ -52,7 +52,7 @@ use std::sync::Arc;
 pub use crate::aged::{Aged, Refusals};
 pub use crate::device::{Composed, Device, Pixels};
 pub use crate::drawing::{Drawing, Instance};
-pub use crate::driver::{driver, factory, self_paced};
+pub use crate::driver::{Waiter, driver, factory, self_paced, unsynced_driver, unsynced_thread};
 pub use crate::kept::{Drawn, Frames, Kept};
 pub use crate::null::NullRenderer;
 pub use crate::output::TestOutput;
