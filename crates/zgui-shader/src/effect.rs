@@ -8,10 +8,6 @@ use zgui_paint::content::shader::{Declaration, ShaderId, ShaderMode, ShaderReads
 use crate::handle::{ShaderHandle, ShaderParams};
 use crate::program::EffectProgram;
 
-/// The format of [`EffectProgram::prebuilt`]: naga 30 IR, encoded with bincode.
-// The workspace pins naga to the version wgpu 30 links.
-const PREBUILT_FORMAT: &str = "naga-30";
-
 /// An application shader, as `shader!` left it.
 ///
 /// Written as a `static`, because everything in it is decided while the application is built. It
@@ -123,7 +119,7 @@ impl<P: ShaderParams> ShaderEffect<P> {
             source: ShaderSource {
                 wgsl: Arc::from(program.source),
                 prebuilt: Some(Prebuilt {
-                    format: Arc::from(PREBUILT_FORMAT),
+                    format: Arc::from(program.prebuilt_format),
                     bytes: Arc::from(program.prebuilt),
                 }),
             },

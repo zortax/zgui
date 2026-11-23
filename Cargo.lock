@@ -921,7 +921,6 @@ version = "0.1.0"
 dependencies = [
  "compositor-api",
  "compositor-types",
- "web-time",
 ]
 
 [[package]]

@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use compositor_types::shader;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -153,30 +154,24 @@ fn parse_reads(input: ParseStream<'_>) -> syn::Result<Reads> {
 pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
     let declared: Declaration = syn::parse2(input)?;
     let (snippet, tracked) = read_source(&declared.source)?;
-    // The unit a renderer assembles from the text, so the compiled form is the same program.
-    let unit = compositor_wgsl::effect(declared.mode.compositor(), &snippet)
-        .expect("compositor-wgsl assembles every mode a declaration can name");
+    let mode = declared.mode.compositor();
+    let entry =
+        shader::entry(mode).expect("the contract defines every mode a declaration can name");
 
-    // Asked before the unit is parsed, because the epilogue calls the function and a missing one
+    // Asked before the module is parsed, because the module calls the function and a missing one
     // is reported by the shader front end as an unknown identifier deep in text the application
     // never wrote. This says the same thing where the application can act on it.
-    if !mentions_entry(&snippet, declared.mode) {
-        return Err(syn::Error::new(
-            declared.mode_span,
-            format!(
-                "a `{}` effect writes `fn {}(in: ShaderInput, params: Params)`, and this shader \
-                 declares no such function",
-                declared.mode.name(),
-                declared.mode.entry()
-            ),
-        ));
+    if !mentions_entry(&snippet, entry) {
+        return Err(missing_entry(&declared, entry));
     }
-    let module = naga::front::wgsl::parse_str(&unit).map_err(|error| {
+    let checked = shader::validation_module(mode, &snippet)
+        .expect("the contract defines every mode a declaration can name");
+    let module = naga::front::wgsl::parse_str(&checked).map_err(|error| {
         syn::Error::new(
             source_span(&declared.source),
             format!(
                 "this shader does not compile:\n{}",
-                error.emit_to_string(&unit)
+                error.emit_to_string(&checked)
             ),
         )
     })?;
@@ -189,26 +184,14 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
             format!("this shader is not valid:\n{error}"),
         )
     })?;
-    if !declares_entry(&module, declared.mode) {
-        return Err(syn::Error::new(
-            declared.mode_span,
-            format!(
-                "a `{}` effect writes `fn {}(in: ShaderInput, params: Params)`, and this shader \
-                 declares no such function",
-                declared.mode.name(),
-                declared.mode.entry()
-            ),
-        ));
+    if !declares_entry(&module, entry) {
+        return Err(missing_entry(&declared, entry));
     }
-    let representation = bincode::serialize(&module).map_err(|error| {
-        syn::Error::new(
-            declared.name.span(),
-            format!("this shader compiled but would not encode: {error}"),
-        )
-    })?;
+    let representation = prebuilt(&declared, &snippet)?;
 
     let name = &declared.name;
-    let mode = mode_path(declared.mode);
+    let mode_path = mode_path(declared.mode);
+    let prebuilt_format = compositor_wgsl::PREBUILT_FORMAT;
     let reads_time = declared.reads.time;
     let reads_pointer = declared.reads.pointer;
     let reach = declared.reach;
@@ -230,9 +213,10 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
             #watch
             ::zgui::shader::ShaderEffect::declared(
                 ::zgui::shader::EffectProgram {
-                    mode: #mode,
+                    mode: #mode_path,
                     label: #name,
                     prebuilt: #bytes,
+                    prebuilt_format: #prebuilt_format,
                     source: #snippet,
                     params: #params,
                     shader_params: #shader_params,
@@ -246,6 +230,43 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
             )
         }
     })
+}
+
+/// Returns the reference renderer's module for `snippet`, as naga IR encoded with bincode.
+///
+/// Fails when the module does not parse, as when the snippet declares a name the renderer reserves.
+fn prebuilt(declared: &Declaration, snippet: &str) -> Result<Vec<u8>, syn::Error> {
+    let unit = compositor_wgsl::effect(declared.mode.compositor(), snippet)
+        .expect("compositor-wgsl assembles every mode a declaration can name");
+    let module = naga::front::wgsl::parse_str(&unit).map_err(|error| {
+        syn::Error::new(
+            source_span(&declared.source),
+            format!(
+                "this shader does not compile with the reference renderer, which reserves every \
+                 name beginning with `{}`:\n{}",
+                shader::RESERVED_PREFIX,
+                error.emit_to_string(&unit)
+            ),
+        )
+    })?;
+    bincode::serialize(&module).map_err(|error| {
+        syn::Error::new(
+            declared.name.span(),
+            format!("this shader compiled but would not encode: {error}"),
+        )
+    })
+}
+
+/// The refusal of a shader that does not define the function its mode calls.
+fn missing_entry(declared: &Declaration, entry: &str) -> syn::Error {
+    syn::Error::new(
+        declared.mode_span,
+        format!(
+            "a `{}` effect writes `fn {entry}(in: ShaderInput, params: Params)`, and this shader \
+             declares no such function",
+            declared.mode.name()
+        ),
+    )
 }
 
 /// The application's own text, and the path rustc should watch for it.
@@ -290,24 +311,24 @@ fn validate(module: &naga::Module) -> Result<(), String> {
         .map_err(|error| error.to_string())
 }
 
-/// Whether the application's text appears to define the function the mode calls.
+/// Whether the application's text appears to define the function `entry`.
 ///
 /// A textual answer, and deliberately generous: it decides only which of two messages an
 /// application gets, and [`declares_entry`] is the one that decides whether the effect is accepted.
-fn mentions_entry(snippet: &str, mode: Mode) -> bool {
-    let wanted = format!("fn {}", mode.entry());
+fn mentions_entry(snippet: &str, entry: &str) -> bool {
+    let wanted = format!("fn {entry}");
     snippet.match_indices(&wanted).any(|(at, matched)| {
         let after = snippet[at + matched.len()..].trim_start();
         after.starts_with('(')
     })
 }
 
-/// Whether the compiled module declares the function the mode calls.
-fn declares_entry(module: &naga::Module, mode: Mode) -> bool {
+/// Whether the compiled module declares the function `entry`.
+fn declares_entry(module: &naga::Module, entry: &str) -> bool {
     module
         .functions
         .iter()
-        .any(|(_, function)| function.name.as_deref() == Some(mode.entry()))
+        .any(|(_, function)| function.name.as_deref() == Some(entry))
 }
 
 /// The path naming one mode in the expansion.
@@ -377,8 +398,8 @@ mod tests {
         );
     }
 
-    /// Every mode's assembled unit compiles, which is the check that the epilogues and the prelude
-    /// agree about what they declare and what they read.
+    /// Every mode's validation module and reference assembly compile around a snippet the contract
+    /// accepts.
     #[test]
     fn every_mode_assembles_a_unit_that_compiles() {
         for (mode, body) in [
@@ -409,6 +430,36 @@ mod tests {
                 accepted.err().map(|e| e.to_string()).unwrap_or_default()
             );
         }
+    }
+
+    #[test]
+    fn a_name_only_the_reference_renderer_declares_is_refused() {
+        let refused = refusal(quote! {
+            name: "reference-only",
+            mode: Paint,
+            source: "fn shade(in: ShaderInput, params: Params) -> vec4<f32> { \
+                     return vec4<f32>(srgb_to_linear(vec3<f32>(1.0)), 1.0); }",
+        });
+        assert!(refused.contains("srgb_to_linear"), "{refused}");
+    }
+
+    #[test]
+    fn a_name_outside_the_reserved_prefix_is_the_shader_s_own() {
+        let accepted = expand(quote! {
+            name: "own-names",
+            mode: Paint,
+            source: "const M_PI: f32 = 3.14159; struct Bounds { width: f32 } \
+                     fn shade(in: ShaderInput, params: Params) -> vec4<f32> { \
+                     return vec4<f32>(Bounds(M_PI).width); }",
+        });
+        assert!(
+            accepted.is_ok(),
+            "{}",
+            accepted
+                .err()
+                .map(|error| error.to_string())
+                .unwrap_or_default()
+        );
     }
 
     #[test]

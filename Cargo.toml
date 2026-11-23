@@ -72,9 +72,8 @@ compositor-testing = { path = "../compositor/compositor/tool/testing", version =
 # their own.
 compositor-driver = { path = "../compositor/compositor/crates/driver", version = "0.1.0" }
 compositor-thread = { path = "../compositor/compositor/crates/thread", version = "0.1.0" }
-# The prelude and epilogues an application shader is assembled with, read by the `shader!` macro so
-# that the program it compiles is the one the reference renderer would assemble. The compositor
-# ledger records the macro's one exception for it.
+# The reference renderer's assembly of an application shader, which the `shader!` macro compiles
+# into the prebuilt program. The compositor ledger records the macro's one exception for it.
 compositor-wgsl = { path = "../compositor/compositor/crates/wgsl", version = "0.1.0" }
 
 # --- gpu and vector ------------------------------------------------------------------------

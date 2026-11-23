@@ -35,15 +35,6 @@ impl Mode {
             Self::Filter => ShaderMode::FILTER,
         }
     }
-
-    /// Returns the function a shader of this mode defines.
-    pub(crate) fn entry(self) -> &'static str {
-        match self {
-            Self::Paint => "shade",
-            Self::Coverage => "coverage",
-            Self::Filter => "apply",
-        }
-    }
 }
 
 /// What a declared shader reads that changes on its own.

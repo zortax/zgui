@@ -12,9 +12,10 @@ pub struct EffectProgram {
     pub mode: ShaderMode,
     /// A label, so a driver error names the shader that produced it.
     pub label: &'static str,
-    /// The translation unit a renderer assembles from `source`, compiled to naga IR and encoded
-    /// with bincode.
+    /// The reference renderer's module for `source`, compiled ahead of time.
     pub prebuilt: &'static [u8],
+    /// The format of `prebuilt`.
+    pub prebuilt_format: &'static str,
     /// The application's own text.
     pub source: &'static str,
     /// The layout of the shader's `Params` structure, as Rust has it.

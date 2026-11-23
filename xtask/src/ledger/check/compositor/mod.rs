@@ -53,8 +53,8 @@ const ALLOWED: &[(&str, &str)] = &[
 const EXCEPTIONS: &[(&str, &str, &str)] = &[(
     "zgui-shader-macro",
     "compositor-wgsl",
-    "compiles an application shader into the reference renderer's prebuilt IR, which only that \
-     renderer's assembly produces",
+    "assembles the reference renderer's prebuilt program, as spec change 178 allows a client; \
+     shaders are validated through compositor-types",
 )];
 
 /// Members outside every ledger.
