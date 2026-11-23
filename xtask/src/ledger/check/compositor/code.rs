@@ -1,6 +1,6 @@
 //! Finding compositor implementations named in source text.
 
-use crate::ledger::check::compositor::IMPLEMENTATIONS;
+use crate::ledger::check::compositor::CONTRACT;
 
 /// The concrete compositor, renderer and presenter types of the implementation crates.
 const CONCRETE: &[&str] = &[
@@ -21,17 +21,17 @@ const DOWNCASTS: &[&str] = &[
     "is::<",
 ];
 
-/// Returns each line of `text` that names an implementation, by line number from one, with what
-/// it names.
+/// Returns each line of `text` that names one of the `implementations` or downcasts to a concrete
+/// type, by line number from one, with what it names.
 ///
-/// Comment lines are skipped.
-pub(crate) fn findings(text: &str) -> Vec<(usize, String)> {
+/// An implementation is named when a path starts with its crate name. Comment lines are skipped.
+pub(crate) fn findings(text: &str, implementations: &[&str]) -> Vec<(usize, String)> {
     let mut out = Vec::new();
     for (index, line) in text.lines().enumerate() {
         if line.trim_start().starts_with("//") {
             continue;
         }
-        if let Some(path) = crate_path(line) {
+        if let Some(path) = crate_path(line, implementations) {
             out.push((index + 1, format!("names the implementation `{path}`")));
         } else if let Some(target) = downcast_target(line) {
             out.push((index + 1, format!("downcasts to the concrete `{target}`")));
@@ -41,11 +41,11 @@ pub(crate) fn findings(text: &str) -> Vec<(usize, String)> {
 }
 
 /// Returns the implementation crate whose path `line` names, if any.
-fn crate_path(line: &str) -> Option<String> {
-    IMPLEMENTATIONS
+fn crate_path(line: &str, implementations: &[&str]) -> Option<String> {
+    implementations
         .iter()
         .map(|name| name.replace('-', "_"))
-        .find(|path| word_at(line, path).is_some())
+        .find(|path| path_root_at(line, path).is_some())
 }
 
 /// Returns the concrete type a downcast on `line` targets, if any.
@@ -59,19 +59,54 @@ fn downcast_target(line: &str) -> Option<&'static str> {
         .find(|name| word_at(line, name).is_some())
 }
 
+/// Returns where `root` first stands in `line` outside a module of a contract crate.
+fn path_root_at(line: &str, root: &str) -> Option<usize> {
+    let identifier = |c: char| c.is_alphanumeric() || c == '_';
+    let in_contract = |before: &str| {
+        CONTRACT.iter().any(|name| {
+            before
+                .strip_suffix(name.replace('-', "_").as_str())
+                .is_some_and(|rest| !rest.ends_with(identifier))
+        })
+    };
+    // `compositor_types::compositor_color` is a module of the contract crate.
+    words_at(line, root).find(|&at| !line[..at].strip_suffix("::").is_some_and(in_contract))
+}
+
 /// Returns where `word` first stands in `line` as a whole identifier.
 fn word_at(line: &str, word: &str) -> Option<usize> {
+    words_at(line, word).next()
+}
+
+/// Returns each place `word` stands in `line` as a whole identifier.
+fn words_at<'a>(line: &'a str, word: &'a str) -> impl Iterator<Item = usize> + 'a {
     let identifier = |c: char| c.is_alphanumeric() || c == '_';
-    line.match_indices(word).map(|(at, _)| at).find(|&at| {
-        let before = line[..at].chars().next_back();
-        let after = line[at + word.len()..].chars().next();
-        !before.is_some_and(identifier) && !after.is_some_and(identifier)
-    })
+    line.match_indices(word)
+        .map(|(at, _)| at)
+        .filter(move |&at| {
+            let before = line[..at].chars().next_back();
+            let after = line[at + word.len()..].chars().next();
+            !before.is_some_and(identifier) && !after.is_some_and(identifier)
+        })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::findings;
+    use super::findings as findings_in;
+
+    /// The findings in `text`, against a few implementations.
+    fn findings(text: &str) -> Vec<(usize, String)> {
+        findings_in(
+            text,
+            &[
+                "compositor-core",
+                "compositor-text",
+                "compositor-vector",
+                "compositor-vector-coverage",
+                "compositor-color",
+            ],
+        )
+    }
 
     #[test]
     fn a_path_into_an_implementation_is_found_and_the_interface_is_not() {
@@ -82,6 +117,16 @@ mod tests {
         );
         assert!(findings("use compositor_api::Compositor;").is_empty());
         assert!(findings("use compositor_types::Transaction;").is_empty());
+    }
+
+    #[test]
+    fn a_module_of_the_contract_is_not_the_crate_it_shares_a_name_with() {
+        assert!(findings("use compositor_types::compositor_color::Color;").is_empty());
+        assert_eq!(findings("use ::compositor_color::Color;").len(), 1);
+        assert_eq!(
+            findings("use zgui_testkit::compositor_core::CompositorImpl;").len(),
+            1
+        );
     }
 
     #[test]

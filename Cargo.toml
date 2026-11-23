@@ -58,8 +58,6 @@ zeno = "0.3.3"
 # The interface: every engine crate names these two and nothing else of the compositor.
 compositor-types = { path = "../compositor/compositor/crates/types", version = "0.1.0" }
 compositor-api = { path = "../compositor/compositor/crates/api", version = "0.1.0" }
-# The colour foundation zgui-color re-exports, so a zgui colour is the compositor's.
-compositor-color = { path = "../compositor/compositor/crates/color", version = "0.1.0" }
 # The implementations, named only by the crates `cargo xtask ledger compositor` allows.
 compositor-core = { path = "../compositor/compositor/crates/core", version = "0.1.0" }
 compositor-wgpu = { path = "../compositor/compositor/crates/wgpu", version = "0.1.0" }
@@ -75,7 +73,8 @@ compositor-testing = { path = "../compositor/compositor/tool/testing", version =
 compositor-driver = { path = "../compositor/compositor/crates/driver", version = "0.1.0" }
 compositor-thread = { path = "../compositor/compositor/crates/thread", version = "0.1.0" }
 # The prelude and epilogues an application shader is assembled with, read by the `shader!` macro so
-# that the program it compiles is the one a renderer would assemble.
+# that the program it compiles is the one the reference renderer would assemble. The compositor
+# ledger records the macro's one exception for it.
 compositor-wgsl = { path = "../compositor/compositor/crates/wgsl", version = "0.1.0" }
 
 # --- gpu and vector ------------------------------------------------------------------------

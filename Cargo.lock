@@ -6075,7 +6075,7 @@ dependencies = [
 name = "zgui-color"
 version = "0.1.0"
 dependencies = [
- "compositor-color",
+ "compositor-types",
 ]
 
 [[package]]

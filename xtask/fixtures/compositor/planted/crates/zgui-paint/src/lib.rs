@@ -8,4 +8,6 @@ pub fn record(_transaction: &mut Transaction, renderer: &mut dyn compositor_api:
     let _ = renderer.as_any_mut().and_then(|any| any.downcast_mut::<WgpuRenderer>());
     // PLANTED VIOLATION: a path into an implementation crate.
     let _ = compositor_core::CompositorImpl::new();
+    // PLANTED VIOLATION: a path into a compositor crate that no list names.
+    let _ = compositor_wgsl::effect(compositor_types::ShaderMode::PAINT, "");
 }

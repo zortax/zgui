@@ -8,6 +8,9 @@
 //! could come to rely on behaviour the contract does not promise, and would then break with a
 //! second implementation that is correct.
 //!
+//! Every crate of the compositor's checkout other than the two contract crates is an
+//! implementation. The checkout is the directory that holds `compositor-types` at `crates/types`.
+//!
 //! A member is checked in three ways:
 //!
 //! 1. No manifest section depends on an implementation crate.
@@ -17,29 +20,18 @@
 mod code;
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use crate::ledger::report::Report;
 use crate::ledger::tree::Tree;
 use crate::ledger::tree::manifest::Dependency;
 use crate::ledger::tree::member::Member;
 
-/// The compositor crates that implement the contract rather than state it.
-const IMPLEMENTATIONS: &[&str] = &[
-    "compositor-core",
-    "compositor-wgpu",
-    "compositor-cpu",
-    "compositor-vello",
-    "compositor-vector-coverage",
-    "compositor-vector",
-    "compositor-content",
-    "compositor-plan",
-    "compositor-upload",
-    "compositor-text",
-    "compositor-capture",
-    "compositor-driver",
-    "compositor-thread",
-    "compositor-naive",
-];
+/// The compositor crates that state the contract.
+const CONTRACT: [&str; 2] = ["compositor-types", "compositor-api"];
+
+/// Where `compositor-types` sits in the compositor's checkout.
+const TYPES_IN_CHECKOUT: &str = "crates/types";
 
 /// The members that may name an implementation, and why.
 const ALLOWED: &[(&str, &str)] = &[
@@ -57,6 +49,14 @@ const ALLOWED: &[(&str, &str)] = &[
     ),
 ];
 
+/// The members outside [`ALLOWED`] that may name one implementation, the implementation, and why.
+const EXCEPTIONS: &[(&str, &str, &str)] = &[(
+    "zgui-shader-macro",
+    "compositor-wgsl",
+    "compiles an application shader into the reference renderer's prebuilt IR, which only that \
+     renderer's assembly produces",
+)];
+
 /// Members outside every ledger.
 const EXEMPT: [&str; 2] = ["probe", "xtask"];
 
@@ -65,11 +65,26 @@ pub(crate) fn check(tree: &Tree) -> Report {
     let mut report = Report::clean();
     let workspace = tree.manifest.workspace_dependencies();
     let aliases = aliases(&workspace);
+    let Some(implementations) = implementations(&workspace) else {
+        report.violation(
+            tree.manifest.rel_path.clone(),
+            format!(
+                "no `compositor-types` path dependency ends in `{TYPES_IN_CHECKOUT}`, so the \
+                 compositor's crates cannot be told apart"
+            ),
+        );
+        return report;
+    };
 
     for member in tree.members.iter().filter(|member| !is_allowed(member)) {
+        let named: Vec<&str> = implementations
+            .iter()
+            .map(String::as_str)
+            .filter(|name| !is_excepted(&member.name, name))
+            .collect();
         for dependency in member.manifest.dependencies() {
             let name = resolve(&dependency, &aliases);
-            if IMPLEMENTATIONS.contains(&name.as_str()) {
+            if named.contains(&name.as_str()) {
                 report.violation(
                     member.manifest.rel_path.clone(),
                     format!(
@@ -83,7 +98,7 @@ pub(crate) fn check(tree: &Tree) -> Report {
             }
         }
         for source in &member.sources {
-            for (line, finding) in code::findings(&source.text) {
+            for (line, finding) in code::findings(&source.text, &named) {
                 report.violation(
                     source.rel_path.clone(),
                     format!("line {line}: {finding}; only {} may", allowed_names()),
@@ -92,6 +107,40 @@ pub(crate) fn check(tree: &Tree) -> Report {
         }
     }
     report
+}
+
+/// Returns the packages of the compositor's checkout outside [`CONTRACT`], or `None` when the
+/// workspace gives `compositor-types` no path inside a checkout.
+fn implementations(workspace: &[Dependency]) -> Option<Vec<String>> {
+    let types = workspace
+        .iter()
+        .find(|dependency| dependency.name == "compositor-types")?;
+    let types = Path::new(types.path.as_deref()?);
+    if !types.ends_with(TYPES_IN_CHECKOUT) {
+        return None;
+    }
+    let checkout = types.ancestors().nth(2)?;
+
+    Some(
+        workspace
+            .iter()
+            .filter(|dependency| {
+                dependency
+                    .path
+                    .as_deref()
+                    .is_some_and(|path| Path::new(path).starts_with(checkout))
+            })
+            .map(|dependency| dependency.name.clone())
+            .filter(|name| !CONTRACT.contains(&name.as_str()))
+            .collect(),
+    )
+}
+
+/// Whether [`EXCEPTIONS`] lets `member` name the implementation `name`.
+fn is_excepted(member: &str, name: &str) -> bool {
+    EXCEPTIONS
+        .iter()
+        .any(|(excepted, implementation, _)| *excepted == member && *implementation == name)
 }
 
 /// Whether `member` may name implementations, or sits outside the ledgers.

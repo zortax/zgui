@@ -3,7 +3,7 @@ name = "zgui-color"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "CSS color spaces, conversion and interpolation, over compositor-color"
+description = "CSS color spaces, conversion and interpolation, over the compositor's color types"
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
@@ -13,7 +13,7 @@ include.workspace = true
 
 # L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
-compositor-color.workspace = true
+compositor-types.workspace = true
 
 [lints]
 workspace = true

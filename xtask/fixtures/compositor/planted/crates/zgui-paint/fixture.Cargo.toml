@@ -7,6 +7,8 @@ edition = "2024"
 compositor-types.workspace = true
 # PLANTED VIOLATION: an engine crate depends on an implementation, through an alias.
 renderer.workspace = true
+# PLANTED VIOLATION: an implementation no list names, found by its path into the checkout.
+compositor-wgsl.workspace = true
 
 [dev-dependencies]
 # PLANTED VIOLATION: a test of an engine crate builds the implementation itself.

@@ -3,7 +3,9 @@
 members = ["crates/*"]
 
 [workspace.dependencies]
-compositor-types = { path = "../types", version = "0.1.0" }
-compositor-api = { path = "../api", version = "0.1.0" }
-compositor-core = { path = "../core", version = "0.1.0" }
-renderer = { path = "../wgpu", version = "0.1.0", package = "compositor-wgpu" }
+compositor-types = { path = "../compositor/crates/types", version = "0.1.0" }
+compositor-api = { path = "../compositor/crates/api", version = "0.1.0" }
+compositor-core = { path = "../compositor/crates/core", version = "0.1.0" }
+renderer = { path = "../compositor/crates/wgpu", version = "0.1.0", package = "compositor-wgpu" }
+compositor-wgsl = { path = "../compositor/crates/wgsl", version = "0.1.0" }
+compositor-color = { path = "../compositor/crates/color", version = "0.1.0" }

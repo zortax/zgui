@@ -1,7 +1,7 @@
 //! CSS colour: colour spaces, interpolation between them, and the conversion to the values a
 //! renderer draws with.
 //!
-//! The types are the compositor's own, from `compositor-color`, so a colour crosses into a
+//! The types are the compositor's own, from `compositor-types`, so a colour crosses into a
 //! compositor item without conversion. [`Color::to_premultiplied_srgb`] produces the premultiplied,
 //! gamma-encoded sRGB every renderer draws with.
 //!
@@ -19,7 +19,7 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub use compositor_color::{
+pub use compositor_types::compositor_color::{
     Color, ColorSpace, DEFAULT_TOLERANCE, GradientStop, HueInterpolation, Interpolation,
     PremultipliedLinear, WhitePoint, color, color_mix, color_mix_evenly, densify,
     densify_with_tolerance, gamma, gamma_correction_ratios, gradient, interpolate, mix, space,
