@@ -1,2 +1,7 @@
 [alias]
 xtask = "run --quiet --package xtask --"
+
+# Tests and examples keep their compiled pipelines inside the workspace rather than in the user's cache.
+[env]
+ZGUI_CACHE_DIR = { value = "target/pipeline-cache", relative = true, force = false }
+COMPOSITOR_CACHE_DIR = { value = "target/pipeline-cache", relative = true, force = false }
