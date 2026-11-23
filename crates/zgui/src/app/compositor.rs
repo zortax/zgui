@@ -115,15 +115,13 @@ thread_local! {
 /// first renderer.
 fn graphics(options: &GraphicsOptions) -> SharedGraphics {
     GRAPHICS.with(|graphics| {
-        graphics
-            .get_or_init(|| {
-                Box::leak(Box::new(SharedGraphics::new().with_options(
-                    options.pipelines.clone(),
-                    Some(Arc::clone(&options.marks)),
-                )))
-            })
-            .clone()
-            .clone()
+        let shared: &SharedGraphics = graphics.get_or_init(|| {
+            Box::leak(Box::new(SharedGraphics::new().with_options(
+                options.pipelines.clone(),
+                Some(Arc::clone(&options.marks)),
+            )))
+        });
+        shared.clone()
     })
 }
 
