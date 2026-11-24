@@ -8,7 +8,7 @@
 use crate::axis::Axis;
 use crate::scroll_region::bar::Scrollport;
 
-/// How short a thumb may become, in device pixels.
+/// How short a thumb may become, in CSS pixels.
 ///
 /// A thumb sized purely by the visible fraction of a very long document is two pixels tall and
 /// cannot be grabbed. Clamping it changes what the rest of the track means — the thumb no longer
@@ -84,10 +84,11 @@ pub fn of(port: &Scrollport, axis: Axis) -> Travel {
     };
     let length = length.max(0.0);
     let limit = port.limit(axis);
+    let min_thumb = MIN_THUMB * port.scale.max(1.0);
     let thumb = if length <= 0.0 || limit <= 0.0 {
         length
     } else {
-        (length * (length / (length + limit))).clamp(MIN_THUMB.min(length), length)
+        (length * (length / (length + limit))).clamp(min_thumb.min(length), length)
     };
     Travel {
         start,
@@ -169,5 +170,58 @@ mod tests {
         let travel = of(&port, Axis::Vertical);
         assert!(travel.is_still());
         assert_eq!(travel.offset_at(120.0), 0.0);
+    }
+
+    #[test]
+    fn minimum_thumb_length_scales_with_device_density_and_preserves_roundtrip_reach() {
+        use zgui_geom::Rect;
+
+        let cases = [
+            // (scale, track_device_px, content_device_px, expected_thumb_px)
+            (1.0_f32, 200.0_f32, 400_000.0_f32, MIN_THUMB),
+            (1.5, 300.0, 600_000.0, MIN_THUMB * 1.5),
+            (2.0, 400.0, 800_000.0, MIN_THUMB * 2.0),
+            (3.0, 600.0, 1_200_000.0, MIN_THUMB * 3.0),
+            (4.0, 800.0, 1_600_000.0, MIN_THUMB * 4.0),
+            // Sub-1.0 scale clamps at 1x CSS minimum; short track clamps thumb to track length.
+            (0.5, 200.0, 400_000.0, MIN_THUMB),
+            (3.0, 48.0, 400_000.0, 48.0),
+        ];
+
+        for (scale, track_h, content_h, expected_thumb) in cases {
+            let gutter = 12.0 * scale.max(1.0);
+            let box_rect = Rect::new(
+                Point::new(DevicePx(0.0), DevicePx(0.0)),
+                Size::new(DevicePx(200.0), DevicePx(track_h)),
+            );
+            let port = crate::scroll_region::bar::Scrollport {
+                padding_box: box_rect,
+                inner: box_rect,
+                content_box: Rect::new(
+                    Point::new(DevicePx(0.0), DevicePx(0.0)),
+                    Size::new(DevicePx(200.0 - gutter), DevicePx(track_h)),
+                ),
+                content: Size::new(DevicePx(200.0 - gutter), DevicePx(content_h)),
+                offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+                scale,
+            };
+            let travel = of(&port, Axis::Vertical);
+            assert!(
+                (travel.thumb - expected_thumb).abs() < 1e-4,
+                "scale={scale}, track_h={track_h}: thumb={} != expected {expected_thumb}",
+                travel.thumb
+            );
+            if !travel.is_still() {
+                for frac in [0.0_f32, 0.25, 0.5, 0.75, 1.0] {
+                    let offset = travel.limit * frac;
+                    let thumb_pos = travel.thumb_at(offset);
+                    assert!(
+                        (travel.offset_at(thumb_pos) - offset).abs() < 0.25,
+                        "scale={scale}, frac={frac}: roundtrip {} != {offset}",
+                        travel.offset_at(thumb_pos)
+                    );
+                }
+            }
+        }
     }
 }

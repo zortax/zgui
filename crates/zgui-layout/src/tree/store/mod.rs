@@ -295,6 +295,11 @@ impl LayoutStore {
         self.root
     }
 
+    /// The device scale factor the store was last lowered for, in device pixels per CSS pixel.
+    pub fn scale(&self) -> f32 {
+        self.styles.scale()
+    }
+
     /// Makes `key` the box the document is laid out from.
     pub fn set_root(&mut self, key: BoxKey) {
         self.root = Some(key);

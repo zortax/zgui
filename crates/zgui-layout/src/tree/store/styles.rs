@@ -117,6 +117,11 @@ fn cascade_address(style: &ComputedStyle) -> usize {
 }
 
 impl StyleTable {
+    /// The device scale factor the held styles were lowered for, or `1.0` before the first pass.
+    pub(crate) fn scale(&self) -> f32 {
+        self.lowered_for.map_or(1.0, |device| device.scale)
+    }
+
     /// The slot for `style`, interning it if no live box holds it yet.
     pub(crate) fn intern(&mut self, style: &ComputedStyle) -> StyleSlot {
         let address = cascade_address(style);

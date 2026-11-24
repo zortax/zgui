@@ -43,6 +43,8 @@ pub struct Scrollport {
     pub content: Size<DevicePx, Device>,
     /// How far it has been scrolled, which may be past the end while an edge is displaced.
     pub offset: Point<DevicePx, Device>,
+    /// The device scale factor, in device pixels per CSS pixel.
+    pub scale: f32,
 }
 
 impl Scrollport {
@@ -189,6 +191,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(185.0), DevicePx(400.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            scale: 1.0,
         }
     }
 

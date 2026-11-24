@@ -33,6 +33,7 @@ pub fn travel_of(store: &LayoutStore, element: NodeKey, axis: Axis) -> Option<Tr
         content_box: fragment.content_box(),
         content,
         offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+        scale: store.scale(),
     };
     port.reserves(axis).then(|| travel::of(&port, axis))
 }
