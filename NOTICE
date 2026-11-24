@@ -35,6 +35,7 @@ fails the build.
 | `crates/zgui-geom/src/snap/stroke.rs` | the GPUI project | Apache-2.0 |
 | `crates/zgui-scene/src/order/tree.rs` | the GPUI project | Apache-2.0 |
 | `crates/zgui-color/src/gamma.rs` | the Windows Terminal project | MIT |
+| `crates/zgui-text-parley/src/raster/colr.rs` | the Rune project | MIT |
 | `crates/zgui-wgsl/src/wgsl/sdf.wgsl` | the GPUI project | Apache-2.0 |
 | `crates/zgui-wgsl/src/wgsl/blur.wgsl` | the GPUI project | Apache-2.0 |
 | `crates/zgui-wgsl/src/wgsl/paint.wgsl` | the GPUI project | Apache-2.0 |
@@ -93,3 +94,4 @@ They are not linked into any library and are not redistributed as part of a buil
 | `crates/zgui-text-parley/tests/fonts/NotoSansArabic-Regular.ttf` | Noto Sans Arabic | The Noto Project Authors | SIL Open Font License 1.1 |
 | `crates/zgui-text-parley/tests/fonts/NotoZnamennyMusicalNotation-Regular.ttf` | Noto Znamenny Musical Notation | The Noto Project Authors | SIL Open Font License 1.1 |
 | `crates/zgui-text-parley/tests/fonts/RubikSubset-Variable.ttf` | Rubik (variable, subset to eight letters) | The Rubik Project Authors | SIL Open Font License 1.1 |
+| `crates/zgui-text-parley/tests/fonts/NotoColorEmoji-Subset.ttf` | Noto Color Emoji (COLR v1, subset to four emoji) | The Noto Project Authors | SIL Open Font License 1.1 |

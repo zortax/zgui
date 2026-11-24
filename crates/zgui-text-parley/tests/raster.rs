@@ -609,3 +609,143 @@ fn a_batch_answers_what_one_call_answers() {
         }
     }
 }
+
+/// A COLR v1 glyph paints its paint graph into straight-alpha RGBA, and the same key twice gives
+/// the same bytes.
+///
+/// The face is Noto Color Emoji's COLR v1 build, subset to four emoji. It carries no COLR v0
+/// records, so a painter that cannot read the graph draws the monochrome outline instead.
+#[test]
+fn a_colour_v1_glyph_paints_from_its_paint_graph() {
+    use std::collections::HashSet;
+
+    use skrifa::MetadataProvider;
+
+    let data = support::face("NotoColorEmoji-Subset.ttf");
+    let glyph = {
+        let font = skrifa::FontRef::from_index((*data).as_ref(), 0).expect("a readable face");
+        font.charmap()
+            .map('😀')
+            .expect("the subset maps the grinning face")
+    };
+    let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
+    let face = fonts
+        .register(data, None)
+        .expect("the colour face registers")[0];
+    let raster = Rasteriser::new(fonts);
+
+    let key = GlyphKey::new(
+        face,
+        glyph.to_u32() as u16,
+        32.0,
+        SubpixelOffset(0),
+        RasterStyle::Color,
+    );
+    let image = raster.raster(&key).expect("a COLR v1 glyph");
+    assert_eq!(image.format, GlyphFormat::Color);
+    assert!(image.is_well_formed());
+    assert!(!image.is_empty());
+
+    let colours: HashSet<[u8; 4]> = image
+        .bytes
+        .chunks_exact(4)
+        .map(|pixel| [pixel[0], pixel[1], pixel[2], pixel[3]])
+        .collect();
+    assert!(
+        colours.len() > 64,
+        "the emoji is drawn in one ink: {} distinct pixels",
+        colours.len()
+    );
+    for pixel in image.bytes.chunks_exact(4) {
+        if pixel[3] == 0 {
+            assert_eq!(
+                &pixel[..3],
+                &[0, 0, 0],
+                "a transparent pixel carries colour in a straight-alpha image"
+            );
+        }
+    }
+    assert_eq!(raster.raster(&key).as_ref(), Some(&image));
+}
+
+/// A COLR v0 face still takes the swash path, which is what the glyph's flat layers are for.
+#[test]
+fn a_colour_v0_glyph_still_takes_the_swash_path() {
+    use skrifa::MetadataProvider;
+    use skrifa::raw::TableProvider;
+
+    let data = support::face("NotoZnamennyMusicalNotation-Regular.ttf");
+    let glyph = {
+        let font = skrifa::FontRef::from_index((*data).as_ref(), 0).expect("a readable face");
+        let colr = font.colr().expect("a COLR table");
+        font.charmap()
+            .mappings()
+            .map(|(_, glyph)| glyph)
+            .find(|glyph| {
+                colr.v0_base_glyph(*glyph)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|layers| !layers.is_empty())
+            })
+            .expect("a glyph with flat layers")
+    };
+    let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
+    let face = fonts
+        .register(data, None)
+        .expect("the colour face registers")[0];
+    let raster = Rasteriser::new(fonts);
+
+    let image = raster
+        .raster(&GlyphKey::new(
+            face,
+            glyph.to_u32() as u16,
+            32.0,
+            SubpixelOffset(0),
+            RasterStyle::Color,
+        ))
+        .expect("a COLR v0 glyph");
+    assert_eq!(image.format, GlyphFormat::Color);
+    assert!(image.is_well_formed());
+    assert!(!image.is_empty());
+}
+
+/// A synthesised slant widens the colour tile, so the sheared paint is not cut at its edges.
+#[test]
+fn a_slanted_colour_glyph_keeps_its_sheared_width() {
+    use skrifa::MetadataProvider;
+
+    let data = support::face("NotoColorEmoji-Subset.ttf");
+    let glyph = {
+        let font = skrifa::FontRef::from_index((*data).as_ref(), 0).expect("a readable face");
+        font.charmap()
+            .map('😀')
+            .expect("the subset maps the grinning face")
+    };
+    let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
+    let face = fonts
+        .register(data, None)
+        .expect("the colour face registers")[0];
+    let raster = Rasteriser::new(fonts);
+
+    let at = |slant: f32| {
+        let mut key = GlyphKey::new(
+            face,
+            glyph.to_u32() as u16,
+            32.0,
+            SubpixelOffset(0),
+            RasterStyle::Color,
+        );
+        key.synthetic_slant_bits = slant.to_bits();
+        raster.raster(&key).expect("a COLR v1 glyph")
+    };
+    let upright = at(0.0);
+    let slanted = at(20.0);
+    assert!(
+        slanted.size.width > upright.size.width,
+        "the slanted tile ({} px) is no wider than the upright one ({} px)",
+        slanted.size.width,
+        upright.size.width
+    );
+    assert!(slanted.is_well_formed());
+    assert!(!slanted.is_empty());
+}
