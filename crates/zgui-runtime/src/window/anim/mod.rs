@@ -142,12 +142,15 @@ impl Window {
     }
 
     /// Returns when the window's driver latches the frame this window committed last, for a driver
-    /// that paces itself.
+    /// that paces itself, unless its next frame cannot hold a commit made now.
     fn driver_latch(&self) -> Option<web_time::Instant> {
         if self.compositor.pacing() != compositor_api::DriverPacing::SelfPaced {
             return None;
         }
-        let due = self.compositor.next_due()?;
+        let due = self
+            .compositor
+            .next_due()
+            .filter(|due| self.holds_commit(*due))?;
         Some(self.frame_clock_moment(due))
     }
 
