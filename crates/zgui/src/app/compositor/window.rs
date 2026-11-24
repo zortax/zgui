@@ -5,7 +5,7 @@ use std::sync::Arc;
 use compositor_api::Renderer;
 use compositor_types::{RenderTarget, VectorBackend};
 use compositor_vello::VelloOptions;
-use compositor_wgpu::{LatencyMarks, PrePresent, PresentPacing, SharedGraphics};
+use compositor_wgpu::{LatencyMarks, PrePresent, PresentPacing, SharedGraphics, SurfacePresenter};
 use zgui_platform::{GpuSurface, PlatformError, Surface};
 use zgui_runtime::{AppError, RendererFactory};
 
@@ -109,14 +109,26 @@ fn renderer(
         zgui_platform::PresentPacing::Platform => PresentPacing::Platform,
         _ => PresentPacing::Display,
     };
+    let notified = notify_wanted(pacing);
     let mut renderer = graphics.renderer_for_surface(
         target.size,
         target.opaque,
         handles,
         pacing,
-        notify_wanted(pacing).then(|| pre_present(surface)),
+        notified.then(|| pre_present(surface)),
     )?;
     renderer.set_group_precision(precision);
+    // The notification sets the extent the surface shows, so a cropping surface keeps its swap
+    // chain through a resize within a size class and skips the wait for an idle device.
+    if notified
+        && surface.crops_buffers()
+        && let Some(presenter) = renderer
+            .wgpu_presenter()
+            .as_any_mut()
+            .and_then(|presenter| presenter.downcast_mut::<SurfacePresenter>())
+    {
+        presenter.set_crop(true);
+    }
     // Without a path rasteriser, paths and glyphs on the path route draw nothing.
     renderer.set_vector_factory(
         vectors(vello.clone(), paths.clone()),
