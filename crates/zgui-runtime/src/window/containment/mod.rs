@@ -5,7 +5,8 @@
 //! changes pixels for reasons the walk never sees, so a frame is checked only when it has none of
 //! them: no property, paint or offset write in its commits, no compositor scrolling, no shift, a
 //! frame before it that retired its damage, and changes short of the whole output. The damage the
-//! compositor's own commits caused, which the frame reports, is left out of the check.
+//! compositor's own commits caused, which the frame reports, is left out of the check. The pixels
+//! the texture frames of embedded surfaces redraw count as visited.
 //!
 //! The frames are checked where the driver builds them, and a violation is reported to the window
 //! when it next takes the driver's answers.
@@ -28,7 +29,8 @@ pub(crate) struct Containment(Arc<Mutex<Expected>>);
 /// What the next frame built is checked against.
 #[derive(Debug)]
 struct Expected {
-    /// The pixels the paint walks of the commits since the last frame visited.
+    /// The pixels the commits since the last frame may change: what their paint walks visited and
+    /// what their texture frames redraw.
     painted: DamageSet,
     /// Whether a commit arrived since the last frame.
     committed: bool,
@@ -55,7 +57,7 @@ impl Containment {
         containment
     }
 
-    /// Adds a commit whose paint walk visited `painted` to the next frame's check, which the
+    /// Adds a commit that may change the pixels `painted` to the next frame's check, which the
     /// commit leaves fit when `fit` holds.
     pub(crate) fn committed(&self, painted: &DamageSet, fit: bool) {
         let mut expected = self.lock();

@@ -707,6 +707,7 @@ impl Window {
     fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
         let placements = self.host.placements();
         let mut damage = DamageSet::new();
+        let mut redrawn = DamageSet::new();
         let mut transaction = self.compositor.transaction();
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
@@ -716,6 +717,7 @@ impl Window {
             content: &mut self.content,
             transaction: &mut transaction,
             damage: &mut damage,
+            redrawn: &mut redrawn,
             intrinsics: &self.replaced_surfaces,
             revision: self.dom.revision(),
             scale: self.scale,
@@ -739,7 +741,7 @@ impl Window {
         self.damage.absorb_set(&damage);
         drop(placements);
         if !transaction.is_empty() {
-            self.submit_embed_transaction(transaction);
+            self.submit_embed_transaction(transaction, &redrawn);
         }
     }
 

@@ -58,6 +58,10 @@ pub struct EmbedSyncCx<'a> {
     pub transaction: &'a mut compositor_types::Transaction,
     /// The frame's damage, still open: a host that attached new pixels absorbs their rectangle.
     pub damage: &'a mut DamageSet,
+    /// The pixels the compositor redraws for the texture frames reported through `transaction`.
+    ///
+    /// A host that reports a frame absorbs the device ink of the element drawn from it.
+    pub redrawn: &'a mut DamageSet,
     /// The intrinsics slot surface nodes answer layout from.
     pub intrinsics: &'a Arc<IntrinsicTable>,
     /// How many batches of changes the document has taken, ever.

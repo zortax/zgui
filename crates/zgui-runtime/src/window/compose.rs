@@ -249,10 +249,17 @@ impl Window {
         self.resync.set(true);
     }
 
-    /// Commits the transaction the embed host wrote into.
+    /// Commits the transaction the embed host wrote into, whose texture frames redraw `redrawn`.
     ///
     /// A rejection is answered later, as a rejected frame is.
-    pub(super) fn submit_embed_transaction(&mut self, transaction: compositor_types::Transaction) {
+    pub(super) fn submit_embed_transaction(
+        &mut self,
+        transaction: compositor_types::Transaction,
+        redrawn: &DamageSet,
+    ) {
+        if self.check_damage {
+            self.containment().committed(redrawn, true);
+        }
         self.compositor.commit(transaction);
     }
 
@@ -292,16 +299,20 @@ impl Window {
             let fit = report.is_some_and(|report| {
                 report.table_writes == 0 && report.params_written == 0 && report.offsets == 0
             }) && !self.compositor_scrolling();
-            let compositor = &self.compositor;
             let mut visited = crate::window::declared::visited(&self.painted, &self.recorded_ink);
             if let Some(embolden) = report.and_then(|report| report.glyphs_changed) {
                 visited = crate::window::declared::grown(&visited, glyph_allowance(embolden));
             }
-            self.containment
-                .get_or_insert_with(|| crate::window::containment::Containment::observe(compositor))
-                .committed(&visited, fit);
+            self.containment().committed(&visited, fit);
         }
         self.compositor.commit(transaction);
+    }
+
+    /// Returns the containment check of the window's frames, started on first use.
+    fn containment(&mut self) -> &crate::window::containment::Containment {
+        self.containment.get_or_insert_with(|| {
+            crate::window::containment::Containment::observe(&self.compositor)
+        })
     }
 }
 

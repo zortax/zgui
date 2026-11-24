@@ -972,6 +972,7 @@ impl WgpuSurfaces {
                             retired,
                             content_attached: &mut binding.content_attached,
                             content_box,
+                            ink,
                         },
                     );
                     binding.attached = Some(texture);
@@ -992,6 +993,7 @@ impl WgpuSurfaces {
                             retired,
                             content_attached: &mut binding.content_attached,
                             content_box,
+                            ink,
                         },
                     );
                 }
@@ -1069,6 +1071,7 @@ impl WgpuSurfaces {
                             retired,
                             content_attached: &mut binding.content_attached,
                             content_box,
+                            ink,
                         },
                     );
                 }
@@ -1096,6 +1099,8 @@ struct AttachAsk<'a> {
     content_attached: &'a mut bool,
     /// Where the element is, for the damage a new slot owes.
     content_box: Option<zgui_geom::Rect<zgui_geom::DevicePx, Device>>,
+    /// The element's ink on the device, which a new frame of the texture redraws.
+    ink: zgui_geom::Rect<zgui_geom::DevicePx, Device>,
 }
 
 /// Binds one texture to the element's slot and reports its new content.
@@ -1103,6 +1108,7 @@ struct AttachAsk<'a> {
 /// The slot is created again when there is none yet, when it belongs to an earlier client, or when
 /// the texture's extent or premultiplication changed, and the old one is retired. A slot the
 /// content cache does not name yet is attached to the element, and its content box is damaged.
+/// The element's ink is added to the pixels the texture frame redraws.
 fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
     let client = cx.transaction.client();
     let desc = TextureDesc {
@@ -1132,6 +1138,8 @@ fn attach(cx: &mut EmbedSyncCx<'_>, ask: AttachAsk<'_>) {
         }
     }));
     cx.transaction.texture_frame(slot.id);
+    cx.redrawn
+        .absorb(zgui_layout::fragment::diff::pixels(ask.ink));
     if !*ask.content_attached {
         cx.content.set_external(ReplacedId::new(ask.node), slot.id);
         *ask.content_attached = true;
