@@ -4,7 +4,8 @@
 //! where the walk was gated on, because the walk only records what it visits. The compositor also
 //! changes pixels for reasons the walk never sees, so a frame is checked only when it has none of
 //! them: no property, paint or offset write in its commits, no compositor scrolling, no shift, a
-//! frame before it that retired its damage, and changes short of the whole output.
+//! frame before it that retired its damage, and changes short of the whole output. The damage the
+//! compositor's own commits caused, which the frame reports, is left out of the check.
 //!
 //! The frames are checked where the driver builds them, and a violation is reported to the window
 //! when it next takes the driver's answers.
@@ -95,8 +96,8 @@ impl Containment {
 
 /// Describes the pixels `frame` changes that `painted` does not hold, if there are any.
 ///
-/// The changed pixels are those that differ from the previous image presented. A frame that
-/// shifted or changes the whole output has none.
+/// The changed pixels are those that differ from the previous image presented, less the damage
+/// the compositor's own commits caused. A frame that shifted or changes the whole output has none.
 fn violation(frame: &Frame, painted: &DamageSet) -> Option<String> {
     // An image older than the last one is drawn over its older damage too, which no walk of this
     // frame visited.
@@ -104,12 +105,22 @@ fn violation(frame: &Frame, painted: &DamageSet) -> Option<String> {
     if !frame.shifts.is_empty() || draw.is_full() || painted.is_full() {
         return None;
     }
+    if frame.damage.driven.is_full() {
+        return None;
+    }
+    let mut allowed = painted.rects().to_vec();
+    allowed.extend(frame.damage.driven.rects().iter().map(|rect| {
+        Rect::new(
+            Point::new(rect.origin.x, rect.origin.y),
+            Size::new(rect.size.width, rect.size.height),
+        )
+    }));
     draw.rects().iter().find_map(|drawn| {
         let drawn = Rect::new(
             Point::new(drawn.origin.x, drawn.origin.y),
             Size::new(drawn.size.width, drawn.size.height),
         );
-        let outside = cover::uncovered(drawn, painted.rects())?;
+        let outside = cover::uncovered(drawn, &allowed)?;
         Some(format!(
             "the compositor changed {outside:?}, which the paint walk never visited: changed {:?}, \
              painted {:?}",

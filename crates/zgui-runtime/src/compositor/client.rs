@@ -129,6 +129,21 @@ impl Client {
             .map(|due| if due <= clock.now_ns { next } else { due })
     }
 
+    /// Returns the latch and display time of the frame a commit queued now goes into, on the frame
+    /// clock, or `None` for a stepped driver.
+    ///
+    /// A snapshot whose latch has passed is moved on by whole intervals of `interval`.
+    pub(crate) fn commit_frame(&self, interval: std::time::Duration) -> Option<(u64, u64)> {
+        let stats = self.stats();
+        let (due, display) = (stats.commit_due_ns?, stats.commit_display_ns?);
+        let now = compositor_api::now_ns();
+        let interval = u64::try_from(interval.as_nanos())
+            .unwrap_or(u64::MAX)
+            .max(1);
+        let steps = now.saturating_sub(due).div_ceil(interval);
+        Some((due + steps * interval, display + steps * interval))
+    }
+
     /// Returns the newest snapshot of the driver and its compositor.
     pub(crate) fn stats(&self) -> DriverStats {
         self.shared.driver.borrow().stats()

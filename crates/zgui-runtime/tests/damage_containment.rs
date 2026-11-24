@@ -19,22 +19,48 @@ use zgui_runtime::{App, Runtime};
 use zgui_testkit_compositor::{Frames, Kept};
 use zgui_view::{BuildCx, IntoView, View};
 
-/// A document of swatches, a line of text and a list long enough to scroll.
+/// A document of swatches, a badge that can shrink, a line of text and a list long enough to
+/// scroll.
 const CSS: &str = "root { display: block; width: 400px; height: 300px; padding: 20px }
                    .swatch { display: block; width: 40px; height: 20px; background-color: #303030 }
                    .swatch.lit { background-color: #c0c0c0 }
+                   .badge { display: block; width: 100px; height: 40px; background-color: #405060;
+                            transform: scale(1.1) }
+                   .badge.small { transform: scale(0.95) }
                    text { display: block; width: 200px }
                    .list { display: block; width: 300px; height: 120px; overflow: scroll;
                            background-color: #101010 }
                    .row { display: block; width: 280px; height: 20px; background-color: #202020 }";
 
-/// A window over `css` with a lit swatch, a count, an optional extra row and a list, drawn onto a
-/// kept target with the containment check on.
-fn window(
+/// The signals a window's document follows.
+#[derive(Clone, Copy)]
+struct Signals {
     lit: RwSignal<bool>,
+    small: RwSignal<bool>,
     count: RwSignal<i32>,
     extra: RwSignal<bool>,
-) -> (Harness<Runtime>, Frames) {
+}
+
+impl Signals {
+    fn new() -> Self {
+        Self {
+            lit: RwSignal::new(false),
+            small: RwSignal::new(false),
+            count: RwSignal::new(1),
+            extra: RwSignal::new(false),
+        }
+    }
+}
+
+/// A window over `css` with a lit swatch, a badge, a count, an optional extra row and a list,
+/// drawn onto a kept target with the containment check on.
+fn window(signals: Signals) -> (Harness<Runtime>, Frames) {
+    let Signals {
+        lit,
+        small,
+        count,
+        extra,
+    } = signals;
     let frames = Frames::default();
     let handed = frames.clone();
     let handler = App::new()
@@ -69,6 +95,11 @@ fn window(
                             .class("swatch")
                             .class_toggle(zgui_view::ClassName::new("lit"), move || lit.get()),
                     )
+                    .child(
+                        zgui_elements::column()
+                            .class("badge")
+                            .class_toggle(zgui_view::ClassName::new("small"), move || small.get()),
+                    )
                     .child(zgui_elements::text().child(move || count.get().to_string()))
                     .child(zgui_view::Show::new(
                         move || extra.get(),
@@ -88,8 +119,11 @@ fn window(
 
 #[test]
 fn a_restyle_a_text_change_a_mount_and_a_scroll_redraw_only_what_the_walk_visited() {
-    let (lit, count, extra) = (RwSignal::new(false), RwSignal::new(1), RwSignal::new(false));
-    let (mut harness, frames) = window(lit, count, extra);
+    let signals = Signals::new();
+    let Signals {
+        lit, count, extra, ..
+    } = signals;
+    let (mut harness, frames) = window(signals);
     frames.clear();
 
     lit.set(true);
@@ -127,4 +161,26 @@ fn a_restyle_a_text_change_a_mount_and_a_scroll_redraw_only_what_the_walk_visite
         partial >= 3,
         "only {partial} frames redrew part of the output, so the check read almost nothing"
     );
+}
+
+#[test]
+fn a_node_coming_to_rest_beside_a_text_change_redraws_only_what_the_walk_visited() {
+    // The badge's slight scale keeps it moving, and the frame a hold later brings it to rest and
+    // redraws it, as the compositor's own damage, beside the text change.
+    let signals = Signals::new();
+    let (mut harness, frames) = window(signals);
+    signals.small.set(true);
+    harness.settle(8);
+
+    frames.clear();
+    harness.advance(std::time::Duration::from_millis(150));
+    signals.count.set(7);
+    harness.settle(8);
+
+    let driven = frames
+        .drawn()
+        .iter()
+        .filter(|frame| !frame.damage.driven.is_empty())
+        .count();
+    assert!(driven > 0, "no frame brought the badge to rest");
 }

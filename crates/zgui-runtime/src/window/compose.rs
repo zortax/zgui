@@ -109,31 +109,16 @@ impl Window {
     /// sampled at.
     ///
     /// A stepped driver shows the frame at the clock the window steps it with, which is `at`. A
-    /// driver that paces itself shows it at its next display time, and at `at` when it predicts
-    /// none.
+    /// driver that paces itself shows it when the frame a commit made now goes into is shown, and
+    /// at `at` when it predicts none.
     pub(crate) fn shown_at(&self, at: zgui_vocab::Timestamp) -> zgui_vocab::Timestamp {
         if self.compositor.pacing() == compositor_api::DriverPacing::Stepped {
             return at;
         }
-        let Some(display) = self
-            .compositor
-            .stats()
-            .next_display_ns
-            .filter(|display| self.holds_commit(*display))
-        else {
+        let Some((_, display)) = self.compositor.commit_frame(self.refresh_interval()) else {
             return at;
         };
         at + web_time::Duration::from_nanos(display.saturating_sub(compositor_api::now_ns()))
-    }
-
-    /// Reports whether a driver frame at `ns` on the frame clock can hold a commit made now.
-    ///
-    /// A frame more than two refresh intervals away cannot: the driver latches a commit at the
-    /// next refresh it reaches, so such a frame is one the driver wants for itself, such as one
-    /// that brings a compositor node to rest.
-    pub(crate) fn holds_commit(&self, ns: u64) -> bool {
-        let ahead = ns.saturating_sub(compositor_api::now_ns());
-        u128::from(ahead) <= 2 * self.refresh_interval().as_nanos()
     }
 
     /// Takes what the driver answered since the last call and acts on it.
