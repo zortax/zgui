@@ -86,6 +86,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(570.0), DevicePx(370.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            scale: 1.0,
         }
     }
 
@@ -164,6 +165,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(1182.25), DevicePx(4000.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            scale: 1.0,
         };
         let down = track(&port, Axis::Vertical);
         assert_eq!(down.left(), port.content_box.right());
@@ -190,6 +192,7 @@ mod tests {
             ),
             content: Size::new(DevicePx(258.0), DevicePx(316.0)),
             offset: Point::new(DevicePx(0.0), DevicePx(0.0)),
+            scale: 1.0,
         }
     }
 

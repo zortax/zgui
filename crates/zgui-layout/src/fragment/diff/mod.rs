@@ -1816,6 +1816,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             content_box: placed.content_box,
             content,
             offset,
+            scale: self.tables.device.scale,
         }
     }
 
