@@ -1,6 +1,6 @@
 //! Where the recorded chunks of each coordinate system draw.
 
-use std::collections::BTreeMap;
+use std::cell::Cell;
 
 use compositor_types::ChunkKey;
 use rustc_hash::FxHashMap;
@@ -13,8 +13,8 @@ use zgui_space::SpatialId;
 pub(crate) struct Extents {
     /// Each chunk's coordinate system, its extent where it was recorded and its offset since.
     chunks: FxHashMap<ChunkKey, Placed>,
-    /// The edges of every chunk of each coordinate system, by slot.
-    spaces: FxHashMap<u32, Edges>,
+    /// The extent of the chunks of each coordinate system, by slot.
+    spaces: FxHashMap<u32, Space>,
 }
 
 /// Where one chunk draws.
@@ -32,10 +32,15 @@ struct Placed {
     glyphs: Option<f32>,
 }
 
-/// How many chunks of one coordinate system have each of their edges at each place.
-#[derive(Debug, Default)]
-struct Edges {
-    edges: [BTreeMap<i32, u32>; 4],
+/// The extent of the chunks of one coordinate system.
+#[derive(Debug)]
+struct Space {
+    /// How many chunks draw in it.
+    count: u32,
+    /// The union of their extents as `[left, top, right, bottom]`, unless it is stale.
+    union: Cell<[i32; 4]>,
+    /// Whether a chunk on the union's edge moved or went since the union was taken.
+    stale: Cell<bool>,
 }
 
 impl Placed {
@@ -57,7 +62,6 @@ impl Extents {
         ink: Rect<i32, Device>,
         glyphs: Option<f32>,
     ) {
-        self.removed(key);
         let placed = Placed {
             anchor,
             slot: anchor.index(),
@@ -70,6 +74,15 @@ impl Extents {
             offset: [0, 0],
             glyphs,
         };
+        if let Some(held) = self.chunks.get_mut(&key)
+            && held.anchor == anchor
+            && held.edges() == placed.edges()
+        {
+            // The chunk draws where it drew, so the extents stay as they are.
+            *held = placed;
+            return;
+        }
+        self.removed(key);
         self.add(placed);
         self.chunks.insert(key, placed);
     }
@@ -116,11 +129,17 @@ impl Extents {
 
     /// Returns the extent the recorded chunks of the coordinate system in `slot` draw over.
     pub(crate) fn of(&self, slot: u32) -> Option<Rect<i32, Device>> {
-        let edges = &self.spaces.get(&slot)?.edges;
-        let left = *edges[0].keys().next()?;
-        let top = *edges[1].keys().next()?;
-        let right = *edges[2].keys().next_back()?;
-        let bottom = *edges[3].keys().next_back()?;
+        let space = self.spaces.get(&slot)?;
+        if space.stale.get() {
+            let union = self
+                .chunks
+                .values()
+                .filter(|placed| placed.slot == slot)
+                .fold(EMPTY, |union, placed| widened(union, placed.edges()));
+            space.union.set(union);
+            space.stale.set(false);
+        }
+        let [left, top, right, bottom] = space.union.get();
         Some(Rect::new(
             Point::new(left, top),
             Size::new(right - left, bottom - top),
@@ -128,26 +147,78 @@ impl Extents {
     }
 
     fn add(&mut self, placed: Placed) {
-        let edges = self.spaces.entry(placed.slot).or_default();
-        for (map, at) in edges.edges.iter_mut().zip(placed.edges()) {
-            *map.entry(at).or_insert(0) += 1;
+        let space = self.spaces.entry(placed.slot).or_insert_with(|| Space {
+            count: 0,
+            union: Cell::new(EMPTY),
+            stale: Cell::new(false),
+        });
+        space.count += 1;
+        if !space.stale.get() {
+            space.union.set(widened(space.union.get(), placed.edges()));
         }
     }
 
     fn take(&mut self, placed: Placed) {
-        let Some(edges) = self.spaces.get_mut(&placed.slot) else {
+        let Some(space) = self.spaces.get_mut(&placed.slot) else {
             return;
         };
-        for (map, at) in edges.edges.iter_mut().zip(placed.edges()) {
-            if let Some(count) = map.get_mut(&at) {
-                *count -= 1;
-                if *count == 0 {
-                    map.remove(&at);
-                }
-            }
-        }
-        if edges.edges[0].is_empty() {
+        space.count -= 1;
+        if space.count == 0 {
             self.spaces.remove(&placed.slot);
+            return;
         }
+        // A chunk inside the union leaves it as it is.
+        let union = space.union.get();
+        if placed
+            .edges()
+            .iter()
+            .zip(union)
+            .any(|(edge, bound)| *edge == bound)
+        {
+            space.stale.set(true);
+        }
+    }
+}
+
+/// The union of no extent, which widens to the first extent added.
+const EMPTY: [i32; 4] = [i32::MAX, i32::MAX, i32::MIN, i32::MIN];
+
+/// Returns the union of the extents `union` and `edges`, both as `[left, top, right, bottom]`.
+fn widened(union: [i32; 4], edges: [i32; 4]) -> [i32; 4] {
+    [
+        union[0].min(edges[0]),
+        union[1].min(edges[1]),
+        union[2].max(edges[2]),
+        union[3].max(edges[3]),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use compositor_types::ChunkKey;
+    use zgui_geom::{Device, Point, Rect, Size};
+    use zgui_space::SpatialId;
+
+    use super::Extents;
+
+    fn rect(x: i32, y: i32, width: i32, height: i32) -> Rect<i32, Device> {
+        Rect::new(Point::new(x, y), Size::new(width, height))
+    }
+
+    #[test]
+    fn the_extent_follows_the_chunks_on_its_edge() {
+        let space = SpatialId::VIEWPORT;
+        let (a, b) = (ChunkKey::new(1, 0), ChunkKey::new(2, 0));
+        let mut extents = Extents::default();
+        extents.recorded(a, space, rect(0, 0, 10, 10), None);
+        extents.recorded(b, space, rect(20, 0, 10, 40), None);
+        assert_eq!(extents.of(space.index()), Some(rect(0, 0, 30, 40)));
+
+        extents.moved(a, [5.0, 0.0]);
+        assert_eq!(extents.of(space.index()), Some(rect(5, 0, 25, 40)));
+        extents.removed(b);
+        assert_eq!(extents.of(space.index()), Some(rect(5, 0, 10, 10)));
+        extents.removed(a);
+        assert_eq!(extents.of(space.index()), None);
     }
 }
