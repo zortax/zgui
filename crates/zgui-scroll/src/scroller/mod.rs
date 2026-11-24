@@ -19,6 +19,7 @@ pub mod extent;
 mod gesture;
 mod glide;
 mod motion;
+mod velocity;
 
 pub use self::gesture::Track;
 

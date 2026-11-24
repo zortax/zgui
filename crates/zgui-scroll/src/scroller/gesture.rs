@@ -17,16 +17,11 @@ use zgui_layout::LayoutStore;
 
 use crate::chain;
 use crate::scroller::Scroller;
+use crate::scroller::velocity::VelocityTracker;
 use crate::stretch::Stretch;
 
 /// How much stronger one axis of the first movement must be for the gesture to rail to it.
 const RAIL_RATIO: f32 = 2.0;
-
-/// A gap between two events longer than this says nothing about the speed, in seconds.
-const STALE: f32 = 0.1;
-
-/// A gap between two events shorter than this is too short to measure a speed over, in seconds.
-const COALESCED: f32 = 0.001;
 
 /// Which axes a gesture moves.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,12 +77,8 @@ pub(crate) struct Gesture {
     rail: Option<Rail>,
     /// How far the gesture has got.
     pub(crate) stage: Stage,
-    /// The speed of the gesture, in device pixels per second.
-    pub(crate) velocity: Size<DevicePx, Device>,
-    /// The stamp of the last event, as time since an arbitrary origin.
-    last: Option<Duration>,
-    /// Whether the speed holds a measurement.
-    sampled: bool,
+    /// The velocity of the fingers.
+    tracker: VelocityTracker,
 }
 
 impl Gesture {
@@ -97,9 +88,7 @@ impl Gesture {
             latched: None,
             rail: None,
             stage: Stage::Touching,
-            velocity: Size::new(DevicePx(0.0), DevicePx(0.0)),
-            last: None,
-            sampled: false,
+            tracker: VelocityTracker::new(),
         }
     }
 
@@ -113,37 +102,17 @@ impl Gesture {
             self.rail = Some(Rail::for_first(delta));
         }
         let along = self.rail.unwrap_or(Rail::Free).along(delta);
-        self.measure(along, at);
+        self.tracker.moved(along, at);
         along
     }
 
-    /// Updates the speed from `delta`, which arrived at `at`.
-    fn measure(&mut self, delta: Size<DevicePx, Device>, at: Duration) {
-        let Some(last) = self.last.replace(at) else {
-            return;
-        };
-        let gap = at.saturating_sub(last).as_secs_f32();
-        if gap > STALE {
-            self.velocity = Size::new(DevicePx(0.0), DevicePx(0.0));
-            self.sampled = false;
-            return;
-        }
-        if gap < COALESCED {
-            self.last = Some(last);
-            return;
-        }
-        // The first measurement is taken whole, and each later one is averaged with the speed.
-        let weight = if self.sampled { 0.5 } else { 0.0 };
-        self.sampled = true;
-        let sample = |speed: f32, by: f32| weight * speed + (1.0 - weight) * by / gap;
-        self.velocity = Size::new(
-            DevicePx(sample(self.velocity.width.0, delta.width.0)),
-            DevicePx(sample(self.velocity.height.0, delta.height.0)),
-        );
+    /// The velocity of the gesture, in device pixels per second.
+    pub(crate) fn velocity(&self) -> Size<DevicePx, Device> {
+        self.tracker.velocity()
     }
 }
 
-/// The rail and the speed of one touchpad gesture, measured from the steps it delivers.
+/// The rail and the velocity of one touchpad gesture, measured from the steps it delivers.
 ///
 /// A gesture rails to one axis as [`Scroller::drag_by`] does, for a caller that moves the
 /// content some other way.
@@ -161,9 +130,14 @@ impl Track {
         self.0.moved(delta, at)
     }
 
-    /// The speed of the gesture, in device pixels per second.
+    /// The velocity of the fingers, in device pixels per second.
+    ///
+    /// The velocity is the one at the latest step that moved, measured over at most the 100 ms
+    /// before it.
+    /// It is zero if the fingers never moved, or rested for more than 40 ms before the latest
+    /// step, such as the one that lifts them.
     pub fn velocity(&self) -> Size<DevicePx, Device> {
-        self.0.velocity
+        self.0.velocity()
     }
 }
 
@@ -282,9 +256,10 @@ impl Scroller {
         if !chain::negligible(past) {
             gesture.stage = Stage::Spent;
             if stretch.is_permitted() {
+                let velocity = gesture.velocity();
                 let speed = Size::new(
-                    DevicePx(throw(past.width.0, gesture.velocity.width.0)),
-                    DevicePx(throw(past.height.0, gesture.velocity.height.0)),
+                    DevicePx(throw(past.width.0, velocity.width.0)),
+                    DevicePx(throw(past.height.0, velocity.height.0)),
                 );
                 self.displace(container, self.overscroll_of(container).thrown(speed));
                 if !moved.contains(&container) {
@@ -454,20 +429,5 @@ mod tests {
             gesture.moved(by(30.0, 2.0), Duration::from_millis(8)),
             by(0.0, 2.0)
         );
-    }
-
-    #[test]
-    fn the_speed_is_measured_from_the_stamps() {
-        let mut gesture = Gesture::touching();
-        for step in 0..10 {
-            gesture.moved(by(0.0, 10.0), Duration::from_millis(10 * step));
-        }
-        assert!(
-            (gesture.velocity.height.0 - 1000.0).abs() < 1.0,
-            "{:?}",
-            gesture.velocity
-        );
-        gesture.moved(by(0.0, 10.0), Duration::from_secs(5));
-        assert_eq!(gesture.velocity, by(0.0, 0.0), "a stale gap says nothing");
     }
 }
