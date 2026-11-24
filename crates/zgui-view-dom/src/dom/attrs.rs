@@ -64,6 +64,12 @@ impl Dom for DocumentDom {
         let Some(el) = self.live_index_of(el) else {
             return;
         };
+        if name.as_str() == "id" {
+            let id = value.filter(|v| !v.is_empty()).map(Ident::new);
+            self.edit(|edit| edit.set_id(el, id));
+            self.note_attribute(el, name, value);
+            return;
+        }
         let stored = value.map(Into::into);
         self.edit(|edit| edit.set_attribute(el, name, stored));
         self.note_attribute(el, name, value);
@@ -423,5 +429,37 @@ mod tests {
             0,
             "the handler is released all the same"
         );
+    }
+
+    #[test]
+    fn setting_the_id_attribute_routes_to_the_document_id() {
+        let document = Rc::new(RefCell::new(Document::new()));
+        let dom = DocumentDom::new(Rc::clone(&document));
+        let row = dom.create_element(ElementName::new("row"));
+        dom.insert(dom.root(row), row, None);
+
+        let id_of = || {
+            let doc = document.borrow();
+            let store = doc.store();
+            store
+                .core(dom.index_of(row))
+                .id_attr()
+                .and_then(|ident| store.idents().resolve(ident))
+                .map(|atom| atom.to_string())
+        };
+
+        assert_eq!(id_of(), None);
+
+        Dom::set_attribute(&dom, row, AttrName::new("id"), Some("hero"));
+        assert_eq!(id_of().as_deref(), Some("hero"));
+
+        Dom::set_attribute(&dom, row, AttrName::new("id"), Some(""));
+        assert_eq!(id_of(), None);
+
+        Dom::set_attribute(&dom, row, AttrName::new("id"), Some("next"));
+        assert_eq!(id_of().as_deref(), Some("next"));
+
+        Dom::set_attribute(&dom, row, AttrName::new("id"), None);
+        assert_eq!(id_of(), None);
     }
 }
