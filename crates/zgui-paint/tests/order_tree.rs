@@ -181,3 +181,38 @@ fn rows_join_the_order_tree_when_they_are_first_drawn() {
     assert_eq!(whole.report.order_entries, 15 + 15 * 2, "{whole:?}");
     assert_eq!(fills(&mut output), ["blue"; 20]);
 }
+
+#[test]
+fn a_drawn_box_moved_under_another_parent_stays_drawn() {
+    let Some(mut output) = Recorded::new([200, 200]) else {
+        return;
+    };
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![
+            Element::new("a").children(vec![Element::new("cell"), Element::new("cell")]),
+            Element::new("b").children(vec![Element::new("cell")]),
+        ]),
+        "root { display: block; width: 200px; height: 200px }
+         a, b { display: block; height: 40px }
+         cell { display: block; height: 10px; background: blue }",
+        200.0,
+        200.0,
+    );
+    output.frame_everything(&mut harness);
+
+    // The layout keeps a box's key when it moves the box under another parent.
+    let (a, b) = (harness.box_of("a"), harness.box_of("b"));
+    let cell = harness.store.get(a).expect("a box").children[0];
+    harness
+        .store
+        .get_mut(a)
+        .expect("a box")
+        .children
+        .retain(|child| *child != cell);
+    harness.store.get_mut(b).expect("a box").children.push(cell);
+    harness.store.get_mut(cell).expect("a box").parent = Some(b);
+    harness.compose(200.0, 200.0);
+    output.frame(&mut harness);
+
+    assert_eq!(fills(&mut output), ["blue"; 3]);
+}

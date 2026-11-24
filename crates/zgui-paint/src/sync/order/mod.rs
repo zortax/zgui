@@ -14,6 +14,8 @@
 //! - A child sorts by the place of other boxes, such as an absolutely positioned box ranked where
 //!   it was written. No mark covers those boxes, so the list is checked after a sync that saw an
 //!   order mark below its box.
+//! - A box below it is drawn for the first time, or a box it now holds was dropped from another
+//!   list.
 //!
 //! A rebuilt list is written as one splice per run of entries that differs, and a list that did
 //! not change writes nothing.
@@ -252,6 +254,7 @@ impl Order {
             work.push(key);
             entries += self.drain(context, &mut work);
         }
+        entries += self.relist_dropped(context, &mut work);
         entries += std::mem::take(&mut self.created);
         let effects = self.write_effects(context);
         self.remove_orphans(context);

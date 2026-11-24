@@ -18,6 +18,7 @@
 //! Fragments outside the frame's damage are not visited, and their chunks stay as they are.
 
 mod animate;
+mod check;
 mod extent;
 mod flush;
 mod key;
@@ -188,6 +189,9 @@ impl CompositorSync {
         self.report.table_writes += order.effects;
         self.report.released += self.mirror.settle(&mut transaction, tables);
         self.names.settle(|key| left(store, key));
+        if zgui_layout::invariants::enabled() {
+            self.check_listed(store);
+        }
         Some(transaction)
     }
 

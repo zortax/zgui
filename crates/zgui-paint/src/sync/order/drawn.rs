@@ -7,7 +7,7 @@
 use zgui_dom::side::BoxKey;
 use zgui_layout::LayoutStore;
 
-use super::Order;
+use super::{Context, Order};
 
 impl Order {
     /// Notes that the box `key` is drawn.
@@ -30,18 +30,54 @@ impl Order {
     pub(super) fn show_drawn(&mut self, store: &LayoutStore, work: &mut Vec<BoxKey>) {
         let mut drawn = std::mem::take(&mut self.drawn);
         for &key in &drawn {
-            let mut at = key;
-            while !self.knows(at) && self.scratch.shown.insert(at) {
-                match store.get(at).and_then(|node| node.parent) {
-                    Some(parent) => at = parent,
-                    None => break,
-                }
-            }
-            if at != key && self.knows(at) {
-                work.push(at);
+            if let Some(above) = self.show(store, key) {
+                work.push(above);
             }
         }
         drawn.clear();
         self.drawn = drawn;
+    }
+
+    /// Lists again each live box that a list dropped in this sync and no list holds now, such as a
+    /// box moved under another parent, and returns the entries spliced.
+    ///
+    /// Every box a list held was drawn, so each is shown again and the list above it rebuilt.
+    pub(super) fn relist_dropped(
+        &mut self,
+        context: &mut Context<'_>,
+        work: &mut Vec<BoxKey>,
+    ) -> usize {
+        let mut entries = 0;
+        let mut checked = 0;
+        // Rebuilding a list can drop further boxes, which are checked in turn.
+        while let Some(&key) = self.scratch.orphans.get(checked) {
+            checked += 1;
+            let store = context.store;
+            if self.knows(key) || store.get(key).is_none() || store.removed(key) {
+                continue;
+            }
+            if let Some(above) = self.show(store, key) {
+                self.scratch.visited.remove(&above);
+                work.push(above);
+                entries += self.drain(context, work);
+            }
+        }
+        entries
+    }
+
+    /// Shows the box `key` and the boxes above it that no list holds, and returns the first box
+    /// above them that a list holds.
+    ///
+    /// Returns `None` when a list holds `key`, when the chain was shown already, and when it ends
+    /// at a box without a parent.
+    fn show(&mut self, store: &LayoutStore, key: BoxKey) -> Option<BoxKey> {
+        let mut at = key;
+        while !self.knows(at) {
+            if !self.scratch.shown.insert(at) {
+                return None;
+            }
+            at = store.get(at)?.parent?;
+        }
+        (at != key).then_some(at)
     }
 }
