@@ -10,6 +10,7 @@
 //!   in its place recorded the same keys. A box that arrives where a box left records the
 //!   departed box's keys.
 //! - The tables' changes become node and slot writes.
+//! - A box enters the order tree once a chunk in its subtree is recorded.
 //! - A changed child list, set of fragments or group effect rewrites the order nodes of the boxes
 //!   concerned.
 //! - Nodes and slots that no chunk and no node names any more are removed.
@@ -376,6 +377,7 @@ impl CompositorSync {
         }
         flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
+        self.order.recorded(fragment.box_);
         self.report.recorded += 1;
         self.chunks.insert(
             fragment.key,
@@ -446,6 +448,7 @@ impl CompositorSync {
         let held = items.clone();
         flush::record(transaction, &mut self.mirror, tables, key, items);
         self.mirror.recorded(key);
+        self.order.recorded(fragment.box_);
         self.report.recorded += 1;
         self.owners.insert(key, fragment.key);
         by_fragment.insert(fragment.key, key);

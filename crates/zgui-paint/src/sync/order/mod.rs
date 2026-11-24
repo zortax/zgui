@@ -1,9 +1,11 @@
 //! The paint order mirrored as the compositor's order tree.
 //!
-//! Each box with children, each box that establishes a stacking context and each box drawn with a
-//! group effect gets an order node. A node lists the chunks of its box's fragments, then each child
-//! in painting order: a child with a node of its own as that node, any other child as the chunks
-//! of its fragments. A child's backdrop chunk comes right before it, outside its node.
+//! The tree holds the boxes that are drawn: those with a chunk recorded in their subtree and those
+//! drawn with a group effect. Each drawn box with children, each that establishes a stacking
+//! context and each drawn with a group effect gets an order node. A node lists the chunks of its
+//! box's fragments, then each drawn child in painting order: a child with a node of its own as that
+//! node, any other child as the chunks of its fragments. A child's backdrop chunk comes right
+//! before it, outside its node.
 //!
 //! A box's list is rebuilt in these cases:
 //!
@@ -16,6 +18,7 @@
 //! A rebuilt list is written as one splice per run of entries that differs, and a list that did
 //! not change writes nothing.
 
+mod drawn;
 mod effect;
 mod ends;
 mod splice;
@@ -54,6 +57,8 @@ pub(crate) struct Order {
     /// The boxes whose list holds a child that sorts by other boxes than itself, which no mark
     /// covers, so a sync after an order mark below one of them checks the order of its children.
     volatile: FxHashSet<BoxKey>,
+    /// The boxes drawn since the last sync that may not be listed yet.
+    drawn: Vec<BoxKey>,
     scratch: Scratch,
 }
 
@@ -96,6 +101,10 @@ struct Scratch {
     seen: FxHashSet<BoxKey>,
     entries: Vec<OrderEntry>,
     spans: Vec<u32>,
+    children: Vec<BoxKey>,
+    /// The boxes the current sync lists for the first time, with the boxes above them that are
+    /// not listed yet.
+    shown: FxHashSet<BoxKey>,
     /// The boxes the current sync was given to visit.
     touched: FxHashSet<BoxKey>,
     /// Whether the current sync visits every node.
@@ -192,6 +201,9 @@ impl Order {
 
     /// Notes the group effect the box `key` is drawn with, `None` for none.
     pub(crate) fn isolate(&mut self, key: BoxKey, effect: Option<GroupEffect>) {
+        if effect.is_some() {
+            self.recorded(key);
+        }
         let changed = match effect {
             Some(effect) => self.effects.insert(key, effect.clone()).as_ref() != Some(&effect),
             None => self.effects.remove(&key).is_some(),
@@ -221,6 +233,7 @@ impl Order {
         let mut volatile = std::mem::take(&mut self.scratch.volatile);
         self.volatile_above(context.store, &work, coverage, &mut volatile);
         work.extend(self.dirty.drain());
+        self.show_drawn(context.store, &mut work);
         self.scratch.touched.clear();
         self.scratch.touched.extend(work.iter().copied());
         self.scratch.whole = coverage == ChangeCoverage::All;
@@ -242,6 +255,7 @@ impl Order {
         entries += std::mem::take(&mut self.created);
         let effects = self.write_effects(context);
         self.remove_orphans(context);
+        self.scratch.shown.clear();
         self.scratch.marked = work;
         self.scratch.volatile = volatile;
         Synced { entries, effects }
@@ -313,7 +327,8 @@ impl Order {
     fn drain(&mut self, context: &mut Context<'_>, work: &mut Vec<BoxKey>) -> usize {
         let mut entries = 0;
         while let Some(key) = work.pop() {
-            if self.scratch.visited.insert(key) {
+            // A box no list holds has no list to bring up to date.
+            if self.knows(key) && self.scratch.visited.insert(key) {
                 entries += self.visit(context, key, work);
             }
         }
@@ -328,7 +343,11 @@ impl Order {
         };
         store.get(key).is_some()
             && (self.top == Some(key) || self.needs_node(store, key))
-            && *stacking::children_in_paint_order(store, key) == *node.children
+            && stacking::children_in_paint_order(store, key)
+                .iter()
+                .copied()
+                .filter(|&child| self.shows(child))
+                .eq(node.children.iter().copied())
     }
 
     /// Brings the list that holds the box `key` up to date, and returns the entries spliced.
@@ -340,8 +359,9 @@ impl Order {
         if context.store.get(key).is_none() || context.store.removed(key) {
             return 0;
         }
-        let wants_node = self.top == Some(key) || self.needs_node(context.store, key);
-        if wants_node && self.nodes.contains_key(&key) {
+        if self.nodes.contains_key(&key)
+            && (self.top == Some(key) || self.needs_node(context.store, key))
+        {
             return self.rebuild(context, key);
         }
         if let Some(place) = self.placed.get(&key) {
@@ -381,15 +401,37 @@ impl Order {
         id
     }
 
-    /// Rebuilds the list of the box `key`'s node, and returns the entries spliced.
+    /// Rebuilds the list of the box `key`'s node from its drawn children, and returns the entries
+    /// spliced.
+    fn rebuild(&mut self, context: &mut Context<'_>, key: BoxKey) -> usize {
+        let store = context.store;
+        // Taken while the list is built, since a child's new node builds its own list first.
+        let mut children = std::mem::take(&mut self.scratch.children);
+        children.clear();
+        children.extend(
+            stacking::children_in_paint_order(store, key)
+                .iter()
+                .copied()
+                .filter(|&child| self.shows(child)),
+        );
+        let spliced = self.rebuild_from(context, key, &children);
+        self.scratch.children = children;
+        spliced
+    }
+
+    /// Rebuilds the list of the box `key`'s node with `children`, and returns the entries spliced.
     ///
     /// A list that keeps a run of its children unchanged is rebuilt at its ends, see
     /// [`Order::rebuild_ends`]. A list whose children and entries stay as they are writes
     /// nothing.
-    fn rebuild(&mut self, context: &mut Context<'_>, key: BoxKey) -> usize {
+    fn rebuild_from(
+        &mut self,
+        context: &mut Context<'_>,
+        key: BoxKey,
+        children: &[BoxKey],
+    ) -> usize {
         let store = context.store;
-        let children = stacking::children_in_paint_order(store, key);
-        if let Some(spliced) = self.rebuild_ends(context, key, &children) {
+        if let Some(spliced) = self.rebuild_ends(context, key, children) {
             return spliced;
         }
         let volatile = children
@@ -402,13 +444,12 @@ impl Order {
                 self.volatile.remove(&key);
             }
         }
-        // Taken while the list is built, since a child's new node builds its own list first.
         let mut entries = std::mem::take(&mut self.scratch.entries);
         entries.clear();
         let mut spans = std::mem::take(&mut self.scratch.spans);
         spans.clear();
         push_chunks(context.names, store, key, &mut entries);
-        for &child in children.iter() {
+        for &child in children {
             spans.push(entries.len() as u32);
             self.push_child(context, child, &mut entries);
         }
@@ -426,7 +467,7 @@ impl Order {
             self.scratch.entries = entries;
             return 0;
         }
-        for &child in children.iter() {
+        for &child in children {
             let node = self.needs_node(store, child);
             self.placed.insert(child, Place { owner: key, node });
             if !node && self.nodes.contains_key(&child) {
@@ -436,7 +477,7 @@ impl Order {
         let Some(node) = self.nodes.get_mut(&key) else {
             return 0;
         };
-        let old = std::mem::replace(&mut node.children, children.into_owned());
+        let old = std::mem::replace(&mut node.children, children.to_vec());
         let listed = Listed::of(&node.children);
         for old in old {
             if listed.holds(old) {

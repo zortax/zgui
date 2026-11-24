@@ -4,6 +4,7 @@ mod support;
 
 use support::compositor::Recorded;
 use support::{Element, Harness};
+use zgui_geom::{Device, Point, Rect, Size};
 use zgui_interned::ClassName;
 
 /// Three overlapping positioned squares in red, green and blue, painted in that order, beside a
@@ -145,4 +146,38 @@ fn removed_rows_leave_their_list_without_emptying_their_nodes() {
     assert_eq!(written.report.order_entries, 10, "{written:?}");
     assert_eq!(written.commit.keys_spliced, 10, "{written:?}");
     assert!(fills(&mut output).is_empty());
+}
+
+#[test]
+fn rows_join_the_order_tree_when_they_are_first_drawn() {
+    let Some(mut output) = Recorded::new([200, 200]) else {
+        return;
+    };
+    let row = || Element::new("row").children(vec![Element::new("cell")]);
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![
+            Element::new("list").children((0..20).map(|_| row()).collect()),
+        ]),
+        "root { display: block; width: 200px; height: 200px }
+         list { display: block }
+         row { display: block; height: 10px; background: gray }
+         cell { display: block; height: 5px; background: blue }",
+        200.0,
+        200.0,
+    );
+    harness.clear_damage();
+    harness.damage.absorb(Rect::<i32, Device>::new(
+        Point::new(0, 0),
+        Size::new(200, 50),
+    ));
+    let top = output.frame(&mut harness);
+    let whole = output.frame_everything(&mut harness);
+
+    // The root's node in the output's root, the root's chunk and the list's node in the root's
+    // list, the list's chunk and the five rows the damage reaches in the list's, and a row's chunk
+    // and its cell's chunk in each row's.
+    assert_eq!(top.report.order_entries, 1 + 2 + 6 + 5 * 2, "{top:?}");
+    // The other fifteen rows into the list, each with its two chunks.
+    assert_eq!(whole.report.order_entries, 15 + 15 * 2, "{whole:?}");
+    assert_eq!(fills(&mut output), ["blue"; 20]);
 }
