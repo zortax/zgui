@@ -6,7 +6,10 @@
 //! a private field — so the declarations are serialised and the text scanned, once per
 //! declaration block, and the answer is cached by the rule node that names the block chain.
 
-use style::properties::{CustomDeclarationValue, PropertyDeclaration, PropertyDeclarationBlock};
+use style::properties::declaration_block::AppendableValue;
+use style::properties::{
+    CustomDeclarationValue, PropertyDeclaration, PropertyDeclarationBlock, PropertyDeclarationId,
+};
 use style::rule_tree::StrongRuleNode;
 use style::shared_lock::StylesheetGuards;
 use style::stylesheets::keyframes_rule::{KeyframesAnimation, KeyframesStepValue};
@@ -85,6 +88,7 @@ pub(crate) fn keyframe_refs_of(
 ///
 /// `text` is scratch space for the serialised declarations.
 fn scan_block(block: &PropertyDeclarationBlock, refs: &mut RuleRefs, text: &mut String) {
+    let mut last_unparsed: usize = 0;
     for declaration in block.declarations() {
         match declaration {
             PropertyDeclaration::Custom(custom) => {
@@ -94,10 +98,28 @@ fn scan_block(block: &PropertyDeclarationBlock, refs: &mut RuleRefs, text: &mut 
                     scan_var_names(&value.css, &mut refs.reads);
                 }
             }
-            PropertyDeclaration::WithVariables(_) => {
+            PropertyDeclaration::WithVariables(variable) => {
+                let ptr = variable.value.heap_ptr() as usize;
+                if ptr == last_unparsed {
+                    continue;
+                }
+                last_unparsed = ptr;
                 text.clear();
-                if declaration.to_css(text).is_ok() {
+                // A longhand expanded from a shorthand that contained `var()` is a
+                // pending-substitution value whose own CSSOM serialisation is empty; its raw
+                // shorthand text is recovered by asking the shorthand it came from about this
+                // single declaration.
+                if declaration.to_css(text).is_ok() && !text.is_empty() {
                     scan_var_names(text, &mut refs.reads);
+                } else if let PropertyDeclarationId::Longhand(longhand) = declaration.id() {
+                    for shorthand in longhand.shorthands() {
+                        if let Some(AppendableValue::Css(css)) = shorthand
+                            .get_shorthand_appendable_value(core::slice::from_ref(&declaration))
+                        {
+                            scan_var_names(css, &mut refs.reads);
+                            break;
+                        }
+                    }
                 }
             }
             _ => {}
@@ -122,10 +144,17 @@ impl RuleRefs {
     }
 }
 
+/// Finds the next ASCII case-insensitive `"var("` call in `text`.
+fn find_var_open(text: &str) -> Option<usize> {
+    text.as_bytes()
+        .windows(4)
+        .position(|w| w.eq_ignore_ascii_case(b"var("))
+}
+
 /// Appends every custom property name `var(--name` in `text` names, without the prefix.
 pub(crate) fn scan_var_names(text: &str, out: &mut Vec<String>) {
     let mut rest = text;
-    while let Some(at) = rest.find("var(") {
+    while let Some(at) = find_var_open(rest) {
         rest = &rest[at + "var(".len()..];
         let trimmed = rest.trim_start();
         let Some(named) = trimmed.strip_prefix("--") else {
@@ -159,6 +188,7 @@ mod tests {
             names("1px solid var(--zgui-border) inset var(--x)"),
             ["zgui-border", "x"]
         );
+        assert_eq!(names("1px solid VAR(--up)"), ["up"]);
         assert!(names("rgb(1, 2, 3)").is_empty());
         assert!(names("var(a)").is_empty());
     }

@@ -349,6 +349,45 @@ fn a_custom_property_change_recascades_its_readers_only() {
     }
 }
 
+/// A custom property read inside a CSS shorthand (including a partially overridden shorthand and
+/// ASCII case-insensitive `VAR(...)`) recascades its readers when an ancestor mutates it.
+#[test]
+fn a_custom_property_read_through_a_shorthand_recascades_its_readers() {
+    let (mut harness, rows) = themed(
+        8,
+        2,
+        "row { background: VAR(--accent, rgb(1, 1, 1)); border: 1px solid var(--edge, rgb(2, 2, 2)); border-top-color: rgb(3, 3, 3); }",
+    );
+
+    assert_eq!(background(&harness, rows[7]), (1, 1, 1));
+
+    let root = harness.root;
+    set_custom(&mut harness, root, "accent", "rgb(0, 9, 0)");
+    set_custom(&mut harness, root, "edge", "rgb(4, 5, 6)");
+    harness.frame();
+
+    assert_eq!(background(&harness, rows[7]), (0, 9, 0));
+    let style = harness
+        .document
+        .node(rows[7])
+        .primary_style()
+        .expect("the element is styled");
+    let [r, g, b, _] = *style
+        .get_border()
+        .clone_border_bottom_color()
+        .resolve_to_absolute(&style.get_inherited_text().clone_color())
+        .into_srgb_legacy()
+        .raw_components();
+    assert_eq!(
+        (
+            (r * 255.0).round() as u8,
+            (g * 255.0).round() as u8,
+            (b * 255.0).round() as u8,
+        ),
+        (4, 5, 6),
+    );
+}
+
 /// A restyle of many elements of one rule chain under equal parents cascades the first of them.
 #[test]
 fn cells_that_cascade_alike_run_one_cascade() {
