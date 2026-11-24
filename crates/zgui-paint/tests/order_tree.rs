@@ -100,3 +100,49 @@ fn a_box_that_stops_being_a_stacking_context_goes_back_into_its_parent_list() {
         assert_eq!(fills, ["red", "green", "blue"]);
     }
 }
+
+#[test]
+fn removed_rows_leave_their_list_without_emptying_their_nodes() {
+    let Some(mut output) = Recorded::new([200, 200]) else {
+        return;
+    };
+    let row = || Element::new("row").children(vec![Element::new("cell"), Element::new("cell")]);
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![
+            Element::new("list").children(
+                (0..10)
+                    .map(|_| row())
+                    .chain([Element::new("tail")])
+                    .collect(),
+            ),
+        ]),
+        "root { display: block; width: 200px; height: 200px }
+         list { display: block }
+         row { display: block; height: 10px; background: gray }
+         cell { display: block; height: 5px; background: blue }
+         tail { display: block; height: 10px }",
+        200.0,
+        200.0,
+    );
+    output.frame_everything(&mut harness);
+    let root = harness.document.root_index().expect("a root element");
+    // The marks of the first build, which built the whole tree.
+    zgui_layout::boxtree::retire(&mut harness.document, root);
+
+    let rows = harness.elements("row");
+    harness.edit_and_restyle(|edit| {
+        for row in rows {
+            edit.remove(row);
+        }
+    });
+    let owed = zgui_layout::boxtree::retire(&mut harness.document, root);
+    zgui_layout::boxtree::patch::rebuild(&mut harness.store, &harness.document, &owed)
+        .expect("the rows leave the box tree");
+    harness.compose_from_marks(200.0, 200.0);
+    let written = output.frame(&mut harness);
+
+    // The ten row nodes out of the list, and nothing out of the nodes, which are removed whole.
+    assert_eq!(written.report.order_entries, 10, "{written:?}");
+    assert_eq!(written.commit.keys_spliced, 10, "{written:?}");
+    assert!(fills(&mut output).is_empty());
+}

@@ -714,6 +714,12 @@ impl LayoutStore {
         self.boxes.contains_key(slot(key))
     }
 
+    /// Reports whether the box `key` was removed and its record is readable only until the frame
+    /// is recycled.
+    pub fn removed(&self, key: BoxKey) -> bool {
+        self.boxes.is_removed(slot(key))
+    }
+
     /// Removes one box. Its record stays readable until the frame is recycled.
     pub fn remove(&mut self, key: BoxKey) -> bool {
         self.retired_boxes.push(key);

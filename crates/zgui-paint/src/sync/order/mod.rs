@@ -336,7 +336,8 @@ impl Order {
     /// A box listed as its own node rebuilds its node's list. A box whose place in its owner's
     /// list changed has the owner rebuilt.
     fn visit(&mut self, context: &mut Context<'_>, key: BoxKey, work: &mut Vec<BoxKey>) -> usize {
-        if context.store.get(key).is_none() {
+        // A removed box's node goes with the list of the live box that held it.
+        if context.store.get(key).is_none() || context.store.removed(key) {
             return 0;
         }
         let wants_node = self.top == Some(key) || self.needs_node(context.store, key);
@@ -502,7 +503,7 @@ impl Order {
             if named {
                 continue;
             }
-            if context.store.get(key).is_none() {
+            if context.store.get(key).is_none() || context.store.removed(key) {
                 self.effects.remove(&key);
             }
             let Some(node) = self.nodes.remove(&key) else {
