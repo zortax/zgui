@@ -24,7 +24,6 @@ fn main() {
     println!("cargo::rerun-if-changed=build/json.rs");
 
     let source = source_path();
-    println!("cargo::rerun-if-changed={}", source.display());
     let text = fs::read_to_string(&source).unwrap_or_else(|error| {
         panic!(
             "the style engine's property list at {} could not be read: {error}",
