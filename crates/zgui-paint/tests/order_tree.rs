@@ -216,3 +216,47 @@ fn a_drawn_box_moved_under_another_parent_stays_drawn() {
 
     assert_eq!(fills(&mut output), ["blue"; 3]);
 }
+
+#[test]
+fn a_drawn_box_moved_under_a_box_that_draws_nothing_stays_drawn() {
+    let Some(mut output) = Recorded::new([200, 200]) else {
+        return;
+    };
+    let mut harness = Harness::sized(
+        Element::new("root").children(vec![
+            Element::new("a").children(vec![Element::new("cell"), Element::new("cell")]),
+            Element::new("b").children(vec![Element::new("cell")]),
+            Element::new("empty"),
+        ]),
+        "root { display: block; width: 200px; height: 200px }
+         a, b, empty { display: block; height: 40px }
+         cell { display: block; height: 10px; background: blue }",
+        200.0,
+        200.0,
+    );
+    output.frame_everything(&mut harness);
+
+    // The layout keeps a box's key when it moves the box under another parent.
+    let (root, a, empty) = (
+        harness.store.root().expect("a root box"),
+        harness.box_of("a"),
+        harness.box_of("empty"),
+    );
+    harness
+        .store
+        .get_mut(root)
+        .expect("a box")
+        .children
+        .retain(|child| *child != a);
+    harness
+        .store
+        .get_mut(empty)
+        .expect("a box")
+        .children
+        .push(a);
+    harness.store.get_mut(a).expect("a box").parent = Some(empty);
+    harness.compose(200.0, 200.0);
+    output.frame(&mut harness);
+
+    assert_eq!(fills(&mut output), ["blue"; 3]);
+}

@@ -53,7 +53,7 @@ impl Order {
         while let Some(&key) = self.scratch.orphans.get(checked) {
             checked += 1;
             let store = context.store;
-            if self.knows(key) || store.get(key).is_none() || store.removed(key) {
+            if self.listed(key) || store.get(key).is_none() || store.removed(key) {
                 continue;
             }
             if let Some(above) = self.show(store, key) {
@@ -65,6 +65,13 @@ impl Order {
         entries
     }
 
+    /// Reports whether a list or the output's root holds the box `key`.
+    ///
+    /// A box keeps its node after a list drops it until the sync removes the nodes no list names.
+    fn listed(&self, key: BoxKey) -> bool {
+        self.top == Some(key) || self.placed.contains_key(&key)
+    }
+
     /// Shows the box `key` and the boxes above it that no list holds, and returns the first box
     /// above them that a list holds.
     ///
@@ -72,7 +79,7 @@ impl Order {
     /// at a box without a parent.
     fn show(&mut self, store: &LayoutStore, key: BoxKey) -> Option<BoxKey> {
         let mut at = key;
-        while !self.knows(at) {
+        while !self.listed(at) {
             if !self.scratch.shown.insert(at) {
                 return None;
             }
