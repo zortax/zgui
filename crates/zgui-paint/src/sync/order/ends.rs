@@ -34,14 +34,9 @@ impl Order {
             return None;
         }
         let kept = &children[new_at..new_at + run];
-        let touched = self.scratch.touched.iter().any(|touched| {
-            *touched != key
-                && self
-                    .placed
-                    .get(touched)
-                    .is_some_and(|place| place.owner == key)
-                && kept.contains(touched)
-        });
+        let touched = kept
+            .iter()
+            .any(|child| self.scratch.touched.contains(child));
         let store = context.store;
         let (front, back) = (&children[..new_at], &children[new_at + run..]);
         if touched
