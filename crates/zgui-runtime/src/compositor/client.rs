@@ -129,8 +129,8 @@ impl Client {
             .map(|due| if due <= clock.now_ns { next } else { due })
     }
 
-    /// Returns the latch and display time of the frame a commit queued now goes into, on the frame
-    /// clock, or `None` for a stepped driver.
+    /// Returns the latch and display time of the frame due that a commit queued now goes into, on
+    /// the frame clock, or `None` when the driver reports none.
     ///
     /// A snapshot whose latch has passed is moved on by whole intervals of `interval`.
     pub(crate) fn commit_frame(&self, interval: std::time::Duration) -> Option<(u64, u64)> {
