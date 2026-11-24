@@ -56,7 +56,7 @@ pub(super) fn splice(
 ///
 /// - One of the lists is empty.
 /// - `new` drops entries at one end of `old` and adds entries at the other, which may be the ones
-///   it dropped.
+///   it dropped, and keeps at least as many entries as it drops or as it adds.
 ///
 /// Returns `None` and writes nothing for any other change.
 fn shifted(
@@ -76,7 +76,9 @@ fn shifted(
         .and_then(|first| old.iter().position(|e| e == first))
     {
         let kept = old.len() - dropped;
-        if new.len() >= kept && old[dropped..] == new[..kept] {
+        // No other order keeps more: only dropped entries that come back could be kept instead.
+        let fewest = kept >= dropped.min(new.len().saturating_sub(kept));
+        if fewest && new.len() >= kept && old[dropped..] == new[..kept] {
             if dropped > 0 {
                 tx.splice(node, at, dropped as u32, &[]);
             }
@@ -92,7 +94,8 @@ fn shifted(
         .and_then(|first| new.iter().position(|e| e == first))
     {
         let kept = new.len() - added;
-        if old.len() >= kept && new[added..] == old[..kept] {
+        let fewest = kept >= added.min(old.len().saturating_sub(kept));
+        if fewest && old.len() >= kept && new[added..] == old[..kept] {
             if added > 0 {
                 tx.splice(node, at, 0, &new[..added]);
             }
@@ -206,6 +209,11 @@ mod tests {
             replayed(&[1, 2, 3], &[1, 5, 3]),
             None,
             "a change in the middle"
+        );
+        assert_eq!(
+            replayed(&[2, 3, 9, 4, 5, 1], &[1, 2, 3, 4, 5, 9]),
+            None,
+            "two entries that move past the others"
         );
     }
 }
