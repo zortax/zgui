@@ -34,6 +34,7 @@ mod driver;
 mod kept;
 mod null;
 mod output;
+mod recording;
 mod screen;
 mod screens;
 mod select;
@@ -56,6 +57,7 @@ pub use crate::driver::{Waiter, driver, factory, self_paced, unsynced_driver, un
 pub use crate::kept::{Drawn, Frames, Kept};
 pub use crate::null::NullRenderer;
 pub use crate::output::TestOutput;
+pub use crate::recording::{Gestures, recording};
 pub use crate::screen::{Screen, Shown, drawing_of};
 pub use crate::screens::{screen, screens, showing, through};
 pub use crate::select::{CompositorKind, DriverKind, RendererKind};
