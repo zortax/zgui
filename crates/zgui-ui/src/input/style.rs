@@ -54,21 +54,20 @@ style! { pub InputStyle =>
         box-shadow: 0 0 0 3px var(--zui-color-control-ring-invalid);
     }"
 ":scope:disabled { opacity: 0.5; pointer-events: none; }"
-// `:empty` is *this field holds no text*, answered by the document itself: the element's only
-// children are the text nodes the editing model writes. Out of flow, so that it neither moves
-// the text nor pushes the insertion point along in front of it. It covers the padding box and
-// inherits the field's padding, so it starts where the text starts after any restyle.
+// `:empty` means this field holds no text, answered by the document itself: the element's only
+// children are the text nodes the editing model writes. Positioned out of flow so the insertion
+// point stays at the leading edge, spanning the padding box horizontally with inherited padding so
+// the single-line placeholder aligns with typed text and truncates with an ellipsis.
 ":scope:empty::before {
         content: var(--zui-field-placeholder, \"\");
         position: absolute;
-        top: 0;
-        bottom: 0;
         left: 0;
         right: 0;
         padding: inherit;
-        display: flex;
-        flex-direction: row;
-        align-items: center;
+        display: block;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
         color: var(--zui-color-muted-foreground);
     }"
 }

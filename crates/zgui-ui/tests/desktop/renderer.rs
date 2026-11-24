@@ -4,11 +4,11 @@
 //! stage — because the question these fixtures ask is about dispatch and geometry, and a graphics
 //! device would only add a reason for them not to run on a machine that has none.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use zgui::atlas::{SinkError, TextureFormat, TextureId, TextureSink};
-use zgui::geom::{Device, Rect, Size};
+use zgui::geom::{Device, DevicePx, Rect, Size};
 use zgui::platform::Surface;
 use zgui::render::{
     ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
@@ -26,6 +26,18 @@ static VECTOR_ITEMS: AtomicUsize = AtomicUsize::new(0);
 
 /// The most vector passes any frame drawn through this renderer has planned.
 static VECTOR_PASSES: AtomicUsize = AtomicUsize::new(0);
+
+/// Sprite ink rectangles from the most recently drawn frame.
+static LAST_SPRITES: Mutex<Vec<Rect<DevicePx, Device>>> = Mutex::new(Vec::new());
+
+/// Sprite ink rectangles from the most recently drawn frame.
+#[allow(dead_code)]
+pub fn last_sprite_bounds() -> Vec<Rect<DevicePx, Device>> {
+    LAST_SPRITES
+        .lock()
+        .unwrap_or_else(|held| held.into_inner())
+        .clone()
+}
 
 /// Forgets what earlier frames carried, so one fixture's count is its own.
 pub fn forget_vectors() {
@@ -97,6 +109,16 @@ impl Renderer for NullRenderer {
     ) -> FrameOutcome {
         VECTOR_ITEMS.fetch_max(scene.primitives.vectors.len(), Ordering::Relaxed);
         VECTOR_PASSES.fetch_max(scene.pass_plan().passes.len(), Ordering::Relaxed);
+        if !scene.primitives.mono_sprites.is_empty()
+            || !scene.primitives.subpixel_sprites.is_empty()
+            || !scene.primitives.color_sprites.is_empty()
+        {
+            let mut sprites = LAST_SPRITES.lock().unwrap_or_else(|held| held.into_inner());
+            sprites.clear();
+            sprites.extend(scene.primitives.mono_sprites.iter().map(|s| s.ink()));
+            sprites.extend(scene.primitives.subpixel_sprites.iter().map(|s| s.ink()));
+            sprites.extend(scene.primitives.color_sprites.iter().map(|s| s.ink()));
+        }
         FrameOutcome::Presented(FrameStats::default())
     }
 
