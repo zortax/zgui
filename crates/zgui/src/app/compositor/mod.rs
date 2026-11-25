@@ -1,6 +1,7 @@
 //! The compositor every window is drawn through, the driver that runs it, and the renderers that
 //! draw its frames.
 
+mod offscreen;
 mod paths;
 mod window;
 
@@ -13,6 +14,8 @@ use iceblink_wgpu::LatencyMarks;
 use zgui_runtime::RendererFactory;
 use zgui_runtime::budget::limits::ATLAS_BYTES;
 
+pub use self::offscreen::Presented;
+pub(crate) use self::offscreen::factory as offscreen;
 pub(crate) use self::paths::{PathRenderers, vectors};
 pub(crate) use self::window::factory;
 use crate::app::driver::CompositorDriver;
@@ -52,6 +55,15 @@ pub(crate) fn driven(
             iceblink_driver::DriverOptions::default(),
         )),
     }
+}
+
+/// Returns `compositor` on the caller's thread, building frames only at the clocks the window
+/// steps it at.
+pub(crate) fn stepped(compositor: Box<dyn Compositor>) -> Box<dyn CompositorClient> {
+    Box::new(iceblink_driver::InProcess::new(
+        compositor,
+        iceblink_driver::DriverOptions::stepped(),
+    ))
 }
 
 /// The variable that names the directory compiled pipelines are kept in.

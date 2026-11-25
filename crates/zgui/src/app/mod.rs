@@ -12,11 +12,13 @@ use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 pub use crate::app::compositor::{
-    PIPELINE_DIRECTORY_VARIABLE, compositor, latency_marks, pipeline_directory,
+    PIPELINE_DIRECTORY_VARIABLE, Presented, compositor, latency_marks, pipeline_directory,
 };
 pub use crate::app::driver::CompositorDriver;
 pub use crate::app::fonts::Fonts;
 pub use crate::app::precision::GroupPrecision;
+/// Texels read back from a renderer's target, four bytes each and row by row.
+pub use iceblink_wgpu::Pixels;
 
 /// A function that runs a compositor behind a driver.
 pub type ClientMaker =
@@ -187,6 +189,8 @@ pub struct App {
     compositor_driver: CompositorDriver,
     /// What runs the compositor behind a driver, when the application supplied it.
     client_maker: Option<ClientMaker>,
+    /// Where an application drawn offscreen keeps the image presented last.
+    offscreen: Option<Presented>,
     /// The application's own context setup, held until the faces are known.
     ///
     /// Held here rather than passed straight down because the faces are provided in the same scope
@@ -219,6 +223,7 @@ impl App {
             group_precision: None,
             compositor_driver: CompositorDriver::default(),
             client_maker: None,
+            offscreen: None,
             context: None,
         }
     }
@@ -566,9 +571,32 @@ impl App {
     /// Draws the frames of each window with the renderer `make` returns for the window's first
     /// size.
     ///
-    /// A factory set with [`App::with_renderer`] takes precedence.
+    /// A factory set with [`App::with_renderer`] and offscreen drawing set with
+    /// [`App::with_offscreen`] take precedence.
     pub fn with_compositor_renderer(mut self, make: CompositorRendererMaker) -> Self {
         self.compositor_renderer = Some(make);
+        self
+    }
+
+    /// Draws every window into an offscreen texture and keeps the image each frame presents in
+    /// `presented`.
+    ///
+    /// The compositor runs on the window's thread and builds a frame only when the platform steps
+    /// the window, so the image is current once a step returns. The driver set with
+    /// [`App::with_compositor_driver`] and `ZGUI_DRIVER` are ignored. A factory set with
+    /// [`App::with_renderer`] and a client set with [`App::with_compositor_client`] take
+    /// precedence.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// let presented = zgui::app::Presented::default();
+    /// let handler = app()
+    ///     .with_offscreen(presented.clone())
+    ///     .into_handler(|| view! { column() });
+    /// ```
+    pub fn with_offscreen(mut self, presented: Presented) -> Self {
+        self.offscreen = Some(presented);
         self
     }
 
@@ -733,10 +761,15 @@ impl App {
         let compositor_driver = self.compositor_driver;
         let client_maker = self.client_maker;
         let compositor_renderer = self.compositor_renderer;
-        let renderer = self.renderer.unwrap_or_else(|| match compositor_renderer {
-            Some(make) => compositor::wrapping(make),
-            None => compositor::factory(group_precision),
-        });
+        let offscreen = self.offscreen;
+        let stepped = offscreen.is_some();
+        let renderer = self
+            .renderer
+            .unwrap_or_else(|| match (offscreen, compositor_renderer) {
+                (Some(presented), _) => compositor::offscreen(group_precision, presented),
+                (None, Some(make)) => compositor::wrapping(make),
+                (None, None) => compositor::factory(group_precision),
+            });
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and
         // therefore resolves them like any other context.
@@ -752,6 +785,7 @@ impl App {
             })
             .with_compositor(match client_maker {
                 Some(make) => make(compositor::compositor(&fonts)),
+                None if stepped => compositor::stepped(compositor::compositor(&fonts)),
                 None => compositor::driven(compositor::compositor(&fonts), compositor_driver),
             })
             .with_renderer(renderer)
