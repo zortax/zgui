@@ -7,16 +7,18 @@
 
 use std::sync::Arc;
 
-use iceblink::{RenderTarget, Renderer};
+use iceblink::{RenderTarget, Renderer, RendererFactory};
 use zgui_platform::Surface;
 use zgui_runtime::AppError;
 
-/// Builds the renderer a window draws through.
+/// Returns what builds the renderer a window draws through.
 pub fn build(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<Box<dyn Renderer>, AppError> {
-    let mut renderer = zgui_testkit_compositor::NullRenderer::default();
-    renderer.configure(target);
-    Ok(Box::new(renderer))
+) -> Result<RendererFactory, AppError> {
+    Ok(zgui_testkit_compositor::factory(move || {
+        let mut renderer = zgui_testkit_compositor::NullRenderer::default();
+        renderer.configure(target);
+        renderer
+    }))
 }
