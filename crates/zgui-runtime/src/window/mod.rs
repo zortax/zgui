@@ -660,6 +660,7 @@ impl Window {
         // Before the output's first frame, so a paced driver never builds one at a rate it
         // assumed while the platform reports the real one.
         let told_rate = surface.refresh_rate_millihertz().filter(|rate| *rate > 0);
+        zgui_profile::latency::note_with("w.refresh", || format!("{told_rate:?}"));
         compositor.set_refresh(compose::refresh_ns(told_rate));
 
         Self {

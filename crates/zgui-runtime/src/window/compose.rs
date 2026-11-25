@@ -62,6 +62,7 @@ impl Window {
             .refresh_rate_millihertz()
             .filter(|rate| *rate > 0);
         if self.told_rate.replace(rate) != Some(rate) {
+            zgui_profile::latency::note_with("w.refresh", || format!("{rate:?}"));
             self.compositor.set_refresh(refresh_ns(rate));
         }
     }
