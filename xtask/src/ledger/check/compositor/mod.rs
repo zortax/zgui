@@ -1,15 +1,15 @@
 //! The compositor ledger.
 //!
-//! zgui draws through the shared compositor's interface, `compositor-types` and `compositor-api`,
-//! and holds every implementation as a `Box<dyn CompositorClient>`, `Box<dyn Compositor>`,
-//! `Box<dyn Renderer>` or `Box<dyn Presenter>`. The implementations are chosen in a few crates only: the umbrella's app
+//! zgui draws through the shared compositor's interface, `iceblink`, and holds every
+//! implementation as a `Box<dyn CompositorClient>`, `Box<dyn Compositor>`, `Box<dyn Renderer>` or
+//! `Box<dyn Presenter>`. The implementations are chosen in a few crates only: the umbrella's app
 //! wiring, the crates that are wgpu by nature, the bench binaries and the test kit's factory. Any
 //! other crate that names an implementation, or downcasts to one of its renderers or presenters,
 //! could come to rely on behaviour the contract does not promise, and would then break with a
 //! second implementation that is correct.
 //!
-//! Every crate of the compositor's checkout other than the two contract crates is an
-//! implementation. The checkout is the directory that holds `compositor-types` at `crates/types`.
+//! Every crate of the compositor's checkout other than the contract crate is an implementation.
+//! The checkout is the directory that holds `iceblink` at `crates/iceblink`.
 //!
 //! A member is checked in three ways:
 //!
@@ -27,11 +27,11 @@ use crate::ledger::tree::Tree;
 use crate::ledger::tree::manifest::Dependency;
 use crate::ledger::tree::member::Member;
 
-/// The compositor crates that state the contract.
-const CONTRACT: [&str; 2] = ["compositor-types", "compositor-api"];
+/// The compositor crate that states the contract.
+const CONTRACT: &str = "iceblink";
 
-/// Where `compositor-types` sits in the compositor's checkout.
-const TYPES_IN_CHECKOUT: &str = "crates/types";
+/// Where [`CONTRACT`] sits in the compositor's checkout.
+const CONTRACT_IN_CHECKOUT: &str = "crates/iceblink";
 
 /// The members that may name an implementation, and why.
 const ALLOWED: &[(&str, &str)] = &[
@@ -52,9 +52,9 @@ const ALLOWED: &[(&str, &str)] = &[
 /// The members outside [`ALLOWED`] that may name one implementation, the implementation, and why.
 const EXCEPTIONS: &[(&str, &str, &str)] = &[(
     "zgui-shader-macro",
-    "compositor-wgsl",
+    "iceblink-wgsl",
     "assembles the reference renderer's prebuilt program, as spec change 178 allows a client; \
-     shaders are validated through compositor-types",
+     shaders are validated through iceblink",
 )];
 
 /// Members outside every ledger.
@@ -69,7 +69,7 @@ pub(crate) fn check(tree: &Tree) -> Report {
         report.violation(
             tree.manifest.rel_path.clone(),
             format!(
-                "no `compositor-types` path dependency ends in `{TYPES_IN_CHECKOUT}`, so the \
+                "no `{CONTRACT}` path dependency ends in `{CONTRACT_IN_CHECKOUT}`, so the \
                  compositor's crates cannot be told apart"
             ),
         );
@@ -109,17 +109,17 @@ pub(crate) fn check(tree: &Tree) -> Report {
     report
 }
 
-/// Returns the packages of the compositor's checkout outside [`CONTRACT`], or `None` when the
-/// workspace gives `compositor-types` no path inside a checkout.
+/// Returns the packages of the compositor's checkout other than [`CONTRACT`], or `None` when the
+/// workspace gives [`CONTRACT`] no path inside a checkout.
 fn implementations(workspace: &[Dependency]) -> Option<Vec<String>> {
-    let types = workspace
+    let contract = workspace
         .iter()
-        .find(|dependency| dependency.name == "compositor-types")?;
-    let types = Path::new(types.path.as_deref()?);
-    if !types.ends_with(TYPES_IN_CHECKOUT) {
+        .find(|dependency| dependency.name == CONTRACT)?;
+    let contract = Path::new(contract.path.as_deref()?);
+    if !contract.ends_with(CONTRACT_IN_CHECKOUT) {
         return None;
     }
-    let checkout = types.ancestors().nth(2)?;
+    let checkout = contract.ancestors().nth(2)?;
 
     Some(
         workspace
@@ -131,7 +131,7 @@ fn implementations(workspace: &[Dependency]) -> Option<Vec<String>> {
                     .is_some_and(|path| Path::new(path).starts_with(checkout))
             })
             .map(|dependency| dependency.name.clone())
-            .filter(|name| !CONTRACT.contains(&name.as_str()))
+            .filter(|name| name != CONTRACT)
             .collect(),
     )
 }

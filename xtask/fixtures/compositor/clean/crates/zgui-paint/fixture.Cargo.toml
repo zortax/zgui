@@ -4,5 +4,4 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-compositor-types.workspace = true
-compositor-api.workspace = true
+iceblink.workspace = true

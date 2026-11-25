@@ -22,7 +22,7 @@ use zgui_view::{Anchor, BuildCx, IntoView, View};
 use zgui_wgpu::SurfaceElementExt;
 
 /// The compositor the window draws through, with glyphs drawn as boxes.
-fn compositor() -> Box<dyn compositor_api::Compositor> {
+fn compositor() -> Box<dyn iceblink::Compositor> {
     let mut compositor =
         zgui_testkit_compositor::compositor().unwrap_or_else(|why| panic!("no compositor: {why}"));
     zgui_testkit_compositor::with_fake_text(&mut *compositor);

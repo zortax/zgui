@@ -1,6 +1,6 @@
 //! How recognised prims become a mark's payload.
 
-use compositor_types::MarkFlags;
+use iceblink::MarkFlags;
 
 use super::{dedupe, runs};
 use crate::emit::vector::recognise::{BUTT, Decomposition, Orientation, ROUND, SQUARE};

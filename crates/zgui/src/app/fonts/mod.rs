@@ -74,7 +74,7 @@ impl Default for Fonts {
 
 impl Fonts {
     /// Returns the faces as a compositor font registry, so glyph runs and layout name a face alike.
-    pub(crate) fn compositor_registry(&self) -> Arc<dyn compositor_api::FontRegistry> {
+    pub(crate) fn compositor_registry(&self) -> Arc<dyn iceblink::FontRegistry> {
         Arc::new(registry::Registry::new(Arc::clone(&self.system)))
     }
 

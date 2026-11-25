@@ -1,11 +1,10 @@
 //! One output of a compositor from the factory, with a renderer that draws it.
 
-use compositor_api::{CommitReport, Compositor, OutputConfig, Renderer};
-use compositor_capture::CaptureRenderer;
-use compositor_types::{
-    BufferAge, Built, ClientId, Counters, Frame, FrameClock, FrameRequest, OutputId, RenderTarget,
-    Transaction,
+use iceblink::{
+    BufferAge, Built, ClientId, CommitReport, Compositor, Counters, Frame, FrameClock,
+    FrameRequest, OutputConfig, OutputId, RenderTarget, Renderer, Transaction,
 };
+use iceblink_testing::capture::CaptureRenderer;
 
 use crate::{Unavailable, compositor, renderer};
 

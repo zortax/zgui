@@ -28,8 +28,7 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # A graphics device under the compositor. Every other assertion about an icon stops at what was
 # recorded, and a recording is satisfied by a rasteriser that writes nothing, so the pixels are read
 # back off a real device.
-compositor-api.workspace = true
-compositor-types.workspace = true
+iceblink.workspace = true
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [lints]

@@ -825,286 +825,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "compositor-api"
-version = "0.1.0"
-dependencies = [
- "compositor-types",
- "web-time",
-]
-
-[[package]]
-name = "compositor-arena"
-version = "0.1.0"
-
-[[package]]
-name = "compositor-atlas"
-version = "0.1.0"
-dependencies = [
- "compositor-damage",
- "compositor-geom",
- "etagere",
- "rustc-hash 2.1.3",
- "thiserror 2.0.19",
-]
-
-[[package]]
-name = "compositor-capture"
-version = "0.1.0"
-dependencies = [
- "compositor-api",
- "compositor-types",
-]
-
-[[package]]
-name = "compositor-color"
-version = "0.1.0"
-
-[[package]]
-name = "compositor-content"
-version = "0.1.0"
-dependencies = [
- "compositor-api",
- "compositor-atlas",
- "compositor-geom",
- "compositor-types",
- "kurbo",
- "rustc-hash 2.1.3",
- "zeno",
-]
-
-[[package]]
-name = "compositor-core"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "compositor-api",
- "compositor-arena",
- "compositor-color",
- "compositor-content",
- "compositor-damage",
- "compositor-geom",
- "compositor-motion",
- "compositor-plan",
- "compositor-types",
- "kurbo",
- "rustc-hash 2.1.3",
- "smallvec",
- "tracing",
- "web-time",
-]
-
-[[package]]
-name = "compositor-cpu"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "compositor-api",
- "compositor-color",
- "compositor-damage",
- "compositor-geom",
- "compositor-types",
- "kurbo",
- "smallvec",
- "vello_cpu",
-]
-
-[[package]]
-name = "compositor-damage"
-version = "0.1.0"
-dependencies = [
- "compositor-geom",
-]
-
-[[package]]
-name = "compositor-driver"
-version = "0.1.0"
-dependencies = [
- "compositor-api",
- "compositor-types",
-]
-
-[[package]]
-name = "compositor-geom"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
-name = "compositor-motion"
-version = "0.1.0"
-dependencies = [
- "compositor-types",
-]
-
-[[package]]
-name = "compositor-naive"
-version = "0.1.0"
-dependencies = [
- "compositor-api",
- "compositor-types",
- "zeno",
-]
-
-[[package]]
-name = "compositor-pipeline-cache"
-version = "0.1.0"
-dependencies = [
- "tracing",
- "wgpu",
-]
-
-[[package]]
-name = "compositor-plan"
-version = "0.1.0"
-dependencies = [
- "compositor-damage",
- "compositor-geom",
- "compositor-types",
- "rustc-hash 2.1.3",
- "smallvec",
-]
-
-[[package]]
-name = "compositor-testing"
-version = "0.1.0"
-dependencies = [
- "compositor-api",
- "compositor-damage",
- "compositor-geom",
- "compositor-types",
- "compositor-vector",
- "png 0.17.16",
- "pollster",
- "smallvec",
- "wgpu",
-]
-
-[[package]]
-name = "compositor-text"
-version = "0.1.0"
-dependencies = [
- "compositor-api",
- "compositor-types",
- "rustc-hash 2.1.3",
- "skrifa",
- "swash",
-]
-
-[[package]]
-name = "compositor-thread"
-version = "0.1.0"
-dependencies = [
- "compositor-api",
- "compositor-driver",
- "compositor-types",
-]
-
-[[package]]
-name = "compositor-types"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "compositor-color",
- "compositor-damage",
- "compositor-geom",
- "kurbo",
- "smallvec",
-]
-
-[[package]]
-name = "compositor-upload"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "tracing",
- "wgpu",
-]
-
-[[package]]
-name = "compositor-vector"
-version = "0.1.0"
-dependencies = [
- "compositor-color",
- "compositor-geom",
- "compositor-types",
- "kurbo",
- "rustc-hash 2.1.3",
- "smallvec",
- "web-time",
- "wgpu",
-]
-
-[[package]]
-name = "compositor-vector-coverage"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "compositor-types",
- "compositor-upload",
- "compositor-vector",
- "kurbo",
- "rustc-hash 2.1.3",
- "smallvec",
- "tracing",
- "wgpu",
-]
-
-[[package]]
-name = "compositor-vello"
-version = "0.1.0"
-dependencies = [
- "compositor-pipeline-cache",
- "compositor-types",
- "compositor-vector",
- "compositor-vector-coverage",
- "kurbo",
- "peniko",
- "rustc-hash 2.1.3",
- "smallvec",
- "tracing",
- "vello",
- "wgpu",
-]
-
-[[package]]
-name = "compositor-wgpu"
-version = "0.1.0"
-dependencies = [
- "ash",
- "bincode",
- "bytemuck",
- "compositor-api",
- "compositor-arena",
- "compositor-atlas",
- "compositor-color",
- "compositor-damage",
- "compositor-geom",
- "compositor-pipeline-cache",
- "compositor-types",
- "compositor-upload",
- "compositor-vector",
- "compositor-wgsl",
- "futures",
- "naga",
- "raw-window-handle",
- "rustc-hash 2.1.3",
- "smallvec",
- "thiserror 2.0.19",
- "tracing",
- "web-time",
- "wgpu",
- "windows",
-]
-
-[[package]]
-name = "compositor-wgsl"
-version = "0.1.0"
-dependencies = [
- "compositor-types",
-]
-
-[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1960,6 +1680,127 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "iceblink"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "kurbo",
+ "smallvec",
+ "web-time",
+]
+
+[[package]]
+name = "iceblink-alloc"
+version = "0.1.0"
+dependencies = [
+ "etagere",
+ "iceblink",
+ "rustc-hash 2.1.3",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "iceblink-core"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "iceblink",
+ "iceblink-alloc",
+ "kurbo",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "tracing",
+ "web-time",
+ "zeno",
+]
+
+[[package]]
+name = "iceblink-cpu"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "iceblink",
+ "kurbo",
+ "smallvec",
+ "vello_cpu",
+]
+
+[[package]]
+name = "iceblink-driver"
+version = "0.1.0"
+dependencies = [
+ "iceblink",
+]
+
+[[package]]
+name = "iceblink-testing"
+version = "0.1.0"
+dependencies = [
+ "iceblink",
+ "iceblink-wgpu",
+ "png 0.17.16",
+ "pollster",
+ "smallvec",
+ "wgpu",
+ "zeno",
+]
+
+[[package]]
+name = "iceblink-text"
+version = "0.1.0"
+dependencies = [
+ "iceblink",
+ "rustc-hash 2.1.3",
+ "skrifa",
+ "swash",
+]
+
+[[package]]
+name = "iceblink-vello"
+version = "0.1.0"
+dependencies = [
+ "iceblink",
+ "iceblink-wgpu",
+ "kurbo",
+ "peniko",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "tracing",
+ "vello",
+ "wgpu",
+]
+
+[[package]]
+name = "iceblink-wgpu"
+version = "0.1.0"
+dependencies = [
+ "ash",
+ "bincode",
+ "bytemuck",
+ "futures",
+ "iceblink",
+ "iceblink-alloc",
+ "iceblink-wgsl",
+ "kurbo",
+ "naga",
+ "raw-window-handle",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "thiserror 2.0.19",
+ "tracing",
+ "web-time",
+ "wgpu",
+ "windows",
+]
+
+[[package]]
+name = "iceblink-wgsl"
+version = "0.1.0"
+dependencies = [
+ "iceblink",
+]
 
 [[package]]
 name = "icu_collections"
@@ -5945,14 +5786,12 @@ dependencies = [
 name = "zgui"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-core",
- "compositor-driver",
- "compositor-text",
- "compositor-thread",
- "compositor-types",
- "compositor-vello",
- "compositor-wgpu",
+ "iceblink",
+ "iceblink-core",
+ "iceblink-driver",
+ "iceblink-text",
+ "iceblink-vello",
+ "iceblink-wgpu",
  "tracing",
  "web-time",
  "zgui-bits",
@@ -6020,14 +5859,12 @@ dependencies = [
 name = "zgui-bench"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-capture",
- "compositor-core",
- "compositor-naive",
- "compositor-text",
- "compositor-types",
- "compositor-vello",
- "compositor-wgpu",
+ "iceblink",
+ "iceblink-core",
+ "iceblink-testing",
+ "iceblink-text",
+ "iceblink-vello",
+ "iceblink-wgpu",
  "rustix 1.1.4",
  "zgui",
  "zgui-a11y",
@@ -6074,7 +5911,7 @@ dependencies = [
 name = "zgui-color"
 version = "0.1.0"
 dependencies = [
- "compositor-types",
+ "iceblink",
 ]
 
 [[package]]
@@ -6101,11 +5938,10 @@ dependencies = [
 name = "zgui-console"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-driver",
- "compositor-types",
- "compositor-vello",
- "compositor-wgpu",
+ "iceblink",
+ "iceblink-driver",
+ "iceblink-vello",
+ "iceblink-wgpu",
  "tracing",
  "zgui",
  "zgui-geom",
@@ -6136,7 +5972,7 @@ dependencies = [
 name = "zgui-custom"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
+ "iceblink",
  "rustc-hash 2.1.3",
  "zgui-color",
  "zgui-css",
@@ -6161,8 +5997,7 @@ dependencies = [
 name = "zgui-devtools"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-types",
+ "iceblink",
  "zgui",
  "zgui-css",
  "zgui-dom",
@@ -6350,8 +6185,7 @@ dependencies = [
 name = "zgui-paint"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-types",
+ "iceblink",
  "kurbo",
  "peniko",
  "rustc-hash 2.1.3",
@@ -6398,10 +6232,9 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "ash",
- "compositor-api",
- "compositor-core",
- "compositor-types",
- "compositor-wgpu",
+ "iceblink",
+ "iceblink-core",
+ "iceblink-wgpu",
  "raw-window-handle",
  "rustix 1.1.4",
  "tracing",
@@ -6435,9 +6268,8 @@ dependencies = [
  "accesskit_unix",
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
- "compositor-api",
- "compositor-types",
  "futures",
+ "iceblink",
  "raw-window-handle",
  "rustix 1.1.4",
  "smithay-client-toolkit 0.20.0",
@@ -6486,8 +6318,7 @@ dependencies = [
  "accesskit_winit",
  "arboard",
  "block2 0.6.2",
- "compositor-api",
- "compositor-types",
+ "iceblink",
  "muda",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -6538,8 +6369,7 @@ name = "zgui-runtime"
 version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
- "compositor-api",
- "compositor-types",
+ "iceblink",
  "kurbo",
  "rustc-hash 2.1.3",
  "thiserror 2.0.19",
@@ -6603,8 +6433,7 @@ dependencies = [
 name = "zgui-shader"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-types",
+ "iceblink",
  "tracing",
  "trybuild",
  "zgui-custom",
@@ -6627,8 +6456,8 @@ name = "zgui-shader-macro"
 version = "0.1.0"
 dependencies = [
  "bincode",
- "compositor-types",
- "compositor-wgsl",
+ "iceblink",
+ "iceblink-wgsl",
  "naga",
  "proc-macro2",
  "quote",
@@ -6705,18 +6534,14 @@ dependencies = [
 name = "zgui-testkit-compositor"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-capture",
- "compositor-core",
- "compositor-cpu",
- "compositor-driver",
- "compositor-naive",
- "compositor-testing",
- "compositor-text",
- "compositor-thread",
- "compositor-types",
- "compositor-vello",
- "compositor-wgpu",
+ "iceblink",
+ "iceblink-core",
+ "iceblink-cpu",
+ "iceblink-driver",
+ "iceblink-testing",
+ "iceblink-text",
+ "iceblink-vello",
+ "iceblink-wgpu",
 ]
 
 [[package]]
@@ -6752,9 +6577,8 @@ dependencies = [
 name = "zgui-text-parley"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-types",
  "fontique",
+ "iceblink",
  "parley",
  "proptest",
  "rustc-hash 2.1.3",
@@ -6797,8 +6621,7 @@ name = "zgui-ui"
 version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
- "compositor-api",
- "compositor-types",
+ "iceblink",
  "image",
  "rustc-hash 2.1.3",
  "zgui",
@@ -6816,8 +6639,7 @@ dependencies = [
 name = "zgui-ui-icons"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-types",
+ "iceblink",
  "zgui",
  "zgui-platform-headless",
  "zgui-testkit-compositor",
@@ -6856,7 +6678,7 @@ dependencies = [
 name = "zgui-view-dom"
 version = "0.1.0"
 dependencies = [
- "compositor-types",
+ "iceblink",
  "rustc-hash 2.1.3",
  "tracing",
  "zgui-color",
@@ -6903,9 +6725,8 @@ dependencies = [
 name = "zgui-wgpu"
 version = "0.1.0"
 dependencies = [
- "compositor-api",
- "compositor-types",
- "compositor-wgpu",
+ "iceblink",
+ "iceblink-wgpu",
  "rustc-hash 2.1.3",
  "tracing",
  "zgui-dom",

@@ -2,8 +2,8 @@
 
 use std::sync::{Arc, Mutex, Weak};
 
-use compositor_vello::{Choice, SharedRenderer, VelloOptions, VelloRaster};
-use compositor_wgpu::{Gpu, VectorFactory};
+use iceblink_vello::{Choice, SharedRenderer, VelloOptions, VelloRaster};
+use iceblink_wgpu::{Gpu, VectorFactory};
 
 /// Returns the factory of the path rasteriser a device can run, built with `options`.
 ///
@@ -12,13 +12,9 @@ pub(crate) fn vectors(options: VelloOptions, paths: PathRenderers) -> VectorFact
     Box::new(
         move |gpu: &Arc<Gpu>, size| match paths.shared(gpu, &options) {
             Some(shared) => Box::new(VelloRaster::sharing(shared, gpu.queue())),
-            None => compositor_vello::for_device(
-                gpu.adapter(),
-                gpu.device(),
-                gpu.queue(),
-                size,
-                &options,
-            ),
+            None => {
+                iceblink_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
+            }
         },
     )
 }
@@ -43,7 +39,7 @@ impl PathRenderers {
     ///
     /// Returns `None` when the device cannot run vello or the renderer fails to build.
     fn shared(&self, gpu: &Arc<Gpu>, options: &VelloOptions) -> Option<Arc<SharedRenderer>> {
-        if compositor_vello::chosen(gpu.adapter()) != Choice::Compute {
+        if iceblink_vello::chosen(gpu.adapter()) != Choice::Compute {
             return None;
         }
         let mut held = self
@@ -77,8 +73,8 @@ impl PathRenderers {
 mod tests {
     use std::sync::Arc;
 
-    use compositor_vello::{Choice, VelloOptions};
-    use compositor_wgpu::SharedGraphics;
+    use iceblink_vello::{Choice, VelloOptions};
+    use iceblink_wgpu::SharedGraphics;
 
     use super::{PathRenderers, vectors};
 
@@ -89,7 +85,7 @@ mod tests {
             eprintln!("skipped: no graphics device");
             return;
         };
-        if compositor_vello::chosen(gpu.adapter()) != Choice::Compute {
+        if iceblink_vello::chosen(gpu.adapter()) != Choice::Compute {
             eprintln!("skipped: the device cannot run vello");
             return;
         }

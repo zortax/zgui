@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use compositor_api::{Compositor, OutputConfig, Renderer};
-use compositor_capture::CaptureRenderer;
-use compositor_testing::fakes::{FakeFontRegistry, FakeGlyphRaster, fake_font};
-use compositor_types::{
-    BufferAge, Built, ChunkKey, ClientId, CommitCounters, Counters, Frame, FrameClock,
-    FrameRequest, OrderEntry, OrderId, OrderNode, OutputId, RenderTarget, Transaction,
+use iceblink::{
+    BufferAge, Built, ChunkKey, ClientId, CommitCounters, Compositor, Counters, Frame, FrameClock,
+    FrameRequest, OrderEntry, OrderId, OrderNode, OutputConfig, OutputId, RenderTarget, Renderer,
+    Transaction,
 };
+use iceblink_testing::capture::CaptureRenderer;
+use iceblink_testing::fakes::{FakeFontRegistry, FakeGlyphRaster, fake_font};
 
 use crate::Unavailable;
 use crate::drawing::Drawing;
@@ -22,7 +22,7 @@ pub const FONTS: u32 = 16;
 pub fn with_fake_text(compositor: &mut dyn Compositor) {
     let fonts = FakeFontRegistry::new();
     for seed in 0..FONTS {
-        compositor_api::FontRegistry::register(&fonts, fake_font(seed));
+        iceblink::FontRegistry::register(&fonts, fake_font(seed));
     }
     compositor.use_font_registry(Arc::new(fonts));
     compositor.use_glyph_raster(Arc::new(FakeGlyphRaster::new()));

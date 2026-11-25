@@ -9,7 +9,7 @@ mod events;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use compositor_api::CompositorClient;
+use iceblink::CompositorClient;
 
 pub(crate) use self::client::Client;
 pub(crate) use self::events::{Answers, Drawn};

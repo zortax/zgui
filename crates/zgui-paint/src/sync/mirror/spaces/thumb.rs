@@ -1,8 +1,6 @@
 //! Scrollbar thumbs mirrored as transform nodes that a scroll offset moves along their track.
 
-use compositor_types::{
-    Anchor, Matrix4, ScrollId, ThumbAnchor, Transaction, TransformId, TransformNode,
-};
+use iceblink::{Anchor, Matrix4, ScrollId, ThumbAnchor, Transaction, TransformId, TransformNode};
 use zgui_space::spatial::SpatialTree;
 
 use crate::sync::mirror::holds::Holds;
@@ -42,7 +40,7 @@ impl Written {
     }
 
     /// The ids the node holds.
-    fn held(&self) -> [compositor_types::AnyId; 3] {
+    fn held(&self) -> [iceblink::AnyId; 3] {
         [self.parent.into(), self.content.into(), self.scroll.into()]
     }
 }

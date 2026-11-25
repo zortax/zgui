@@ -120,7 +120,7 @@ fn a_component_resolves_the_applications_faces() {
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
             Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
                 let mut renderer = Nowhere::default();
-                compositor_api::Renderer::configure(&mut renderer, target);
+                iceblink::Renderer::configure(&mut renderer, target);
                 renderer
             }))
         }))
@@ -167,7 +167,7 @@ fn the_applications_own_setup_resolves_the_faces() {
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
             Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
                 let mut renderer = Nowhere::default();
-                compositor_api::Renderer::configure(&mut renderer, target);
+                iceblink::Renderer::configure(&mut renderer, target);
                 renderer
             }))
         }))

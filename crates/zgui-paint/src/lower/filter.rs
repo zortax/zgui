@@ -6,7 +6,7 @@
 //! needed before anything is drawn. A second conversion here would let the ink, the registry and the
 //! damage disagree, so this calls that one.
 
-use compositor_types::BlendMode;
+use iceblink::BlendMode;
 use zgui_css::parity::Support;
 use zgui_css::values::effect::{IsolationValue, MixBlendModeValue};
 use zgui_css::{ComputedStyle, register_properties};
@@ -102,7 +102,7 @@ mod tests {
     fn normal_is_the_mode_that_needs_no_boundary() {
         assert_eq!(
             blend_of(MixBlendModeValue::Normal),
-            compositor_types::BlendMode::NORMAL
+            iceblink::BlendMode::NORMAL
         );
     }
 
@@ -126,7 +126,7 @@ mod tests {
             MixBlendModeValue::Luminosity,
             MixBlendModeValue::PlusLighter,
         ];
-        let mut seen: Vec<compositor_types::BlendMode> = vec![blend_of(MixBlendModeValue::Normal)];
+        let mut seen: Vec<iceblink::BlendMode> = vec![blend_of(MixBlendModeValue::Normal)];
         for mode in modes {
             let blend = blend_of(mode);
             assert!(

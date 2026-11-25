@@ -8,7 +8,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{BorderStyle, PaintRef, Quad, ShaderQuad};
+use iceblink::{BorderStyle, PaintRef, Quad, ShaderQuad};
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 
@@ -155,7 +155,7 @@ impl ScenePainter<'_> {
         let quad = ShaderQuad {
             bounds: local_rect(self.placed(rect)),
             radii: flat_radii(corners(corner_radius)),
-            shapes: compositor_types::ROUND,
+            shapes: iceblink::ROUND,
             border: [0.0; 4],
             fill: PaintRef::NONE,
             stroke: PaintRef::NONE,
@@ -229,7 +229,7 @@ impl ScenePainter<'_> {
         color: Color,
     ) {
         let paint = self.rec.color(self.faded(color));
-        if run.glyphs.is_empty() || paint.kind == compositor_types::PaintKind::NONE {
+        if run.glyphs.is_empty() || paint.kind == iceblink::PaintKind::NONE {
             return;
         }
         let draw = crate::emit::text::RunDraw {
@@ -288,7 +288,7 @@ impl ScenePainter<'_> {
         let quad = Quad {
             bounds: local_rect(self.placed(rect)),
             radii: flat_radii(corners(corner_radius)),
-            shapes: compositor_types::ROUND,
+            shapes: iceblink::ROUND,
             border,
             fill,
             stroke,
@@ -318,7 +318,7 @@ fn corners(radius: f32) -> Corners<Vec2<DevicePx>> {
 mod tests {
     use super::ScenePainter;
     use crate::Tables;
-    use compositor_types::{GlyphFlags, PaintRef};
+    use iceblink::{GlyphFlags, PaintRef};
     use zgui_color::Color;
     use zgui_geom::{DevicePx, Point, Rect, Size};
     use zgui_space::{ClipId, SpatialId};

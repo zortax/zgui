@@ -15,7 +15,7 @@ mod cover;
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use compositor_types::Frame;
+use iceblink::Frame;
 use zgui_bits::DamageSet;
 use zgui_geom::{Point, Rect, Size};
 

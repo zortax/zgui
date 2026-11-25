@@ -172,11 +172,10 @@ fn kept_document(lit: RwSignal<bool>) -> zgui_platform_headless::Harness<zgui_ru
         .with_compositor(support::client())
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui_platform::Surface>,
-             target: compositor_types::RenderTarget| {
-                let mut renderer = zgui_testkit_compositor::Kept::new(
-                    compositor_types::RenderCapabilities::MINIMAL,
-                );
-                compositor_api::Renderer::configure(&mut renderer, target);
+             target: iceblink::RenderTarget| {
+                let mut renderer =
+                    zgui_testkit_compositor::Kept::new(iceblink::RenderCapabilities::MINIMAL);
+                iceblink::Renderer::configure(&mut renderer, target);
                 support::hand(renderer)
             },
         ))

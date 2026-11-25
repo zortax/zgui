@@ -7,7 +7,7 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use compositor_types::{BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities};
+use iceblink::{BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities};
 use zgui_testkit_compositor::{Composed, Device, Shown};
 
 use crate::raster::script::{self, Recorded};
@@ -38,16 +38,16 @@ struct Recording {
     log: Log,
 }
 
-impl compositor_api::Renderer for Recording {
+impl iceblink::Renderer for Recording {
     fn capabilities(&self) -> RenderCapabilities {
         self.device.capabilities()
     }
 
-    fn configure(&mut self, target: compositor_types::RenderTarget) {
+    fn configure(&mut self, target: iceblink::RenderTarget) {
         self.device.configure(target);
     }
 
-    fn target(&self) -> Option<compositor_types::RenderTarget> {
+    fn target(&self) -> Option<iceblink::RenderTarget> {
         self.device.target()
     }
 
@@ -85,7 +85,7 @@ pub fn factory(log: &Log) -> zgui::CompositorRendererMaker {
             composed: device.composed(),
             device,
             log: Arc::clone(&log),
-        }) as Box<dyn compositor_api::Renderer>
+        }) as Box<dyn iceblink::Renderer>
     })
 }
 

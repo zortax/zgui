@@ -52,7 +52,7 @@ fn drawn() -> Drawing {
         .with_stylesheet(SHEET)
         .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_compositor_renderer(Box::new(move |_size| {
-            Box::new(screen.take().unwrap_or_default()) as Box<dyn compositor_api::Renderer>
+            Box::new(screen.take().unwrap_or_default()) as Box<dyn iceblink::Renderer>
         }))
         .run_on(drive, || {
             view! {

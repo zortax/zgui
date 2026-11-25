@@ -145,7 +145,7 @@ pub fn emit(
             return;
         }
         let quad = record::filled(highlight.bounds, [0.0; 8], rec.color(color));
-        let quad = compositor_types::Quad {
+        let quad = iceblink::Quad {
             clip: rec.clip(clip),
             space: rec.space(transform),
             ..quad

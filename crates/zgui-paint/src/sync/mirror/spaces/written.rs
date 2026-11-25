@@ -1,6 +1,6 @@
 //! A coordinate system's value in the compositor's vocabulary.
 
-use compositor_types::{
+use iceblink::{
     Anchor, Matrix4, ScrollBehaviour, ScrollId, ScrollNode, StickyAnchor, TransformId,
     TransformNode,
 };

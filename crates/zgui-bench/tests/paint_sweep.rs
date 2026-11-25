@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use compositor_types::RenderTarget;
+use iceblink::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
@@ -95,7 +95,7 @@ fn opened(
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<compositor_api::RendererFactory, AppError> {
+             -> Result<iceblink::RendererFactory, AppError> {
                 Ok(zgui_testkit_compositor::screen(target))
             },
         ))

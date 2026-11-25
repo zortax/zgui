@@ -76,8 +76,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::{Surface, SurfaceEvent};
 use zgui::prelude::*;
@@ -255,7 +254,7 @@ impl Args {
 /// Builds the renderer the window draws through, charged to [`Tag::Renderer`].
 fn renderer(gpu: bool) -> zgui::runtime::RendererFactory {
     Box::new(move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-        let factory: compositor_api::RendererFactory = Box::new(move || {
+        let factory: iceblink::RendererFactory = Box::new(move || {
             alloc_tag::scope(Tag::Renderer, || {
                 if !gpu {
                     return Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target))

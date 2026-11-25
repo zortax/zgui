@@ -195,7 +195,7 @@ mod tests {
 
     use super::{Offered, intersect, listed, offered};
     use crate::import::{IMAGE_FEATURES, IMAGE_USAGE, VK_FORMAT, vulkan};
-    use compositor_wgpu::{Gpu, SharedGraphics, wgpu};
+    use iceblink_wgpu::{Gpu, SharedGraphics, wgpu};
     use zgui_drm::format::Modifier;
 
     /// Returns a device that enabled what an exported image needs, or `None`.

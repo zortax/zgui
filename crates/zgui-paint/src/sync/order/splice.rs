@@ -1,6 +1,6 @@
 //! The splices that turn one list of order entries into another.
 
-use compositor_types::{OrderEntry, OrderId, Transaction};
+use iceblink::{OrderEntry, OrderId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// Replaces `old` with `new` as the list of `node`, and returns the number of entries removed and
@@ -160,9 +160,7 @@ fn increasing(pairs: &[[usize; 2]]) -> Vec<[usize; 2]> {
 
 #[cfg(test)]
 mod tests {
-    use compositor_types::{
-        ChunkKey, ClientId, Command, IdSpace, OrderEntry, OrderNode, Transaction,
-    };
+    use iceblink::{ChunkKey, ClientId, Command, IdSpace, OrderEntry, OrderNode, Transaction};
 
     use super::shifted;
 

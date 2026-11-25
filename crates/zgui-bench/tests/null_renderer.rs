@@ -2,8 +2,7 @@
 
 #![forbid(unsafe_code)]
 
-use compositor_api::Renderer;
-use compositor_types::{BufferAge, Frame, RenderTarget};
+use iceblink::{BufferAge, Frame, RenderTarget, Renderer};
 use zgui_bench::renderers::NullRenderer;
 
 fn target(size: [u32; 2], scale: f32) -> RenderTarget {

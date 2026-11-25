@@ -111,8 +111,7 @@ fn a_filters_bleed_stays_inside_the_reported_ink() {
     assert_all_inside(&mut harness, bounds, 1);
     // The group's read extent, which the compositor derives from the ink of its content.
     let content = harness.redraw().quads()[0].bounds();
-    let [x, y, width, height] =
-        compositor_types::read_extent(content, &[compositor_types::Filter::Blur(6.0)]);
+    let [x, y, width, height] = iceblink::read_extent(content, &[iceblink::Filter::Blur(6.0)]);
     let read = Rect::new(
         zgui_geom::Point::new(DevicePx(x), DevicePx(y)),
         zgui_geom::Size::new(DevicePx(width), DevicePx(height)),
@@ -158,7 +157,7 @@ fn a_backdrop_filters_source_stays_inside_the_reported_ink() {
 /// box, because nothing tells the layout stage that an ancestor's decoration is being drawn here.
 #[test]
 fn a_wavy_underline_is_given_a_band_and_stays_inside_the_line_box() {
-    use compositor_types::LineStyle as Line;
+    use iceblink::LineStyle as Line;
     use zgui_css::StyleDraft;
     use zgui_geom::{Point, Rect as GeomRect, Size};
     use zgui_layout::fragment::ParagraphId;

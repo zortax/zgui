@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use compositor_wgpu::{Gpu, SharedGraphics};
+use iceblink_wgpu::{Gpu, SharedGraphics};
 use tracing::warn;
 
 /// Opens the device a display's own buffers are made on.
@@ -43,7 +43,7 @@ pub(crate) fn scanout_device(graphics: &SharedGraphics) -> Option<Arc<Gpu>> {
 /// Returns the graphics every display is drawn with, opening its device with the Vulkan device
 /// extensions an exported image needs where an adapter has them.
 pub(crate) fn graphics() -> SharedGraphics {
-    let backends = compositor_wgpu::wgpu::Backends::VULKAN | compositor_wgpu::wgpu::Backends::GL;
+    let backends = iceblink_wgpu::wgpu::Backends::VULKAN | iceblink_wgpu::wgpu::Backends::GL;
     SharedGraphics::with_backends_and_extensions(backends, zgui_platform_drm::EXTENSIONS.to_vec())
         .with_options(
             zgui::app::pipeline_directory(),

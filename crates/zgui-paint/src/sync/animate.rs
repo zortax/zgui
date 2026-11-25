@@ -2,7 +2,7 @@
 
 use core::time::Duration;
 
-use compositor_types::{
+use iceblink::{
     Animation, AnimationStart, AnimationTarget, Direction, Easing, FillMode, Keyframe, Keyframes,
     ScrollId, Timing,
 };

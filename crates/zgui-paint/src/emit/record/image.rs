@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{Image, ImageDesc, ImageWrite};
+use iceblink::{Image, ImageDesc, ImageWrite};
 use zgui_geom::{Device, DevicePx, Rect};
 
 use crate::emit::record::{Recorder, Ref, refer};

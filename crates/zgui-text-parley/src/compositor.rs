@@ -3,7 +3,7 @@
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, PoisonError};
 
-use compositor_types::{FontData, FontId};
+use iceblink::{FontData, FontId};
 use rustc_hash::{FxHashMap, FxHasher};
 use zgui_text::{FaceId, FontSource};
 
@@ -29,7 +29,7 @@ impl CompositorFonts {
     }
 }
 
-impl compositor_api::FontRegistry for CompositorFonts {
+impl iceblink::FontRegistry for CompositorFonts {
     fn register(&self, data: FontData) -> FontId {
         let content = (fingerprint(data.bytes()), data.bytes().len(), data.index);
         let mut by_content = self

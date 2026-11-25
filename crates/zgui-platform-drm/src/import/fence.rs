@@ -202,7 +202,7 @@ mod tests {
     use super::{SYNC_FD, exportable};
     use crate::import::{EXTENSIONS, vulkan};
     use ash::vk;
-    use compositor_wgpu::{SharedGraphics, wgpu};
+    use iceblink_wgpu::{SharedGraphics, wgpu};
 
     #[test]
     fn the_handle_type_asked_for_is_the_kernels_own_rather_than_the_drivers() {

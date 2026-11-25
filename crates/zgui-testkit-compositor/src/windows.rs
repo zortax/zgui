@@ -1,8 +1,7 @@
 //! Renderers that present into windows on the desktop, all on one shared device.
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
-use compositor_wgpu::{PresentPacing, SharedGraphics, wgpu};
+use iceblink::{RenderTarget, Renderer};
+use iceblink_wgpu::{PresentPacing, SharedGraphics, wgpu};
 
 use crate::Unavailable;
 

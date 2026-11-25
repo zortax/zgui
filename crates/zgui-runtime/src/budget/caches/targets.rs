@@ -1,6 +1,6 @@
 //! The reusable targets the renderer composes isolated content in.
 
-use compositor_api::OutputStatus;
+use iceblink::OutputStatus;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};

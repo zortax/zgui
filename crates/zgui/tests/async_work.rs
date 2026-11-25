@@ -108,7 +108,7 @@ fn work_finishing_on_a_worker_thread_reaches_the_screen_without_spinning() {
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
             Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
                 let mut renderer = Nowhere::default();
-                compositor_api::Renderer::configure(&mut renderer, target);
+                iceblink::Renderer::configure(&mut renderer, target);
                 renderer
             }))
         }))

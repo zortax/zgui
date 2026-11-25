@@ -9,12 +9,12 @@
 //! The anchors stay in the shape's own units and the item maps them by the fit, so a canvas view
 //! panned without a zoom keeps the payload.
 //!
-//! [`Marks`]: compositor_types::Marks
+//! [`Marks`]: iceblink::Marks
 
 use std::sync::Arc;
 
 use crate::VectorId;
-use compositor_types::{MarkFlags, MarkPayload, MarkPlacement};
+use iceblink::{MarkFlags, MarkPayload, MarkPlacement};
 use zgui_color::Color;
 use zgui_geom::{DevicePx, Point, Rect, Size};
 

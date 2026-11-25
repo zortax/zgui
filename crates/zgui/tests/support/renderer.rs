@@ -7,8 +7,7 @@
 
 use std::sync::Arc;
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui_platform::Surface;
 use zgui_runtime::AppError;
 

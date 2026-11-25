@@ -14,7 +14,7 @@
 use std::sync::Arc;
 
 use crate::VectorId;
-use compositor_types::{ClipRef, MarkBox, MarkFlags, MarkPayload, Marks, PaintRef, SpaceRef};
+use iceblink::{ClipRef, MarkBox, MarkFlags, MarkPayload, Marks, PaintRef, SpaceRef};
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};

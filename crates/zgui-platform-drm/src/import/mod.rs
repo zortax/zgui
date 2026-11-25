@@ -75,7 +75,7 @@ use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use ash::{ext, khr, vk};
-use compositor_wgpu::{Gpu, wgpu};
+use iceblink_wgpu::{Gpu, wgpu};
 use zgui_drm::format::Modifier;
 
 pub use crate::import::barrier::Handover;
@@ -238,7 +238,7 @@ impl Imported {
     /// ```no_run
     /// use zgui_drm::format::Modifier;
     /// use zgui_platform_drm::{EXTENSIONS, Imported};
-    /// use compositor_wgpu::{SharedGraphics, wgpu};
+    /// use iceblink_wgpu::{SharedGraphics, wgpu};
     ///
     /// let graphics =
     ///     SharedGraphics::with_backends_and_extensions(wgpu::Backends::VULKAN, EXTENSIONS.to_vec());
@@ -557,7 +557,7 @@ mod tests {
 
     use super::{HAL_USAGE, IMAGE_FEATURES, IMAGE_USAGE, USAGE, VK_FORMAT};
     use crate::scanout::FORMAT;
-    use compositor_wgpu::wgpu;
+    use iceblink_wgpu::wgpu;
 
     #[test]
     fn the_usage_a_supplied_presentation_requires_is_the_usage_the_image_is_created_with() {

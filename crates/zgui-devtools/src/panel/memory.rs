@@ -35,7 +35,7 @@ use crate::sample::frame::Held;
 use crate::state::DevTools;
 
 /// One component of the renderer's report: what it is called and how to read it out.
-type Component = (&'static str, fn(&compositor_types::MemoryReport) -> u64);
+type Component = (&'static str, fn(&iceblink::MemoryReport) -> u64);
 
 /// The renderer's report, in the order the bar stacks them.
 const COMPONENTS: [Component; 5] = [
@@ -135,10 +135,10 @@ pub(crate) fn MemoryPanel(
 }
 
 /// The lazy general-vector state, in the words the inspector shows.
-pub(crate) fn vector_status(status: compositor_types::VectorStatus) -> String {
+pub(crate) fn vector_status(status: iceblink::VectorStatus) -> String {
     let backend = match status.backend {
-        Some(compositor_types::VectorBackend::Compute) => "Vello",
-        Some(compositor_types::VectorBackend::Raster) => "coverage fallback",
+        Some(iceblink::VectorBackend::Compute) => "Vello",
+        Some(iceblink::VectorBackend::Raster) => "coverage fallback",
         Some(_) => "other",
         None => return "not configured".to_owned(),
     };
@@ -225,14 +225,14 @@ mod tests {
 
     #[test]
     fn vector_status_says_whether_vello_has_paid_its_lazy_cost() {
-        let lazy = compositor_types::VectorStatus {
-            backend: Some(compositor_types::VectorBackend::Compute),
+        let lazy = iceblink::VectorStatus {
+            backend: Some(iceblink::VectorBackend::Compute),
             name: "vello",
             initialized: false,
         };
         assert_eq!(vector_status(lazy), "Vello — lazy, not initialized");
         assert_eq!(
-            vector_status(compositor_types::VectorStatus {
+            vector_status(iceblink::VectorStatus {
                 initialized: true,
                 ..lazy
             }),

@@ -1,6 +1,6 @@
 //! The shading modes and reads a declaration can name.
 
-use compositor_types::ShaderMode;
+use iceblink::ShaderMode;
 
 /// What a declared shader does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

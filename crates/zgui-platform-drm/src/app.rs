@@ -167,7 +167,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Instant;
 
-use compositor_wgpu::Gpu;
+use iceblink_wgpu::Gpu;
 use rustix::event::{PollFd, PollFlags, poll};
 use rustix::io::Errno;
 use tracing::{info, warn};

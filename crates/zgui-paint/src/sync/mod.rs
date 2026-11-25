@@ -1,7 +1,7 @@
 //! Fragments recorded as compositor chunks.
 //!
 //! A [`CompositorSync`] attached to a [`Painter`](crate::Painter) turns the emit walk into
-//! commands of a `compositor_types::Transaction`:
+//! commands of an `iceblink::Transaction`:
 //!
 //! - A fragment encoded this frame is recorded as the chunk of its key, replacing it.
 //! - A replayed fragment that moved has its chunk's offset written.
@@ -35,7 +35,7 @@ pub(crate) use self::mirror::images::whole;
 pub(crate) use self::resolve::Resolver;
 
 use crate::Tables;
-use compositor_types::{ChunkKey, OutputId, ScrollId, Transaction};
+use iceblink::{ChunkKey, OutputId, ScrollId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Rect, Size};

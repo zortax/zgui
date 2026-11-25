@@ -17,18 +17,14 @@ include.workspace = true
 # and renderer from the factory here, so a second implementation reaches every test by an
 # environment variable.
 [dependencies]
-compositor-api.workspace = true
-compositor-capture.workspace = true
-compositor-core.workspace = true
-compositor-cpu.workspace = true
-compositor-driver.workspace = true
-compositor-naive.workspace = true
-compositor-testing.workspace = true
-compositor-thread.workspace = true
-compositor-text.workspace = true
-compositor-types.workspace = true
-compositor-vello.workspace = true
-compositor-wgpu.workspace = true
+iceblink.workspace = true
+iceblink-core.workspace = true
+iceblink-cpu.workspace = true
+iceblink-driver.workspace = true
+iceblink-testing.workspace = true
+iceblink-text.workspace = true
+iceblink-vello.workspace = true
+iceblink-wgpu.workspace = true
 
 [lints]
 workspace = true

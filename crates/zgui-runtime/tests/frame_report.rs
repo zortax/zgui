@@ -5,9 +5,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use compositor_api::Renderer;
-use compositor_types::{
+use iceblink::{
     BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+    Renderer,
 };
 use zgui_platform::Surface;
 use zgui_reactive::RwSignal;

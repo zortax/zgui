@@ -26,7 +26,7 @@ mod ends;
 mod splice;
 
 use crate::Tables;
-use compositor_types::{OrderEntry, OrderId, OrderNode, OutputId, Transaction};
+use iceblink::{OrderEntry, OrderId, OrderNode, OutputId, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::side::BoxKey;
 use zgui_layout::{JournalVersion, LayoutStore};

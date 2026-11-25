@@ -12,8 +12,7 @@ pub mod churn;
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use compositor_api::{Compositor, CompositorClient, Renderer};
-use compositor_types::RenderTarget;
+use iceblink::{Compositor, CompositorClient, RenderTarget, Renderer};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
 use zgui_runtime::{App, AppError, MAINTENANCE_DELAY, Runtime};
@@ -205,7 +204,7 @@ pub fn compositor() -> Box<dyn Compositor> {
 }
 
 /// Returns a factory that hands the driver `renderer`, for a window's output.
-pub fn hand<R>(renderer: R) -> Result<compositor_api::RendererFactory, AppError>
+pub fn hand<R>(renderer: R) -> Result<iceblink::RendererFactory, AppError>
 where
     R: Renderer + Send + 'static,
 {
@@ -234,7 +233,7 @@ thread_local! {
 pub fn screen(
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     let shown = zgui_testkit_compositor::Shown::default();
     SCREENS.with(|screens| screens.borrow_mut().push((surface.id(), shown.clone())));
     Ok(Box::new(move || {

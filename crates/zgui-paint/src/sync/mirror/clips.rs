@@ -1,6 +1,6 @@
 //! Clip chains mirrored as clip nodes.
 
-use compositor_types::{ClipId, ClipNode, ClipShape, Transaction};
+use iceblink::{ClipId, ClipNode, ClipShape, Transaction};
 use rustc_hash::FxHashMap;
 use zgui_space::{ChangeCoverage, ClipLink, ClipTable, SpatialTree, TableVersion};
 

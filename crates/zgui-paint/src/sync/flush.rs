@@ -1,7 +1,7 @@
 //! A fragment's items recorded as one compositor chunk.
 
 use crate::Tables;
-use compositor_types::{ChunkFlags, ChunkKey, ChunkProps, Transaction};
+use iceblink::{ChunkFlags, ChunkKey, ChunkProps, Transaction};
 
 use crate::emit::record::Items;
 use crate::sync::mirror::Mirror;

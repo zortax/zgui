@@ -55,26 +55,21 @@ swash = "0.2.10"
 zeno = "0.3.3"
 
 # --- the shared compositor ------------------------------------------------------------------
-# The interface: every engine crate names these two and nothing else of the compositor.
-compositor-types = { path = "../compositor/compositor/crates/types", version = "0.1.0" }
-compositor-api = { path = "../compositor/compositor/crates/api", version = "0.1.0" }
+# The interface: every engine crate names this one and nothing else of the compositor.
+iceblink = { path = "../compositor/iceblink/crates/iceblink", version = "0.1.0" }
 # The implementations, named only by the crates `cargo xtask ledger compositor` allows.
-compositor-core = { path = "../compositor/compositor/crates/core", version = "0.1.0" }
-compositor-wgpu = { path = "../compositor/compositor/crates/wgpu", version = "0.1.0" }
-compositor-capture = { path = "../compositor/compositor/crates/capture", version = "0.1.0" }
-compositor-cpu = { path = "../compositor/compositor/crates/cpu", version = "0.1.0" }
-compositor-naive = { path = "../compositor/compositor/crates/naive", version = "0.1.0" }
-compositor-text = { path = "../compositor/compositor/crates/text", version = "0.1.0" }
-compositor-vector = { path = "../compositor/compositor/crates/vector", version = "0.1.0" }
-compositor-vello = { path = "../compositor/compositor/crates/vello", version = "0.1.0" }
-compositor-testing = { path = "../compositor/compositor/tool/testing", version = "0.1.0" }
+iceblink-core = { path = "../compositor/iceblink/crates/core", version = "0.1.0" }
+iceblink-wgpu = { path = "../compositor/iceblink/crates/wgpu", version = "0.1.0" }
+iceblink-cpu = { path = "../compositor/iceblink/crates/cpu", version = "0.1.0" }
+iceblink-text = { path = "../compositor/iceblink/crates/text", version = "0.1.0" }
+iceblink-vello = { path = "../compositor/iceblink/crates/vello", version = "0.1.0" }
+iceblink-testing = { path = "../compositor/iceblink/tool/testing", version = "0.1.0" }
 # The drivers that run a compositor behind the client seam: on the caller's thread, or on one of
 # their own.
-compositor-driver = { path = "../compositor/compositor/crates/driver", version = "0.1.0" }
-compositor-thread = { path = "../compositor/compositor/crates/thread", version = "0.1.0" }
+iceblink-driver = { path = "../compositor/iceblink/crates/driver", version = "0.1.0" }
 # The reference renderer's assembly of an application shader, which the `shader!` macro compiles
 # into the prebuilt program. The compositor ledger records the macro's one exception for it.
-compositor-wgsl = { path = "../compositor/compositor/crates/wgsl", version = "0.1.0" }
+iceblink-wgsl = { path = "../compositor/iceblink/crates/wgsl", version = "0.1.0" }
 
 # --- gpu and vector ------------------------------------------------------------------------
 # wgpu is pinned to 30.x workspace-wide because vello 0.11 links wgpu 30 and shares one

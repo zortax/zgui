@@ -21,7 +21,7 @@ mod support;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use compositor_types::RenderTarget;
+use iceblink::RenderTarget;
 use zgui_platform::{AppHandler, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId};
 use zgui_platform_headless::Harness;
 use zgui_runtime::{App, AppError};
@@ -108,7 +108,7 @@ impl<A: AppHandler> AppHandler for StopWhenDrawn<A> {
 fn renderer(
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Ok(zgui_testkit_compositor::screen(target));
     };
@@ -135,8 +135,7 @@ fn renderer(
                 // A machine with no usable device is a fact about the machine, not a defect. It is
                 // recorded so the program can say so out loud rather than report a silent zero.
                 NO_DEVICE.store(true, Ordering::Relaxed);
-                compositor_types::GpuUnavailable::default()
-                    .rejected("window", unavailable.to_string())
+                iceblink::GpuUnavailable::default().rejected("window", unavailable.to_string())
             })
     }))
 }

@@ -2,14 +2,12 @@
 
 use std::sync::Arc;
 
-use compositor_api::{
-    ClientEvent, CommitId, CompositorBudgets, CompositorCapabilities, CompositorClient,
-    CompositorMemory, DriverPacing, DriverStats, EventWaker, FontRegistry, FrameObserver,
-    OutputConfig, OutputStatus, OutputWatch, RendererFactory, RendererTask, ScrollWatch,
-};
-use compositor_types::smallvec::SmallVec;
-use compositor_types::{
-    ClientId, FrameClock, HitResult, IdSpace, OutputId, ScrollGesture, ScrollId, ScrollRouting,
+use iceblink::smallvec::SmallVec;
+use iceblink::{
+    ClientEvent, ClientId, CommitId, CompositorBudgets, CompositorCapabilities, CompositorClient,
+    CompositorMemory, DriverPacing, DriverStats, EventWaker, FontRegistry, FrameClock,
+    FrameObserver, HitResult, IdSpace, OutputConfig, OutputId, OutputStatus, OutputWatch,
+    RendererFactory, RendererTask, ScrollGesture, ScrollId, ScrollRouting, ScrollWatch,
     SubpixelOrder, Transaction,
 };
 

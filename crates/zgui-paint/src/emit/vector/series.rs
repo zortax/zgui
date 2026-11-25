@@ -19,7 +19,7 @@
 use std::sync::Arc;
 
 use crate::{Tables, VectorId};
-use compositor_types::{
+use iceblink::{
     ClipRef, MarkFlags, MarkPayload, Marks, PaintRef, PathFill, PathItem, PathStroke, SpaceRef,
 };
 use kurbo::{self, Affine, BezPath};
@@ -759,7 +759,7 @@ fn emit_placed_markers(
             None => {
                 fill = Some(PathFill {
                     paint,
-                    rule: compositor_types::FillRule::NON_ZERO,
+                    rule: iceblink::FillRule::NON_ZERO,
                 });
             }
             Some(width) => {

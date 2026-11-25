@@ -1,6 +1,6 @@
 //! One chunk of emitted items, recorded into a compositor of its own and drawn.
 
-use compositor_types::ChunkKey;
+use iceblink::ChunkKey;
 use zgui_paint::Tables;
 use zgui_paint::emit::Recorder;
 use zgui_space::{ClipId, SpatialId};

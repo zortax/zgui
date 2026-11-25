@@ -36,8 +36,7 @@ zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
-compositor-api.workspace = true
-compositor-types.workspace = true
+iceblink.workspace = true
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
 
 # A process may create exactly one event loop, ever, and on most desktops only on its own first

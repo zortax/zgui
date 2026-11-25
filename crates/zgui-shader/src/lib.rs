@@ -89,7 +89,7 @@ pub use crate::handle::{NoParams, ParamsValue, ShaderHandle, ShaderParams};
 pub use crate::paint::ShaderPainterExt;
 pub use crate::program::{EffectProgram, ParamsField, ParamsLayout};
 
-pub use compositor_types::ParamsBlock as ShaderParamsBlock;
+pub use iceblink::ParamsBlock as ShaderParamsBlock;
 pub use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderMode, ShaderReads};
 // The derive and the trait share a name deliberately, the way `Debug` does: one is a macro and the
 // other a type, and an application writes `#[derive(ShaderParams)]` against the trait it names.

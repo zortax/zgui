@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{AnyId, EffectId, EffectNode, Filter, OrderId, Transaction};
+use iceblink::{AnyId, EffectId, EffectNode, Filter, OrderId, Transaction};
 
 use crate::Tables;
 

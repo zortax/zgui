@@ -36,9 +36,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
 use zgui::platform::{AppHandler, PlatformCx, SurfaceEvent, SurfaceId, WakeReason};
 use zgui::prelude::*;
@@ -116,7 +115,7 @@ fn main() -> Result<(), zgui::Error> {
         .with_renderer(Box::new(move |surface, target| {
             let open = zgui_bench::renderers::window(surface, target)?;
             let counted = Arc::clone(&counted);
-            let factory: compositor_api::RendererFactory =
+            let factory: iceblink::RendererFactory =
                 Box::new(
                     move || Ok(Box::new(Stamping::new(open()?, counted)) as Box<dyn Renderer>),
                 );
@@ -451,11 +450,11 @@ impl Renderer for Stamping {
         self.inner.memory()
     }
 
-    fn vector_status(&self) -> compositor_types::VectorStatus {
+    fn vector_status(&self) -> iceblink::VectorStatus {
         self.inner.vector_status()
     }
 
-    fn target_pool(&self) -> compositor_types::TargetPoolReport {
+    fn target_pool(&self) -> iceblink::TargetPoolReport {
         self.inner.target_pool()
     }
 

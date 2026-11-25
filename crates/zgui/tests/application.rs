@@ -55,7 +55,7 @@ fn an_application_built_through_the_umbrella_draws_its_boxes_and_its_glyphs() {
         .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_compositor_renderer(Box::new(move |_size| {
             Box::new(screen.take().expect("the application opens one window"))
-                as Box<dyn compositor_api::Renderer>
+                as Box<dyn iceblink::Renderer>
         }))
         .run_on(buffers, || view! { Panel() })
         .expect("the application ran");

@@ -14,8 +14,7 @@
 
 use std::time::{Duration, Instant};
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
@@ -97,8 +96,8 @@ fn main() {
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<compositor_api::RendererFactory, AppError> {
-                let factory: compositor_api::RendererFactory = Box::new(move || {
+             -> Result<iceblink::RendererFactory, AppError> {
+                let factory: iceblink::RendererFactory = Box::new(move || {
                     let mut inner = zgui_bench::renderers::NullRenderer::default();
                     inner.configure(target);
                     Ok(Box::new(inner) as Box<dyn Renderer>)

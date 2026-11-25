@@ -6,9 +6,7 @@
     reason = "one support module serves several test binaries, and none of them uses all of it"
 )]
 
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
-};
+use iceblink::{BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget};
 use zgui_testkit_compositor::{Drawing, Instance, Screen};
 
 /// What a frame drew, handed over after every frame.
@@ -20,7 +18,7 @@ struct Watching {
     watch: Watch,
 }
 
-impl compositor_api::Renderer for Watching {
+impl iceblink::Renderer for Watching {
     fn capabilities(&self) -> RenderCapabilities {
         self.screen.capabilities()
     }
@@ -56,7 +54,7 @@ pub fn watched(mut make: impl FnMut() -> Watch + Send + 'static) -> zgui::Compos
         Box::new(Watching {
             screen: Screen::new(),
             watch: make(),
-        }) as Box<dyn compositor_api::Renderer>
+        }) as Box<dyn iceblink::Renderer>
     })
 }
 

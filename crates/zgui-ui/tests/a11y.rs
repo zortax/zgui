@@ -48,8 +48,7 @@ impl TreeChangeHandler for Silent {
 mod nowhere {
     use std::sync::Arc;
 
-    use compositor_api::Renderer;
-    use compositor_types::RenderTarget;
+    use iceblink::{RenderTarget, Renderer};
     use zgui::platform::Surface;
     use zgui::runtime::AppError;
 
@@ -57,7 +56,7 @@ mod nowhere {
     pub(crate) fn build(
         _: &Arc<dyn Surface>,
         target: RenderTarget,
-    ) -> Result<compositor_api::RendererFactory, AppError> {
+    ) -> Result<iceblink::RendererFactory, AppError> {
         Ok(zgui_testkit_compositor::factory(move || {
             let mut renderer = zgui_testkit_compositor::NullRenderer::default();
             renderer.configure(target);

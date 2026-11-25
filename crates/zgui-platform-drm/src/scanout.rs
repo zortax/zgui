@@ -72,7 +72,7 @@ use std::fmt;
 use std::os::fd::{AsFd, OwnedFd};
 use std::time::{Duration, Instant};
 
-use compositor_wgpu::{Gpu, Pixels, wgpu};
+use iceblink_wgpu::{Gpu, Pixels, wgpu};
 use tracing::{info, warn};
 use zgui_drm::buffer::{DumbBuffer, ImportedBuffer};
 use zgui_drm::commit::{Commit, DamageClip, Pipe, waits_for_a_fence};

@@ -252,9 +252,9 @@ pub struct Window {
     /// it.
     containment: Option<crate::window::containment::Containment>,
     /// The target the output was last configured for.
-    target: Option<compositor_types::RenderTarget>,
+    target: Option<iceblink::RenderTarget>,
     /// The device ink of the fragments the last paint walk recorded.
-    recorded_ink: compositor_types::compositor_damage::DamageSet,
+    recorded_ink: iceblink::damage::DamageSet,
     /// See [`Window::forget_compositor_sync`].
     resync: std::cell::Cell<bool>,
     /// What is hovered, pressed, focused and captured.
@@ -399,7 +399,7 @@ pub struct Window {
     scheme: zgui_style::ColorScheme,
     /// Whether the surface is drawn translucent rather than opaque.
     ///
-    /// Stated on every [`RenderTarget`](compositor_types::RenderTarget) this window configures and on
+    /// Stated on every [`RenderTarget`](iceblink::RenderTarget) this window configures and on
     /// every frame it paints, because text with per-channel coverage has no meaning over a
     /// destination that is not opaque.
     translucent: bool,
@@ -407,7 +407,7 @@ pub struct Window {
     text_antialiasing: text_aa::TextAntialiasing,
     /// The stripe order the last frame drew per-channel text coverage for, or `None` when it drew
     /// one coverage for each pixel.
-    subpixel_order: Option<compositor_types::SubpixelOrder>,
+    subpixel_order: Option<iceblink::SubpixelOrder>,
     /// Whether the surface is entirely hidden.
     occluded: bool,
     /// Whether the surface is the one receiving the keyboard.
@@ -457,7 +457,7 @@ pub struct Window {
     /// Whether the next frame is the first one.
     first_frame: bool,
     /// Why the renderer could not be built, for a window that never showed a frame.
-    unopened: Option<compositor_types::GpuUnavailable>,
+    unopened: Option<iceblink::GpuUnavailable>,
     /// Whether the window has read what its output's renderer can do.
     renderer_known: bool,
     /// When the last frame the driver was told about reached the display.
@@ -712,7 +712,7 @@ impl Window {
             check_damage: zgui_layout::invariants::enabled(),
             containment: None,
             target: None,
-            recorded_ink: compositor_types::compositor_damage::DamageSet::new(),
+            recorded_ink: iceblink::damage::DamageSet::new(),
             resync: std::cell::Cell::new(false),
             router: Router::new(),
             pending_focus: Vec::new(),
@@ -1102,13 +1102,13 @@ impl Window {
     /// renderer.
     pub fn inspect_renderer<T: Send + 'static>(
         &self,
-        inspect: impl FnOnce(&mut dyn compositor_api::Renderer) -> T + Send + 'static,
+        inspect: impl FnOnce(&mut dyn iceblink::Renderer) -> T + Send + 'static,
     ) -> Option<T> {
         self.compositor.inspect(inspect)
     }
 
     /// The newest snapshot of the output the window draws into and of its renderer.
-    pub fn output_status(&self) -> Option<compositor_api::OutputStatus> {
+    pub fn output_status(&self) -> Option<iceblink::OutputStatus> {
         self.compositor.status()
     }
 

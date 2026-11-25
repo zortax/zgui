@@ -70,7 +70,7 @@ fn every_scope_is_disposed_of_before_the_run_returns() {
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
             Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
                 let mut renderer = Nowhere::default();
-                compositor_api::Renderer::configure(&mut renderer, target);
+                iceblink::Renderer::configure(&mut renderer, target);
                 renderer
             }))
         }))

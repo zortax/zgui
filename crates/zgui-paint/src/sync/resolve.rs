@@ -1,7 +1,7 @@
 //! zgui's tables resolved into compositor nodes and slots while a chunk's items are built.
 
 use crate::Tables;
-use compositor_types::{
+use iceblink::{
     ClipId, Filter, ImageDesc, ImageId, ImageWrite, PaintId, PaintKind, ParamsBlock, ParamsId,
     ShaderId, Transaction, TransformId,
 };

@@ -1,6 +1,6 @@
 //! What an effect is drawn with, and how an application changes it.
 
-use compositor_types::ParamsBlock as Block;
+use iceblink::ParamsBlock as Block;
 use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderReads, SharedParams};
 
 use crate::program::ParamsLayout;

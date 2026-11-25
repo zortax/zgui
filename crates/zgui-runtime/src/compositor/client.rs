@@ -1,12 +1,9 @@
 //! One window's client of the shared driver.
 
-use compositor_api::{
-    ClientEvent, CommitId, CompositorCapabilities, DriverPacing, DriverStats, EventWaker,
-    FrameObserver, OutputConfig, OutputStatus, OutputWatch, RendererFactory, RendererTask,
-    ScrollWatch,
-};
-use compositor_types::{
-    ClientId, FrameClock, OutputId, RenderTarget, ScrollGesture, ScrollId, ScrollRouting,
+use iceblink::{
+    ClientEvent, ClientId, CommitId, CompositorCapabilities, DriverPacing, DriverStats, EventWaker,
+    FrameClock, FrameObserver, OutputConfig, OutputId, OutputStatus, OutputWatch, RenderTarget,
+    RendererFactory, RendererTask, ScrollGesture, ScrollId, ScrollRouting, ScrollWatch,
     SubpixelOrder, Transaction,
 };
 
@@ -136,7 +133,7 @@ impl Client {
     pub(crate) fn commit_frame(&self, interval: std::time::Duration) -> Option<(u64, u64)> {
         let stats = self.stats();
         let (due, display) = (stats.commit_due_ns?, stats.commit_display_ns?);
-        let now = compositor_api::now_ns();
+        let now = iceblink::now_ns();
         let interval = u64::try_from(interval.as_nanos())
             .unwrap_or(u64::MAX)
             .max(1);
@@ -150,7 +147,7 @@ impl Client {
     }
 
     /// Returns the memory the compositor holds.
-    pub(crate) fn memory(&self) -> compositor_api::CompositorMemory {
+    pub(crate) fn memory(&self) -> iceblink::CompositorMemory {
         self.shared.driver.borrow().memory()
     }
 
@@ -284,7 +281,7 @@ impl Client {
     /// Returns `None` when the output has no renderer.
     pub(crate) fn inspect<T: Send + 'static>(
         &self,
-        inspect: impl FnOnce(&mut dyn compositor_api::Renderer) -> T + Send + 'static,
+        inspect: impl FnOnce(&mut dyn iceblink::Renderer) -> T + Send + 'static,
     ) -> Option<T> {
         let answer = std::sync::Arc::new(std::sync::Mutex::new(None));
         let answered = std::sync::Arc::clone(&answer);

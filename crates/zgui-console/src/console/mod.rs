@@ -47,13 +47,12 @@ pub(crate) use self::device::{graphics, scanout_device};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, SkipReason,
-    TargetPoolReport, VectorBackend, VectorStatus,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
+    SkipReason, TargetPoolReport, VectorBackend, VectorStatus,
 };
-use compositor_vello::VelloOptions;
-use compositor_wgpu::{Gpu, SharedGraphics, Supplied, WgpuRenderer};
+use iceblink_vello::VelloOptions;
+use iceblink_wgpu::{Gpu, SharedGraphics, Supplied, WgpuRenderer};
 use tracing::warn;
 use zgui_geom::{Device, Point, Rect, Size};
 use zgui_platform::{PlatformError, Surface};
@@ -148,7 +147,7 @@ impl DrmRenderer {
             return FrameOutcome::Skipped(SkipReason::Validation);
         };
         match self.display.present(&pixels) {
-            Ok(true) => FrameOutcome::Presented(compositor_types::FrameStats::default()),
+            Ok(true) => FrameOutcome::Presented(iceblink::FrameStats::default()),
             // The buffer this frame would be written into is the one still on the screen. The
             // frame's work is submitted and the target holds it, so the damage retires and another
             // frame is asked for. `Declined` rather than `Timeout`, because this refusal blocked
@@ -290,7 +289,7 @@ pub(crate) fn factory(graphics: SharedGraphics, displays: Displays) -> RendererF
             HANDED
                 .with(|handed| handed.borrow_mut().take())
                 .ok_or_else(|| {
-                    compositor_types::GpuUnavailable::default()
+                    iceblink::GpuUnavailable::default()
                         .rejected("display", "drawn on a thread other than its frame loop's")
                 })
         }))
@@ -299,11 +298,11 @@ pub(crate) fn factory(graphics: SharedGraphics, displays: Displays) -> RendererF
 
 /// Runs a compositor on the frame loop's thread, which drives the displays.
 pub(crate) fn driver(
-    compositor: Box<dyn compositor_api::Compositor>,
-) -> Box<dyn compositor_api::CompositorClient> {
-    Box::new(compositor_driver::InProcess::new(
+    compositor: Box<dyn iceblink::Compositor>,
+) -> Box<dyn iceblink::CompositorClient> {
+    Box::new(iceblink_driver::InProcess::new(
         compositor,
-        compositor_driver::DriverOptions::default(),
+        iceblink_driver::DriverOptions::default(),
     ))
 }
 
@@ -354,7 +353,7 @@ fn renderer(
     };
     inner.set_vector_factory(
         Box::new(move |gpu: &Arc<Gpu>, size| {
-            compositor_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
+            iceblink_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
         }),
         VectorBackend::Compute,
         "vello",

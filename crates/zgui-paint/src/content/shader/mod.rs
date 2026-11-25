@@ -27,7 +27,7 @@ pub trait ShaderSource {
     ///
     /// This is also where a device that cannot draw an effect at all says so — an implementation
     /// answers `None` throughout when
-    /// [`RenderCapabilities::custom_shaders`](compositor_types::RenderCapabilities::custom_shaders) is
+    /// [`RenderCapabilities::custom_shaders`](iceblink::RenderCapabilities::custom_shaders) is
     /// false, and every box falls back to the painting it would have had. Deciding it here rather
     /// than in the renderer is what keeps the fallback a *picture* rather than an omission: a
     /// smoothed corner becomes a rounded one, not a hole.

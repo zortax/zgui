@@ -1,6 +1,6 @@
 //! Turning the parameters a style sheet wrote into the block an effect is drawn with.
 
-use compositor_types::ParamsBlock;
+use iceblink::ParamsBlock;
 use zgui_css::shader::ShaderId;
 use zgui_geom::{Device, DevicePx, Point, Rect};
 

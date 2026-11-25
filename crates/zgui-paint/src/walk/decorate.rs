@@ -143,7 +143,7 @@ pub fn interrupts_propagation(style: &ComputedStyle) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use compositor_types::LineStyle as Line;
+    use iceblink::LineStyle as Line;
     use zgui_color::Color;
     use zgui_css::StyleDraft;
 

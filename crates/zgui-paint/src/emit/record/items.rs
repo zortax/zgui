@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{
+use iceblink::{
     AnyId, Backdrop, ClipId, ExternalQuad, Filter, Glyph, GlyphRun, Image, ImageId, ItemKind,
     ItemOp, Line, LocalClip, MarkPayload, Marks, PaintId, PaintKind, ParamsId, PathItem, Quad,
     RecordedChunk, ShaderId, ShaderQuad, Shadow, TextureId, TransformId,

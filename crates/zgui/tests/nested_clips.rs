@@ -34,7 +34,7 @@ fn drawn() -> Drawing {
         .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_compositor_renderer(Box::new(move |_size| {
             Box::new(screen.take().expect("the application opens one window"))
-                as Box<dyn compositor_api::Renderer>
+                as Box<dyn iceblink::Renderer>
         }))
         .run_on(drive, || {
             view! {

@@ -28,8 +28,7 @@
 
 use std::time::{Duration, Instant};
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui::app::Fonts;
 use zgui::geom::{Css, CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
@@ -164,8 +163,8 @@ fn opened() -> Harness<Runtime> {
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<compositor_api::RendererFactory, AppError> {
-                let factory: compositor_api::RendererFactory = Box::new(move || {
+             -> Result<iceblink::RendererFactory, AppError> {
+                let factory: iceblink::RendererFactory = Box::new(move || {
                     // A renderer that moves composed pixels it does not hold: the compositor's decision
                     // to shift narrows a frame's damage, and the walk and replays that follow from the
                     // narrowing are what this probe measures.

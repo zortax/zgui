@@ -13,12 +13,11 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
-use compositor_api::Renderer;
-use compositor_types::compositor_damage::DamageSet;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::damage::DamageSet;
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
-use compositor_wgpu::{Builder, WgpuRenderer};
+use iceblink_wgpu::{Builder, WgpuRenderer};
 use zgui::prelude::*;
 use zgui_platform::{PlatformError, Surface};
 use zgui_runtime::AppError;
@@ -287,7 +286,7 @@ fn renderer(
     target: RenderTarget,
     start: Instant,
     dir: &Path,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Err(AppError::Platform(PlatformError::Backend(
             "this window offers no handles a graphics API can draw into".to_owned(),

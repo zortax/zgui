@@ -9,7 +9,7 @@
 //! | [`FontSource`](zgui_text::FontSource) | [`FontSystem`] |
 //! | [`FontMetricsSource`](zgui_text::FontMetricsSource) | [`FontSystem`] |
 //! | [`ParagraphShaper`](zgui_text::ParagraphShaper) | [`Shaper`] |
-//! | `compositor_api::FontRegistry` | [`CompositorFonts`] |
+//! | `iceblink::FontRegistry` | [`CompositorFonts`] |
 //!
 //! ```
 //! use std::sync::Arc;

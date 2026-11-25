@@ -17,7 +17,7 @@ pub enum AppError {
 
     /// No graphics adapter on this machine could be used.
     #[error("{0}")]
-    GpuUnavailable(#[from] compositor_types::GpuUnavailable),
+    GpuUnavailable(#[from] iceblink::GpuUnavailable),
 
     /// The application installed no compositor for its windows to draw through.
     #[error("no compositor was installed for the windows to draw through")]

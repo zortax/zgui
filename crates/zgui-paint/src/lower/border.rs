@@ -10,7 +10,7 @@
 //! same function that decides what a box clips its children to — so a background painted to a curve
 //! and a child clipped to it cannot round differently.
 
-use compositor_types::BorderStyle;
+use iceblink::BorderStyle;
 use zgui_color::Color;
 use zgui_css::parity::Support;
 use zgui_css::values::border::BorderStyleValue;

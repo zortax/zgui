@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{
+use iceblink::{
     Extend, ExternalQuad, Image, ImageDesc, ImageFilter, ImageFlags, ImageFormat, PaintRef,
     TextureId,
 };
@@ -97,7 +97,7 @@ pub fn emit(rec: &mut Recorder<'_>, source: Source, placement: ReplacedPlacement
                 frame: local_rect(placement.content_box),
                 source: [0.0, 0.0, width as f32, height as f32],
                 radii: flat_radii(placement.radii),
-                shapes: compositor_types::ROUND,
+                shapes: iceblink::ROUND,
                 paint: PaintRef::NONE,
                 image,
                 opacity: placement.opacity,
@@ -209,8 +209,8 @@ mod tests {
     }
 
     /// An external texture slot of a client.
-    fn texture() -> compositor_types::TextureId {
-        compositor_types::IdSpace::new(compositor_types::ClientId(1)).mint()
+    fn texture() -> iceblink::TextureId {
+        iceblink::IdSpace::new(iceblink::ClientId(1)).mint()
     }
 
     #[test]

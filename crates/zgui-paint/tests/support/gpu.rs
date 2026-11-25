@@ -2,10 +2,9 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use compositor_api::{Compositor, OutputConfig, Renderer};
-use compositor_types::{
-    BufferAge, Built, ChunkKey, ClientId, Frame, FrameClock, FrameRequest, OrderEntry, OrderNode,
-    OutputId, RenderTarget,
+use iceblink::{
+    BufferAge, Built, ChunkKey, ClientId, Compositor, Frame, FrameClock, FrameRequest, OrderEntry,
+    OrderNode, OutputConfig, OutputId, RenderTarget, Renderer,
 };
 use zgui_paint::Tables;
 use zgui_paint::emit::Recorder;
@@ -169,7 +168,7 @@ impl Gpu {
         }
     }
 
-    fn commit(&mut self, transaction: compositor_types::Transaction) {
+    fn commit(&mut self, transaction: iceblink::Transaction) {
         if let Err(error) = self.compositor.commit(transaction) {
             panic!("the compositor rejected the transaction: {error}");
         }

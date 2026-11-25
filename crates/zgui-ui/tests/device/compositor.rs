@@ -3,9 +3,8 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
 use zgui::geom::{Device as Space, DevicePx, Size};
 use zgui_testkit_compositor::Device;

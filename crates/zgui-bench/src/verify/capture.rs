@@ -3,12 +3,12 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use compositor_api::Renderer;
-use compositor_capture::CaptureRenderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, VectorStatus,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
+    VectorStatus,
 };
-use compositor_wgpu::{Pixels, WgpuRenderer};
+use iceblink_testing::capture::CaptureRenderer;
+use iceblink_wgpu::{Pixels, WgpuRenderer};
 use zgui::geom::{Device, Point, Rect, Size};
 
 /// What one frame was drawn against: whether the whole surface, and the rectangles otherwise.

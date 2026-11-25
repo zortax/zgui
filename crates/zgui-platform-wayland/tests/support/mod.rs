@@ -28,7 +28,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use compositor_types::RenderTarget;
+use iceblink::RenderTarget;
 use zgui_platform::{
     AppHandler, IdlePolicy, PlatformCx, PlatformError, Surface, SurfaceEvent, SurfaceId, WakeReason,
 };
@@ -294,7 +294,7 @@ impl<A: AppHandler> AppHandler for StopAfter<A> {
 }
 
 /// Returns the compositor every window of a test application draws through.
-pub(crate) fn compositor() -> Box<dyn compositor_api::CompositorClient> {
+pub(crate) fn compositor() -> Box<dyn iceblink::CompositorClient> {
     zgui_testkit_compositor::driver(zgui_testkit_compositor::fake_text_compositor())
 }
 
@@ -315,7 +315,7 @@ fn renderer(
     windows: Windows,
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Err(AppError::Platform(PlatformError::Backend(
             "this surface offers no handles a graphics API can draw into".to_owned(),
@@ -339,8 +339,7 @@ fn renderer(
             .renderer(target, handles, pacing, Some(pre_present))
             .map_err(|unavailable| {
                 NO_DEVICE.store(true, Ordering::Relaxed);
-                compositor_types::GpuUnavailable::default()
-                    .rejected("window", unavailable.to_string())
+                iceblink::GpuUnavailable::default().rejected("window", unavailable.to_string())
             })
     }))
 }

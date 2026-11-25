@@ -8,7 +8,7 @@
 //! device, offscreen, at scale one.
 //!
 //! After the first frame and again after thirty animated steps, the probe prints what
-//! [`Renderer::memory`](compositor_api::Renderer::memory) reports, what the group pool holds and the
+//! [`Renderer::memory`](iceblink::Renderer::memory) reports, what the group pool holds and the
 //! most targets it lent at once, and the totals of the device allocator's report. The animated
 //! steps are printed as the other probes print them, with GPU time under `ZGUI_GPU_TIMING=1`.
 //!
@@ -20,7 +20,7 @@
 
 #![forbid(unsafe_code)]
 
-use compositor_wgpu::{WgpuRenderer, wgpu};
+use iceblink_wgpu::{WgpuRenderer, wgpu};
 use zgui::view;
 use zgui::view::{Anchor, AnyView, BuildCx, IntoView, View};
 use zgui_bench::probe::{self, Device};

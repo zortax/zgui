@@ -438,20 +438,20 @@ pub fn layer_image(
             DevicePx(local.size.height.0 + 2.0),
         ),
     );
-    let item = compositor_types::Image {
+    let item = iceblink::Image {
         bounds: crate::emit::record::local_rect(local),
         frame: crate::emit::record::local_rect(frame),
         source: [0.0, 0.0, raster.width as f32, raster.height as f32],
         radii: [0.0; 8],
-        shapes: compositor_types::ROUND,
-        paint: compositor_types::PaintRef::NONE,
+        shapes: iceblink::ROUND,
+        paint: iceblink::PaintRef::NONE,
         image,
         opacity: alpha,
         clip: rec.clip(placement.clip),
         space: rec.space(placement.transform),
-        flags: compositor_types::ImageFlags::default(),
-        extend: [compositor_types::Extend::NONE; 2],
-        filter: compositor_types::ImageFilter::LINEAR,
+        flags: iceblink::ImageFlags::default(),
+        extend: [iceblink::Extend::NONE; 2],
+        filter: iceblink::ImageFilter::LINEAR,
     };
     rec.image(item);
     1
@@ -482,7 +482,7 @@ pub(crate) fn clip_through(
     rec: &mut Recorder<'_>,
     placement: VectorPlacement,
     links: impl IntoIterator<Item = ClipLink>,
-) -> compositor_types::ClipRef {
+) -> iceblink::ClipRef {
     let mut chain = placement.clip;
     let mut clip = rec.clip(chain);
     for link in links {

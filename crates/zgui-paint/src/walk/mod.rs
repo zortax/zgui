@@ -24,7 +24,7 @@ pub mod stacking;
 use std::borrow::Cow;
 
 use crate::Tables;
-use compositor_types::RenderCapabilities;
+use iceblink::RenderCapabilities;
 use zgui_bits::DamageSet;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Edges, Rect};

@@ -8,8 +8,7 @@ mod support;
 
 use std::sync::Arc;
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui_geom::{Device, Point, Rect, Size};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;

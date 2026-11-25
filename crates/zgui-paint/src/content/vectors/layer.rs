@@ -16,7 +16,7 @@ use std::sync::Arc;
 use web_time::Instant;
 
 use crate::VectorId;
-use compositor_types::{ImageDesc, ImageFormat};
+use iceblink::{ImageDesc, ImageFormat};
 use kurbo::{self, Affine};
 use rustc_hash::FxHashMap;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};

@@ -16,8 +16,7 @@
 
 use std::time::{Duration, Instant};
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
@@ -72,7 +71,7 @@ fn placements() -> String {
 fn nowhere(
     _surface: &std::sync::Arc<dyn zgui::platform::Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     Ok(Box::new(move || {
         Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target)) as Box<dyn Renderer>)
     }))

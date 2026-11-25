@@ -32,8 +32,7 @@ rustc-hash.workspace = true
 smallvec.workspace = true
 
 # The registry the compositor's glyph cache shares with layout, so both name a face alike.
-compositor-api.workspace = true
-compositor-types.workspace = true
+iceblink.workspace = true
 
 [dev-dependencies]
 # The counters have to hold in an optimised build as well as a debug one, and they are compiled

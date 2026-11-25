@@ -28,7 +28,7 @@ const TICK: Duration = Duration::from_millis(8);
 type Ticks = Vec<(u64, u64)>;
 
 /// A port of `rows` rows over the driver `client`.
-fn listing(client: Box<dyn compositor_api::CompositorClient>, rows: usize) -> Harness<Runtime> {
+fn listing(client: Box<dyn iceblink::CompositorClient>, rows: usize) -> Harness<Runtime> {
     support::app_with_text_over(client, CSS, move |cx: &mut BuildCx<'_>| {
         let mut port = zgui_elements::column().class("port");
         for _ in 0..rows {

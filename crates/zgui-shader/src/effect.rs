@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use compositor_types::{Prebuilt, ShaderDesc, ShaderSource};
+use iceblink::{Prebuilt, ShaderDesc, ShaderSource};
 use zgui_paint::content::shader::{Declaration, ShaderId, ShaderMode, ShaderReads};
 
 use crate::handle::{ShaderHandle, ShaderParams};
@@ -112,9 +112,9 @@ impl<P: ShaderParams> ShaderEffect<P> {
         let program = &self.program;
         ShaderDesc {
             mode: match program.mode {
-                ShaderMode::Paint => compositor_types::ShaderMode::PAINT,
-                ShaderMode::Coverage => compositor_types::ShaderMode::COVERAGE,
-                ShaderMode::Filter => compositor_types::ShaderMode::FILTER,
+                ShaderMode::Paint => iceblink::ShaderMode::PAINT,
+                ShaderMode::Coverage => iceblink::ShaderMode::COVERAGE,
+                ShaderMode::Filter => iceblink::ShaderMode::FILTER,
             },
             source: ShaderSource {
                 wgsl: Arc::from(program.source),
@@ -125,9 +125,9 @@ impl<P: ShaderParams> ShaderEffect<P> {
             },
             params_size: P::LAYOUT.size as u32,
             reads: if self.reads.time {
-                compositor_types::ShaderReads::TIME
+                iceblink::ShaderReads::TIME
             } else {
-                compositor_types::ShaderReads::default()
+                iceblink::ShaderReads::default()
             },
         }
     }

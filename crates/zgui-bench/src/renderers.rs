@@ -4,13 +4,12 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use compositor_api::{Compositor, CompositorClient, Renderer};
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    VectorBackend,
+use iceblink::{
+    BufferAge, Compositor, CompositorClient, Frame, FrameOutcome, FrameStats, MemoryReport,
+    RenderCapabilities, RenderTarget, Renderer, VectorBackend,
 };
-use compositor_vello::VelloOptions;
-use compositor_wgpu::{Gpu, WgpuRenderer, wgpu};
+use iceblink_vello::VelloOptions;
+use iceblink_wgpu::{Gpu, WgpuRenderer, wgpu};
 use zgui::platform::{PlatformError, Surface};
 use zgui::runtime::AppError;
 
@@ -89,9 +88,9 @@ impl Renderer for NullRenderer {
 /// # Errors
 ///
 /// Fails when no adapter opens a device.
-pub fn device(target: RenderTarget) -> Result<WgpuRenderer, compositor_types::GpuUnavailable> {
+pub fn device(target: RenderTarget) -> Result<WgpuRenderer, iceblink::GpuUnavailable> {
     let mut gpu =
-        compositor_wgpu::Builder::new().offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)?;
+        iceblink_wgpu::Builder::new().offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)?;
     attach_vello(&mut gpu);
     gpu.configure(target);
     Ok(gpu)
@@ -106,7 +105,7 @@ fn attach_vello(renderer: &mut WgpuRenderer) {
     };
     renderer.set_vector_factory(
         Box::new(move |gpu: &Arc<Gpu>, size| {
-            compositor_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
+            iceblink_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
         }),
         VectorBackend::Compute,
         "vello",
@@ -129,7 +128,7 @@ fn pipeline_cache_directory() -> Option<PathBuf> {
 /// compositor's own variable.
 pub fn gpu_timing_requested() -> bool {
     std::env::var_os("ZGUI_GPU_TIMING").is_some_and(|value| !value.is_empty() && value != "0")
-        || compositor_wgpu::gpu_timing_requested()
+        || iceblink_wgpu::gpu_timing_requested()
 }
 
 /// Opens this machine's device for the window `surface` is, wired as an application's window is.
@@ -145,7 +144,7 @@ pub fn gpu_timing_requested() -> bool {
 pub fn window(
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
         AppError::Platform(PlatformError::Backend(
             "this window offers no handles a graphics API can draw into".to_owned(),
@@ -163,16 +162,16 @@ fn presenting(
     surface: &Arc<dyn Surface>,
     handles: Arc<dyn zgui::platform::GpuSurface>,
     target: RenderTarget,
-) -> Result<WgpuRenderer, compositor_types::GpuUnavailable> {
+) -> Result<WgpuRenderer, iceblink::GpuUnavailable> {
     let platform = matches!(
         surface.present_pacing(),
         zgui::platform::PresentPacing::Platform
     );
     let notify =
         platform || matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify");
-    let mut builder = compositor_wgpu::Builder::new();
+    let mut builder = iceblink_wgpu::Builder::new();
     if platform {
-        builder = builder.with_present_pacing(compositor_wgpu::PresentPacing::Platform);
+        builder = builder.with_present_pacing(iceblink_wgpu::PresentPacing::Platform);
     }
     if notify {
         let presented = Arc::clone(surface);
@@ -197,7 +196,7 @@ fn presenting(
 /// Returns a compositor for a measured document that draws no text.
 #[must_use]
 pub fn compositor() -> Box<dyn Compositor> {
-    Box::new(compositor_core::CompositorImpl::new())
+    Box::new(iceblink_core::CompositorImpl::new())
 }
 
 /// Returns `compositor` behind the driver `ZGUI_DRIVER` selects, waiting for a threaded driver

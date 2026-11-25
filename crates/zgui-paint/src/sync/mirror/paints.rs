@@ -1,7 +1,7 @@
 //! Paint sources mirrored as paint slots.
 
 use crate::paints::PaintTable;
-use compositor_types::{Paint, PaintId, PaintKind, Transaction};
+use iceblink::{Paint, PaintId, PaintKind, Transaction};
 use rustc_hash::FxHashMap;
 use zgui_space::{ChangeCoverage, TableVersion};
 

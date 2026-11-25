@@ -10,8 +10,7 @@
 //! been open; the delta tells you what this frame cost, which is the only form in which "hovering
 //! one row restyled four hundred elements" is a sentence anybody can act on.
 
-use compositor_types::MemoryReport;
-use compositor_types::VectorStatus;
+use iceblink::{MemoryReport, VectorStatus};
 use zgui::geom::{Device, Rect};
 use zgui::runtime::Window;
 use zgui::runtime::budget::{CacheId, CacheUnit};

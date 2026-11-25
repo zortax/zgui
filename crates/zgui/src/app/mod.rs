@@ -19,16 +19,14 @@ pub use crate::app::fonts::Fonts;
 pub use crate::app::precision::GroupPrecision;
 
 /// A function that runs a compositor behind a driver.
-pub type ClientMaker = Box<
-    dyn FnOnce(Box<dyn compositor_api::Compositor>) -> Box<dyn compositor_api::CompositorClient>,
->;
+pub type ClientMaker =
+    Box<dyn FnOnce(Box<dyn iceblink::Compositor>) -> Box<dyn iceblink::CompositorClient>>;
 
 /// A maker of the renderer a window's compositor draws with, given the window's first size in
 /// device pixels.
 ///
 /// It runs on the thread that draws the window's frames.
-pub type CompositorRendererMaker =
-    Box<dyn FnMut([u32; 2]) -> Box<dyn compositor_api::Renderer> + Send>;
+pub type CompositorRendererMaker = Box<dyn FnMut([u32; 2]) -> Box<dyn iceblink::Renderer> + Send>;
 #[cfg(target_arch = "wasm32")]
 pub use crate::app::web::Mounted;
 #[cfg(target_arch = "wasm32")]
@@ -725,7 +723,7 @@ impl App {
     {
         // Before the font thread below, which is the first thread this process starts: the guard
         // inside changes the environment only while the process has one thread.
-        compositor_wgpu::prefer_hardware_vulkan();
+        iceblink_wgpu::prefer_hardware_vulkan();
         // The last point at which the application could have named its own faces has passed, so
         // this is where enumerating the machine's starts — on a thread of its own, alongside
         // opening the window and the graphics device rather than in front of them.

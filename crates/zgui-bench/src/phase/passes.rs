@@ -8,9 +8,9 @@
 //! function of the damage it answered, and by the time the loop has gone quiet the damage has been
 //! retired and the last plan is the empty one belonging to a frame that redrew nothing.
 
-use compositor_api::Renderer;
-use compositor_types::{
+use iceblink::{
     BufferAge, Frame as Built, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+    Renderer,
 };
 
 use crate::input::wheel;

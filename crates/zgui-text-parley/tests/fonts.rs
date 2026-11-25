@@ -254,8 +254,7 @@ fn the_constructors_select_the_two_enumeration_modes() {
 /// The compositor reads a face from the same font file the font system holds, without a copy.
 #[test]
 fn the_compositor_registry_shares_the_font_file_of_each_face() {
-    use compositor_api::FontRegistry;
-    use compositor_types::FontId;
+    use iceblink::{FontId, FontRegistry};
 
     let fonts = Arc::new(FontSystem::new(FontSystemOptions::registered_only()));
     let file = support::face("NotoSans-Regular.ttf");
@@ -293,8 +292,7 @@ fn one_face_has_one_handle() {
 /// shaped before the unregistration still draws.
 #[test]
 fn the_compositor_registry_keeps_a_face_whose_family_was_unregistered() {
-    use compositor_api::FontRegistry;
-    use compositor_types::FontId;
+    use iceblink::{FontId, FontRegistry};
 
     let fonts = support::fonts();
     let face = fonts

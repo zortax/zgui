@@ -2,8 +2,7 @@
 
 use std::time::Duration;
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
@@ -111,9 +110,9 @@ pub(crate) fn opened(rows: usize, height: f32) -> Opened {
     let for_renderer = damage.clone();
     let render = move |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
                        target: RenderTarget|
-          -> Result<compositor_api::RendererFactory, AppError> {
+          -> Result<iceblink::RendererFactory, AppError> {
         let for_renderer = for_renderer.clone();
-        let factory: compositor_api::RendererFactory = Box::new(move || {
+        let factory: iceblink::RendererFactory = Box::new(move || {
             let mut inner = zgui_bench::renderers::NullRenderer::default();
             inner.configure(target);
             let mut watching = Watching::new(Box::new(inner), for_renderer);

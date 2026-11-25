@@ -22,7 +22,7 @@
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
-use compositor_types::{MarkFlags, MarkPayload, MarkPlacement};
+use iceblink::{MarkFlags, MarkPayload, MarkPlacement};
 use kurbo::{Affine, BezPath, Point};
 use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
@@ -976,7 +976,7 @@ mod tests {
     use std::sync::Arc;
 
     use crate::{Tables, VectorId};
-    use compositor_types::{MarkFlags, MarkPayload};
+    use iceblink::{MarkFlags, MarkPayload};
     use kurbo::{Affine, BezPath, Circle, Shape as _};
     use zgui_canvas::{Brush, CanvasScene};
     use zgui_color::Color;

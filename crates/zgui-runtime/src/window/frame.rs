@@ -26,7 +26,7 @@
 //! testing under a stationary pointer** is what stops a dropdown that opens under the cursor from
 //! never being hovered.
 
-use compositor_types::{FrameOutcome, RenderTarget, SkipReason, SubpixelOrder};
+use iceblink::{FrameOutcome, RenderTarget, SkipReason, SubpixelOrder};
 use web_time::Instant;
 
 use zgui_bits::{DamageSet, Dirty};
@@ -1446,9 +1446,7 @@ impl Window {
         let mut capabilities = self
             .compositor
             .status()
-            .map_or(compositor_types::RenderCapabilities::MINIMAL, |status| {
-                status.caps
-            });
+            .map_or(iceblink::RenderCapabilities::MINIMAL, |status| status.caps);
         // What the device can blend is narrowed to what this window draws on its display.
         capabilities.subpixel_text = self.subpixel_order.is_some();
         let vector_report;
@@ -1588,7 +1586,7 @@ impl Window {
             self.layers_owed = report.layers_owed;
             // The compositor measures a recording's damage on the whole device, so the ink is
             // declared whole, also where it reaches past the surface.
-            self.recorded_ink = compositor_types::compositor_damage::DamageSet::new();
+            self.recorded_ink = iceblink::damage::DamageSet::new();
             for ink in report.recorded_ink.iter().chain(&removed) {
                 self.recorded_ink.absorb(crate::window::declared::of(*ink));
             }
@@ -1724,7 +1722,7 @@ impl Window {
                 first = ?complex_this_frame.first(),
                 "the general vector rasteriser was built"
             );
-            if vector_after.backend == Some(compositor_types::VectorBackend::Compute) {
+            if vector_after.backend == Some(iceblink::VectorBackend::Compute) {
                 self.vello_initializers = complex_this_frame;
             }
         }

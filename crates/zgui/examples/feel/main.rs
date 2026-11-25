@@ -27,7 +27,7 @@ mod todo;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use compositor_types::RenderTarget;
+use iceblink::RenderTarget;
 use zgui::prelude::*;
 use zgui_platform::{AppHandler, PlatformError, Surface};
 

@@ -2,16 +2,15 @@
 
 use std::sync::{Arc, Mutex};
 
-use compositor_api::Renderer;
-use compositor_capture::CaptureRenderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, SubpixelOrder,
-    VectorBackend,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
+    SubpixelOrder, VectorBackend,
 };
-use compositor_vello::VelloOptions;
-use compositor_wgpu::{Gpu, WgpuRenderer, wgpu};
+use iceblink_testing::capture::CaptureRenderer;
+use iceblink_vello::VelloOptions;
+use iceblink_wgpu::{Gpu, WgpuRenderer, wgpu};
 
-pub use compositor_wgpu::Pixels;
+pub use iceblink_wgpu::Pixels;
 
 use crate::Unavailable;
 use crate::drawing::Drawing;
@@ -56,7 +55,7 @@ impl Device {
     ///
     /// Fails when no adapter opens a device.
     pub fn open(size: [u32; 2]) -> Result<Self, Unavailable> {
-        let mut wgpu = compositor_wgpu::Builder::new()
+        let mut wgpu = iceblink_wgpu::Builder::new()
             .offscreen(size, wgpu::TextureFormat::Bgra8Unorm)
             .map_err(|error| Unavailable::device(&error))?;
         let options = VelloOptions {
@@ -65,13 +64,7 @@ impl Device {
         };
         wgpu.set_vector_factory(
             Box::new(move |gpu: &Arc<Gpu>, size| {
-                compositor_vello::for_device(
-                    gpu.adapter(),
-                    gpu.device(),
-                    gpu.queue(),
-                    size,
-                    &options,
-                )
+                iceblink_vello::for_device(gpu.adapter(), gpu.device(), gpu.queue(), size, &options)
             }),
             VectorBackend::Compute,
             "vello",

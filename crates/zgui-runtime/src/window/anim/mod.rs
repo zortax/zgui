@@ -144,7 +144,7 @@ impl Window {
     /// Returns when the window's driver latches the frame this window committed last, for a driver
     /// that paces itself.
     fn driver_latch(&self) -> Option<web_time::Instant> {
-        if self.compositor.pacing() != compositor_api::DriverPacing::SelfPaced {
+        if self.compositor.pacing() != iceblink::DriverPacing::SelfPaced {
             return None;
         }
         let (due, _) = self.compositor.commit_frame(self.refresh_interval())?;

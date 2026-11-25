@@ -4,7 +4,7 @@ mod support;
 
 use std::sync::Arc;
 
-use compositor_types::{GpuUnavailable, RenderTarget};
+use iceblink::{GpuUnavailable, RenderTarget};
 use zgui_platform::{PlatformCx, Surface};
 use zgui_platform_headless::Harness;
 use zgui_runtime::{App, AppError};
@@ -14,7 +14,7 @@ use zgui_view::{BuildCx, IntoView, View};
 fn failing(
     _surface: &Arc<dyn Surface>,
     _target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     Ok(Box::new(|| Err(GpuUnavailable::default())))
 }
 

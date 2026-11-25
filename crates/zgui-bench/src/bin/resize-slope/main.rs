@@ -30,8 +30,7 @@
 
 use std::time::Duration;
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
@@ -73,7 +72,7 @@ const SHEET: &str = "root { display: block; width: 100%; height: 100%; overflow:
 fn capture(
     _surface: &std::sync::Arc<dyn zgui::platform::Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     Ok(Box::new(move || {
         let mut renderer = zgui_bench::renderers::NullRenderer::default();
         renderer.configure(target);

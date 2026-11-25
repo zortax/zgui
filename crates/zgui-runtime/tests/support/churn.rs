@@ -9,8 +9,7 @@
 
 use std::sync::Arc;
 
-use compositor_api::{CompositorBudgets, Renderer};
-use compositor_types::RenderTarget;
+use iceblink::{CompositorBudgets, RenderTarget, Renderer};
 use zgui_platform::Surface;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
@@ -112,7 +111,7 @@ impl Churn {
 fn device(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     Ok(Box::new(move || {
         let mut device = zgui_testkit_compositor::Device::open(target.size)
             .expect("a device opens, which `Churn::open` answered beforehand");

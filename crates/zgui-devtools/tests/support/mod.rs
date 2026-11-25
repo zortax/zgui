@@ -12,8 +12,7 @@
 
 use std::time::Duration;
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui::geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 use zgui::platform::{Surface, SurfaceEvent};
 use zgui::prelude::*;
@@ -67,7 +66,7 @@ pub(crate) fn sheet() -> String {
 fn blind(
     _surface: &std::sync::Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     Ok(zgui_testkit_compositor::factory(move || {
         let mut renderer = zgui_testkit_compositor::NullRenderer::default();
         renderer.configure(target);

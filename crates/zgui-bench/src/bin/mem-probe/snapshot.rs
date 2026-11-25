@@ -157,7 +157,7 @@ fn gpu(window: &Window, vram_mib: Option<u64>) -> Group {
 }
 
 /// What `renderer` reports, and its device's own allocator when it has a device.
-fn renderer_group(renderer: &mut dyn compositor_api::Renderer) -> Group {
+fn renderer_group(renderer: &mut dyn iceblink::Renderer) -> Group {
     let memory = renderer.memory();
     let mut group = vec![
         ("renderer_fixed_bytes", memory.fixed),
@@ -169,7 +169,7 @@ fn renderer_group(renderer: &mut dyn compositor_api::Renderer) -> Group {
     ];
     let wgpu = renderer
         .as_any()
-        .and_then(|any| any.downcast_ref::<compositor_wgpu::WgpuRenderer>());
+        .and_then(|any| any.downcast_ref::<iceblink_wgpu::WgpuRenderer>());
     group.push(("renderer_is_wgpu", u64::from(wgpu.is_some())));
     if let Some(report) = wgpu.and_then(|wgpu| wgpu.gpu().device().generate_allocator_report()) {
         group.push(("allocator_allocated_bytes", report.total_allocated_bytes));

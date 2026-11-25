@@ -5,7 +5,7 @@
 //! layout recorded on the line. A box broken across lines is sliced: a part the box continues past
 //! has no border and no rounded corners on that side (`box-decoration-break: slice`).
 
-use compositor_types::{ClipRef, Color as Premultiplied, Line};
+use iceblink::{ClipRef, Color as Premultiplied, Line};
 use zgui_css::ComputedStyle;
 use zgui_geom::{Corners, Device, DevicePx, Edges, Rect, Vec2};
 use zgui_layout::inline::slices::{InlineSlice, device_rect};

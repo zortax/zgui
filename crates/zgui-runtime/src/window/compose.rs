@@ -46,7 +46,7 @@ impl Window {
         let interval = self.refresh_interval();
         self.tell_refresh();
         self.hand_lost_steps();
-        self.compositor.run_due(compositor_types::FrameClock {
+        self.compositor.run_due(iceblink::FrameClock {
             now_ns: nanos(at.since_origin()),
             present_ns: nanos(at.since_origin()),
             interval_ns: nanos(interval),
@@ -84,22 +84,22 @@ impl Window {
 
     /// Returns where the moment `at` of the window's clock falls on the driver's frame clock.
     fn frame_clock_ns(&self, at: web_time::Instant) -> u64 {
-        if self.compositor.pacing() == compositor_api::DriverPacing::Stepped {
+        if self.compositor.pacing() == iceblink::DriverPacing::Stepped {
             let since = at.saturating_duration_since(self.clock.origin());
             return u64::try_from(since.as_nanos()).unwrap_or(u64::MAX);
         }
         let ago = self.clock.now().saturating_duration_since(at);
-        compositor_api::now_ns().saturating_sub(u64::try_from(ago.as_nanos()).unwrap_or(u64::MAX))
+        iceblink::now_ns().saturating_sub(u64::try_from(ago.as_nanos()).unwrap_or(u64::MAX))
     }
 
     /// Returns the moment of the window's clock that `ns` on the driver's frame clock is.
     ///
     /// A stepped driver's frame clock is the window's own clock, which the window steps it with.
     pub(crate) fn frame_clock_moment(&self, ns: u64) -> web_time::Instant {
-        if self.compositor.pacing() == compositor_api::DriverPacing::Stepped {
+        if self.compositor.pacing() == iceblink::DriverPacing::Stepped {
             return self.clock.origin() + web_time::Duration::from_nanos(ns);
         }
-        let now = compositor_api::now_ns();
+        let now = iceblink::now_ns();
         let ahead = web_time::Duration::from_nanos(ns.saturating_sub(now));
         let behind = web_time::Duration::from_nanos(now.saturating_sub(ns));
         self.clock.now() + ahead - behind.min(self.clock.now() - self.clock.origin())
@@ -112,13 +112,13 @@ impl Window {
     /// driver that paces itself shows it when the frame a commit made now goes into is shown, and
     /// at `at` when it predicts none.
     pub(crate) fn shown_at(&self, at: zgui_vocab::Timestamp) -> zgui_vocab::Timestamp {
-        if self.compositor.pacing() == compositor_api::DriverPacing::Stepped {
+        if self.compositor.pacing() == iceblink::DriverPacing::Stepped {
             return at;
         }
         let Some((_, display)) = self.compositor.commit_frame(self.refresh_interval()) else {
             return at;
         };
-        at + web_time::Duration::from_nanos(display.saturating_sub(compositor_api::now_ns()))
+        at + web_time::Duration::from_nanos(display.saturating_sub(iceblink::now_ns()))
     }
 
     /// Takes what the driver answered since the last call and acts on it.
@@ -152,8 +152,8 @@ impl Window {
             containment.assert_contained();
         }
         if answers.shown {
-            self.show_first_frame(compositor_types::FrameOutcome::Presented(
-                compositor_types::FrameStats::default(),
+            self.show_first_frame(iceblink::FrameOutcome::Presented(
+                iceblink::FrameStats::default(),
             ));
         }
         if let Some((starved, _occluded)) = answers.presenter {
@@ -193,7 +193,7 @@ impl Window {
     }
 
     /// Takes why the window's renderer could not be built, if the window never showed a frame.
-    pub(crate) const fn take_unopened(&mut self) -> Option<compositor_types::GpuUnavailable> {
+    pub(crate) const fn take_unopened(&mut self) -> Option<iceblink::GpuUnavailable> {
         self.unopened.take()
     }
 
@@ -223,7 +223,7 @@ impl Window {
     /// Makes the driver's next frame a deadline of the window, unless the driver paces itself.
     pub(crate) fn arm_driver(&mut self) {
         let due = self.compositor.next_due();
-        let paced = self.compositor.pacing() == compositor_api::DriverPacing::SelfPaced;
+        let paced = self.compositor.pacing() == iceblink::DriverPacing::SelfPaced;
         let at = due
             .filter(|_| !paced)
             .map(|due| self.frame_clock_moment(due));
@@ -254,7 +254,7 @@ impl Window {
     /// A rejection is answered later, as a rejected frame is.
     pub(super) fn submit_embed_transaction(
         &mut self,
-        transaction: compositor_types::Transaction,
+        transaction: iceblink::Transaction,
         redrawn: &DamageSet,
     ) {
         if self.check_damage {
@@ -272,7 +272,7 @@ impl Window {
     /// glyphs, declares the damage the frame's paint walk drew, which holds every pixel the walk's
     /// recordings and offsets change. With invariants checked, a declaration the compositor's
     /// verification finds short is a defect.
-    pub(super) fn submit_transaction(&mut self, mut transaction: compositor_types::Transaction) {
+    pub(super) fn submit_transaction(&mut self, mut transaction: iceblink::Transaction) {
         let report = self.painter.compositor().map(|sync| sync.report());
         // Table writes, such as a transform or a colour an animation moves, change pixels the
         // walk's damage does not hold, and so do hinted glyphs, whose bitmaps only the

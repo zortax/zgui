@@ -15,7 +15,7 @@ pub use self::recording::Recording;
 use std::sync::Arc;
 
 use crate::Tables;
-use compositor_types::{
+use iceblink::{
     Backdrop, ClipRef, ClipShape, ExternalQuad, Filter, Glyph, GlyphRun, Line, LocalClip,
     LocalParent, MarkPayload, Marks, PaintRef, ParamsBlock, PathItem, Quad, ShaderQuad, Shadow,
     SpaceRef, TextureId,
@@ -362,10 +362,10 @@ impl core::fmt::Debug for Recorder<'_> {
 }
 
 /// Appends `values` to `arena` and returns the range they take.
-fn append<T: Copy>(arena: &mut Vec<T>, values: &[T]) -> compositor_types::ArenaRange {
+fn append<T: Copy>(arena: &mut Vec<T>, values: &[T]) -> iceblink::ArenaRange {
     let start = arena.len() as u32;
     arena.extend_from_slice(values);
-    compositor_types::ArenaRange {
+    iceblink::ArenaRange {
         start,
         len: values.len() as u32,
     }
@@ -409,14 +409,14 @@ pub fn filled(bounds: Rect<DevicePx, Device>, radii: [f32; 8], fill: PaintRef) -
     Quad {
         bounds: local_rect(bounds),
         radii,
-        shapes: compositor_types::ROUND,
+        shapes: iceblink::ROUND,
         border: [0.0; 4],
         fill,
         stroke: PaintRef::NONE,
         paint_origin: [0.0; 2],
         clip: ClipRef::INHERIT,
         space: SpaceRef::INHERIT,
-        style: compositor_types::BorderStyle::SOLID,
+        style: iceblink::BorderStyle::SOLID,
         _pad: [0; 3],
     }
 }

@@ -7,7 +7,7 @@
 
 use crate::Tables;
 use crate::paints::{Paint, PaintOwner, PaintRef, PaintRole};
-use compositor_types::{Color as Premultiplied, PaintKind, Quad, ShaderQuad, Shadow};
+use iceblink::{Color as Premultiplied, PaintKind, Quad, ShaderQuad, Shadow};
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Edges, Point, Rect, Vec2};
@@ -281,7 +281,7 @@ fn shaded(
         };
         let (border, stroke) = match stroke.filter(|_| index == last) {
             Some(stroke) => (borders, stroke),
-            None => ([0.0; 4], compositor_types::PaintRef::NONE),
+            None => ([0.0; 4], iceblink::PaintRef::NONE),
         };
         // Only a paint that is read at a point has an origin to be read from.
         let samples = [fill, stroke]
@@ -314,10 +314,10 @@ fn push(
     rec: &mut Recorder<'_>,
     placement: BoxPlacement,
     style: &PaintStyle,
-    fill: compositor_types::PaintRef,
-    border: Option<([f32; 4], compositor_types::PaintRef)>,
+    fill: iceblink::PaintRef,
+    border: Option<([f32; 4], iceblink::PaintRef)>,
 ) {
-    let (widths, stroke) = border.unwrap_or(([0.0; 4], compositor_types::PaintRef::NONE));
+    let (widths, stroke) = border.unwrap_or(([0.0; 4], iceblink::PaintRef::NONE));
     // Only a paint that is read at a point has an origin to be read from, and saying so is what
     // keeps every flat-filled box in the document carrying a zero it does not use.
     let samples = [fill, stroke]
@@ -374,7 +374,7 @@ pub fn outline(rec: &mut Recorder<'_>, style: &PaintStyle, placement: BoxPlaceme
         // as two boxes rather than one.
         shapes: [style.corner_shape.get(); 4],
         border: [outline.width; 4],
-        fill: compositor_types::PaintRef::NONE,
+        fill: iceblink::PaintRef::NONE,
         stroke,
         paint_origin: [0.0; 2],
         clip,
@@ -496,7 +496,7 @@ mod tests {
     /// The only shadow `emit` records.
     fn only_shadow(
         emit: impl FnOnce(&mut crate::emit::record::Recorder<'_>) -> usize,
-    ) -> compositor_types::Shadow {
+    ) -> iceblink::Shadow {
         let mut tables = crate::Tables::new();
         let mut recording = Recording::new();
         let mut rec = recording.recorder(
@@ -535,7 +535,7 @@ mod tests {
     }
 
     /// The only inset shadow a 48-pixel box with a two-pixel border and six-pixel corners emits.
-    fn bordered_inset(offset: (f32, f32), spread: f32) -> compositor_types::Shadow {
+    fn bordered_inset(offset: (f32, f32), spread: f32) -> iceblink::Shadow {
         let mut style = with_shadow(spread, true);
         style.shadows[0].offset_x = offset.0;
         style.shadows[0].offset_y = offset.1;

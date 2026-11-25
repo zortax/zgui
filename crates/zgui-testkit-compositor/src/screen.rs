@@ -2,11 +2,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use compositor_api::Renderer;
-use compositor_capture::CaptureRenderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
+use iceblink_testing::capture::CaptureRenderer;
 
 use crate::drawing::Drawing;
 

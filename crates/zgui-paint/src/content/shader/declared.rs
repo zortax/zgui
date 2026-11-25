@@ -3,7 +3,7 @@
 
 use std::sync::{OnceLock, RwLock};
 
-use compositor_types::ShaderDesc;
+use iceblink::ShaderDesc;
 use zgui_css::shader::{ShaderField, ShaderId, ShaderMode, ShaderReads};
 
 /// One application shader as an application declares it.

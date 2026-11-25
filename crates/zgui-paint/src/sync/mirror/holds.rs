@@ -4,7 +4,7 @@
 //! it, such as a clip node's parent or a transform node's scroll node. An id nothing holds is
 //! removed at the next [`Holds::settle`].
 
-use compositor_types::{AnyId, ChunkKey, Transaction};
+use iceblink::{AnyId, ChunkKey, Transaction};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 

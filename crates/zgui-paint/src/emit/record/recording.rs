@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use crate::Tables;
-use compositor_types::{
+use iceblink::{
     Backdrop, ExternalQuad, Filter, Glyph, GlyphRun, Image, ItemOp, Line, MarkPayload, Marks,
     PathItem, Quad, ShaderQuad, Shadow,
 };

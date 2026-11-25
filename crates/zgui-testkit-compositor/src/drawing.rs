@@ -2,7 +2,7 @@
 
 use core::fmt;
 
-use compositor_capture::Transcript;
+use iceblink_testing::capture::Transcript;
 
 /// What one frame draws: its instances in draw order, read from the capture transcript.
 ///

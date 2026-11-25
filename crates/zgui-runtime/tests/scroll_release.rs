@@ -7,7 +7,7 @@ mod support;
 
 use std::time::Duration;
 
-use compositor_types::GesturePhase;
+use iceblink::GesturePhase;
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_platform::{Clock, SurfaceEvent};
 use zgui_platform_headless::Harness;

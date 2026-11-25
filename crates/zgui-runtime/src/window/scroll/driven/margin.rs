@@ -10,9 +10,8 @@
 //! reaches an end of the content vouches for every offset past it. For content built in steps,
 //! such as the rows of a virtual list, that holds only once its paint reaches the end.
 
-use compositor_api::{OffsetRange, ScrollWatch};
-use compositor_types::ScrollId;
-use compositor_types::smallvec::SmallVec;
+use iceblink::smallvec::SmallVec;
+use iceblink::{OffsetRange, ScrollId, ScrollWatch};
 use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
 use zgui_space::SpatialId;
 use zgui_space::spatial::{Anchoring, PropertyOwner};

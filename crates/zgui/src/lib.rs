@@ -183,8 +183,7 @@ pub use zgui_reactive::task;
 /// The compositor interface a window draws through, for an application supplying a renderer of
 /// its own.
 pub mod compositor {
-    pub use compositor_api::*;
-    pub use compositor_types::*;
+    pub use iceblink::*;
 }
 /// The frame pipeline, its windows and its timers.
 pub use zgui_runtime as runtime;

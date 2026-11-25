@@ -8,10 +8,9 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use compositor_api::Renderer;
-use compositor_types::VectorBackend;
-use compositor_vello::VelloOptions;
-use compositor_wgpu::{Canvas, PresentPacing, SharedGraphics, wgpu};
+use iceblink::{Renderer, VectorBackend};
+use iceblink_vello::VelloOptions;
+use iceblink_wgpu::{Canvas, PresentPacing, SharedGraphics, wgpu};
 use zgui_platform::PlatformError;
 use zgui_platform_web::Mount;
 use zgui_runtime::{AppError, RendererFactory};
@@ -311,15 +310,15 @@ thread_local! {
 /// Opens a renderer presenting into the canvas of the surface `id` on the page's device.
 fn canvas_renderer(
     id: zgui_platform::SurfaceId,
-    target: compositor_types::RenderTarget,
+    target: iceblink::RenderTarget,
     precision: GroupPrecision,
     paths: &super::compositor::PathRenderers,
-) -> Result<Box<dyn Renderer>, compositor_types::GpuUnavailable> {
+) -> Result<Box<dyn Renderer>, iceblink::GpuUnavailable> {
     let graphics = PAGE_GRAPHICS
         .with(|page| page.borrow().clone())
-        .ok_or_else(compositor_types::GpuUnavailable::default)?;
+        .ok_or_else(iceblink::GpuUnavailable::default)?;
     let canvas = zgui_platform_web::canvas_of(id)
-        .ok_or_else(|| compositor_types::GpuUnavailable::default().rejected("canvas", "gone"))?;
+        .ok_or_else(|| iceblink::GpuUnavailable::default().rejected("canvas", "gone"))?;
     // The page presents a canvas when the callback that drew it returns, so the display
     // paces every frame and nothing is told before a present.
     let mut renderer = graphics.renderer_for_surface(

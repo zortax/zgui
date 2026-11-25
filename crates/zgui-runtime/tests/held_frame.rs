@@ -10,10 +10,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
-use compositor_api::Renderer;
-use compositor_types::{
+use iceblink::{
     BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    SkipReason,
+    Renderer, SkipReason,
 };
 use zgui_platform::{Surface, SurfaceEvent};
 use zgui_runtime::{App, Runtime};

@@ -63,10 +63,10 @@ impl GroupPrecision {
     }
 
     /// Returns the precision the compositor's wgpu renderer holds groups at.
-    pub(crate) fn wgpu(self) -> compositor_wgpu::GroupPrecision {
+    pub(crate) fn wgpu(self) -> iceblink_wgpu::GroupPrecision {
         match self {
-            Self::High => compositor_wgpu::GroupPrecision::High,
-            Self::Compact => compositor_wgpu::GroupPrecision::Compact,
+            Self::High => iceblink_wgpu::GroupPrecision::High,
+            Self::Compact => iceblink_wgpu::GroupPrecision::Compact,
         }
     }
 }

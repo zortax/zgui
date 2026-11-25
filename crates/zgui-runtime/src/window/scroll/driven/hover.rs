@@ -1,7 +1,6 @@
 //! Hover under content the compositor moves.
 
-use compositor_api::OffsetRange;
-use compositor_types::ScrollId;
+use iceblink::{OffsetRange, ScrollId};
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point, Size};
 use zgui_vocab::{PointerId, UiState};

@@ -75,7 +75,7 @@ use std::os::fd::OwnedFd;
 use std::time::Duration;
 
 use ash::vk;
-use compositor_wgpu::Gpu;
+use iceblink_wgpu::Gpu;
 use tracing::{info, warn};
 
 use crate::import::fence::Signal;

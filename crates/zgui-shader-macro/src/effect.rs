@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use compositor_types::shader;
+use iceblink::shader;
 use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
@@ -191,7 +191,7 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
 
     let name = &declared.name;
     let mode_path = mode_path(declared.mode);
-    let prebuilt_format = compositor_wgsl::PREBUILT_FORMAT;
+    let prebuilt_format = iceblink_wgsl::PREBUILT_FORMAT;
     let reads_time = declared.reads.time;
     let reads_pointer = declared.reads.pointer;
     let reach = declared.reach;
@@ -236,8 +236,8 @@ pub(crate) fn expand(input: TokenStream) -> Result<TokenStream, syn::Error> {
 ///
 /// Fails when the module does not parse, as when the snippet declares a name the renderer reserves.
 fn prebuilt(declared: &Declaration, snippet: &str) -> Result<Vec<u8>, syn::Error> {
-    let unit = compositor_wgsl::effect(declared.mode.compositor(), snippet)
-        .expect("compositor-wgsl assembles every mode a declaration can name");
+    let unit = iceblink_wgsl::effect(declared.mode.compositor(), snippet)
+        .expect("iceblink-wgsl assembles every mode a declaration can name");
     let module = naga::front::wgsl::parse_str(&unit).map_err(|error| {
         syn::Error::new(
             source_span(&declared.source),

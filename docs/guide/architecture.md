@@ -34,7 +34,7 @@ the compositor keeps every other chunk and the pixels it drew.
             │
             │  a transaction: chunks, nodes, slots and the order
             ▼
-  the compositor and renderer       compositor-api (contract), compositor-core, compositor-wgpu
+  the compositor and renderer       iceblink (contract), iceblink-core, iceblink-wgpu
             │
             ▼
   a surface                         zgui-platform (contract), zgui-platform-wayland /
@@ -100,8 +100,8 @@ mechanically.
 `zgui` is the crate an application depends on. Everything else is reachable through it, and an
 application that only wants to describe an interface never names any of the others.
 
-The compositor crates are a workspace of their own, below every zgui layer. The engine crates name
-only its interface, `compositor-types` and `compositor-api`. The umbrella, `zgui-wgpu`, the console
+The compositor crates are the iceblink workspace, below every zgui layer. The engine crates name
+only its interface, `iceblink`. The umbrella, `zgui-wgpu`, the console
 and DRM crates, the bench and the compositor test kit choose its implementations.
 
 The unpublished `probe` crate is outside these product layers. It is a compile canary that verifies
@@ -114,8 +114,8 @@ These are the seams a consumer is most likely to meet.
 
 | Seam | Crate | What plugs in |
 |---|---|---|
-| `Compositor` | `compositor-api` | What holds a window's chunks and property trees and builds its frames. |
-| `Renderer` | `compositor-api` | A device that draws the compositor's frames. |
+| `Compositor` | `iceblink` | What holds a window's chunks and property trees and builds its frames. |
+| `Renderer` | `iceblink` | A device that draws the compositor's frames. |
 | `Surface`, `AppHandler`, `Clock`, `Waker`, `Clipboard` | `zgui-platform` | A windowing system, or the absence of one. |
 | `Dom`, `ViewHost`, `EventSink` | `zgui-view` | The node tree, the engine that laid it out, and where a handler's commands go. |
 | `SheetLoader`, `ReplacedContent`, `LinkResolver`, `PresentationalHints` | `zgui-dom` | The four things a document language brings that a document core cannot define for itself. |

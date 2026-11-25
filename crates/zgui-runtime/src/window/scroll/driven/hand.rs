@@ -1,6 +1,6 @@
 //! Handing scroll gestures to the compositor.
 
-use compositor_types::{GesturePhase, ScrollGesture, ScrollRouting, ScrollSource};
+use iceblink::{GesturePhase, ScrollGesture, ScrollRouting, ScrollSource};
 use zgui_dom::NodeKey;
 use zgui_vocab::{EventKind, PointerKind, ScrollPhase, WheelEvent};
 
@@ -125,7 +125,7 @@ impl Window {
 
     /// Returns the scroll node the window predicts the gesture in progress moves: the node of the
     /// element it latched to, or of the document's own scroll container.
-    fn predicted_node(&mut self) -> Option<compositor_types::ScrollId> {
+    fn predicted_node(&mut self) -> Option<iceblink::ScrollId> {
         if !self.compositor.capabilities().scroll_input {
             return None;
         }
@@ -184,7 +184,7 @@ impl Window {
     ///
     /// A node that moves for the first time asks for a frame of the window too, which records the
     /// margin around its port before the compositor shows any of it.
-    pub(super) fn moving(&mut self, node: compositor_types::ScrollId) {
+    pub(super) fn moving(&mut self, node: iceblink::ScrollId) {
         let container = self.element_of_scroll(node);
         if let Some(container) = container {
             self.scroll.borrow_mut().halt(container);
@@ -197,10 +197,7 @@ impl Window {
     }
 
     /// The element whose content the scroll node `node` scrolls.
-    pub(super) fn element_of_scroll(
-        &mut self,
-        node: compositor_types::ScrollId,
-    ) -> Option<NodeKey> {
+    pub(super) fn element_of_scroll(&mut self, node: iceblink::ScrollId) -> Option<NodeKey> {
         let container = self.painter.compositor()?.scroll_container(node)?;
         self.layout.borrow().get(container)?.source
     }
@@ -211,10 +208,7 @@ impl Window {
     }
 
     /// Returns the scroll node the content of `container` is drawn through.
-    pub(super) fn scroll_node_of(
-        &mut self,
-        container: NodeKey,
-    ) -> Option<compositor_types::ScrollId> {
+    pub(super) fn scroll_node_of(&mut self, container: NodeKey) -> Option<iceblink::ScrollId> {
         let first = self.layout.borrow().boxes_of(container).first().copied()?;
         let tables = &self.tables;
         self.painter.compositor()?.scroll_node(tables, first)

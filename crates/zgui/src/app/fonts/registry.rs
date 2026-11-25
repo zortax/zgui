@@ -2,8 +2,7 @@
 
 use std::sync::{Arc, OnceLock};
 
-use compositor_api::FontRegistry;
-use compositor_types::{FontData, FontId};
+use iceblink::{FontData, FontId, FontRegistry};
 use zgui_text_parley::CompositorFonts;
 
 use crate::app::fonts::pending::Pending;

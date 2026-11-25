@@ -64,7 +64,7 @@ fn a_root_component_called_app_does_not_take_over_the_entry_point() -> Result<()
         .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_compositor_renderer(Box::new(move |_size| {
             Box::new(screen.take().expect("the application opens one window"))
-                as Box<dyn compositor_api::Renderer>
+                as Box<dyn iceblink::Renderer>
         }))
         .into_handler(|| view! { App() })?;
 

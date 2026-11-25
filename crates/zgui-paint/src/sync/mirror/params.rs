@@ -1,6 +1,6 @@
 //! Shader parameter blocks mirrored as parameter slots.
 
-use compositor_types::{ParamsBlock, ParamsId, Transaction};
+use iceblink::{ParamsBlock, ParamsId, Transaction};
 use rustc_hash::FxHashMap;
 
 use crate::content::shader::{SharedParams, Wake};

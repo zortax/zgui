@@ -1,8 +1,7 @@
 //! Frames that only present what the compositor's scrolling moved.
 
-use compositor_api::WatchCause;
-use compositor_types::smallvec::SmallVec;
-use compositor_types::{CompositorEvent, FrameOutcome, ScrollId, ScrollPhase, SkipReason};
+use iceblink::smallvec::SmallVec;
+use iceblink::{CompositorEvent, FrameOutcome, ScrollId, ScrollPhase, SkipReason, WatchCause};
 use web_time::{Duration, Instant};
 use zgui_bits::DamageSet;
 use zgui_platform::Clock;

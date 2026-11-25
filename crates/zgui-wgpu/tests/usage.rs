@@ -3,7 +3,7 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use compositor_wgpu::{Builder, WgpuRenderer};
+use iceblink_wgpu::{Builder, WgpuRenderer};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
 use zgui_runtime::{App, AppError, Runtime};
@@ -99,7 +99,7 @@ fn app(
                 let make = renderer.take().expect("one window asks for one renderer");
                 Ok(zgui_testkit_compositor::factory(move || {
                     let mut renderer = make();
-                    compositor_api::Renderer::configure(&mut renderer, target);
+                    iceblink::Renderer::configure(&mut renderer, target);
                     renderer
                 }))
             },

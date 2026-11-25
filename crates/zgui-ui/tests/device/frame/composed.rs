@@ -44,7 +44,7 @@ impl Frame {
     /// Reads the instances `drawing` drew and the vector passes `frame` planned, beside the
     /// composed target `pixels`.
     pub fn composed(
-        frame: &compositor_types::Frame,
+        frame: &iceblink::Frame,
         drawing: &testkit::Drawing,
         pixels: &testkit::Pixels,
     ) -> Self {

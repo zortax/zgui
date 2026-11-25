@@ -69,7 +69,7 @@ pub(crate) enum Content {
         natural: Size<u32, Device>,
     },
     /// A texture somebody else owns, drawn from where it already is.
-    External(compositor_types::TextureId),
+    External(iceblink::TextureId),
 }
 
 impl Content {

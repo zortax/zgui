@@ -36,17 +36,15 @@ zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
 # The window renderer's contract, and the device renderer a measurement may draw through.
-compositor-api.workspace = true
+iceblink.workspace = true
 # The CPU clocks of the process and of the window's thread, which split a frame's cost between the
 # window and a compositor thread.
 rustix.workspace = true
-compositor-capture.workspace = true
-compositor-core.workspace = true
-compositor-naive.workspace = true
-compositor-text.workspace = true
-compositor-types.workspace = true
-compositor-vello.workspace = true
-compositor-wgpu.workspace = true
+iceblink-core.workspace = true
+iceblink-testing.workspace = true
+iceblink-text.workspace = true
+iceblink-vello.workspace = true
+iceblink-wgpu.workspace = true
 
 [features]
 # The allocation tags `mem-probe` charges each allocation to. A feature of its own, so the timed

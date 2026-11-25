@@ -1,10 +1,9 @@
 //! The factory's compositor and renderer draw a committed chunk.
 
-use compositor_api::OutputConfig;
-use compositor_types::{
+use iceblink::{
     Anchor, BufferAge, Built, ChunkFlags, ChunkKey, ChunkProps, ClipRef, Color, CornerShapes,
-    Frame, FrameClock, FrameOutcome, FrameRequest, Matrix4, OrderEntry, OrderNode, Paint,
-    PaintKind, PaintRef, Quad, RenderTarget, SpaceRef, TransformNode,
+    Frame, FrameClock, FrameOutcome, FrameRequest, Matrix4, OrderEntry, OrderNode, OutputConfig,
+    Paint, PaintKind, PaintRef, Quad, RenderTarget, SpaceRef, TransformNode,
 };
 
 #[test]

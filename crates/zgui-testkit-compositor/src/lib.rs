@@ -44,10 +44,10 @@ mod tierless;
 mod unavailable;
 mod windows;
 
-use compositor_api::{Compositor, Renderer};
-use compositor_capture::CaptureRenderer;
-use compositor_core::CompositorImpl;
-use compositor_text::SwashRaster;
+use iceblink::{Compositor, Renderer};
+use iceblink_core::CompositorImpl;
+use iceblink_testing::capture::CaptureRenderer;
+use iceblink_text::SwashRaster;
 use std::sync::Arc;
 
 pub use crate::aged::{Aged, Refusals};
@@ -81,7 +81,7 @@ pub fn compositor() -> Result<Box<dyn Compositor>, Unavailable> {
             Ok(Box::new(compositor))
         }
         CompositorKind::Naive => {
-            let mut compositor = compositor_naive::NaiveCompositor::new();
+            let mut compositor = iceblink_testing::naive::NaiveCompositor::new();
             compositor.set_verification(true);
             compositor.use_glyph_raster(Arc::new(SwashRaster::new()));
             Ok(Box::new(compositor))
@@ -111,10 +111,10 @@ pub fn renderer(size: [u32; 2]) -> Result<Box<dyn Renderer>, Unavailable> {
     match RendererKind::from_environment()? {
         RendererKind::Capture => Ok(Box::new(CaptureRenderer::new())),
         RendererKind::Null => Ok(Box::new(NullRenderer::default())),
-        RendererKind::Wgpu => compositor_wgpu::Builder::new()
-            .offscreen(size, compositor_wgpu::wgpu::TextureFormat::Rgba8Unorm)
+        RendererKind::Wgpu => iceblink_wgpu::Builder::new()
+            .offscreen(size, iceblink_wgpu::wgpu::TextureFormat::Rgba8Unorm)
             .map(|renderer| Box::new(renderer) as Box<dyn Renderer>)
             .map_err(|error| Unavailable::device(&error)),
-        RendererKind::Cpu => Ok(Box::new(compositor_cpu::CpuRenderer::offscreen(size))),
+        RendererKind::Cpu => Ok(Box::new(iceblink_cpu::CpuRenderer::offscreen(size))),
     }
 }

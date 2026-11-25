@@ -3,13 +3,13 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use compositor_api::{Presenter, Renderer};
-use compositor_capture::CaptureRenderer;
-use compositor_types::compositor_damage::DamageSet;
-use compositor_types::{
+use iceblink::damage::DamageSet;
+use iceblink::{
     Acquired, BufferAge, Frame, FrameOutcome, MemoryReport, PresentCapabilities, PresentFeedback,
-    PresentMode, PresentResult, RenderCapabilities, RenderTarget, STALE_DAMAGE, SkipReason,
+    PresentMode, PresentResult, Presenter, RenderCapabilities, RenderTarget, Renderer,
+    STALE_DAMAGE, SkipReason,
 };
+use iceblink_testing::capture::CaptureRenderer;
 
 use crate::drawing::Drawing;
 use crate::kept::{Drawn, Frames};

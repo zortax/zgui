@@ -5,7 +5,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use compositor_types::{
+use iceblink::{
     BufferAge, Frame, FrameOutcome, MemoryReport, ParamsBlock, RenderCapabilities, RenderTarget,
     ShaderClock,
 };
@@ -100,7 +100,7 @@ impl Shading {
     }
 }
 
-impl compositor_api::Renderer for Shading {
+impl iceblink::Renderer for Shading {
     fn capabilities(&self) -> RenderCapabilities {
         RenderCapabilities {
             custom_shaders: true,
@@ -168,7 +168,7 @@ where
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
                 let mut renderer = Shading::new(&screens);
-                compositor_api::Renderer::configure(&mut renderer, target);
+                iceblink::Renderer::configure(&mut renderer, target);
                 Ok(zgui_testkit_compositor::factory(move || renderer))
             },
         ))

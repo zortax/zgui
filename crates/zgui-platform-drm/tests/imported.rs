@@ -34,8 +34,8 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use compositor_wgpu::Supplied;
-use compositor_wgpu::{Gpu, SharedGraphics, wgpu};
+use iceblink_wgpu::Supplied;
+use iceblink_wgpu::{Gpu, SharedGraphics, wgpu};
 use zgui_drm::commit;
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};

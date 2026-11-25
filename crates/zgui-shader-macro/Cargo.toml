@@ -16,7 +16,7 @@ include.workspace = true
 # The expansion names `zgui-shader` and nothing else, so an application that writes `shader!`
 # depends on that crate rather than on this one's dependency list. What is named here is the shader
 # front end, because this macro compiles an application's WGSL while the application is built. It
-# validates the WGSL against `compositor_types::shader`, the contract's prelude. compositor-wgsl
+# validates the WGSL against `iceblink::shader`, the contract's prelude. iceblink-wgsl
 # assembles the reference renderer's module for the prebuilt program only, which the spec allows a
 # client to do ("Shaders", change 178).
 [lib]
@@ -28,8 +28,8 @@ naga = { workspace = true, features = ["wgsl-in", "serialize"] }
 proc-macro2.workspace = true
 quote.workspace = true
 syn.workspace = true
-compositor-types.workspace = true
-compositor-wgsl.workspace = true
+iceblink.workspace = true
+iceblink-wgsl.workspace = true
 
 [lints]
 workspace = true

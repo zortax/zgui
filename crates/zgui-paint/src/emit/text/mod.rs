@@ -26,7 +26,7 @@ mod run;
 pub(crate) use self::run::{RunDraw, flags, record};
 
 use crate::Tables;
-use compositor_types::{ClipRef, Color as Premultiplied, Line, LineStyle, PaintKind, PaintRef};
+use iceblink::{ClipRef, Color as Premultiplied, Line, LineStyle, PaintKind, PaintRef};
 use zgui_color::Color;
 use zgui_css::parity::Support;
 use zgui_css::values::color::{current, resolve};
@@ -741,7 +741,7 @@ fn lines(rec: &mut Recorder<'_>, style: &DecorationStyle, drawn: Drawn) -> usize
 
 #[cfg(test)]
 mod tests {
-    use compositor_types::{GlyphFlags, LineStyle};
+    use iceblink::{GlyphFlags, LineStyle};
     use zgui_css::StyleDraft;
 
     use super::{DecorationStyle, TextPlacement};
@@ -958,7 +958,7 @@ mod tests {
         };
         let drawn = super::Drawn {
             placement,
-            clip: compositor_types::ClipRef::INHERIT,
+            clip: iceblink::ClipRef::INHERIT,
         };
         let pushed = super::lines(&mut rec, &wavy, drawn);
         assert_eq!(pushed, 3, "three lines were asked for and three were drawn");

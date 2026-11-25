@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-compositor-types.workspace = true
+iceblink.workspace = true
 # PLANTED VIOLATION: an engine crate depends on an implementation, through an alias.
 renderer.workspace = true
 # PLANTED VIOLATION: an implementation no list names, found by its path into the checkout.
-compositor-wgsl.workspace = true
+iceblink-wgsl.workspace = true
 
 [dev-dependencies]
 # PLANTED VIOLATION: a test of an engine crate builds the implementation itself.
-compositor-core.workspace = true
+iceblink-core.workspace = true

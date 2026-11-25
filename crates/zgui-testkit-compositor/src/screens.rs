@@ -2,9 +2,9 @@
 
 use std::cell::RefCell;
 
-use compositor_api::{Renderer, RendererFactory};
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
+    RendererFactory,
 };
 
 use crate::screen::{Screen, Shown};

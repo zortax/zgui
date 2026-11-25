@@ -41,8 +41,8 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
-use compositor_types::{ClientId, TextureDesc, TextureId};
-use compositor_wgpu::{Gpu, WgpuRenderer};
+use iceblink::{ClientId, TextureDesc, TextureId};
+use iceblink_wgpu::{Gpu, WgpuRenderer};
 use rustc_hash::{FxHashMap, FxHashSet};
 use zgui_dom::NodeKey;
 use zgui_dom::host::replaced::{Intrinsic, ReplacedId};
@@ -55,7 +55,7 @@ use zgui_runtime::wake::RuntimeWaker;
 use zgui_vocab::{PropKey, PropValue, Timestamp};
 
 /// The re-exported graphics API, so a producer names the same wgpu the renderer links.
-pub use compositor_wgpu::wgpu;
+pub use iceblink_wgpu::wgpu;
 
 /// One shared device, plus the epoch that says when it stopped being the one you knew.
 ///
@@ -1217,7 +1217,7 @@ impl WgpuSurfaces {
 }
 
 /// Returns the window's renderer as the compositor's wgpu renderer, when it is one.
-fn wgpu_renderer(renderer: &mut dyn compositor_api::Renderer) -> Option<&mut WgpuRenderer> {
+fn wgpu_renderer(renderer: &mut dyn iceblink::Renderer) -> Option<&mut WgpuRenderer> {
     renderer.as_any_mut()?.downcast_mut::<WgpuRenderer>()
 }
 

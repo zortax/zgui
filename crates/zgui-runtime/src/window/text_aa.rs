@@ -5,7 +5,7 @@
 //! the layout where it knows it, the application or the user can state it, and one function
 //! decides from both.
 
-use compositor_types::SubpixelOrder;
+use iceblink::SubpixelOrder;
 use zgui_platform::SubpixelLayout;
 
 /// The environment variable that states [`TextAntialiasing`] for every window of a process.
@@ -81,7 +81,7 @@ impl TextAntialiasing {
     ///
     /// ```
     /// use zgui_platform::SubpixelLayout;
-    /// use compositor_types::SubpixelOrder;
+    /// use iceblink::SubpixelOrder;
     /// use zgui_runtime::TextAntialiasing;
     ///
     /// let auto = TextAntialiasing::Auto;
@@ -108,7 +108,7 @@ impl TextAntialiasing {
 
 #[cfg(test)]
 mod tests {
-    use compositor_types::SubpixelOrder;
+    use iceblink::SubpixelOrder;
     use zgui_platform::SubpixelLayout;
 
     use super::TextAntialiasing;

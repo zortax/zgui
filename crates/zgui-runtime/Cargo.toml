@@ -20,8 +20,7 @@ include.workspace = true
 # what lets the whole loop be exercised with no display server at all.
 [dependencies]
 # The compositor contract a window can draw through.
-compositor-api.workspace = true
-compositor-types.workspace = true
+iceblink.workspace = true
 web-time.workspace = true
 rustc-hash.workspace = true
 thiserror.workspace = true

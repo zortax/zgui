@@ -2,7 +2,7 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use compositor_types::ParamsBlock;
+use iceblink::ParamsBlock;
 
 /// What wakes a window to draw a changed block.
 pub type Wake = Arc<dyn Fn() + Send + Sync>;

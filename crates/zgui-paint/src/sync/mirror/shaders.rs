@@ -1,7 +1,6 @@
 //! Declared application shaders mirrored as compositor shaders.
 
-use compositor_types::ShaderReads;
-use compositor_types::{ShaderId, Transaction};
+use iceblink::{ShaderId, ShaderReads, Transaction};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 /// The compositor shader of each declared shader an item drew with.

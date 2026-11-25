@@ -2,8 +2,8 @@
 
 use std::sync::Arc;
 
-use compositor_types::compositor_geom::{Point, Size};
-use compositor_types::{DeviceRect, ImageDesc, ImageId, ImageWrite, Transaction};
+use iceblink::geom::{Point, Size};
+use iceblink::{DeviceRect, ImageDesc, ImageId, ImageWrite, Transaction};
 use rustc_hash::FxHashMap;
 
 use crate::emit::record::{ImageKey, ImagePixels};
@@ -136,7 +136,7 @@ pub(crate) fn whole(desc: ImageDesc, texels: &[u8]) -> ImageWrite {
 
 /// Returns the bytes one texel of an image of `desc` takes.
 pub(crate) fn bytes_per_texel(desc: ImageDesc) -> u32 {
-    if desc.format == compositor_types::ImageFormat::A8 {
+    if desc.format == iceblink::ImageFormat::A8 {
         1
     } else {
         4

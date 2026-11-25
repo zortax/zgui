@@ -2,7 +2,7 @@
 
 mod support;
 
-use compositor_types::Command;
+use iceblink::Command;
 use support::compositor::Recorded;
 use support::{Element, Harness};
 use zgui_space::spatial::PropertyOwner;

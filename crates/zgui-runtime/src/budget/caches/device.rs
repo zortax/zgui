@@ -1,6 +1,6 @@
 //! Everything the renderer holds on the device that no other cache here accounts for.
 
-use compositor_api::OutputStatus;
+use iceblink::OutputStatus;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};

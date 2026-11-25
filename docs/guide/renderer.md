@@ -3,9 +3,9 @@
 zgui draws nothing itself. Each frame, the paint stage records what changed as compositor items and
 commits them to a compositor in one transaction. The compositor builds frames from what it holds,
 and a renderer draws those frames into a window, a buffer or a transcript. The compositor and the
-renderer are trait objects, `Box<dyn compositor_api::Compositor>` and
-`Box<dyn compositor_api::Renderer>`, and zgui relies only on the behaviour the shared compositor
-specification guarantees. Any implementation that meets the specification can draw a zgui window.
+renderer are trait objects, `Box<dyn iceblink::Compositor>` and `Box<dyn iceblink::Renderer>`,
+and zgui relies only on the behaviour the shared compositor specification guarantees. Any
+implementation that meets the specification can draw a zgui window.
 
 This guide says what zgui sends to a compositor, where the implementations are chosen, and how an
 application or a test chooses others. The specification is the contract for an implementor.
@@ -30,20 +30,20 @@ zgui's own damage decides which fragments the paint walk visits. The compositor 
 recorded changes which pixels each frame redraws, and whether a scroll is drawn as a shift of the
 previous picture.
 
-The engine crates name only `compositor-types` and `compositor-api`. `cargo xtask ledger
+The engine crates name only `iceblink`. `cargo xtask ledger
 compositor` fails any other crate that names an implementation or downcasts to one.
 
 ## Where the implementations are chosen
 
 `zgui::app()` chooses them:
 
-- The compositor is the reference implementation, `compositor-core`, with glyphs rasterised by
+- The compositor is the reference implementation, `iceblink-core`, with glyphs rasterised by
   swash and its atlas held to a budget. `zgui::app::compositor` returns it.
-- Each window gets a `compositor-wgpu` renderer that presents into its surface. All windows share
+- Each window gets a `iceblink-wgpu` renderer that presents into its surface. All windows share
   one device and one pipeline cache, kept in `ZGUI_CACHE_DIR` or in `~/.cache/zgui/pipelines`.
 - Paths are rasterised by vello on the same device.
 
-`zgui::compositor` re-exports the interface, `compositor-api` and `compositor-types`, for an
+`zgui::compositor` re-exports the interface, `iceblink`, for an
 application that names compositor types.
 
 A few environment variables tune the default renderer:

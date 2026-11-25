@@ -6,10 +6,10 @@ mod window;
 
 use std::sync::{Arc, Mutex};
 
-use compositor_api::{Compositor, CompositorBudgets, CompositorClient};
-use compositor_core::CompositorImpl;
-use compositor_text::SwashRaster;
-use compositor_wgpu::LatencyMarks;
+use iceblink::{Compositor, CompositorBudgets, CompositorClient};
+use iceblink_core::CompositorImpl;
+use iceblink_text::SwashRaster;
+use iceblink_wgpu::LatencyMarks;
 use zgui_runtime::RendererFactory;
 use zgui_runtime::budget::limits::ATLAS_BYTES;
 
@@ -45,11 +45,11 @@ pub(crate) fn driven(
     };
     match driver {
         CompositorDriver::Threaded => {
-            Box::new(compositor_thread::ThreadedCompositor::spawn(compositor).0)
+            Box::new(iceblink_driver::thread::ThreadedCompositor::spawn(compositor).0)
         }
-        CompositorDriver::InProcess => Box::new(compositor_driver::InProcess::new(
+        CompositorDriver::InProcess => Box::new(iceblink_driver::InProcess::new(
             compositor,
-            compositor_driver::DriverOptions::default(),
+            iceblink_driver::DriverOptions::default(),
         )),
     }
 }

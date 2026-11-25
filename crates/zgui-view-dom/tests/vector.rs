@@ -261,7 +261,7 @@ fn the_outlines_a_view_set_reach_the_compositor_as_the_list_it_wrote_in_the_colo
 
     // Through a compositor, not read back out of the tables the test just filled: what a renderer
     // is handed is the frame, and the colour in it is the one the cascade resolved.
-    let key = compositor_types::ChunkKey::new(1, 0);
+    let key = iceblink::ChunkKey::new(1, 0);
     let mut session =
         zgui_testkit_compositor::Session::new([64, 64]).unwrap_or_else(|why| panic!("{why}"));
     let mut transaction = session.transaction();

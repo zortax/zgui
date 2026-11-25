@@ -11,7 +11,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use compositor_types::{BufferAge, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget};
+use iceblink::{BufferAge, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget};
 use zgui::platform::{AppHandler, PlatformError, SurfaceEvent};
 use zgui::prelude::*;
 use zgui_platform_headless::Harness;
@@ -71,7 +71,7 @@ struct Recording {
     record: Arc<Mutex<Record>>,
 }
 
-impl compositor_api::Renderer for Recording {
+impl iceblink::Renderer for Recording {
     fn capabilities(&self) -> RenderCapabilities {
         self.device.capabilities()
     }
@@ -89,7 +89,7 @@ impl compositor_api::Renderer for Recording {
         self.device.target_age()
     }
 
-    fn draw(&mut self, frame: &compositor_types::Frame) -> FrameOutcome {
+    fn draw(&mut self, frame: &iceblink::Frame) -> FrameOutcome {
         let outcome = self.device.draw(frame);
         let drawing = self.shown.drawing().expect("the device recorded the frame");
         lock(&self.record).frames.push(Frame {
@@ -104,7 +104,7 @@ impl compositor_api::Renderer for Recording {
         outcome
     }
 
-    fn set_subpixel_order(&mut self, order: compositor_types::SubpixelOrder) {
+    fn set_subpixel_order(&mut self, order: iceblink::SubpixelOrder) {
         self.device.set_subpixel_order(order);
     }
 
@@ -149,7 +149,7 @@ fn run_with(transparent: bool, antialiasing: zgui::TextAntialiasing, sheet: &str
             composed: device.composed(),
             device,
             record: Arc::clone(&factory_record),
-        }) as Box<dyn compositor_api::Renderer>
+        }) as Box<dyn iceblink::Renderer>
     };
     let drive = |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
         let mut harness = Harness::new(handler);

@@ -13,7 +13,7 @@ pub(crate) mod gpu;
 
 use std::sync::Arc;
 
-use compositor_types::CommitCounters;
+use iceblink::CommitCounters;
 use zgui_bits::DamageSet;
 use zgui_dom::host::{Intrinsic, ReplacedContent, ReplacedId};
 use zgui_dom::node::flags::NodeFlags;

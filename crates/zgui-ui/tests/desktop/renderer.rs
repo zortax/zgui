@@ -8,9 +8,8 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
 use zgui::platform::Surface;
 use zgui::runtime::AppError;
@@ -80,7 +79,7 @@ impl Renderer for Counting {
 pub fn build(
     _surface: &Arc<dyn Surface>,
     target: RenderTarget,
-) -> Result<compositor_api::RendererFactory, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     Ok(zgui_testkit_compositor::factory(move || {
         let mut renderer = Counting::default();
         renderer.configure(target);

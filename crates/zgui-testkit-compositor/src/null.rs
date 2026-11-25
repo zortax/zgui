@@ -1,8 +1,8 @@
 //! A renderer that draws nothing.
 
-use compositor_api::Renderer;
-use compositor_types::{
+use iceblink::{
     BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+    Renderer,
 };
 
 /// A renderer that accepts every frame, reports it presented and keeps nothing.

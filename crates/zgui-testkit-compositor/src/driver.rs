@@ -1,8 +1,8 @@
 //! The driver zgui's tests run a compositor behind.
 
-use compositor_api::{Compositor, CompositorClient, Renderer, RendererFactory};
-use compositor_driver::{DriverOptions, InProcess};
-use compositor_thread::{ClientHandle, ThreadedCompositor};
+use iceblink::{Compositor, CompositorClient, Renderer, RendererFactory};
+use iceblink_driver::thread::{ClientHandle, ThreadedCompositor};
+use iceblink_driver::{DriverOptions, InProcess};
 
 use crate::select::DriverKind;
 use crate::synced::Synced;

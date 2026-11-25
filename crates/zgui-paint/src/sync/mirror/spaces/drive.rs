@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{ScrollBehaviour, ScrollPhysics, SnapKind, Sources};
+use iceblink::{ScrollBehaviour, ScrollPhysics, SnapKind, Sources};
 
 /// How the compositor moves a scroll node under gestures, without the client writing offsets.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

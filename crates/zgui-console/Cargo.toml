@@ -21,11 +21,10 @@ zgui-platform-drm = { path = "../zgui-platform-drm", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
 # The window renderer's contract, and the device renderer and path rasteriser a display is drawn
 # with.
-compositor-api.workspace = true
-compositor-driver.workspace = true
-compositor-types.workspace = true
-compositor-vello.workspace = true
-compositor-wgpu.workspace = true
+iceblink.workspace = true
+iceblink-driver.workspace = true
+iceblink-vello.workspace = true
+iceblink-wgpu.workspace = true
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
 # What the console renderer says when a frame did not reach a display — a readback that answered
 # nothing, a buffer the display would not give up, a driver that refused the flip — and what it

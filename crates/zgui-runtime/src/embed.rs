@@ -19,7 +19,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use compositor_api::RendererTask;
+use iceblink::RendererTask;
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
 use zgui_geom::{Device, Size};
@@ -55,7 +55,7 @@ pub struct EmbedSyncCx<'a> {
     /// A host creates the external texture slots surface nodes are drawn from here, and reports
     /// new content bound to one with `texture_frame`. The client is the transaction's, and it
     /// changes when the compositor rejected a commit and every slot was removed.
-    pub transaction: &'a mut compositor_types::Transaction,
+    pub transaction: &'a mut iceblink::Transaction,
     /// The frame's damage, still open: a host that attached new pixels absorbs their rectangle.
     pub damage: &'a mut DamageSet,
     /// The pixels the compositor redraws for the texture frames reported through `transaction`.
@@ -101,7 +101,7 @@ pub struct RendererQueue<'a>(pub(crate) &'a crate::compositor::Client);
 
 impl RendererQueue<'_> {
     /// Queues `task` on the renderer, which it reaches through
-    /// [`Renderer::as_any_mut`](compositor_api::Renderer::as_any_mut).
+    /// [`Renderer::as_any_mut`](iceblink::Renderer::as_any_mut).
     pub fn queue(&self, task: RendererTask) {
         self.0.with_renderer(task);
     }

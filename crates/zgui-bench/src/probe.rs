@@ -12,11 +12,10 @@ use std::ops::Range;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
-use compositor_wgpu::WgpuRenderer;
+use iceblink_wgpu::WgpuRenderer;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::{Surface, SurfaceEvent};
 use zgui::runtime::{AppError, Runtime};
@@ -261,11 +260,11 @@ impl Renderer for Counted {
         self.inner.memory()
     }
 
-    fn vector_status(&self) -> compositor_types::VectorStatus {
+    fn vector_status(&self) -> iceblink::VectorStatus {
         self.inner.vector_status()
     }
 
-    fn target_pool(&self) -> compositor_types::TargetPoolReport {
+    fn target_pool(&self) -> iceblink::TargetPoolReport {
         self.inner.target_pool()
     }
 
@@ -295,7 +294,7 @@ fn renderer(device: Device, log: DrawLog) -> zgui::runtime::RendererFactory {
     Box::new(
         move |_surface: &Arc<dyn Surface>,
               target: RenderTarget|
-              -> Result<compositor_api::RendererFactory, AppError> {
+              -> Result<iceblink::RendererFactory, AppError> {
             let log = log.clone();
             Ok(Box::new(move || {
                 let inner: Box<dyn Renderer> = match device {
@@ -303,7 +302,7 @@ fn renderer(device: Device, log: DrawLog) -> zgui::runtime::RendererFactory {
                     Device::Gpu => {
                         let timed = crate::renderers::gpu_timing_requested();
                         if timed {
-                            compositor_wgpu::enable_gpu_timing();
+                            iceblink_wgpu::enable_gpu_timing();
                         }
                         let gpu = crate::renderers::device(target)?;
                         if timed && !gpu.gpu_timing_enabled() {

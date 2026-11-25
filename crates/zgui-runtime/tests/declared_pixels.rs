@@ -9,8 +9,7 @@ mod support;
 
 use std::sync::Arc;
 
-use compositor_api::Renderer;
-use compositor_types::RenderTarget;
+use iceblink::{RenderTarget, Renderer};
 use zgui_geom::{CssPx, DevicePx, Point, Size};
 use zgui_platform::{Surface, SurfaceEvent};
 use zgui_runtime::{App, AppError};

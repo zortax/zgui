@@ -1,8 +1,6 @@
 //! One shaped run recorded as a compositor glyph run.
 
-use compositor_types::{
-    ArenaRange, ClipRef, FontId, Glyph, GlyphFlags, GlyphRun, PaintRef, SpaceRef,
-};
+use iceblink::{ArenaRange, ClipRef, FontId, Glyph, GlyphFlags, GlyphRun, PaintRef, SpaceRef};
 use smallvec::SmallVec;
 use zgui_text::{SUBPIXEL_MAX_SIZE, ShapedRun};
 
@@ -72,7 +70,7 @@ pub(crate) fn flags(size: f32, subpixel: bool, silhouette: bool) -> GlyphFlags {
 
 #[cfg(test)]
 mod tests {
-    use compositor_types::GlyphFlags;
+    use iceblink::GlyphFlags;
     use zgui_text::SUBPIXEL_MAX_SIZE;
 
     #[test]
@@ -110,9 +108,9 @@ mod tests {
             &run,
             super::RunDraw {
                 origin: [10.0, 20.0],
-                paint: compositor_types::PaintRef::color([0, 0, 0, 255]),
-                clip: compositor_types::ClipRef::INHERIT,
-                space: compositor_types::SpaceRef::INHERIT,
+                paint: iceblink::PaintRef::color([0, 0, 0, 255]),
+                clip: iceblink::ClipRef::INHERIT,
+                space: iceblink::SpaceRef::INHERIT,
                 flags: GlyphFlags::HINT,
             },
         );

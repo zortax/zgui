@@ -9,11 +9,10 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
-use compositor_wgpu::{GpuTiming, WgpuRenderer};
+use iceblink_wgpu::{GpuTiming, WgpuRenderer};
 
 use crate::scenario::band::Spread;
 
@@ -155,7 +154,7 @@ impl Renderer for Timed {
         self.inner.acquire_block()
     }
 
-    fn set_subpixel_order(&mut self, order: compositor_types::SubpixelOrder) {
+    fn set_subpixel_order(&mut self, order: iceblink::SubpixelOrder) {
         self.inner.set_subpixel_order(order);
     }
 
@@ -163,7 +162,7 @@ impl Renderer for Timed {
         self.inner.memory()
     }
 
-    fn target_pool(&self) -> compositor_types::TargetPoolReport {
+    fn target_pool(&self) -> iceblink::TargetPoolReport {
         self.inner.target_pool()
     }
 
@@ -175,7 +174,7 @@ impl Renderer for Timed {
         self.inner.release_idle_resources()
     }
 
-    fn vector_status(&self) -> compositor_types::VectorStatus {
+    fn vector_status(&self) -> iceblink::VectorStatus {
         self.inner.vector_status()
     }
 

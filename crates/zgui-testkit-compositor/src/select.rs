@@ -5,7 +5,7 @@ use crate::Unavailable;
 /// A compositor implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CompositorKind {
-    /// The reference compositor, `compositor-core`.
+    /// The reference compositor, `iceblink-core`.
     Core,
     /// The second implementation, written from the spec alone.
     Naive,
@@ -14,11 +14,12 @@ pub enum CompositorKind {
 /// A driver of the compositor.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DriverKind {
-    /// `compositor-driver`'s driver on the test's own thread.
+    /// The driver of `iceblink-driver` on the test's own thread.
     Local,
-    /// `compositor-thread`'s driver on a thread of its own.
+    /// The driver of `iceblink_driver::thread` on a thread of its own.
     Threaded,
-    /// `compositor-thread`'s driver on a thread of its own, building frames at the display's rate.
+    /// The driver of `iceblink_driver::thread` on a thread of its own, building frames at the
+    /// display's rate.
     Paced,
 }
 

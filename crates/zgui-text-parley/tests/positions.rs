@@ -106,7 +106,7 @@ fn a_second_line_is_not_offset_by_the_first() {
 /// The run a glyph belongs to names a face the compositor's font registry knows.
 #[test]
 fn a_run_names_a_face_and_a_size_the_compositor_can_draw() {
-    use compositor_api::FontRegistry;
+    use iceblink::FontRegistry;
 
     let (fonts, mut shaper) = support::shaper(Controls::Verbatim);
     let fixture = support::Fixture::new("handgloves", Direction::LeftToRight);
@@ -117,7 +117,7 @@ fn a_run_names_a_face_and_a_size_the_compositor_can_draw() {
     shaper.visit_line(&shaped, 0, &mut |run: ShapedRun<'_>| {
         assert!(run.size > 0.0, "a run drawn at no size draws nothing");
         assert!(
-            registry.get(compositor_types::FontId(run.face.0)).is_some(),
+            registry.get(iceblink::FontId(run.face.0)).is_some(),
             "the run names {:?}, which the registry does not know",
             run.face
         );

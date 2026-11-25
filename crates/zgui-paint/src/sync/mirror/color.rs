@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use crate::paints::GradientKind;
-use compositor_types::compositor_color as target;
-use compositor_types::{Color, Gradient, GradientShape, GradientStop, Interpolation, Paint};
+use iceblink::color as target;
+use iceblink::{Color, Gradient, GradientShape, GradientStop, Interpolation, Paint};
 
 /// Returns `paint` as a compositor paint, or `None` for an image paint.
 pub(crate) fn paint(paint: &crate::paints::Paint) -> Option<Paint> {

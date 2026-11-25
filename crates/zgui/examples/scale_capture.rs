@@ -1,7 +1,7 @@
 //! The same document drawn at several device pixel ratios, read back off the graphics device.
 //!
 //! Every stage a window runs is run here: the events are dispatched, the reactive work flushed,
-//! the document restyled, laid out, painted, composited and drawn by the real `compositor-wgpu`
+//! the document restyled, laid out, painted, composited and drawn by the real `iceblink-wgpu`
 //! renderer. The one difference from a window on a screen is that the renderer presents to a
 //! texture rather than to a surface, which is what makes the pixels readable.
 //!
@@ -26,11 +26,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
-use compositor_wgpu::{Builder, Pixels, wgpu};
+use iceblink_wgpu::{Builder, Pixels, wgpu};
 use zgui::prelude::*;
 use zgui_geom::{Device, DevicePx, Rect, Size};
 use zgui_platform::{Surface, SurfaceEvent};
@@ -47,7 +46,7 @@ type Readback = Arc<Mutex<Option<Pixels>>>;
 /// second render of the same frame.
 struct Recording {
     /// The renderer under test.
-    inner: compositor_wgpu::WgpuRenderer,
+    inner: iceblink_wgpu::WgpuRenderer,
     /// Where the last frame's pixels go.
     into: Readback,
 }
@@ -162,7 +161,7 @@ fn open(
         )))
         .with_renderer(Box::new(move |_surface: &Arc<dyn Surface>, target| {
             let into = Arc::clone(&into);
-            Ok::<compositor_api::RendererFactory, zgui_runtime::AppError>(Box::new(move || {
+            Ok::<iceblink::RendererFactory, zgui_runtime::AppError>(Box::new(move || {
                 let mut inner =
                     Builder::new().offscreen(target.size, wgpu::TextureFormat::Bgra8Unorm)?;
                 inner.configure(target);

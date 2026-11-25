@@ -27,7 +27,7 @@ mod filter;
 
 use std::sync::Arc;
 
-use compositor_types::Backdrop;
+use iceblink::Backdrop;
 use zgui_layout::{Fragment, FragmentFlags};
 use zgui_space::{ClipId, ClipLink};
 
@@ -120,9 +120,9 @@ pub struct GroupEffect {
     /// The multiplier on the group.
     pub opacity: f32,
     /// How the group is composited onto what is beneath it.
-    pub blend: compositor_types::BlendMode,
+    pub blend: iceblink::BlendMode,
     /// The filters applied to the group's content, in sequence.
-    pub filters: Arc<[compositor_types::Filter]>,
+    pub filters: Arc<[iceblink::Filter]>,
     /// The application shader that filters the group's content after `filters`.
     pub shader: Option<crate::emit::shader::ShaderStep>,
     /// Whether the subtree is drawn into a group whatever the other fields say.
@@ -167,7 +167,7 @@ pub fn effect(
         Isolation::Folded(alpha) if alpha <= 0.0 => Some(GroupEffect {
             clip: ClipId::ROOT,
             opacity: 0.0,
-            blend: compositor_types::BlendMode::NORMAL,
+            blend: iceblink::BlendMode::NORMAL,
             filters: Arc::from([]),
             shader: None,
             isolate: false,
@@ -437,11 +437,11 @@ mod tests {
         );
         assert_eq!(pushed, 1);
         let backdrop = &recording.backdrops()[0];
-        assert_eq!(backdrop.space, compositor_types::SpaceRef::INHERIT);
+        assert_eq!(backdrop.space, iceblink::SpaceRef::INHERIT);
         assert_eq!(backdrop.bounds, [10.0, 10.0, 40.0, 30.0]);
         assert_eq!(
             recording.filters(backdrop).as_ref(),
-            [compositor_types::Filter::Blur(4.0)]
+            [iceblink::Filter::Blur(4.0)]
         );
     }
 }

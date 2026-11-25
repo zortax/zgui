@@ -189,7 +189,7 @@ impl ContentCache {
     }
 
     /// Attaches an external texture slot of the window's compositor client to a replaced node.
-    pub fn set_external(&mut self, id: ReplacedId, texture: compositor_types::TextureId) {
+    pub fn set_external(&mut self, id: ReplacedId, texture: iceblink::TextureId) {
         self.attach(id, Content::External(texture));
     }
 

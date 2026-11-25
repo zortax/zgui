@@ -22,8 +22,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use compositor_api::CompositorClient;
-use compositor_types::RenderTarget;
+use iceblink::{CompositorClient, RenderTarget};
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
     AppHandler, Clock, CloseReason, IdlePolicy, PlatformCx, PlatformError, Surface,
@@ -48,9 +47,8 @@ use crate::window::{Window, WindowContent};
 /// It runs on the window's thread when the window opens, and fails there when the surface cannot
 /// be drawn into. What it returns builds the renderer on the thread that draws the frames of the
 /// window's output of the application's compositor, see [`App::with_compositor`].
-pub type RendererFactory = Box<
-    dyn FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<compositor_api::RendererFactory, AppError>,
->;
+pub type RendererFactory =
+    Box<dyn FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<iceblink::RendererFactory, AppError>>;
 
 /// Builds the text engine a window shapes with.
 pub type TextFactory = Box<dyn FnMut() -> Box<dyn TextEngine>>;
@@ -723,11 +721,7 @@ impl Runtime {
             application_id: application_id.clone(),
             compositor: app.compositor.map(crate::compositor::Shared::new),
             renderer: app.renderer.unwrap_or_else(|| {
-                Box::new(|_, _| {
-                    Err(AppError::GpuUnavailable(
-                        compositor_types::GpuUnavailable::default(),
-                    ))
-                })
+                Box::new(|_, _| Err(AppError::GpuUnavailable(iceblink::GpuUnavailable::default())))
             }),
             text: app
                 .text

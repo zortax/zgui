@@ -1,8 +1,8 @@
 //! The damage a window's frame declares to its compositor.
 
-use compositor_types::DeviceRect;
-use compositor_types::compositor_damage::DamageSet as Declared;
-use compositor_types::compositor_geom::{Point, Rect, Size};
+use iceblink::DeviceRect;
+use iceblink::damage::DamageSet as Declared;
+use iceblink::geom::{Point, Rect, Size};
 use zgui_bits::DamageSet;
 use zgui_geom::Device;
 

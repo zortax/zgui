@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use compositor_types::{FillRule, PathClip, PathFill, PathItem, PathStroke};
+use iceblink::{FillRule, PathClip, PathFill, PathItem, PathStroke};
 use zgui_color::{Color, ColorSpace, HueInterpolation};
 use zgui_profile::{Counter, counter};
 
@@ -115,13 +115,13 @@ pub(crate) fn emit_tracked(
                 rule: fill_rule(fill.rule),
             }
         })
-        .filter(|fill| fill.paint != compositor_types::PaintRef::NONE);
+        .filter(|fill| fill.paint != iceblink::PaintRef::NONE);
     let stroke = stroke
         .map(|(stroke, style)| PathStroke {
             paint: rec.paint(stroke),
             style,
         })
-        .filter(|stroke| stroke.paint != compositor_types::PaintRef::NONE);
+        .filter(|stroke| stroke.paint != iceblink::PaintRef::NONE);
     if fill.is_none() && stroke.is_none() {
         return ShapeEmission::default();
     }

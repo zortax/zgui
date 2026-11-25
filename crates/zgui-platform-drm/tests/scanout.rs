@@ -19,14 +19,13 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use compositor_api::{Compositor, OutputConfig, Renderer};
-use compositor_core::CompositorImpl;
-use compositor_types::{
-    Anchor, BorderStyle, BufferAge, Built, ChunkFlags, ChunkKey, ChunkProps, ClipRef, Frame,
-    FrameClock, FrameRequest, Matrix4, OrderEntry, OrderNode, PaintRef, Quad, RenderTarget,
-    SpaceRef, TransformNode,
+use iceblink::{
+    Anchor, BorderStyle, BufferAge, Built, ChunkFlags, ChunkKey, ChunkProps, ClipRef, Compositor,
+    Frame, FrameClock, FrameRequest, Matrix4, OrderEntry, OrderNode, OutputConfig, PaintRef, Quad,
+    RenderTarget, Renderer, SpaceRef, TransformNode,
 };
-use compositor_wgpu::{Builder, Pixels, wgpu};
+use iceblink_core::CompositorImpl;
+use iceblink_wgpu::{Builder, Pixels, wgpu};
 use zgui_drm::commit;
 use zgui_drm::device::Interface;
 use zgui_drm::{Device, Event};
@@ -154,7 +153,7 @@ fn frame(test: &str, width: u32, height: u32) -> Option<Pixels> {
     chunk.quad(Quad {
         bounds: [0.0, 0.0, width as f32, height as f32],
         radii: [0.0; 8],
-        shapes: compositor_types::ROUND,
+        shapes: iceblink::ROUND,
         border: [0.0; 4],
         fill: PaintRef::color([0, 120, 200, 255]),
         stroke: PaintRef::NONE,

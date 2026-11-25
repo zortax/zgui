@@ -9,8 +9,7 @@ mod support;
 
 use std::sync::Arc;
 
-use compositor_api::Renderer;
-use compositor_types::{RenderCapabilities, RenderTarget};
+use iceblink::{RenderCapabilities, RenderTarget, Renderer};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
 use zgui_reactive::RwSignal;

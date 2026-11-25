@@ -1,6 +1,6 @@
 //! A harness's frames recorded into a compositor from the test factory.
 
-use compositor_types::{Built, CommitCounters};
+use iceblink::{Built, CommitCounters};
 use zgui_paint::{CompositorSync, SyncReport};
 use zgui_testkit_compositor::TestOutput;
 

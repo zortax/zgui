@@ -6,7 +6,7 @@ mod written;
 
 pub use self::drive::ScrollDrive;
 
-use compositor_types::{ScrollId, Transaction, TransformId};
+use iceblink::{ScrollId, Transaction, TransformId};
 use rustc_hash::FxHashMap;
 use zgui_space::ChangeCoverage;
 use zgui_space::spatial::{PropertyOwner, SpatialId, SpatialNode, SpatialTree, TreeVersion};

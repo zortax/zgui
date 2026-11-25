@@ -405,7 +405,7 @@ pub(crate) fn recording(
 pub(crate) fn payloads(
     drawing: &zgui_paint::content::Drawing,
     routes: &dyn VectorMaskSource,
-) -> Vec<Arc<compositor_types::MarkPayload>> {
+) -> Vec<Arc<iceblink::MarkPayload>> {
     let recording = recording(drawing, routes);
     recording
         .marks()
@@ -416,8 +416,8 @@ pub(crate) fn payloads(
 
 /// Reports whether `a` and `b` are the same payloads, by address.
 pub(crate) fn same_payloads(
-    a: &[Arc<compositor_types::MarkPayload>],
-    b: &[Arc<compositor_types::MarkPayload>],
+    a: &[Arc<iceblink::MarkPayload>],
+    b: &[Arc<iceblink::MarkPayload>],
 ) -> bool {
     !a.is_empty() && a.len() == b.len() && a.iter().zip(b).all(|(a, b)| Arc::ptr_eq(a, b))
 }

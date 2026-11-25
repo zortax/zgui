@@ -16,8 +16,7 @@ mod support;
 
 use std::sync::Arc;
 
-use compositor_api::Renderer;
-use compositor_types::{RenderCapabilities, RenderTarget};
+use iceblink::{RenderCapabilities, RenderTarget, Renderer};
 use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::Surface;
 use zgui_platform::SurfaceEvent;

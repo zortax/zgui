@@ -2,7 +2,7 @@
 
 use std::cell::Cell;
 
-use compositor_types::ChunkKey;
+use iceblink::ChunkKey;
 use rustc_hash::FxHashMap;
 use zgui_geom::{Device, Point, Rect, Size};
 use zgui_space::SpatialId;
@@ -195,7 +195,7 @@ fn widened(union: [i32; 4], edges: [i32; 4]) -> [i32; 4] {
 
 #[cfg(test)]
 mod tests {
-    use compositor_types::ChunkKey;
+    use iceblink::ChunkKey;
     use zgui_geom::{Device, Point, Rect, Size};
     use zgui_space::SpatialId;
 

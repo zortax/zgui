@@ -25,14 +25,12 @@ web-time.workspace = true
 # The compositor every window draws through, chosen here and nowhere else: the reference
 # compositor, the wgpu renderer and the swash glyph rasteriser, driven on a thread of its own or
 # on the window's.
-compositor-api.workspace = true
-compositor-core.workspace = true
-compositor-driver.workspace = true
-compositor-text.workspace = true
-compositor-thread.workspace = true
-compositor-types.workspace = true
-compositor-vello.workspace = true
-compositor-wgpu.workspace = true
+iceblink.workspace = true
+iceblink-core.workspace = true
+iceblink-driver.workspace = true
+iceblink-text.workspace = true
+iceblink-vello.workspace = true
+iceblink-wgpu.workspace = true
 # The damage set.
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }

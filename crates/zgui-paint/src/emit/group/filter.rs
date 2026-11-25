@@ -3,7 +3,7 @@
 //! The per-pixel functions are colour matrices over straight colour. A run of them is the product
 //! of their matrices, so it becomes one matrix.
 
-use compositor_types::{Color, Filter};
+use iceblink::{Color, Filter};
 
 /// A 4x5 colour matrix in row-major order, the constant last in each row.
 type Matrix = [f32; 20];
@@ -195,7 +195,7 @@ fn then(first: Matrix, next: Matrix) -> Matrix {
 #[cfg(test)]
 mod tests {
     use super::{IDENTITY, Matrix, convert, then};
-    use compositor_types::Filter;
+    use iceblink::Filter;
 
     /// Applies a row-major matrix to a straight colour.
     fn apply(matrix: &Matrix, color: [f32; 4]) -> [f32; 4] {

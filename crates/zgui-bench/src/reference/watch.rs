@@ -13,9 +13,8 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use compositor_api::Renderer;
-use compositor_types::{
-    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
 
 /// What one drawn frame damaged.

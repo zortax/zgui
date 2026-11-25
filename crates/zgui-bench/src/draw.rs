@@ -5,9 +5,8 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use compositor_api::Renderer;
-use compositor_types::{BufferAge, RenderTarget};
-use compositor_wgpu::WgpuRenderer;
+use iceblink::{BufferAge, RenderTarget, Renderer};
+use iceblink_wgpu::WgpuRenderer;
 use zgui::platform::Surface;
 use zgui::runtime::{AppError, RendererFactory};
 use zgui_bench::renderers::NullRenderer;
@@ -114,7 +113,7 @@ pub(crate) fn mounted_recorder() -> Rc<FullFrame> {
 /// # Panics
 ///
 /// Panics when the variable names another compositor.
-pub(crate) fn compositor(fonts: &zgui::app::Fonts) -> Box<dyn compositor_api::Compositor> {
+pub(crate) fn compositor(fonts: &zgui::app::Fonts) -> Box<dyn iceblink::Compositor> {
     match std::env::var("ZGUI_COMPOSITOR")
         .ok()
         .as_deref()
@@ -122,13 +121,13 @@ pub(crate) fn compositor(fonts: &zgui::app::Fonts) -> Box<dyn compositor_api::Co
     {
         None | Some("" | "core") => zgui::app::compositor(fonts),
         Some("naive") => {
-            let mut compositor = compositor_naive::NaiveCompositor::new();
+            let mut compositor = iceblink_testing::naive::NaiveCompositor::new();
             // The application's compositor holds the fonts the way it reads them.
             let registry = zgui::app::compositor(fonts).font_registry();
-            compositor_api::Compositor::use_font_registry(&mut compositor, registry);
-            compositor_api::Compositor::use_glyph_raster(
+            iceblink::Compositor::use_font_registry(&mut compositor, registry);
+            iceblink::Compositor::use_glyph_raster(
                 &mut compositor,
-                Arc::new(compositor_text::SwashRaster::new()),
+                Arc::new(iceblink_text::SwashRaster::new()),
             );
             Box::new(compositor)
         }
@@ -141,8 +140,8 @@ pub(crate) fn compositor(fonts: &zgui::app::Fonts) -> Box<dyn compositor_api::Co
 /// A threaded driver is waited for after every step only by windows that read their frames back,
 /// which [`draw_whole`] or `ZGUI_BENCH_CAPTURE` turns on.
 pub(crate) fn client(
-    compositor: Box<dyn compositor_api::Compositor>,
-) -> Box<dyn compositor_api::CompositorClient> {
+    compositor: Box<dyn iceblink::Compositor>,
+) -> Box<dyn iceblink::CompositorClient> {
     if WHOLE.with(Cell::get) || capturing() {
         return zgui_bench::renderers::client(compositor);
     }
@@ -180,7 +179,7 @@ pub(crate) fn renderer() -> RendererFactory {
     Box::new(
         move |_surface: &Arc<dyn Surface>,
               target: RenderTarget|
-              -> Result<compositor_api::RendererFactory, AppError> {
+              -> Result<iceblink::RendererFactory, AppError> {
             let capture = capturing().then(|| CAPTURE.with(Clone::clone));
             let shown = shown.clone();
             let gpu = std::env::var_os("ZGUI_BENCH_GPU").is_some();
@@ -215,10 +214,10 @@ pub(crate) fn renderer() -> RendererFactory {
 /// # Errors
 ///
 /// Fails when no adapter opens a device.
-fn device(target: RenderTarget) -> Result<WgpuRenderer, compositor_types::GpuUnavailable> {
+fn device(target: RenderTarget) -> Result<WgpuRenderer, iceblink::GpuUnavailable> {
     // The device reads whether to time its passes when it opens.
     if crate::gpu_time::enabled() {
-        compositor_wgpu::enable_gpu_timing();
+        iceblink_wgpu::enable_gpu_timing();
     }
     zgui_bench::renderers::device(target)
 }

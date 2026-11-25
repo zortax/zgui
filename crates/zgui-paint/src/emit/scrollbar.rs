@@ -139,7 +139,7 @@ pub fn emit(
         record::flat_radii(paint.radii(part, bounds)),
         rec.color(color),
     );
-    let quad = compositor_types::Quad {
+    let quad = iceblink::Quad {
         clip: rec.clip(clip),
         space,
         ..quad
@@ -154,7 +154,7 @@ fn moved(
     rec: &mut Recorder<'_>,
     transform: SpatialId,
     track: ThumbTrack,
-) -> Option<compositor_types::SpaceRef> {
+) -> Option<iceblink::SpaceRef> {
     let owner = zgui_space::PropertyOwner::of(track.owner).content();
     let content = rec.tables_ref().spatial.of(owner)?;
     let axis = match track.axis {

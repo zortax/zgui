@@ -2,14 +2,12 @@
 
 use std::sync::{Arc, Mutex};
 
-use compositor_api::{
-    CommitReport, Compositor, CompositorBudgets, CompositorCapabilities, CompositorMemory,
-    FontRegistry, GlyphRaster, OutputConfig,
-};
-use compositor_types::smallvec::SmallVec;
-use compositor_types::{
-    Built, ClientId, CommitError, CompositorEvent, Counters, Frame, FrameId, FrameOutcome,
-    FrameRequest, HitResult, IdSpace, OutputId, ScrollGesture, ScrollRouting, Transaction,
+use iceblink::smallvec::SmallVec;
+use iceblink::{
+    Built, ClientId, CommitError, CommitReport, Compositor, CompositorBudgets,
+    CompositorCapabilities, CompositorEvent, CompositorMemory, Counters, FontRegistry, Frame,
+    FrameId, FrameOutcome, FrameRequest, GlyphRaster, HitResult, IdSpace, OutputConfig, OutputId,
+    ScrollGesture, ScrollRouting, Transaction,
 };
 
 /// Returns `compositor` recording every scroll gesture it is handed, and the record.

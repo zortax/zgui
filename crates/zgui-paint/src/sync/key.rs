@@ -1,6 +1,6 @@
 //! The chunk keys fragments are recorded under.
 
-use compositor_types::ChunkKey;
+use iceblink::ChunkKey;
 use zgui_layout::{FragKey, Fragment, LayoutStore};
 
 /// The part of a fragment's painting a chunk holds, in the low bits of the key's part.

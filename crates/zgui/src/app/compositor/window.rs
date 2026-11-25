@@ -2,16 +2,15 @@
 
 use std::sync::Arc;
 
-use compositor_api::Renderer;
-use compositor_types::{RenderTarget, VectorBackend};
-use compositor_vello::VelloOptions;
-use compositor_wgpu::{LatencyMarks, PrePresent, PresentPacing, SharedGraphics, SurfacePresenter};
+use iceblink::{RenderTarget, Renderer, VectorBackend};
+use iceblink_vello::VelloOptions;
+use iceblink_wgpu::{LatencyMarks, PrePresent, PresentPacing, SharedGraphics, SurfacePresenter};
 use zgui_platform::{GpuSurface, PlatformError, Surface};
 use zgui_runtime::{AppError, RendererFactory};
 
 use crate::app::compositor::{PathRenderers, latency_marks, pipeline_directory, vectors};
 
-/// Returns the factory of `compositor-wgpu` renderers that present into each window, all on one
+/// Returns the factory of `iceblink-wgpu` renderers that present into each window, all on one
 /// shared device.
 ///
 /// Each renderer holds its groups at `precision`, which `ZGUI_GROUP_PRECISION` overrides.
@@ -103,8 +102,8 @@ fn renderer(
     handles: Arc<dyn GpuSurface>,
     target: RenderTarget,
     (vello, paths): (&VelloOptions, &PathRenderers),
-    precision: compositor_wgpu::GroupPrecision,
-) -> Result<Box<dyn Renderer>, compositor_types::GpuUnavailable> {
+    precision: iceblink_wgpu::GroupPrecision,
+) -> Result<Box<dyn Renderer>, iceblink::GpuUnavailable> {
     let pacing = match surface.present_pacing() {
         zgui_platform::PresentPacing::Platform => PresentPacing::Platform,
         _ => PresentPacing::Display,

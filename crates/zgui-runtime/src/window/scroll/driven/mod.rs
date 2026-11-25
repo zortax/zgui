@@ -25,7 +25,7 @@ mod tick;
 
 use std::cell::Cell;
 
-use compositor_types::{ScrollId, Sources};
+use iceblink::{ScrollId, Sources};
 use rustc_hash::FxHashMap;
 use web_time::Instant;
 use zgui_geom::{Device, Rect};
@@ -56,9 +56,9 @@ pub(crate) struct Driven {
     routed: bool,
     /// The first movement of the gesture in progress handed with a node predicted for it, which
     /// decides who moves the gesture when the compositor routes it to no node.
-    first_move: Option<compositor_types::ScrollGesture>,
+    first_move: Option<iceblink::ScrollGesture>,
     /// The gesture steps handed to the compositor since it last built a frame.
-    handed: Vec<compositor_types::ScrollGesture>,
+    handed: Vec<iceblink::ScrollGesture>,
     /// Whether the client was registered again since those steps were handed, so the compositor
     /// lost them.
     lost: bool,

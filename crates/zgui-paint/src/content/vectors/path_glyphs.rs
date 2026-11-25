@@ -6,7 +6,7 @@
 use core::hash::{Hash, Hasher};
 use std::sync::{Arc, Weak};
 
-use compositor_types::MarkPayload;
+use iceblink::MarkPayload;
 use kurbo::{self, BezPath, Point, Shape as _};
 use rustc_hash::{FxHashMap, FxHasher};
 

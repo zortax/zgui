@@ -9,7 +9,7 @@
 //! least two device pixels apart, which leaves no pixel that two of them reach.
 
 use crate::VectorId;
-use compositor_types::{BorderStyle, ClipRef, PaintRef, Quad, SpaceRef};
+use iceblink::{BorderStyle, ClipRef, PaintRef, Quad, SpaceRef};
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};

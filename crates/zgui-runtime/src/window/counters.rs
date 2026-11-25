@@ -4,8 +4,7 @@
 //! read right after this window's own commit and its own build. The renderer's named statistics
 //! are running totals, so each frame adds what moved since the last one.
 
-use compositor_api::CommitReport;
-use compositor_types::{CompositorEvent, FrameCounters, FrameOutcome};
+use iceblink::{CommitReport, CompositorEvent, FrameCounters, FrameOutcome};
 use zgui_paint::SyncReport;
 use zgui_profile::{Counter, counter};
 

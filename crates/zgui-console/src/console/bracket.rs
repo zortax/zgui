@@ -1,6 +1,6 @@
 //! The two calls that bracket a frame drawn straight into a display's own buffer.
 
-use compositor_types::{FrameOutcome, SkipReason};
+use iceblink::{FrameOutcome, SkipReason};
 use tracing::warn;
 use zgui_geom::{Device, Rect};
 use zgui_platform::PlatformError;
@@ -91,7 +91,7 @@ mod tests {
 
     use std::cell::{Cell, RefCell};
 
-    use compositor_types::FrameStats;
+    use iceblink::FrameStats;
 
     use super::*;
 

@@ -43,7 +43,7 @@ fn listing_in(css: &str, rows: usize, gap: bool, clicked: &Clicked) -> Harness<R
 
 /// The same over a compositor the driver `client` runs.
 fn listing_over(
-    client: Box<dyn compositor_api::CompositorClient>,
+    client: Box<dyn iceblink::CompositorClient>,
     css: &str,
     rows: usize,
     gap: bool,

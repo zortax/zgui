@@ -1,9 +1,8 @@
 //! What the driver told one window since the window last asked.
 
-use compositor_api::{ClientEvent, CommitReport, WatchCause};
-use compositor_types::{
-    CommitError, CompositorEvent, FrameCounters, FrameOutcome, FrameStats, GpuUnavailable,
-    ScrollGesture, ScrollId, ScrollRouting, SkipReason,
+use iceblink::{
+    ClientEvent, CommitError, CommitReport, CompositorEvent, FrameCounters, FrameOutcome,
+    FrameStats, GpuUnavailable, ScrollGesture, ScrollId, ScrollRouting, SkipReason, WatchCause,
 };
 
 /// The answers and events the driver queued for a window, in the order they happened.

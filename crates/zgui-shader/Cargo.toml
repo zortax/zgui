@@ -17,7 +17,7 @@ include.workspace = true
 # shader reaches the compositor as a `ShaderDesc`, which any renderer that runs application shaders
 # builds.
 [dependencies]
-compositor-types.workspace = true
+iceblink.workspace = true
 # Why an effect draws nothing, when its parameters disagree between its shader and Rust.
 tracing.workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
@@ -29,7 +29,6 @@ zgui-view = { path = "../zgui-view", version = "0.1.0" }
 workspace = true
 
 [dev-dependencies]
-compositor-api.workspace = true
 trybuild.workspace = true
 zgui-custom = { path = "../zgui-custom", version = "0.1.0" }
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }

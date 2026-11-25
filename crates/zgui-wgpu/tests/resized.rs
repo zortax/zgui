@@ -62,13 +62,13 @@ fn app() -> Option<(Harness<Runtime>, Shown)> {
             zgui_testkit_compositor::fake_text_compositor(),
         ))
         .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: compositor_types::RenderTarget| {
+            move |_surface: &Arc<dyn Surface>, target: iceblink::RenderTarget| {
                 let into = into.clone();
                 Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
                     let mut device = Device::open(target.size)
                         .expect("a device opens, which the test answered beforehand")
                         .showing_into(into);
-                    compositor_api::Renderer::configure(&mut device, target);
+                    iceblink::Renderer::configure(&mut device, target);
                     device
                 }))
             },

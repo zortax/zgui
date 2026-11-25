@@ -19,7 +19,7 @@ pub(crate) mod shaders;
 pub(crate) mod spaces;
 
 use crate::Tables;
-use compositor_types::{AnyId, ChunkKey, Transaction};
+use iceblink::{AnyId, ChunkKey, Transaction};
 
 use crate::sync::mirror::clips::Sources;
 
@@ -39,7 +39,7 @@ pub(crate) struct Mirror {
     /// The chunks that draw a shader that reads the clock.
     timed_chunks: rustc_hash::FxHashSet<ChunkKey>,
     /// The effect nodes that filter with a shader that reads the clock.
-    pub(crate) timed_effects: rustc_hash::FxHashSet<compositor_types::EffectId>,
+    pub(crate) timed_effects: rustc_hash::FxHashSet<iceblink::EffectId>,
 }
 
 /// The zgui ids a mirror held when it was forgotten, to give back to the tables.
@@ -72,7 +72,7 @@ impl Mirror {
         tx: &mut Transaction,
         tree: &zgui_space::SpatialTree,
         slot: u32,
-    ) -> compositor_types::TransformId {
+    ) -> iceblink::TransformId {
         self.spaces.ensure(tx, &mut self.holds, tree, slot)
     }
 
@@ -86,7 +86,7 @@ impl Mirror {
         slots: (u32, u32),
         axis: usize,
         free: f32,
-    ) -> Option<compositor_types::TransformId> {
+    ) -> Option<iceblink::TransformId> {
         self.spaces
             .thumb(tx, &mut self.holds, tree, slots, axis, free)
     }
@@ -99,7 +99,7 @@ impl Mirror {
         tx: &mut Transaction,
         tables: &mut Tables,
         id: zgui_space::ClipId,
-    ) -> Option<compositor_types::ClipId> {
+    ) -> Option<iceblink::ClipId> {
         let sources = Sources {
             table: &mut tables.clips,
             spaces: &mut self.spaces,
@@ -114,7 +114,7 @@ impl Mirror {
         tx: &mut Transaction,
         tables: &mut Tables,
         id: zgui_space::ClipId,
-    ) -> Option<compositor_types::ClipId> {
+    ) -> Option<iceblink::ClipId> {
         let mut sources = Sources {
             table: &mut tables.clips,
             spaces: &mut self.spaces,
@@ -131,7 +131,7 @@ impl Mirror {
         tx: &mut Transaction,
         tables: &mut Tables,
         id: zgui_space::PaintId,
-    ) -> Option<(compositor_types::PaintId, compositor_types::PaintKind)> {
+    ) -> Option<(iceblink::PaintId, iceblink::PaintKind)> {
         self.paints
             .ensure(tx, &mut self.holds, &mut tables.paints, id)
     }
@@ -146,7 +146,7 @@ impl Mirror {
         tx: &mut Transaction,
         key: crate::emit::record::ImageKey,
         pixels: Option<crate::emit::record::ImagePixels<'_>>,
-    ) -> Option<(compositor_types::ImageId, compositor_types::ImageDesc)> {
+    ) -> Option<(iceblink::ImageId, iceblink::ImageDesc)> {
         self.images.ensure(tx, &mut self.holds, key, pixels)
     }
 
@@ -156,7 +156,7 @@ impl Mirror {
         &mut self,
         tx: &mut Transaction,
         id: zgui_css::shader::ShaderId,
-    ) -> Option<compositor_types::ShaderId> {
+    ) -> Option<iceblink::ShaderId> {
         let shader = self.shaders.ensure(tx, id)?;
         self.recording_timed |= self.shaders.reads_time(shader);
         Some(shader)
@@ -167,7 +167,7 @@ impl Mirror {
         &mut self,
         tx: &mut Transaction,
         params: &crate::content::shader::SharedParams,
-    ) -> compositor_types::ParamsId {
+    ) -> iceblink::ParamsId {
         self.params.shared(tx, &mut self.holds, params)
     }
 
@@ -175,8 +175,8 @@ impl Mirror {
     pub(crate) fn params(
         &mut self,
         tx: &mut Transaction,
-        block: compositor_types::ParamsBlock,
-    ) -> compositor_types::ParamsId {
+        block: iceblink::ParamsBlock,
+    ) -> iceblink::ParamsId {
         self.params.ensure(tx, &mut self.holds, block)
     }
 
