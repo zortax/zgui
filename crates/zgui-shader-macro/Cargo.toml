@@ -18,7 +18,7 @@ include.workspace = true
 # front end, because this macro compiles an application's WGSL while the application is built. It
 # validates the WGSL against `iceblink::shader`, the contract's prelude. iceblink-wgsl
 # assembles the reference renderer's module for the prebuilt program only, which the spec allows a
-# client to do ("Shaders", change 178).
+# client to do (spec section "Shaders").
 [lib]
 proc-macro = true
 

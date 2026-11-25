@@ -53,7 +53,7 @@ const ALLOWED: &[(&str, &str)] = &[
 const EXCEPTIONS: &[(&str, &str, &str)] = &[(
     "zgui-shader-macro",
     "iceblink-wgsl",
-    "assembles the reference renderer's prebuilt program, as spec change 178 allows a client; \
+    "assembles the reference renderer's prebuilt program, as the spec's Shaders section allows a client; \
      shaders are validated through iceblink",
 )];
 
