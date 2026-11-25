@@ -56,20 +56,20 @@ zeno = "0.3.3"
 
 # --- the shared compositor ------------------------------------------------------------------
 # The interface: every engine crate names this one and nothing else of the compositor.
-iceblink = { path = "../iceblink/crates/iceblink", version = "0.1.0" }
+iceblink = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
 # The implementations, named only by the crates `cargo xtask ledger compositor` allows.
-iceblink-core = { path = "../iceblink/crates/core", version = "0.1.0" }
-iceblink-wgpu = { path = "../iceblink/crates/wgpu", version = "0.1.0" }
-iceblink-cpu = { path = "../iceblink/crates/cpu", version = "0.1.0" }
-iceblink-text = { path = "../iceblink/crates/text", version = "0.1.0" }
-iceblink-vello = { path = "../iceblink/crates/vello", version = "0.1.0" }
-iceblink-testing = { path = "../iceblink/tool/testing", version = "0.1.0" }
+iceblink-core = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-wgpu = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-cpu = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-text = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-vello = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-testing = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
 # The drivers that run a compositor behind the client seam: on the caller's thread, or on one of
 # their own.
-iceblink-driver = { path = "../iceblink/crates/driver", version = "0.1.0" }
+iceblink-driver = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
 # The reference renderer's assembly of an application shader, which the `shader!` macro compiles
 # into the prebuilt program. The compositor ledger records the macro's one exception for it.
-iceblink-wgsl = { path = "../iceblink/crates/wgsl", version = "0.1.0" }
+iceblink-wgsl = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
 
 # --- gpu and vector ------------------------------------------------------------------------
 # wgpu is pinned to 30.x workspace-wide because vello 0.11 links wgpu 30 and shares one
