@@ -253,6 +253,8 @@ pub struct Window {
     containment: Option<crate::window::containment::Containment>,
     /// The target the output was last configured for.
     target: Option<iceblink::RenderTarget>,
+    /// The target the output is configured for right before the frame's commit.
+    configuring: Option<iceblink::RenderTarget>,
     /// The device ink of the fragments the last paint walk recorded.
     recorded_ink: iceblink::damage::DamageSet,
     /// See [`Window::forget_compositor_sync`].
@@ -713,6 +715,7 @@ impl Window {
             check_damage: zgui_layout::invariants::enabled(),
             containment: None,
             target: None,
+            configuring: None,
             recorded_ink: iceblink::damage::DamageSet::new(),
             resync: std::cell::Cell::new(false),
             router: Router::new(),

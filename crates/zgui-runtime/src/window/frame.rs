@@ -865,7 +865,8 @@ impl Window {
         self.damage = DamageSet::full();
     }
 
-    /// Reconfigures the renderer for the surface, when the surface moved.
+    /// Takes the surface's extent as the output's target, which the frame's commit configures,
+    /// when the surface moved.
     ///
     /// The extent is read from the **surface** and never from the event that asked for the frame.
     /// That is what makes a superseded configure cost nothing rather than cost a frame that is
@@ -907,7 +908,7 @@ impl Window {
             opaque: !self.translucent,
         };
         let was = self.target.replace(target);
-        self.compositor.configure(target);
+        self.configuring = Some(target);
         let widest = |a: Size<i32, zgui_geom::Device>, b: Size<i32, zgui_geom::Device>| {
             Size::new(a.width.max(b.width), a.height.max(b.height))
         };
@@ -1602,6 +1603,11 @@ impl Window {
             });
         }
         self.vouch(&margins.measured);
+        // The driver applies a configuration with the next commit, so nothing may commit between
+        // the two, such as the embed transaction.
+        if let Some(target) = self.configuring.take() {
+            self.compositor.configure(target);
+        }
         if let Some(transaction) = transaction {
             self.submit_transaction(transaction);
         }
