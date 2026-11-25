@@ -1781,7 +1781,6 @@ dependencies = [
  "bytemuck",
  "futures",
  "iceblink",
- "iceblink-alloc",
  "iceblink-wgsl",
  "kurbo",
  "naga",
