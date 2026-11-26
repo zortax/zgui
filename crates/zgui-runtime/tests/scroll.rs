@@ -749,10 +749,11 @@ fn a_drag_that_leaves_the_scrollport_keeps_carrying_the_list_it_started_on() {
     let before = topmost_row_top(window(&harness), 20.0);
 
     // Down the screen, out of the bottom of the 120-pixel scrollport and over the root below it.
+    // The press lands on a row above the horizontal scrollbar, which would capture the finger.
     drag_finger(
         &mut harness,
-        110.0,
-        &[(140.0, 16), (170.0, 32), (200.0, 48), (230.0, 64)],
+        90.0,
+        &[(120.0, 16), (150.0, 32), (180.0, 48), (210.0, 64)],
     );
 
     let after = topmost_row_top(window(&harness), 20.0);
