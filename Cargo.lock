@@ -1684,7 +1684,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 [[package]]
 name = "iceblink"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "bytemuck",
  "kurbo",
@@ -1695,7 +1695,7 @@ dependencies = [
 [[package]]
 name = "iceblink-alloc"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "etagere",
  "iceblink",
@@ -1706,7 +1706,7 @@ dependencies = [
 [[package]]
 name = "iceblink-core"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "bytemuck",
  "iceblink",
@@ -1722,7 +1722,7 @@ dependencies = [
 [[package]]
 name = "iceblink-cpu"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "bytemuck",
  "iceblink",
@@ -1734,7 +1734,7 @@ dependencies = [
 [[package]]
 name = "iceblink-driver"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "iceblink",
 ]
@@ -1742,7 +1742,7 @@ dependencies = [
 [[package]]
 name = "iceblink-testing"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "iceblink",
  "iceblink-wgpu",
@@ -1756,7 +1756,7 @@ dependencies = [
 [[package]]
 name = "iceblink-text"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "iceblink",
  "rustc-hash 2.1.3",
@@ -1767,7 +1767,7 @@ dependencies = [
 [[package]]
 name = "iceblink-vello"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "iceblink",
  "iceblink-wgpu",
@@ -1783,7 +1783,7 @@ dependencies = [
 [[package]]
 name = "iceblink-wgpu"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "ash",
  "bincode",
@@ -1806,7 +1806,7 @@ dependencies = [
 [[package]]
 name = "iceblink-wgsl"
 version = "0.1.0"
-source = "git+https://github.com/zortax/iceblink#42cff8fd5749a9f1b89dae9260e4a897f8221701"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
 dependencies = [
  "iceblink",
 ]
