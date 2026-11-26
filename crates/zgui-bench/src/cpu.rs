@@ -3,29 +3,39 @@
 //! A frame's wall time says how long the window's thread waited for it. With the compositor on a
 //! thread of its own, the process also spends CPU the window's thread never sees, so each band of
 //! frames records both clocks: the process's, which counts every thread, and the calling thread's.
-//! On a driver that runs on the window's thread the two agree.
+//! On a driver that runs on the window's thread the two agree. Where the platform has no such
+//! clocks, no frame is recorded and nothing is printed.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use rustix::time::{ClockId, Timespec, clock_gettime};
-
 use crate::scenario::band::Spread;
 
-/// A reading of the process's and the calling thread's CPU clocks.
+/// A reading of the process's and the calling thread's CPU clocks, in nanoseconds, or nothing
+/// where the platform has no such clocks.
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct Cpu {
-    process: Timespec,
-    thread: Timespec,
-}
+pub(crate) struct Cpu(Option<[i64; 2]>);
 
 impl Cpu {
     /// Reads both clocks.
+    #[cfg(unix)]
     pub(crate) fn now() -> Self {
-        Self {
-            process: clock_gettime(ClockId::ProcessCPUTime),
-            thread: clock_gettime(ClockId::ThreadCPUTime),
-        }
+        use rustix::time::{ClockId, clock_gettime};
+
+        let nanos = |clock| {
+            let time = clock_gettime(clock);
+            time.tv_sec * 1_000_000_000 + time.tv_nsec
+        };
+        Self(Some([
+            nanos(ClockId::ProcessCPUTime),
+            nanos(ClockId::ThreadCPUTime),
+        ]))
+    }
+
+    /// Returns a reading that holds nothing.
+    #[cfg(not(unix))]
+    pub(crate) fn now() -> Self {
+        Self(None)
     }
 }
 
@@ -44,10 +54,13 @@ pub(crate) fn record(band: &'static str, from: Cpu) {
 
 /// Records the CPU time spent from `from` to `to` as one frame of `band`.
 pub(crate) fn record_span(band: &'static str, from: Cpu, to: Cpu) {
+    let (Cpu(Some(from)), Cpu(Some(to))) = (from, to) else {
+        return;
+    };
     BANDS.with_borrow_mut(|bands| {
         let (process, thread) = bands.entry(band).or_default();
-        process.push(micros(from.process, to.process));
-        thread.push(micros(from.thread, to.thread));
+        process.push(micros(from[0], to[0]));
+        thread.push(micros(from[1], to[1]));
     });
 }
 
@@ -78,12 +91,11 @@ pub(crate) fn print(scenario: &str) {
     });
 }
 
-/// Returns the microseconds from `from` to `to`.
+/// Returns the microseconds from `from` to `to`, both in nanoseconds.
 #[expect(
     clippy::cast_precision_loss,
     reason = "a frame's CPU time is far under the 2^53 nanoseconds an f64 holds exactly"
 )]
-fn micros(from: Timespec, to: Timespec) -> f64 {
-    let nanos = (to.tv_sec - from.tv_sec) * 1_000_000_000 + (to.tv_nsec - from.tv_nsec);
-    nanos as f64 / 1e3
+fn micros(from: i64, to: i64) -> f64 {
+    (to - from) as f64 / 1e3
 }
