@@ -4,6 +4,7 @@
 //! it lands on — [`RasterPath`](zgui_text::RasterPath) — so that the stage that measures a run's
 //! ink and the stage that draws it cannot come to different answers.
 
+pub(crate) mod colr;
 pub(crate) mod faces;
 pub mod glyphs;
 pub(crate) mod image;

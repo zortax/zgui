@@ -84,13 +84,22 @@ impl Rasteriser {
     /// Rasterises one glyph through `context`.
     fn raster_with(&self, context: &mut ScaleContext, key: &GlyphKey) -> Option<GlyphImage> {
         let (blob, index) = self.faces.get(&self.fonts, key.face)?;
-        let font = FontRef::from_index(blob.data(), index as usize)?;
         let coords = self.fonts.variation_coords(key.instance);
+        let coords = coords.as_deref().unwrap_or_default();
+        // A COLR v1 face has no flat layers to give swash, so the graph is painted here. A v0
+        // face, a bitmap strike and a plain outline all fall through to swash below.
+        if key.style == RasterStyle::Color
+            && let Ok(font) = skrifa::FontRef::from_index(blob.data(), index)
+            && let Some(image) = crate::raster::colr::rasterize(&font, key, coords)
+        {
+            return Some(image);
+        }
+        let font = FontRef::from_index(blob.data(), index as usize)?;
         let mut scaler = context
             .builder_with_id(font, identity(key.face, index, key.instance))
             .size(key.size())
             .hint(true)
-            .normalized_coords(coords.as_deref().unwrap_or_default())
+            .normalized_coords(coords)
             .build();
         let image = renderer(key).render(&mut scaler, key.glyph)?;
         Some(convert(&image))
