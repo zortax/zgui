@@ -22,17 +22,17 @@ pub(super) struct Geometry {
     /// What painting, damage and hit testing branch on.
     pub(super) flags: FragmentFlags,
     /// The clip chain it is drawn under.
-    pub(super) clip: zgui_scene::ClipId,
+    pub(super) clip: zgui_space::ClipId,
     /// The coordinate system it is drawn in.
-    pub(super) transform: Option<zgui_scene::SpatialId>,
+    pub(super) transform: Option<zgui_space::SpatialId>,
     /// The coordinate system its ink is measured in.
-    pub(super) anchor: zgui_scene::SpatialId,
+    pub(super) anchor: zgui_space::SpatialId,
     /// The clip space and the two fingerprints, see [`FragmentExtra`].
     pub(super) extra: FragmentExtra,
     /// The stacking context it belongs to.
-    pub(super) stacking: Option<zgui_scene::StackingContextId>,
+    pub(super) stacking: Option<zgui_space::StackingContextId>,
     /// The scrollable region it moves with.
-    pub(super) scroll: Option<zgui_scene::ScrollFrameId>,
+    pub(super) scroll: Option<zgui_space::ScrollFrameId>,
     /// Whether it reads pixels outside every rectangle it writes.
     pub(super) reads_outside: bool,
 }

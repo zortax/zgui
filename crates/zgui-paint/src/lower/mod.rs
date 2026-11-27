@@ -72,10 +72,6 @@ pub struct PaintStyle {
     /// What decorates the text inside the box.
     pub decoration: crate::emit::text::DecorationStyle,
     /// The ramp the text inside the box is painted with, when it is painted with one.
-    ///
-    /// A brush that varies across a run is not something a coverage tile can carry, so a run
-    /// carrying one leaves the atlas and is drawn as filled curves; see
-    /// [`RasterPath`](zgui_text::RasterPath).
     pub text_fill: Option<crate::lower::background::GradientSpec>,
     /// How outlines the box draws are filled and stroked.
     ///
@@ -96,7 +92,7 @@ pub struct PaintStyle {
     /// smoothed cards cascades to one lowering and reads the property once between them. It
     /// reaches the background, the border, the shadow and the outline from here, and the clip a
     /// box gives its children from layout, which reads the same property through the same parser.
-    pub corner_shape: zgui_scene::CornerShape,
+    pub corner_shape: zgui_space::CornerShape,
     /// The application effect the box is drawn with, when a style sheet named one.
     ///
     /// Boxed because it is large and almost always absent: a lowering is cloned per fragment, and

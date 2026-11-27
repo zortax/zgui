@@ -25,14 +25,11 @@ zgui-testkit-view = { path = "../zgui-testkit-view", version = "0.1.0" }
 # reaches the document and paints nothing is a blank space nothing above this line can see, so the
 # component is asserted on where an application meets it: a frame, and what was in it.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
-# A graphics device, and what rasterises the vector parts of a display list on it. Every other
-# assertion about an icon stops at the display list handed to a renderer, and a display list is
-# satisfied by a rasteriser that writes nothing — so the pixels are read back off a real device,
-# through the same two crates a window is drawn through.
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
-# The colours the fixture scenes are painted with.
-zgui-color = { path = "../zgui-color", version = "0.1.0" }
+# A graphics device under the compositor. Every other assertion about an icon stops at what was
+# recorded, and a recording is satisfied by a rasteriser that writes nothing, so the pixels are read
+# back off a real device.
+iceblink.workspace = true
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [lints]
 workspace = true

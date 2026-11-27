@@ -56,11 +56,10 @@ wayland-protocols-wlr.workspace = true
 wayland-protocols-misc.workspace = true
 zgui-elements = { path = "../zgui-elements", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
+iceblink.workspace = true
 
 # A process opens one connection and runs one loop on it, so each property asserted against a real
 # compositor is its own program and none of them runs under a test harness.

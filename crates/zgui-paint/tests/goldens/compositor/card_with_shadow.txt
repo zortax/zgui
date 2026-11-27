@@ -1,0 +1,15 @@
+output 1 size=256x256 scale=1 opaque
+batches 5
+  quads 0..1 ink=rect(0, 0, 256, 256)
+    quad bounds=rect(0, 0, 256, 256) fill=solid premul[1, 1, 1, 1]
+  shadows 0..1 ink=rect(2, 6, 252, 124)
+    shadow bounds=rect(2, 6, 252, 124) shape=rect(14, 18, 228, 100) blur=4 color=premul[0, 0, 0, 0.251] caster=rect(16, 16, 224, 96) radii=[22, 12, 22, 12, 22, 12, 22, 12] caster_radii=[20, 10, 20, 10, 20, 10, 20, 10]
+  quads 1..2 ink=rect(16, 16, 224, 96)
+    quad bounds=rect(16, 16, 224, 96) fill=solid premul[0.9333, 0.9333, 0.9333, 1] border=[2, 2, 2, 2] stroke=solid premul[0.2, 0.4, 0.6, 1] style=dashed radii=[20, 10, 20, 10, 20, 10, 20, 10]
+  shadows 1..2 ink=rect(18, 18, 220, 92)
+    shadow bounds=rect(18, 18, 220, 92) shape=rect(18, 19, 220, 92) blur=0 color=premul[1, 1, 1, 1] caster=rect(18, 18, 220, 92) radii=[18, 8, 18, 8, 18, 8, 18, 8] caster_radii=[18, 8, 18, 8, 18, 8, 18, 8] inset
+  quads 2..4 ink=rect(14, 14, 228, 100)
+    quad bounds=rect(18, 18, 220, 24) fill=solid premul[0.2, 0.2, 0.2, 1]
+    quad bounds=rect(14, 14, 228, 100) fill=none border=[2, 2, 2, 2] stroke=solid premul[0, 0.4, 1, 1] style=solid radii=[22, 12, 22, 12, 22, 12, 22, 12]
+cover rect(1, 1, 254, 254) batch=0 at=0
+cover rect(19, 19, 218, 22) batch=4 at=2

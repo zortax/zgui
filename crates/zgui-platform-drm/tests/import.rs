@@ -23,12 +23,12 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
+use iceblink_wgpu::Supplied;
+use iceblink_wgpu::{Gpu, SharedGraphics, wgpu};
 use zgui_drm::Device;
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};
 use zgui_platform_drm::{EXTENSIONS, FORMAT, Imported, Offered, Output, Unsupported};
-use zgui_render_wgpu::target::swapchain::Supplied;
-use zgui_render_wgpu::{Gpu, SharedGraphics, wgpu};
 
 /// How many buffers a set holds here.
 ///
@@ -71,7 +71,8 @@ fn device_lock() -> MutexGuard<'static, ()> {
 /// The graphics is answered as well as the device, because it owns the instance every device here
 /// comes from and dropping it would close that.
 fn opened(test: &str) -> Option<(SharedGraphics, Arc<Gpu>)> {
-    let graphics = SharedGraphics::with_extensions(EXTENSIONS.to_vec());
+    let graphics =
+        SharedGraphics::with_backends_and_extensions(wgpu::Backends::VULKAN, EXTENSIONS.to_vec());
     match graphics.open_gpu() {
         Ok(gpu) => Some((graphics, gpu)),
         Err(failure) => {

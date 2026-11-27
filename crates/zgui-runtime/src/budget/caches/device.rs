@@ -1,6 +1,6 @@
 //! Everything the renderer holds on the device that no other cache here accounts for.
 
-use zgui_render::Renderer;
+use iceblink::OutputStatus;
 
 use crate::budget::epoch::SceneEpoch;
 use crate::budget::manager::{Budgeted, Tracked};
@@ -30,8 +30,8 @@ use crate::budget::report::{CacheId, CacheReport, CacheUnit, rebuild};
 /// reconciliation against the system's own tool is for. Registering this is what makes that
 /// comparison possible at all; it is not what makes it come out even.
 pub struct DeviceMemoryBudget<'a> {
-    /// What owns the device resources.
-    renderer: &'a mut dyn Renderer,
+    /// The newest snapshot of the output whose renderer owns the device resources.
+    status: Option<OutputStatus>,
     /// Callback-surface textures allocated by zgui outside the renderer proper.
     callback_surfaces: u64,
     /// This entry's own history.
@@ -39,14 +39,14 @@ pub struct DeviceMemoryBudget<'a> {
 }
 
 impl<'a> DeviceMemoryBudget<'a> {
-    /// The adapter over one window's renderer.
+    /// The adapter over the snapshot of one window's output.
     pub fn new(
-        renderer: &'a mut dyn Renderer,
+        status: Option<OutputStatus>,
         callback_surfaces: u64,
         tracked: &'a mut Tracked,
     ) -> Self {
         Self {
-            renderer,
+            status,
             callback_surfaces,
             tracked,
         }
@@ -67,10 +67,10 @@ impl Budgeted for DeviceMemoryBudget<'_> {
         // The pooled targets are the one part of this figure another entry already names, and
         // subtracting them is what keeps the registry's total an accounting rather than a sum with
         // one term counted twice.
-        let memory = self.renderer.memory();
-        let pooled = self.renderer.target_pool().resident;
-        let resident = memory
-            .total()
+        let (total, pooled) = self.status.map_or((0, 0), |status| {
+            (status.memory.total(), status.target_pool.resident)
+        });
+        let resident = total
             .saturating_sub(pooled)
             .saturating_add(self.callback_surfaces);
         CacheReport {

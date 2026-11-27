@@ -12,17 +12,17 @@
 
 use std::time::Duration;
 
+use iceblink::RenderTarget;
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError, Runtime};
-use zgui::scene::{PaintRef, Scene};
 use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::{component, view};
 use zgui_platform_headless::Harness;
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
+use zgui_testkit_compositor::Drawing;
 
 /// How many animated boxes one generation mounts.
 const BOXES: usize = 40;
@@ -85,25 +85,24 @@ fn opened(
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let handler = App::new()
         .with_title("paint-sweep")
         .with_size(800.0, 600.0)
         .with_stylesheet(SHEET)
+        .with_compositor(zgui_testkit_compositor::driver(zgui::app::compositor(
+            &fonts,
+        )))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = zgui_testkit_scene::CaptureRenderer::new();
-                inner.configure(target);
-                Ok(Box::new(inner))
+             -> Result<iceblink::RendererFactory, AppError> {
+                Ok(zgui_testkit_compositor::screen(target))
             },
         ))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(
                 view! {
@@ -155,22 +154,23 @@ fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
         earlier >= 1_024,
         "the churn never filled the table to the size where sweeps run: {earlier} entries"
     );
-    let scene = harness.app().windows()[0].scene();
-    let refs = drawn_paints(scene);
-    assert!(!refs.is_empty(), "the last frame drew no box");
-    for paint in refs {
-        let id = paint.id().expect("a drawn paint");
-        assert!(
-            scene.paints.contains(id),
-            "a sweep freed paint #{} that the last frame drew",
-            id.index()
-        );
-        assert_eq!(
-            scene.paints.reference(id).kind,
-            paint.kind,
-            "paint #{} holds a paint of another family than the primitive names",
-            id.index()
-        );
+    let drawing = drawing();
+    let quads = drawing.quads();
+    assert!(!quads.is_empty(), "the last frame drew no box");
+    for quad in quads {
+        for role in ["fill", "stroke"] {
+            let paint = quad.paint(role).unwrap_or_default();
+            assert!(
+                !paint.contains("<missing>"),
+                "a sweep freed a paint the last frame drew: {}",
+                quad.text()
+            );
+            assert!(
+                !paint.contains("<mismatched>"),
+                "a quad draws a paint of another family than it names: {}",
+                quad.text()
+            );
+        }
     }
     let mounted = (GENERATIONS * BOXES) as u64;
     assert!(
@@ -183,20 +183,10 @@ fn animated_boxes_that_come_and_go_keep_the_paint_table_flat() {
     );
 }
 
-/// The paints the boxes of the last frame name.
-fn drawn_paints(scene: &Scene) -> Vec<PaintRef> {
-    let quads = scene
-        .primitives
-        .quads
-        .iter()
-        .flat_map(|quad| [quad.fill, quad.stroke]);
-    let shaded = scene
-        .primitives
-        .shaded
-        .iter()
-        .flat_map(|shaded| [shaded.fill, shaded.stroke]);
-    quads
-        .chain(shaded)
-        .filter(|paint| paint.id().is_some())
-        .collect()
+/// Returns what the window opened last on this thread shows.
+fn drawing() -> Drawing {
+    zgui_testkit_compositor::screens()
+        .last()
+        .and_then(zgui_testkit_compositor::Shown::drawing)
+        .expect("the window drew a frame")
 }

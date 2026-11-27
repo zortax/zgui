@@ -11,14 +11,17 @@ mod brushes;
 mod budget;
 pub mod caret;
 mod clicks;
+mod compose;
+mod containment;
+mod counters;
 mod crossing;
 mod cursor;
+mod declared;
 mod drag;
 pub mod frame;
 pub mod input;
 pub mod observe;
 pub mod pointer_text;
-pub mod present;
 pub mod probe;
 pub mod query;
 pub mod resize;
@@ -44,10 +47,9 @@ use zgui_geom::{CssPx, Device, DevicePx, Scale, Size};
 use zgui_input::Router;
 use zgui_layout::HitIndex;
 use zgui_layout::tree::store::LayoutStore;
+use zgui_paint::Tables;
 use zgui_paint::{ContentCache, Painter};
 use zgui_platform::Surface;
-use zgui_render::Renderer;
-use zgui_scene::Scene;
 use zgui_style::{SheetHandle, SheetOrigin, SheetSource, StyleEngine, Viewport};
 use zgui_view::{Anchor, BuildCxOwned, DomHandle, HostHandle};
 use zgui_view_dom::DocumentDom;
@@ -56,32 +58,10 @@ use crate::binding::{HostBinding, NoBinding};
 use crate::host::RuntimeHost;
 use crate::text::TextEngine;
 
-/// What the first starvation probe waits, which is also what the graphics API's acquisition is
-/// willing to block — so the first probe costs at most one such block per second.
-pub(crate) const STARVE_BACKOFF_START: Duration = Duration::from_secs(1);
-
-/// The most a starvation probe waits. A cap because the probe is also what recovers a *visible*
-/// window from a compositor hiccup no event announces the end of.
-pub(crate) const STARVE_BACKOFF_CAP: Duration = Duration::from_secs(16);
-
 /// How long after its last normal frame a window waits before it trims idle resources.
 pub const MAINTENANCE_DELAY: Duration = Duration::from_secs(2);
 use crate::timer::Timers;
 use crate::wake::FrameGate;
-
-/// How much texture memory a window's rasterised content may hold before cold content is freed.
-///
-/// Sixty-four mebibytes: several times what a text-heavy document's glyphs cost at any ordinary
-/// scale, and well under what the atlas could grow to if nothing bounded it. It is a level the
-/// cache returns *below* between frames rather than a ceiling an allocation is refused at, so a
-/// single frame that needs more than this gets it and the excess comes back out of the cold
-/// generations afterwards — a document is never made to drop content it is drawing.
-///
-/// Stated here rather than left unset because eviction that nothing bounds has no criterion: an
-/// unbounded cache never frees, and a cache freeing to no stated level frees for no reason. A
-/// window that wants a different number sets it through
-/// [`ContentCache::set_soft_bytes`](zgui_paint::ContentCache::set_soft_bytes).
-pub const ATLAS_SOFT_BYTES: u64 = 64 * 1024 * 1024;
 
 /// What a window should be when it is opened.
 #[derive(Clone, Debug, Default)]
@@ -162,7 +142,7 @@ pub struct Window {
     /// The reusable buffers the fragment walk works in, warm across frames.
     diff_scratch: zgui_layout::fragment::diff::DiffScratch,
     /// The boxes that imposed a clip and left the tree, whose chains are still in the table.
-    retired_clips: rustc_hash::FxHashSet<zgui_scene::PropertyOwner>,
+    retired_clips: rustc_hash::FxHashSet<zgui_space::PropertyOwner>,
     /// Where each scroll container is scrolled to, and everything that moves one over time.
     scroll: Rc<RefCell<zgui_scroll::Scroller>>,
     /// What this desktop means by one detent of a wheel, and which way it points.
@@ -178,21 +158,15 @@ pub struct Window {
     /// page keeps every scroll container, every offset and every reserved gutter it had, so
     /// opening and closing a surface over it moves nothing.
     scroll_frozen: bool,
+    /// The scrolling the compositor drives, and what the window knows of where it put things.
+    driven: crate::window::scroll::driven::Driven,
     /// When the last frame ran, so that a motion knows how much time it has to spend.
     ///
     /// A gap far longer than a refresh interval is a park rather than a slow frame, and buys a
     /// motion nothing: see [`Window::advance_scroll`].
     last_frame: Option<zgui_vocab::Timestamp>,
-    /// The moment the first frame ran at, so an effect can be told how long the window has been up.
-    ///
-    /// Measured from the first frame rather than from the process, because that is the moment an
-    /// effect's own clock should start: a window opened late should not begin its animations part
-    /// of the way through.
-    opened_at: Option<zgui_vocab::Timestamp>,
-    /// The moment the previous frame ran at, so an effect can be told how long the last one took.
+    /// The moment the previous frame ran at.
     painted_at: Option<zgui_vocab::Timestamp>,
-    /// What this frame's application effects are told about it, computed once at the frame's top.
-    frame_clock: zgui_scene::FrameClock,
     /// What the running animations wrote on the last frame, and what still owes an undo.
     animator: zgui_anim::Animator,
     /// The moment the running animations owe their next frame at.
@@ -202,6 +176,8 @@ pub struct Window {
     /// deadline recomputed from the present moment is pushed forward by every wake the window has
     /// for any other reason. See [`AnimationCadence`](crate::AnimationCadence).
     animation: crate::window::anim::cadence::AnimationCadence,
+    /// How long the window's frames take, which it starts that long before a driver's latch.
+    compose_lead: crate::window::anim::lead::ComposeLead,
     /// How long after the start of the last frame the stepped animations, whose values hold still,
     /// owe their next tick. Set by the animation stage and turned into `hold_due` when
     /// the frame paces its animations.
@@ -211,23 +187,11 @@ pub struct Window {
     /// They ask for no frame at every refresh, so this moment is the only thing that wakes the
     /// loop for them.
     hold_due: Option<Instant>,
-    /// The display list.
-    scene: Scene,
+    /// The clip, paint and coordinate-system tables the paint stage draws through.
+    tables: Tables,
     /// The paint stage's state between frames.
     painter: Painter,
-    /// Whether every replayed range is checked against the cache holding the rasters it draws.
-    ///
-    /// See [`Window::set_verify_replays`]. It is read once per frame and passed into the walk,
-    /// rather than the walk reading the environment, so that the answer is a property of this
-    /// window and a test can state it.
-    verify_replays: bool,
-    /// Whether this window's frames keep the coordinate system every primitive was pushed under.
-    ///
-    /// See [`Window::set_check_spatial_dependencies`]. Applied to the scene at the start of every
-    /// frame rather than read from the environment once, for the same reason as `verify_replays`:
-    /// a check nothing can switch on is a check no test can watch working.
-    check_spatial_dependencies: bool,
-    /// The glyph tiles and decoded images this window draws from.
+    /// The decoded images and the vector caches this window draws from.
     content: ContentCache,
     /// The same, for the nodes whose content is an externally rendered surface.
     replaced_surfaces: Arc<crate::replaced::IntrinsicTable>,
@@ -262,8 +226,6 @@ pub struct Window {
     /// none of them can do for itself, because none of them counts frames. See
     /// [`budget`](crate::budget).
     budgets: crate::budget::Budgets,
-    /// What turns a glyph into pixels.
-    raster: Arc<dyn zgui_text::GlyphRaster>,
     /// What this frame must redraw.
     damage: DamageSet,
     /// The largest extent the surface had since the last frame that retired its damage.
@@ -271,34 +233,6 @@ pub struct Window {
     /// Damage outside it names no pixel of the drawn frame or of the next one, so a layout pass
     /// cuts what it absorbs to it. `None` until the surface is first configured.
     damage_extent: Option<zgui_geom::Size<i32, zgui_geom::Device>>,
-    /// What every fragment pass this frame ran moved rigidly, and whether it moved anything else.
-    ///
-    /// The input to deciding whether the renderer may translate pixels it already has rather than
-    /// have them drawn again. Reset at the top of each frame and merged across passes, because a
-    /// scroll delivered to a listener can relay out inside the frame that delivered it.
-    rigid_moves: zgui_layout::fragment::diff::RigidMoves,
-    /// What this frame had damaged before its first layout pass ran, measured on the drawn frame.
-    ///
-    /// The other half of [`Window::rigid_moves`]: the walk reports what *it* damaged beyond the
-    /// movement, and this is what was already owed before it started. Held separately because a
-    /// frame runs the walk more than once and only the first of them starts from what the frame
-    /// inherited. A caret's old marks join it after layout, because they are pixels of the drawn
-    /// frame too. A scroll that moves composed pixels moves this damage with them.
-    damage_before_layout: DamageSet,
-    /// What the stages after the last layout pass damaged, measured on this frame's matrices.
-    ///
-    /// A scroll that moves composed pixels keeps this as it is: it names pixels the frame draws,
-    /// in the places the frame draws them.
-    damage_after_layout: DamageSet,
-    /// How many layout passes this frame has run, so the first can be told from the rest.
-    layout_passes: u32,
-    /// Which containers scrolled this frame, and from where to where.
-    ///
-    /// Kept because the change log is drained by the dispatch that reports the scroll to the
-    /// document, which happens well before anything decides what to draw.
-    scrolled_this_frame: Vec<zgui_scroll::report::Scrolled>,
-    /// Whether the cascade moved a text colour since the display list's brushes were last copied.
-    brushes_moved: bool,
     /// Which brush slot each element's text is drawn through.
     ///
     /// Held per element rather than per cascade result, because a cascade result is a new object
@@ -308,8 +242,23 @@ pub struct Window {
     text_slots: crate::window::brushes::TextSlots,
     /// The text engine.
     text: Box<dyn TextEngine>,
-    /// What puts the display list on the screen.
-    renderer: Box<dyn Renderer>,
+    /// This window's client of the compositor, and its output.
+    compositor: crate::compositor::Client,
+    /// What the window last read of its renderer's running totals.
+    renderer_totals: crate::window::counters::Totals,
+    /// See [`Window::set_check_damage_containment`].
+    check_damage: bool,
+    /// The check of the output's frames against the walks' damage, once a checked commit started
+    /// it.
+    containment: Option<crate::window::containment::Containment>,
+    /// The target the output was last configured for.
+    target: Option<iceblink::RenderTarget>,
+    /// The target the output is configured for right before the frame's commit.
+    configuring: Option<iceblink::RenderTarget>,
+    /// The device ink of the fragments the last paint walk recorded.
+    recorded_ink: iceblink::damage::DamageSet,
+    /// See [`Window::forget_compositor_sync`].
+    resync: std::cell::Cell<bool>,
     /// What is hovered, pressed, focused and captured.
     router: Router,
     /// Focus moves that have happened and have not yet been announced to the document.
@@ -452,7 +401,7 @@ pub struct Window {
     scheme: zgui_style::ColorScheme,
     /// Whether the surface is drawn translucent rather than opaque.
     ///
-    /// Stated on every [`RenderTarget`](zgui_render::RenderTarget) this window configures and on
+    /// Stated on every [`RenderTarget`](iceblink::RenderTarget) this window configures and on
     /// every frame it paints, because text with per-channel coverage has no meaning over a
     /// destination that is not opaque.
     translucent: bool,
@@ -460,7 +409,7 @@ pub struct Window {
     text_antialiasing: text_aa::TextAntialiasing,
     /// The stripe order the last frame drew per-channel text coverage for, or `None` when it drew
     /// one coverage for each pixel.
-    subpixel_order: Option<zgui_render::SubpixelOrder>,
+    subpixel_order: Option<iceblink::SubpixelOrder>,
     /// Whether the surface is entirely hidden.
     occluded: bool,
     /// Whether the surface is the one receiving the keyboard.
@@ -491,43 +440,16 @@ pub struct Window {
     configured: u64,
     /// How many offered frames were refused because the reconfiguration they owed was too early.
     declined: u64,
-    /// When a frame that has been asked for is allowed to start.
-    present: crate::window::present::PresentPace,
     /// The output refresh rate last reported, so a change in it is logged once rather than per
     /// frame. `None` inside the option is a backend that reports no rate at all.
     reported_rate: std::cell::Cell<Option<Option<u32>>>,
-    /// When to try again after a frame that did not reach the screen, if one is owed.
-    ///
-    /// A frame whose acquisition timed out, or whose surface the compositor replaced underneath it,
-    /// leaves the window showing the picture it had and owes another — but it owes it *later*. The
-    /// condition is the presentation engine having nothing to hand over, and the way that is
-    /// resolved is by the compositor coming back to the surface, not by this process asking again
-    /// sooner. Asking again straight away spends a whole pipeline and then blocks in the
-    /// acquisition for as long as the graphics API is willing to wait, on the thread that reads
-    /// input — which is how one stall becomes several and the window stops answering the pointer.
-    ///
-    /// So it is a moment rather than a request, and the park is what comes back for it.
-    retry_after: Option<Instant>,
-    /// Whether the surface is starved: the compositor stopped handing over buffers.
-    ///
-    /// Latched by an acquisition that timed out, which under a queued presentation mode is what a
-    /// surface the compositor is not drawing produces — the window sits on another workspace, or
-    /// behind something, on a platform that reports no occlusion. While it is set the window is
-    /// treated as the occluded one it very probably is: animations park, the blink stops, and a
-    /// frame that runs anyway — a timer's — skips the present that would block the loop a second.
-    /// What ends it is evidence of visibility (input, a focus, a configure) or the probe at
-    /// [`Window::retry_after`] succeeding.
+    /// The output refresh rate last told to the driver, with the same meaning.
+    told_rate: Option<Option<u32>>,
+    /// Whether the presenter's frames time out waiting for an image, as the driver last
+    /// reported.
     starved: bool,
-    /// How long the next starvation probe waits, doubling to [`STARVE_BACKOFF_CAP`].
-    ///
-    /// The probe is the one attempt the latch allows: it runs the pipeline and lets the
-    /// acquisition block, so its price is up to a second of the loop — which is why the spacing
-    /// grows while the surface stays starved and resets the moment anything presents.
-    starve_backoff: Duration,
     /// One wall-clock deadline for shedding cold renderer and embed high-water resources.
     maintenance_due: Option<Instant>,
-    /// How many offered frames were held back so that they would start closer to being shown.
-    held: u64,
     /// The clock the pacing is measured on.
     ///
     /// Held here as well as inside the host because a configure arrives outside a frame, and the
@@ -536,6 +458,12 @@ pub struct Window {
     clock: Arc<dyn zgui_platform::Clock>,
     /// Whether the next frame is the first one.
     first_frame: bool,
+    /// Why the renderer could not be built, for a window that never showed a frame.
+    unopened: Option<iceblink::GpuUnavailable>,
+    /// Whether the window has read what its output's renderer can do.
+    renderer_known: bool,
+    /// When the last frame the driver was told about reached the display.
+    reported_presented: Option<web_time::Instant>,
     /// Whether a frame has been asked for and has not run yet.
     ///
     /// The platform coalesces repeated requests into one frame, so a second request costs nothing
@@ -553,6 +481,8 @@ pub struct Window {
     probe: Option<Rc<dyn crate::probe::FrameProbe>>,
     /// What the last frame did, or `None` before the first frame.
     last_report: Option<crate::window::frame::FrameReport>,
+    /// The region the last paint walk was gated on.
+    painted: DamageSet,
     /// What the accessibility tree was last told, and what it is owed.
     a11y: zgui_a11y::A11yBuilder,
     /// The elements this frame's fragment pass carried to a new position without changing.
@@ -569,7 +499,7 @@ pub struct Window {
     /// leaves every rectangle measured through it exactly where it was, so the fragment pass has
     /// nothing to report and everything drawn in that space is somewhere else. Filled where the
     /// frame's matrices are published and drained by [`Window::publish_a11y`].
-    moved_spaces: Vec<zgui_scene::SpatialId>,
+    moved_spaces: Vec<zgui_space::SpatialId>,
     /// Which node the accessibility tree was last told holds focus.
     ///
     /// Focus rides on every accessibility update, so a frame that moved focus and changed no node
@@ -594,7 +524,8 @@ pub struct Window {
 }
 
 impl Window {
-    /// Opens a window over `surface`, drawn by `renderer`, and builds `view` into `document`.
+    /// Opens a window over `surface` that draws into the output of `compositor` with `renderer`,
+    /// and builds `view` into `document`.
     ///
     /// `document` is empty and carries the identity the runtime gave this window.
     ///
@@ -604,12 +535,11 @@ impl Window {
     /// sheet was rejected outright. A sheet with one unrecognised declaration is not rejected: the
     /// rest of it applies and the drop is reported.
     #[allow(clippy::too_many_arguments)]
-    pub fn open(
+    pub(crate) fn open(
         surface: Arc<dyn Surface>,
         document: Document,
-        renderer: Box<dyn Renderer>,
+        compositor: crate::compositor::Client,
         text: Box<dyn TextEngine>,
-        raster: Arc<dyn zgui_text::GlyphRaster>,
         metrics: Arc<dyn zgui_text::FontMetricsSource>,
         clock: Arc<dyn zgui_platform::Clock>,
         timers: Rc<RefCell<Timers>>,
@@ -632,17 +562,8 @@ impl Window {
             ]),
         ));
         let dom = Rc::new(DocumentDom::new(Rc::clone(&document)));
-        // The atlas may create textures as large as the device allows, so a photo the device can
-        // hold is cached whole rather than clamped to the smallest supported device's limit.
-        let atlas_limits = zgui_atlas::AtlasLimits {
-            max_texture_size: renderer.capabilities().max_texture_size,
-            ..zgui_atlas::AtlasLimits::default()
-        };
-        // The `- 2` keeps a maximal decode allocatable once the atlas pads the tile.
-        let images = crate::images::ImageLoader::new(
-            Arc::clone(&replaced_images),
-            (atlas_limits.max_texture_size - 2).max(1) as u32,
-        );
+        // The device's limit is set once the renderer is built, before the first decode.
+        let images = crate::images::ImageLoader::new(Arc::clone(&replaced_images), u32::MAX);
         let sources = images.source_queue();
         let secure_changes: Rc<RefCell<Vec<zgui_dom::NodeKey>>> = Rc::default();
         let secure_heard = Rc::clone(&secure_changes);
@@ -726,6 +647,24 @@ impl Window {
         });
         built.mount(&dom_handle, root, None);
 
+        let mut compositor = compositor;
+        // A driver on a thread of its own answers there, and the window takes the answers that
+        // wake it on its next turn. A driver on this thread answers during the window's own calls,
+        // whose answers the window takes right after them.
+        if compositor.capabilities().threaded {
+            let woken = Arc::clone(&waker);
+            let id = surface.id();
+            compositor.set_waker(Arc::new(move || woken.answered(id)));
+        }
+        if zgui_layout::invariants::enabled() {
+            compositor.set_verification(true);
+        }
+        // Before the output's first frame, so a paced driver never builds one at a rate it
+        // assumed while the platform reports the real one.
+        let told_rate = surface.refresh_rate_millihertz().filter(|rate| *rate > 0);
+        zgui_profile::latency::note_with("w.refresh", || format!("{told_rate:?}"));
+        compositor.set_refresh(compose::refresh_ns(told_rate));
+
         Self {
             surface,
             document,
@@ -745,18 +684,15 @@ impl Window {
             retired_clips: rustc_hash::FxHashSet::default(),
             scroll,
             last_frame: None,
-            opened_at: None,
             painted_at: None,
-            frame_clock: zgui_scene::FrameClock::default(),
             animator: zgui_anim::Animator::new(),
             animation: crate::window::anim::cadence::AnimationCadence::parked(),
+            compose_lead: crate::window::anim::lead::ComposeLead::default(),
             hold_after: None,
             hold_due: None,
-            scene: Scene::new(),
+            tables: Tables::new(),
             painter: Painter::new(),
-            verify_replays: zgui_layout::invariants::enabled(),
-            check_spatial_dependencies: zgui_scene::invariant::enabled(),
-            content: ContentCache::new(atlas_limits.with_soft_bytes(ATLAS_SOFT_BYTES)),
+            content: ContentCache::new(),
             replaced_surfaces,
             images,
             embed: Box::new(crate::embed::NoEmbeds),
@@ -770,18 +706,18 @@ impl Window {
             layers_owed: Vec::new(),
             vello_initializers: Vec::new(),
             budgets: crate::budget::Budgets::new(),
-            raster,
             damage: DamageSet::full(),
             damage_extent: None,
-            rigid_moves: zgui_layout::fragment::diff::RigidMoves::default(),
-            damage_before_layout: DamageSet::new(),
-            damage_after_layout: DamageSet::new(),
-            layout_passes: 0,
-            scrolled_this_frame: Vec::new(),
-            brushes_moved: false,
             text_slots: crate::window::brushes::TextSlots::default(),
             text,
-            renderer,
+            compositor,
+            renderer_totals: crate::window::counters::Totals::default(),
+            check_damage: zgui_layout::invariants::enabled(),
+            containment: None,
+            target: None,
+            configuring: None,
+            recorded_ink: iceblink::damage::DamageSet::new(),
+            resync: std::cell::Cell::new(false),
             router: Router::new(),
             pending_focus: Vec::new(),
             pending_crossings: Vec::new(),
@@ -789,6 +725,7 @@ impl Window {
             gestures: zgui_input::Gestures::new(),
             scroll_settings: zgui_platform::ScrollSettings::default(),
             scroll_frozen: false,
+            driven: crate::window::scroll::driven::Driven::default(),
             panning: Vec::new(),
             panning_pointer: None,
             lifted: Vec::new(),
@@ -829,21 +766,22 @@ impl Window {
             pace: crate::window::resize::ResizePace::new(),
             configured: 0,
             declined: 0,
-            present: crate::window::present::PresentPace::free_running(),
             reported_rate: std::cell::Cell::new(None),
-            retry_after: None,
+            told_rate: Some(told_rate),
             starved: false,
-            starve_backoff: STARVE_BACKOFF_START,
             maintenance_due: None,
-            held: 0,
             clock,
             first_frame: true,
+            unopened: None,
+            renderer_known: false,
+            reported_presented: None,
             awaiting_frame: std::cell::Cell::new(false),
             gate,
             timers,
             binding: Box::new(NoBinding),
             probe: options.probe.clone(),
             last_report: None,
+            painted: DamageSet::new(),
             a11y: zgui_a11y::A11yBuilder::new(),
             a11y_moves: Vec::new(),
             moved_spaces: Vec::new(),
@@ -930,7 +868,8 @@ impl Window {
         &self.dom
     }
 
-    /// Whether the surface is starved: the compositor stopped handing over buffers.
+    /// Reports whether the presenter's frames time out waiting for an image, as the driver last
+    /// reported.
     pub fn is_starved(&self) -> bool {
         self.starved
     }
@@ -994,6 +933,8 @@ impl Window {
     /// Records that the frame that was asked for is now running.
     pub(crate) fn frame_started(&mut self) {
         self.awaiting_frame.set(false);
+        // A whole frame presents the compositor's scrolling as well.
+        self.driven.frame_started();
     }
 
     /// Whether a frame offered at `now` is worth running.
@@ -1039,58 +980,11 @@ impl Window {
         zgui_profile::latency::mark("f.declined");
     }
 
-    /// Whether a frame offered at `now` is being held back so that it starts closer to being shown.
-    ///
-    /// A frame is worth running long before it is worth *starting*. Started the moment it is asked
-    /// for, it composes the world as it was when the last buffer was released and then waits inside
-    /// the acquisition — on the thread that reads input — for the display to release the next one.
-    /// Everything that arrives during that wait is answered by the frame after this one.
-    ///
-    /// So the frame is held, the events keep arriving and keep being queued, and the one frame that
-    /// runs when the hold expires is built from all of them. Nothing is skipped and nothing is
-    /// presented later: what moves is how old the picture is when it appears, and how much of each
-    /// interval the loop can answer a pointer in. See [`PresentPace`](crate::PresentPace) for how
-    /// long the hold is and when there is none.
-    ///
-    /// Asking is what starts the hold, so a caller that asks must be prepared to act on the answer.
-    pub fn holds_a_frame(&self, now: Instant) -> bool {
-        self.present.holds_a_frame(now)
-    }
-
-    /// How long the next frame this window is asked for is held back before it starts.
-    ///
-    /// Zero for a window that has never been made to wait for a surface to present into, which is
-    /// every window presenting to something with an image always spare.
-    pub const fn present_hold(&self) -> std::time::Duration {
-        self.present.hold()
-    }
-
     /// Whether the desktop says this window is being interactively resized right now.
     ///
     /// Best effort: a desktop that says nothing about drags answers false for the whole of one.
     pub const fn is_resizing(&self) -> bool {
         self.resizing
-    }
-
-    /// Records that an offered frame was held back, so that the deadline can ask for it again.
-    ///
-    /// The same act as [`Window::declined_a_frame`] and for the same reason: a request left
-    /// standing is a request nothing can renew, so forgetting one was asked for is part of not
-    /// answering it.
-    pub fn held_a_frame(&mut self) {
-        self.held += 1;
-        self.awaiting_frame.set(false);
-        self.surface.redraw_declined();
-        zgui_profile::latency::mark("f.held");
-    }
-
-    /// How many offered frames were held back to start closer to the moment they would be shown.
-    ///
-    /// Nothing was skipped: each of these ran a little later in the same interval. It counts
-    /// offers rather than frames because a burst of input inside one hold offers several and they
-    /// all become the one frame that runs at the end of it.
-    pub const fn held_frames(&self) -> u64 {
-        self.held
     }
 
     /// How many offered frames were refused for a reconfiguration that could not yet be seen.
@@ -1184,9 +1078,9 @@ impl Window {
         Scale::new(self.scale)
     }
 
-    /// The display list the last frame built.
-    pub fn scene(&self) -> &Scene {
-        &self.scene
+    /// Returns the clip, paint and coordinate-system tables the last frame drew through.
+    pub fn tables(&self) -> &Tables {
+        &self.tables
     }
 
     /// What every coordinate system in the drawn frame resolves to.
@@ -1196,7 +1090,7 @@ impl Window {
     /// and these are the matrices the frame on the screen was composed through. A caller holding a
     /// fragment's rectangle and its coordinate system turns the two into a place on the surface
     /// with [`onto_device`](zgui_layout::fragment::transform::placed::onto_device).
-    pub fn placements(&self) -> std::cell::Ref<'_, zgui_scene::Placements> {
+    pub fn placements(&self) -> std::cell::Ref<'_, zgui_space::Placements> {
         self.host.placements()
     }
 
@@ -1205,9 +1099,21 @@ impl Window {
         &self.damage
     }
 
-    /// The renderer, for a caller that wants to ask it something directly.
-    pub fn renderer(&self) -> &dyn Renderer {
-        self.renderer.as_ref()
+    /// Runs `inspect` on the window's renderer, on the thread that draws the window's frames, and
+    /// returns its answer.
+    ///
+    /// The call waits for the driver to run it. Returns `None` when the window's output has no
+    /// renderer.
+    pub fn inspect_renderer<T: Send + 'static>(
+        &self,
+        inspect: impl FnOnce(&mut dyn iceblink::Renderer) -> T + Send + 'static,
+    ) -> Option<T> {
+        self.compositor.inspect(inspect)
+    }
+
+    /// The newest snapshot of the output the window draws into and of its renderer.
+    pub fn output_status(&self) -> Option<iceblink::OutputStatus> {
+        self.compositor.status()
     }
 
     /// The painter and the paint records it holds, for a memory report.
@@ -1292,54 +1198,15 @@ impl Window {
         &mut self.content
     }
 
-    /// Turns on the check that every replayed range still owns the rasters it draws.
+    /// Turns on the check that the compositor redraws nothing the paint walk did not visit.
     ///
-    /// On by default only when `ZGUI_INVARIANTS` is set, because it costs a lookup per distinct
-    /// raster per replayed fragment — a per-frame cost proportional to what the replay saved. A
-    /// test about the check itself turns it on directly, rather than depending on how the process
-    /// was launched.
-    pub fn set_verify_replays(&mut self, verify: bool) {
-        self.verify_replays = verify;
-    }
-
-    /// Turns on the check that every primitive is still drawn through the coordinate system it was
-    /// pushed under.
-    ///
-    /// On by default only when `ZGUI_INVARIANTS` is set, because it costs a word of storage per
-    /// primitive per frame and a lookup per primitive to answer. A test about the check itself
-    /// turns it on directly, rather than depending on how the process was launched — and until
-    /// something could, the check was wired into the frame loop with nothing able to watch it run
-    /// there.
-    ///
-    /// It takes effect on the next frame: the names are kept alongside the log and are meaningless
-    /// unless they have been kept since that log began.
-    pub fn set_check_spatial_dependencies(&mut self, check: bool) {
-        self.check_spatial_dependencies = check;
-    }
-
-    /// How many of this frame's primitives carry the name of a coordinate system.
-    ///
-    /// Zero for a window that was never asked to keep them, and the non-vacuity control for any
-    /// test that watches the check pass: a frame that recorded nothing has nothing to compare, and
-    /// [`Scene::check_spatial_dependencies`](zgui_scene::Scene::check_spatial_dependencies) is
-    /// perfectly happy about it.
-    pub fn spatial_dependencies_recorded(&self) -> usize {
-        self.scene.spatial_dependencies_recorded()
-    }
-
-    /// Every raster a live paint record names that the content cache no longer holds.
-    ///
-    /// Empty for a window whose records own what they draw, and that is the whole assertion: a key
-    /// here names a rectangle of a texture some fragment is going to replay out of and something
-    /// else is now free to write into. It is the state no other observation of the window can see
-    /// — the display list is what it was, the geometry never moved, and the pixels are wrong only
-    /// once the rectangle has been handed out and filled.
-    pub fn stale_replay_resources(&self) -> Vec<zgui_atlas::AtlasKey> {
-        self.painter
-            .cache()
-            .resources()
-            .filter(|key| !self.content.atlas().contains(*key))
-            .collect()
+    /// A frame that breaks it panics, naming what was redrawn outside the region the walk was
+    /// gated on. The check skips a frame whose commit wrote a property, a paint or an offset, a
+    /// frame that shifted, one after a frame that kept its damage, and one that redraws the whole
+    /// output, because the compositor redraws for those on its own account. On by default only
+    /// when `ZGUI_INVARIANTS` is set.
+    pub fn set_check_damage_containment(&mut self, check: bool) {
+        self.check_damage = check;
     }
 
     /// Unmounts the view and drops everything the window was holding on its behalf.
@@ -1362,8 +1229,8 @@ impl Window {
 impl Window {
     /// Draws this window translucent or opaque from the next configuration on.
     ///
-    /// A translucent window configures its renderer with
-    /// [`RenderTarget::translucent`](zgui_render::RenderTarget::translucent) and paints with
+    /// A translucent window configures its renderer with a target that is not opaque
+    /// and paints with
     /// ordinary text coverage, so every pixel it composes is a premultiplied colour that can be
     /// composited over something else.
     pub(crate) fn set_translucent(&mut self, translucent: bool) {

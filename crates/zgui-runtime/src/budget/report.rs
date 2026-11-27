@@ -9,9 +9,6 @@ use crate::budget::epoch::SceneEpoch;
 /// here cannot be.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum CacheId {
-    /// The rasterised glyphs and pictures in the window's texture atlas, and the placements
-    /// remembered beside them.
-    GlyphAtlas,
     /// The decoded texels attached to replaced nodes.
     DecodedImages,
     /// The shaped paragraphs the text engine holds between frames.
@@ -32,13 +29,11 @@ pub enum CacheId {
 impl CacheId {
     /// Every cache a window registers, in registration order.
     ///
-    /// The paint chunks come first on purpose: their forget releases atlas and table holds, so it
-    /// has to run while the caches those holds are in are still alive to be released into. The
-    /// vector layers come before the atlas, whose forget clears them with everything else.
-    pub const ALL: [Self; 8] = [
+    /// The paint chunks come first on purpose: their forget releases table holds, so it has to run
+    /// while the tables those holds are in are still alive to be released into.
+    pub const ALL: [Self; 7] = [
         Self::PaintChunks,
         Self::VectorLayers,
-        Self::GlyphAtlas,
         Self::DecodedImages,
         Self::ParagraphShaping,
         Self::VectorResources,
@@ -54,12 +49,11 @@ impl CacheId {
         match self {
             Self::PaintChunks => 0,
             Self::VectorLayers => 1,
-            Self::GlyphAtlas => 2,
-            Self::DecodedImages => 3,
-            Self::ParagraphShaping => 4,
-            Self::VectorResources => 5,
-            Self::RenderTargets => 6,
-            Self::DeviceMemory => 7,
+            Self::DecodedImages => 2,
+            Self::ParagraphShaping => 3,
+            Self::VectorResources => 4,
+            Self::RenderTargets => 5,
+            Self::DeviceMemory => 6,
         }
     }
 
@@ -68,7 +62,6 @@ impl CacheId {
         match self {
             Self::PaintChunks => "paint chunks",
             Self::VectorLayers => "vector layers",
-            Self::GlyphAtlas => "glyph atlas",
             Self::DecodedImages => "decoded images",
             Self::ParagraphShaping => "paragraph shaping",
             Self::VectorResources => "vector resources",
@@ -150,10 +143,6 @@ pub struct CacheReport {
     /// What the cache is holding.
     pub resident: u64,
     /// How much of that is held by something still using it, and so is never evictable.
-    ///
-    /// For the glyph atlas this is the tiles a live record retains — the rasters a replayed range
-    /// draws from without ever looking them up, which is exactly the set that eviction used to be
-    /// free to take.
     pub pinned: u64,
     /// The last frame in which anything read the cache.
     ///

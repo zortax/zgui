@@ -9,24 +9,10 @@ const HERE: &str = "xtask/src/budget/subject.rs";
 pub(crate) const SUBJECTS: &[Subject] = &[
     Subject {
         member: "zgui-runtime",
-        target: "evict_budget",
-        about: "a cache that has gone over its soft limit comes back under it within a bounded \
-                number of frames, and does not thrash doing so",
-        required: &["atlas_evicts_when_over_soft_limit"],
-        listed_in: HERE,
-    },
-    Subject {
-        member: "zgui-runtime",
-        target: "evict_replay",
-        about: "no cached range is replayed naming a raster the cache behind it no longer holds",
-        required: &["no_replayed_range_names_an_evicted_tile"],
-        listed_in: HERE,
-    },
-    Subject {
-        member: "zgui-runtime",
-        target: "evict_pinned",
-        about: "eviction at its most aggressive still cannot take a raster something is holding",
-        required: &["pinned_resources_survive_aggressive_eviction"],
+        target: "evict_atlas",
+        about: "the compositor's atlas comes back within a page of a limit it is over, as the \
+                device's memory reports it, and does not thrash doing so",
+        required: &["the_compositor_atlas_stays_under_its_limit_without_thrashing"],
         listed_in: HERE,
     },
     Subject {
@@ -75,7 +61,7 @@ mod tests {
             .flat_map(|subject| subject.required)
             .copied()
             .collect();
-        assert!(names.contains(&"atlas_evicts_when_over_soft_limit"));
-        assert!(names.contains(&"no_replayed_range_names_an_evicted_tile"));
+        assert!(names.contains(&"the_compositor_atlas_stays_under_its_limit_without_thrashing"));
+        assert!(names.contains(&"every_registered_cache_is_empty_after_forget"));
     }
 }

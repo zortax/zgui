@@ -5,8 +5,8 @@
 //! paragraphs are equal down to the key. Painting reads glyphs by that key, so each set of lines
 //! that a context keeps has to have a form of its own. Contexts that keep equal lines share one.
 //!
-//! A frame draws again only the lines that changed, so a label that a hover leaves alone draws no
-//! glyphs in that frame. Run with `ZGUI_INVARIANTS=1` to also check the form of such a label.
+//! A frame records again only the lines that changed, and the window still shows a label that a
+//! hover leaves alone. Run with `ZGUI_INVARIANTS=1` to also check the form of such a label.
 
 mod support;
 
@@ -17,14 +17,16 @@ use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 
 /// The sheet. Each hover changes the width of some labels, and leaves the others as they are.
 ///
-/// The root sets the alignment, so every label inherits each text property from it.
+/// The root sets the alignment, so every label inherits each text property from it. Every label
+/// fits inside the 400px window.
+// The compositor draws no glyph outside the output.
 const CSS: &str = "root { display: block; width: 600px; height: 300px; text-align: center }
                    .grid { display: grid; grid-template-columns: 55px 200px; width: 255px }
                    .grid:hover { grid-template-columns: 200px 55px }
                    .even { grid-template-columns: 200px 200px; width: 400px }
                    .even:hover { grid-template-columns: 55px 55px }
-                   .wide { grid-template-columns: 200px 300px; width: 500px }
-                   .wide:hover { grid-template-columns: 300px 200px }
+                   .wide { grid-template-columns: 150px 250px; width: 400px }
+                   .wide:hover { grid-template-columns: 250px 150px }
                    .stay { display: block; width: 200px }
                    .pair { display: block; width: 200px; height: 200px }
                    .pair:hover { width: 55px }
@@ -72,12 +74,11 @@ fn paragraph_of(window: &zgui_runtime::Window, node: NodeRef) -> zgui_text::Para
     panic!("the label laid out no line");
 }
 
-/// Asserts that the labels lay out `expected_lines` lines, and that each line drawn in the last
-/// frame holds the glyphs of its own label's break.
+/// Asserts that the labels lay out `expected_lines` lines, and that the window shows `labels`
+/// labels in full, each line holding the glyphs of its own label's break.
 ///
-/// A line of 55px or less holds one word, and a wider one holds all three. With `drawn`, the last
-/// frame drew that many labels in full.
-fn assert_own_lines(app: &App, drawn: Option<usize>, expected_lines: usize) {
+/// A line of 55px or less holds one word, and a wider one holds all three.
+fn assert_own_lines(app: &App, labels: usize, expected_lines: usize) {
     let window = &app.app().windows()[0];
     let lines = support::line_boxes(window);
     assert_eq!(
@@ -85,14 +86,13 @@ fn assert_own_lines(app: &App, drawn: Option<usize>, expected_lines: usize) {
         expected_lines,
         "the labels lay out {expected_lines} lines: {lines:?}"
     );
-    let sprites = &window.scene().primitives.mono_sprites;
-    if let Some(labels) = drawn {
-        assert_eq!(
-            sprites.len(),
-            labels * GLYPHS,
-            "each label draws its own glyphs"
-        );
-    }
+    let drawing = support::drawing(window);
+    let sprites = drawing.glyphs();
+    assert_eq!(
+        sprites.len(),
+        labels * GLYPHS,
+        "each label draws its own glyphs: {drawing}"
+    );
     let mut found = 0;
     for line in &lines {
         let inside = sprites
@@ -100,17 +100,14 @@ fn assert_own_lines(app: &App, drawn: Option<usize>, expected_lines: usize) {
             .filter(|sprite| {
                 // The centre, because a glyph is snapped to whole pixels and a centred line box
                 // is not.
-                let ink = sprite.ink();
-                let x = ink.origin.x.0 + ink.size.width.0 / 2.0;
-                let y = ink.origin.y.0 + ink.size.height.0 / 2.0;
+                let [x, y, width, height] = support::world(sprite);
+                let x = x + width / 2.0;
+                let y = y + height / 2.0;
                 (line.origin.x.0..=line.right().0).contains(&x)
                     && (line.origin.y.0..=line.bottom().0).contains(&y)
             })
             .count();
         found += inside;
-        if drawn.is_none() && inside == 0 {
-            continue;
-        }
         let expected = if line.size.width.0 > 55.0 { GLYPHS } else { 3 };
         assert_eq!(
             inside, expected,
@@ -178,7 +175,7 @@ fn equal_labels_in_columns_of_different_widths_draw_their_own_lines() {
     let _turn = zgui_profile::counter::exclusive();
     let (mut app, refs) = labels(&[("grid", 2)]);
     app.settle(8);
-    assert_own_lines(&app, Some(2), 4);
+    assert_own_lines(&app, 2, 4);
     let keys = keys(&app, &refs);
     assert_ne!(
         keys[0], keys[1],
@@ -187,11 +184,11 @@ fn equal_labels_in_columns_of_different_widths_draw_their_own_lines() {
 
     // Both labels laid out again, each at the width the other had.
     hover(&mut app, ON_GRID);
-    assert_own_lines(&app, Some(2), 4);
+    assert_own_lines(&app, 2, 4);
 
     // And back.
     hover(&mut app, OUTSIDE);
-    assert_own_lines(&app, Some(2), 4);
+    assert_own_lines(&app, 2, 4);
     app.shut_down();
 }
 
@@ -200,7 +197,7 @@ fn equal_labels_at_one_width_share_one_paragraph() {
     let _turn = zgui_profile::counter::exclusive();
     let (mut app, refs) = labels(&[("grid even", 2)]);
     app.settle(8);
-    assert_own_lines(&app, Some(2), 2);
+    assert_own_lines(&app, 2, 2);
     let keys = keys(&app, &refs);
     assert_eq!(
         keys[0], keys[1],
@@ -217,7 +214,7 @@ fn equal_labels_resized_together_keep_one_paragraph() {
     zgui_profile::counter::reset();
     for (at, lines) in [(ON_GRID, 6), (OUTSIDE, 2), (ON_GRID, 6)] {
         hover(&mut app, at);
-        assert_own_lines(&app, Some(2), lines);
+        assert_own_lines(&app, 2, lines);
         let keys = keys(&app, &refs);
         assert_eq!(
             keys[0], keys[1],
@@ -242,7 +239,7 @@ fn equal_single_lines_at_different_widths_share_one_paragraph() {
         if let Some(at) = at {
             hover(&mut app, at);
         }
-        assert_own_lines(&app, Some(2), 2);
+        assert_own_lines(&app, 2, 2);
         let keys = keys(&app, &refs);
         assert_eq!(
             keys[0], keys[1],
@@ -262,11 +259,11 @@ fn an_equal_label_left_alone_keeps_its_lines() {
     // form has to be put back on its lines.
     let (mut app, refs) = labels(&[("stay", 1), ("pair", 1)]);
     app.settle(8);
-    assert_own_lines(&app, Some(2), 2);
+    assert_own_lines(&app, 2, 2);
     let rest = keys(&app, &refs);
     assert_eq!(rest[0], rest[1], "the fixture holds no shared paragraph");
     hover(&mut app, ON_PAIR);
-    assert_own_lines(&app, None, 4);
+    assert_own_lines(&app, 2, 4);
     let hovered = keys(&app, &refs);
     assert_eq!(
         hovered[0], rest[0],
@@ -277,7 +274,7 @@ fn an_equal_label_left_alone_keeps_its_lines() {
         "the narrowed label shares the other's form"
     );
     hover(&mut app, OUTSIDE);
-    assert_own_lines(&app, None, 2);
+    assert_own_lines(&app, 2, 2);
     app.shut_down();
 }
 
@@ -288,14 +285,14 @@ fn a_third_equal_label_left_alone_keeps_its_lines() {
     // paragraph, because the third still keeps the old ones. The two share one copy.
     let (mut app, refs) = labels(&[("stay", 1), ("pair", 2)]);
     app.settle(8);
-    assert_own_lines(&app, Some(3), 3);
+    assert_own_lines(&app, 3, 3);
     let rest = keys(&app, &refs);
     assert!(
         rest.iter().all(|&key| key == rest[0]),
         "the fixture holds no shared paragraph"
     );
     hover(&mut app, ON_PAIR);
-    assert_own_lines(&app, None, 7);
+    assert_own_lines(&app, 3, 7);
     let hovered = keys(&app, &refs);
     assert_eq!(
         hovered[0], rest[0],
@@ -310,6 +307,6 @@ fn a_third_equal_label_left_alone_keeps_its_lines() {
         "two narrowed labels that keep equal lines hold a copy each"
     );
     hover(&mut app, OUTSIDE);
-    assert_own_lines(&app, None, 3);
+    assert_own_lines(&app, 3, 3);
     app.shut_down();
 }

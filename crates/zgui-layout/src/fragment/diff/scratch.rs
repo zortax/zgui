@@ -30,12 +30,38 @@ pub struct DiffScratch {
     /// The fragments a box is about to retire.
     pub(super) stale: Vec<FragKey>,
     /// The boxes that imposed a clip and left the tree, until the frame's owner takes them.
-    pub(super) retired_clips: Vec<zgui_scene::PropertyOwner>,
+    pub(super) retired_clips: Vec<zgui_space::PropertyOwner>,
+    /// The clips that admit more damage than they show, each named after the box that imposes it
+    /// and given with the device pixels it admits too.
+    pub(super) widened: Vec<(zgui_space::PropertyOwner, Rect<DevicePx, Device>)>,
 }
 
 impl DiffScratch {
+    /// Sets the scroll containers whose clips admit damage in more device pixels than their
+    /// ports show, for the walks that follow.
+    ///
+    /// Content inside those pixels is damaged where it changes, as if the port showed it.
+    pub fn widen_ports(
+        &mut self,
+        ports: impl IntoIterator<Item = (BoxKey, Rect<DevicePx, Device>)>,
+    ) {
+        self.widened.clear();
+        for (container, admitted) in ports {
+            let owner = zgui_space::PropertyOwner::of(container);
+            self.widened
+                .extend([(owner, admitted), (owner.content(), admitted)]);
+        }
+    }
+
+    /// The clips [`DiffScratch::widen_ports`] set, as [`ClipTable::bounds_widened`] takes them.
+    ///
+    /// [`ClipTable::bounds_widened`]: zgui_space::ClipTable::bounds_widened
+    pub fn widened(&self) -> &[(zgui_space::PropertyOwner, Rect<DevicePx, Device>)] {
+        &self.widened
+    }
+
     /// Takes the boxes that imposed a clip and left the tree since the last call.
-    pub fn take_retired_clips(&mut self) -> impl Iterator<Item = zgui_scene::PropertyOwner> + '_ {
+    pub fn take_retired_clips(&mut self) -> impl Iterator<Item = zgui_space::PropertyOwner> + '_ {
         self.retired_clips.drain(..)
     }
 }

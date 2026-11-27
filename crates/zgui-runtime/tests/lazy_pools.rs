@@ -34,14 +34,10 @@ fn window(rows: usize) -> Harness<Runtime> {
         .with_stylesheet(CSS)
         .with_style_threads(4)
         .with_layout_threads(4)
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
-        }))
-        .with_glyph_raster(Box::new(|| {
-            std::sync::Arc::new(zgui_testkit_scene::MonoRaster::new())
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let mut list = zgui_elements::column().class("list");

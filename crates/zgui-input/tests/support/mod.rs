@@ -20,7 +20,7 @@ use zgui_layout::text::Paragraphs;
 use zgui_layout::tree::LayoutTree;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_style::{SheetOrigin, SheetSource, StyleEngine, Viewport};
-use zgui_testkit_scene::{FixedMetrics, MonoShaper};
+use zgui_testkit::{FixedMetrics, MonoShaper};
 use zgui_vocab::SharedString;
 
 /// One element of a fixture tree.
@@ -111,7 +111,7 @@ impl zgui_layout::measure::MeasureContent for NoImages {
     }
 
     fn paint_slot(&mut self, _paint: &zgui_text_style::TextPaint) -> zgui_text::Brush {
-        zgui_scene::PaintSlot(0)
+        zgui_space::PaintSlot(0)
     }
 }
 
@@ -126,9 +126,9 @@ pub struct Fixture {
     /// What is under a point.
     pub hit: HitIndex,
     /// The clip chains the fragments were measured against.
-    pub clips: zgui_scene::ClipTable,
+    pub clips: zgui_space::ClipTable,
     /// The coordinate systems they were measured in.
-    pub spatial: zgui_scene::SpatialTree,
+    pub spatial: zgui_space::SpatialTree,
     /// What the fragment pass said must be redrawn.
     pub damage: zgui_bits::DamageSet,
     /// The engine, held because it owns the rule set the document was styled against.
@@ -165,8 +165,8 @@ impl Fixture {
             root,
             layout: empty,
             hit: HitIndex::new(),
-            clips: zgui_scene::ClipTable::rooted(),
-            spatial: zgui_scene::SpatialTree::with_viewport(),
+            clips: zgui_space::ClipTable::rooted(),
+            spatial: zgui_space::SpatialTree::with_viewport(),
             damage: zgui_bits::DamageSet::new(),
             engine,
             sheets: vec![handle],
@@ -203,7 +203,7 @@ impl Fixture {
         let mut tables = zgui_layout::fragment::build::Tables {
             clips: &mut self.clips,
             spatial: &mut self.spatial,
-            drawn: &zgui_scene::Placements::EMPTY,
+            drawn: &zgui_space::Placements::EMPTY,
             device: DeviceStyle::default(),
             scroll: &scroll,
             placements: &[],

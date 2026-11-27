@@ -84,7 +84,8 @@ fn every_window_belongs_to_the_same_application() {
         .with_application_id("dev.zgui.Test")
         .with_size(400.0, 300.0)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .into_handler(empty)
         .expect("the reactive runtime installs");
     let mut harness = Harness::new(handler);
@@ -383,7 +384,8 @@ fn an_application_that_stops_only_when_it_says_so_outlives_every_window() {
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .with_exit_policy(ExitPolicy::Explicit)
         .into_handler(empty)
         .expect("the reactive runtime installs");
@@ -410,7 +412,8 @@ fn an_application_tied_to_its_first_window_stops_with_it() {
         .with_title("test")
         .with_size(400.0, 300.0)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .with_exit_policy(ExitPolicy::WhenPrimaryCloses)
         .into_handler(empty)
         .expect("the reactive runtime installs");

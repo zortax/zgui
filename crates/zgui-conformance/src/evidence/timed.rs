@@ -31,7 +31,7 @@ use zgui_dom::{Document, NodeKind};
 use zgui_geom::CssPx;
 use zgui_interned::{ClassName, ElementName};
 use zgui_style::{AnimationTime, SheetOrigin, SheetSource, StyleEngine, Viewport};
-use zgui_testkit_scene::FixedMetrics;
+use zgui_testkit::FixedMetrics;
 
 use crate::evidence::probe::Verdict;
 

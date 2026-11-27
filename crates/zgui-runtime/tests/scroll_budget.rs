@@ -34,7 +34,7 @@ mod support;
 use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::SurfaceEvent;
 use zgui_profile::Counter;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
 
 /// A list of fixed-height rows inside a scrollport a fraction of their height.

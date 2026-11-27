@@ -35,18 +35,18 @@ zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 # activation defaults under them. Dispatching an event straight at a node answers what a component
 # does *given* a click; only this answers whether a pointer press and release ever becomes one.
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
-# A graphics device, and what rasterises the vector parts of a display list on it. Everything else
-# written about a drawing in this package stops at the display list, and a display list is satisfied
-# by a rasteriser that writes nothing — so the gallery's pixels are read back off a real device,
-# through the same two crates a window is drawn through.
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
+# The compositor a window draws through, on a device whose composed target and per-frame
+# transcript the painted fixtures read back.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
+iceblink.workspace = true
 # The map the ink measurement tallies colours in.
 rustc-hash.workspace = true
 # The accessibility tree, read by the consumer a screen reader's platform adapter is built on.
 # Asserting on the tree this library *publishes* is asserting on our own structure; this applies
 # the updates the way a real client does and asks the result the questions a reader asks.
 accesskit_consumer.workspace = true
+# The frame counters, which tell the frames the window ran from those the compositor presented.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 
 [lints]
 workspace = true

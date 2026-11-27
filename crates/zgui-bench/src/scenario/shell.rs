@@ -220,10 +220,12 @@ fn tooltips(harness: &mut Harness<Runtime>) -> Tooltips {
         for &at in &aims {
             let _gpu = crate::gpu_time::phase("shell.tooltip_crossing");
             let started = std::time::Instant::now();
+            let cpu = crate::cpu::Cpu::now();
             harness.deliver_to_first(crate::input::pointer(PointerAction::Moved, at));
             harness.settle(64);
             idle(harness, 6);
             crossings.push(started.elapsed().as_secs_f64() * 1e6);
+            crate::cpu::record("shell.tooltip_crossing", cpu);
         }
     }
     // Off the head, so the last tooltip closes and unmounts inside the measurement.
@@ -331,9 +333,11 @@ fn resize(harness: &mut Harness<Runtime>) -> Resize {
         );
         let gpu = crate::gpu_time::phase("shell.resize_step");
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         harness.deliver_to_first(SurfaceEvent::Resized(size));
         harness.settle(64);
         steps.push(started.elapsed().as_secs_f64() * 1e6);
+        crate::cpu::record("shell.resize_step", cpu);
         drop(gpu);
         harness.advance(Duration::from_micros(16_667));
         harness.pump();

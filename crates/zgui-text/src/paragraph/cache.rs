@@ -429,11 +429,11 @@ mod tests {
         let mut cache = ParagraphCache::new();
         for key in 1..=4 {
             let mut result = shaped(key);
-            result.set_brush(Some(zgui_scene::PaintSlot((key % 2) as u32)));
+            result.set_brush(Some(zgui_space::PaintSlot((key % 2) as u32)));
             cache.insert(result);
             cache.restate_engine_bytes(ParagraphKey(key), |_| 10);
         }
-        let gone = zgui_scene::PaintSlot(1);
+        let gone = zgui_space::PaintSlot(1);
         assert_eq!(cache.forget_where(|result| result.brush() == Some(gone)), 2);
         assert!(!cache.holds(ParagraphKey(1)));
         assert!(cache.holds(ParagraphKey(2)));

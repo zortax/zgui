@@ -12,9 +12,7 @@
 //! rows near the pointer; and a fragment whose own cull rectangle misses it is skipped while its
 //! children are still visited, because a child can paint outside its parent.
 //!
-//! Two things are never skipped. A group's markers are matched pairs — dropping one leaves a target
-//! open, or composites one that was never begun — and neither is anything when the damage says the
-//! whole surface is being redrawn.
+//! Nothing is skipped when the damage says the whole surface is being redrawn.
 
 pub mod corners;
 pub mod decorate;
@@ -25,7 +23,8 @@ pub mod stacking;
 
 use std::borrow::Cow;
 
-use zgui_atlas::AtlasKey;
+use crate::Tables;
+use iceblink::RenderCapabilities;
 use zgui_bits::DamageSet;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Edges, Rect};
@@ -33,28 +32,25 @@ use zgui_layout::fragment::FragmentFlags;
 use zgui_layout::fragment::diff::pixels;
 use zgui_layout::{FragKey, Fragment, FragmentKind, LayoutStore};
 use zgui_profile::{Counter, counter};
-use zgui_render::RenderCapabilities;
-use zgui_scene::{GroupBoundary, PropertyOwner, Scene};
+use zgui_space::PropertyOwner;
 
 use crate::content::vectors::{NoVectorMasks, NoVectors, VectorMaskSource, VectorSource};
 use crate::emit::group::{self, Isolation};
 use crate::emit::highlight::{HighlightSource, NoHighlights};
 use crate::emit::scrollbar::ScrollbarPaint;
-use crate::emit::text::{GlyphPlacementSource, GlyphSource, TextPlacement};
+use crate::emit::text::{GlyphSource, TextPlacement};
 use crate::emit::{BoxPlacement, NoGlyphs};
 use zgui_dom::NodeKey;
 use zgui_dom::side::AnimOverride;
 
+use crate::emit::record::{Items, Recorder};
 use crate::lower::anim::{AnimOverrides, NoAnim, OwnedPaints};
 use crate::lower::cache::{PaintStyleCache, PaintStyleRef};
+use crate::sync::CompositorSync;
 use crate::walk::decorate::Decorations;
 use crate::walk::fill::TextFills;
 use crate::walk::order::{Emission, NoReplaced, ReplacedSource};
-use crate::walk::replay::hold::{NoResources, ResourceOwner};
 use crate::walk::replay::{Encoding, LayerRecord, PaintCache, Painted, Reuse};
-
-/// What the shape of a coordinate system is mixed with while an animation moves it.
-const IN_MOTION: u64 = 0x9e37_79b9_7f4a_7c15;
 
 pub use crate::walk::order::{NoReplaced as NoReplacedContent, ReplacedSource as ReplacedContent};
 
@@ -72,8 +68,6 @@ pub struct PaintInput<'a> {
     pub surface: Option<Rect<i32, Device>>,
     /// Where glyphs come from.
     pub glyphs: &'a dyn GlyphSource,
-    /// Where a run a custom element shaped itself gets its tiles.
-    pub glyph_placements: &'a dyn GlyphPlacementSource,
     /// Where the caret and the selection bands drawn with a line come from.
     pub highlights: &'a dyn HighlightSource,
     /// Where replaced content comes from.
@@ -93,13 +87,6 @@ pub struct PaintInput<'a> {
     /// identically wherever the pointer is, which is what keeps a pointer move from repainting
     /// every box that carries one.
     pub pointer: Option<zgui_geom::Point<zgui_geom::DevicePx, zgui_geom::Device>>,
-    /// The cache a recorded range's rasters live in, which the record holds them in.
-    ///
-    /// Separate from [`PaintInput::glyphs`] and [`PaintInput::replaced`] even though one object
-    /// usually answers all three: those two are asked *for* content while the walk runs, and this
-    /// one is told what to keep afterwards. A source that has no atlas behind it — a fixture, a
-    /// document with no text — passes [`NoResources`] and records nothing to keep.
-    pub resources: &'a dyn ResourceOwner,
     /// What each node's running animations are currently overriding.
     ///
     /// Asked per box rather than folded into the lowering, because a lowering is shared between
@@ -123,21 +110,13 @@ pub struct PaintInput<'a> {
     /// would take the oracle with it, so the release tree would be asserting nothing where the
     /// debug tree asserts the whole thing.
     pub record_emitted: bool,
-    /// Whether every replayed range is checked against the cache its rasters live in.
-    ///
-    /// The check is what catches a range drawing a raster that has been freed underneath it — see
-    /// [`replay::hold`]. It costs a lookup per distinct raster per replayed fragment, which is a
-    /// per-frame cost proportional to what the frame *saved*, so it is off unless something asks
-    /// for it: [`PaintInput::new`] takes its default from
-    /// [`zgui_layout::invariants::enabled`], and a test that is about the check sets it directly.
-    pub verify_replays: bool,
     /// The drawn frame's resolved matrices, for putting a line's marks where they are drawn.
     ///
     /// The caret and selection rectangles a line reports are measured in the line's own space,
     /// while the damage they are culled against is measured on the device — see
     /// [`marks::extent`](crate::damage::marks::extent). A caller with no composed frame yet passes
     /// nothing and the marks stay untransformed, which is exact for everything upright.
-    pub placements: Option<&'a zgui_scene::Placements>,
+    pub placements: Option<&'a zgui_space::Placements>,
 }
 
 impl<'a> PaintInput<'a> {
@@ -152,7 +131,6 @@ impl<'a> PaintInput<'a> {
             damage,
             surface: None,
             glyphs: &NoGlyphs,
-            glyph_placements: &crate::emit::text::NoGlyphPlacements,
             highlights: &NoHighlights,
             replaced: &NoReplaced,
             vectors: &NoVectors,
@@ -160,14 +138,12 @@ impl<'a> PaintInput<'a> {
             custom: &crate::content::custom::NoCustom,
             shaders: &crate::content::shader::NoShaders,
             pointer: None,
-            resources: &NoResources,
             anim: &NoAnim,
             capabilities: RenderCapabilities::MINIMAL,
             opaque_surface: true,
             scale: 1.0,
             scrollbars: crate::emit::scrollbar::default_paint(),
             record_emitted: false,
-            verify_replays: zgui_layout::invariants::enabled(),
             placements: None,
         }
     }
@@ -176,7 +152,7 @@ impl<'a> PaintInput<'a> {
 /// What one emit walk did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PaintReport {
-    /// How many primitives reached the display list.
+    /// How many compositor items the visited fragments draw.
     pub primitives: usize,
     /// Which fragments contributed, when the walk was asked to record them.
     pub emitted: Vec<FragKey>,
@@ -200,6 +176,11 @@ pub struct PaintReport {
     /// A caller damages them and asks for a frame, so each is encoded again until its exact layer
     /// stands. An empty list asks for nothing.
     pub layers_owed: Vec<Rect<i32, Device>>,
+    /// The device ink of every fragment whose chunk the walk recorded.
+    ///
+    /// A recording damages the ink of the items it changes, which can reach past the damage that
+    /// reached the fragment, such as a glyph's edge beside a selection band.
+    pub recorded_ink: Vec<Rect<i32, Device>>,
 }
 
 /// The vector raster paths selected for one freshly encoded element.
@@ -235,7 +216,7 @@ impl PaintReport {
         &self,
         store: &LayoutStore,
         damage: &DamageSet,
-        placements: &zgui_scene::Placements,
+        placements: &zgui_space::Placements,
     ) {
         assert!(
             self.recorded,
@@ -288,35 +269,37 @@ pub struct Painter {
     cache: PaintCache,
     /// The walk's stacks and per-frame maps, kept so a frame reuses the last frame's allocations.
     scratch: WalkScratch,
+    /// The compositor chunks the walk records fragments as, when one is attached.
+    sync: Option<CompositorSync>,
+    /// The items of the fragment being encoded.
+    items: Items,
+    /// The items of the outline or the backdrop being emitted.
+    outline: Items,
 }
 
 /// The containers one emit walk fills, empty between walks.
 #[derive(Debug, Default)]
 struct WalkScratch {
-    open: Vec<(BoxKey, GroupBoundary)>,
-    bands: Vec<BoxKey>,
     alpha: Vec<f32>,
     opaque: Vec<bool>,
     outlines: Vec<Option<(FragKey, PaintStyleRef, Option<OwnedPaints>)>>,
     decorations: Decorations,
     text_fills: TextFills,
-    named: Vec<AtlasKey>,
-    shapes: rustc_hash::FxHashMap<zgui_scene::SpatialId, u64>,
-    spaces: rustc_hash::FxHashMap<zgui_scene::SpatialId, Option<zgui_geom::Affine2>>,
+    shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
+    spaces: rustc_hash::FxHashMap<zgui_space::SpatialId, Option<zgui_geom::Affine2>>,
+    admitted: rustc_hash::FxHashMap<zgui_space::ClipId, Rect<DevicePx, Device>>,
 }
 
 impl WalkScratch {
     /// Empties every container and keeps its allocation.
     fn clear(&mut self) {
-        self.open.clear();
-        self.bands.clear();
         self.alpha.clear();
         self.opaque.clear();
         self.outlines.clear();
         self.decorations.clear();
         self.text_fills.clear();
-        self.named.clear();
         self.shapes.clear();
+        self.admitted.clear();
         self.spaces.clear();
     }
 }
@@ -335,6 +318,29 @@ impl Painter {
     /// The per-fragment record, for a caller asking how much of a frame was replayed.
     pub fn cache(&self) -> &PaintCache {
         &self.cache
+    }
+
+    /// Records every fragment the walk visits as a compositor chunk through `sync`.
+    ///
+    /// A fragment `sync` has not recorded is encoded when the walk reaches it, even when its
+    /// record would replay. Without a sync, the walk records its items nowhere.
+    pub fn attach_compositor(&mut self, sync: CompositorSync) {
+        self.sync = Some(sync);
+    }
+
+    /// Reports whether the attached compositor sync records a shader that reads the clock.
+    pub fn draws_time(&self) -> bool {
+        self.sync.as_ref().is_some_and(CompositorSync::reads_time)
+    }
+
+    /// Returns the attached compositor sync, if any.
+    pub fn compositor(&mut self) -> Option<&mut CompositorSync> {
+        self.sync.as_mut()
+    }
+
+    /// Returns the attached compositor sync for reading, if any.
+    pub fn compositor_ref(&self) -> Option<&CompositorSync> {
+        self.sync.as_ref()
     }
 
     /// Discards everything held between frames.
@@ -356,7 +362,7 @@ impl Painter {
     }
 
     /// Walks the document in painting order and emits everything the damage reaches.
-    pub fn emit(&mut self, input: &PaintInput<'_>, scene: &mut Scene) -> PaintReport {
+    pub fn emit(&mut self, input: &PaintInput<'_>, tables: &mut Tables) -> PaintReport {
         let Some(root) = input.store.root() else {
             return PaintReport {
                 recorded: input.record_emitted,
@@ -365,62 +371,74 @@ impl Painter {
             };
         };
         self.cache.begin_frame();
+        let mut moved = false;
+        if let Some(sync) = &mut self.sync {
+            sync.mirror_tables(tables);
+            moved = sync.read_moves(input.store);
+        }
         let scratch = std::mem::take(&mut self.scratch);
         let mut pass = Pass {
             painter: self,
             input,
-            scene,
+            tables,
             report: PaintReport {
                 recorded: input.record_emitted,
                 surface: input.surface,
                 ..PaintReport::default()
             },
             root,
-            open: scratch.open,
-            bands: scratch.bands,
+            moved,
             alpha: scratch.alpha,
             opaque: scratch.opaque,
             outlines: scratch.outlines,
             decorations: scratch.decorations,
             text_fills: scratch.text_fills,
-            named: scratch.named,
             shapes: scratch.shapes,
             spaces: scratch.spaces,
+            admitted: scratch.admitted,
         };
         stacking::walk(input.store, root, &mut pass);
         let Pass {
             mut report,
-            open,
-            bands,
             alpha,
             opaque,
             outlines,
             decorations,
             text_fills,
-            named,
             shapes,
             spaces,
+            admitted,
             ..
         } = pass;
         self.scratch = WalkScratch {
-            open,
-            bands,
             alpha,
             opaque,
             outlines,
             decorations,
             text_fills,
-            named,
             shapes,
             spaces,
+            admitted,
         };
         self.scratch.clear();
-        // After the walk and its replays, which are what push the tiles of large drawings: the
-        // frame's whole need is known only here.
+        if let Some(sync) = &mut self.sync {
+            let cache = &self.cache;
+            sync.withdraw_moved(input.store, |fragment| cache.moved_from(fragment).is_some());
+        }
+        // After the walk, which notes where the tiles of large drawings are shown: the frame's
+        // whole need is known only here.
         if let Some(layers) = input.vector_masks.layers() {
+            let mut resolver = self.sync.as_mut().and_then(CompositorSync::resolver);
+            let mut write = |raster: &crate::content::vectors::LayerPixels| {
+                if let (Some(resolver), Some(texels)) = (&mut resolver, &raster.texels) {
+                    let pixels = raster.pixels();
+                    let write = crate::sync::whole(pixels.desc, texels);
+                    resolver.write_image(raster.key, write, pixels.revision);
+                }
+            };
             report
                 .layers_owed
-                .extend(layers.settle(scene, input.damage));
+                .extend(layers.settle(tables.viewport(), input.damage, &mut write));
         }
         self.cache.end_frame();
         self.styles.sweep();
@@ -432,73 +450,27 @@ impl Painter {
     /// Called once per painted frame, before [`Painter::emit`], with the drained retirement list.
     /// Together with the budget's eviction this is what removes a record: a fragment's painting
     /// lives as long as the fragment, or until memory pressure takes it as a clean miss.
-    pub fn retire(
-        &mut self,
-        keys: &[zgui_layout::FragKey],
-        scene: &mut Scene,
-        owner: &dyn ResourceOwner,
-    ) {
-        self.cache.retire(keys, scene, owner);
-    }
-
-    /// Notes every record's chunk into the scene again, for a renderer that lost its residence.
-    pub fn renote_chunks(&self, scene: &mut Scene) {
-        self.cache.renote_chunks(scene);
+    pub fn retire(&mut self, keys: &[zgui_layout::FragKey], tables: &mut Tables) {
+        if let Some(sync) = &mut self.sync {
+            sync.retire(keys);
+        }
+        self.cache.retire(keys, tables);
     }
 
     /// Drops the coldest records until `bytes` chunk bytes have gone, and reports how many went.
-    pub fn evict_cold_chunks(
-        &mut self,
-        bytes: u64,
-        scene: &mut Scene,
-        owner: &dyn ResourceOwner,
-    ) -> u64 {
-        self.cache.evict_cold(bytes, scene, owner)
-    }
-
-    /// Drops the coldest records holding a raster `holds` names until their rasters sum to
-    /// `bytes`, as `bytes_of` weighs each, and reports how many records went.
-    ///
-    /// Records selected this frame are never taken. A raster several records hold is weighed once.
-    pub fn evict_cold_holding(
-        &mut self,
-        bytes: u64,
-        bytes_of: &dyn Fn(AtlasKey) -> Option<u64>,
-        scene: &mut Scene,
-        owner: &dyn ResourceOwner,
-    ) -> usize {
-        let cold = self.cache.cold_holding(&|key| bytes_of(key).is_some());
-        let mut picked = Vec::new();
-        let mut weighed = rustc_hash::FxHashSet::default();
-        let mut sum = 0;
-        for (fragment, held) in cold {
-            if sum >= bytes {
-                break;
-            }
-            picked.push(fragment);
-            for key in held {
-                if weighed.insert(key) {
-                    sum += bytes_of(key).unwrap_or(0);
-                }
-            }
-        }
-        self.cache.evict(&picked, scene, owner)
+    pub fn evict_cold_chunks(&mut self, bytes: u64, tables: &mut Tables) -> u64 {
+        self.cache.evict_cold(bytes, tables)
     }
 
     /// Drops the records of `fragments`, so the next frame whose damage reaches them encodes them
     /// again, and reports how many went.
-    pub fn evict_records(
-        &mut self,
-        fragments: &[FragKey],
-        scene: &mut Scene,
-        owner: &dyn ResourceOwner,
-    ) -> usize {
-        self.cache.evict(fragments, scene, owner)
+    pub fn evict_records(&mut self, fragments: &[FragKey], tables: &mut Tables) -> usize {
+        self.cache.evict(fragments, tables)
     }
 
     /// Drops every record, releasing everything each one held into caches that survive.
-    pub fn clear_records(&mut self, scene: &mut Scene, owner: &dyn ResourceOwner) {
-        self.cache.clear_releasing(scene, owner);
+    pub fn clear_records(&mut self, tables: &mut Tables) {
+        self.cache.clear_releasing(tables);
     }
 }
 
@@ -509,7 +481,7 @@ struct Pass<'a, 'b> {
     /// What the walk reads.
     input: &'a PaintInput<'b>,
     /// What it writes.
-    scene: &'a mut Scene,
+    tables: &'a mut Tables,
     /// What it did.
     report: PaintReport,
     /// The box the walk starts at, which is the only box entered without a [`Visitor::descends`]
@@ -517,15 +489,8 @@ struct Pass<'a, 'b> {
     ///
     /// [`Visitor::descends`]: stacking::Visitor::descends
     root: BoxKey,
-    /// The groups currently open, innermost last, with the box that opened each.
-    open: Vec<(BoxKey, GroupBoundary)>,
-    /// The boxes whose order band is open, innermost last.
-    ///
-    /// A box that is going to be moved by writing its coordinate system is ordered against the
-    /// whole region its movement visits rather than against where it happens to be, because the
-    /// write happens after this walk has assigned every order. Opened as the box is entered and
-    /// closed as it is left, like the group stack beside it and for the same reason.
-    bands: Vec<BoxKey>,
+    /// Whether a fragment can have moved since the last walk.
+    moved: bool,
     /// The folded alpha in force, innermost last.
     alpha: Vec<f32>,
     /// Whether the target in force is opaque, innermost last.
@@ -537,12 +502,12 @@ struct Pass<'a, 'b> {
     decorations: Decorations,
     /// The ramps contributed by the boxes still on the walk, for the text inside them.
     text_fills: TextFills,
-    /// The rasters the fragment currently being encoded has named, reused between fragments.
-    named: Vec<AtlasKey>,
     /// The fingerprint of what each coordinate system does to shapes, by name, for this frame.
-    shapes: rustc_hash::FxHashMap<zgui_scene::SpatialId, u64>,
+    shapes: rustc_hash::FxHashMap<zgui_space::SpatialId, u64>,
     /// What each coordinate system resolves to in the plane, by name, for this frame.
-    spaces: rustc_hash::FxHashMap<zgui_scene::SpatialId, Option<zgui_geom::Affine2>>,
+    spaces: rustc_hash::FxHashMap<zgui_space::SpatialId, Option<zgui_geom::Affine2>>,
+    /// The device rectangle each clip admits recorded ink in, by name, for this frame.
+    admitted: rustc_hash::FxHashMap<zgui_space::ClipId, Rect<DevicePx, Device>>,
 }
 
 impl Pass<'_, '_> {
@@ -553,27 +518,20 @@ impl Pass<'_, '_> {
     /// the scale, the turn and the projection it was encoded under: the density a drawing is
     /// rasterised at and whether a run of text stays upright. A pan moves only the translation,
     /// and every recording under it replays.
-    fn shape_hash(&mut self, space: zgui_scene::SpatialId) -> u64 {
+    fn shape_hash(&mut self, space: zgui_space::SpatialId) -> u64 {
         if let Some(&held) = self.shapes.get(&space) {
             return held;
         }
-        use zgui_scene::Content;
+        use zgui_space::Content;
         let mut matrix = self
-            .scene
+            .tables
             .spatial
             .resolve(space)
             .unwrap_or(zgui_geom::Matrix4::IDENTITY);
         matrix.columns[3][0] = 0.0;
         matrix.columns[3][1] = 0.0;
         matrix.columns[3][2] = 0.0;
-        let mut hash = matrix.content_hash();
-        // A run of text under a slight scale is drawn from cached tiles while an animation moves
-        // the scale and from its outlines at rest. So a recording under a matrix that does more
-        // than move depends on whether an animation moves it, and one made in motion is not
-        // replayed at rest when the animation ends on the shape it started from.
-        if matrix != zgui_geom::Matrix4::IDENTITY && self.scene.travels(space) {
-            hash ^= IN_MOTION;
-        }
+        let hash = matrix.content_hash();
         self.shapes.insert(space, hash);
         hash
     }
@@ -585,7 +543,7 @@ impl Pass<'_, '_> {
     fn layer_phase(
         &mut self,
         fragment: &Fragment,
-        space: zgui_scene::SpatialId,
+        space: zgui_space::SpatialId,
     ) -> Option<[u8; 2]> {
         if fragment.kind != FragmentKind::Vector {
             return None;
@@ -594,7 +552,7 @@ impl Pass<'_, '_> {
             Some(held) => *held,
             None => {
                 let resolved = self
-                    .scene
+                    .tables
                     .spatial
                     .resolve(space)
                     .as_ref()
@@ -638,6 +596,9 @@ impl Pass<'_, '_> {
                 continue;
             };
             let mut ink = self.where_drawn(fragment, fragment.subtree_ink);
+            if let Some(drawn) = self.retained(fragment) {
+                ink = ink.union(drawn);
+            }
             if let Some(marks) = crate::damage::marks::extent(
                 fragment,
                 self.input.highlights,
@@ -654,6 +615,24 @@ impl Pass<'_, '_> {
         held
     }
 
+    /// Where the compositor still draws the chunk of `fragment`, when one is attached and the
+    /// fragment has moved away from it.
+    ///
+    /// A fragment that moved out of the damage is visited while the damage reaches the place its
+    /// chunk is drawn at, so the chunk follows it there.
+    fn retained(&self, fragment: &Fragment) -> Option<Rect<DevicePx, Device>> {
+        // Every chunk stands where its record was drawn when nothing moved since the last walk.
+        if !self.moved {
+            return None;
+        }
+        let sync = self.painter.sync.as_ref()?;
+        if !sync.knows(fragment.key) {
+            return None;
+        }
+        let drawn = self.painter.cache.moved_from(fragment)?;
+        Some(self.where_drawn(fragment, drawn))
+    }
+
     /// What `key`'s element is currently animating, if anything.
     ///
     /// An anonymous box has no element and therefore no animation of its own; it inherits the
@@ -665,6 +644,54 @@ impl Pass<'_, '_> {
     /// Whether the damage reaches `rect`.
     fn reaches(&self, rect: Rect<DevicePx, Device>) -> bool {
         damage_reaches(self.input.damage, self.input.surface, pixels(rect))
+    }
+
+    /// Reports the device ink a recording of `fragment` damages: `drawn`, the fragment's ink on the
+    /// device, and `replaced`, where the chunks it replaced drew in its anchor, each cut to the
+    /// fragment's clip.
+    fn recorded(
+        &mut self,
+        fragment: &Fragment,
+        drawn: Rect<DevicePx, Device>,
+        replaced: Option<Rect<i32, Device>>,
+    ) {
+        let old = replaced.map(|old| self.where_drawn(fragment, device_px(old)));
+        for ink in std::iter::once(drawn).chain(old) {
+            self.damage_ink(fragment, ink);
+        }
+    }
+
+    /// Reports the device ink a move of `fragment`'s chunk damages: where it drew before and after
+    /// the move, `inks`, in its anchor.
+    fn moved_ink(&mut self, fragment: &Fragment, inks: [Rect<i32, Device>; 2]) {
+        for ink in inks {
+            let ink = self.where_drawn(fragment, device_px(ink));
+            self.damage_ink(fragment, ink);
+        }
+    }
+
+    /// Adds the device rectangle `ink` of `fragment`, cut to the fragment's clip, to the ink the
+    /// walk's recordings damage.
+    fn damage_ink(&mut self, fragment: &Fragment, ink: Rect<DevicePx, Device>) {
+        let edge = DevicePx(1.0);
+        let pixel = Edges {
+            top: edge,
+            right: edge,
+            bottom: edge,
+            left: edge,
+        };
+        let tables = &*self.tables;
+        // A clip's soft edge covers up to half a pixel outside its rectangle, which at a
+        // fractional edge is the next pixel.
+        let admitted = *self.admitted.entry(fragment.clip).or_insert_with(|| {
+            tables
+                .clips
+                .bounds_placed(fragment.clip, &|space| tables.spatial.resolve(space))
+                .outset(pixel)
+        });
+        if let Some(ink) = ink.intersection(admitted) {
+            self.report.recorded_ink.push(pixels(ink));
+        }
     }
 
     /// A rectangle widened to cover where its fragment is actually drawn.
@@ -694,7 +721,7 @@ impl Pass<'_, '_> {
             return rect;
         };
         let built = fragment.on_device(rect, placements);
-        if fragment.anchor != zgui_scene::SpatialId::VIEWPORT
+        if fragment.anchor != zgui_space::SpatialId::VIEWPORT
             && fragment.transform == Some(fragment.anchor)
         {
             // The union of `built` with itself, in bits: the rectangle its own corners give.
@@ -769,7 +796,6 @@ impl Pass<'_, '_> {
             inline,
             nested_inline: fragment.kind == FragmentKind::Box && node.is_nested_inline(),
             glyphs: self.input.glyphs,
-            glyph_placements: self.input.glyph_placements,
             highlights: self.input.highlights,
             replaced: self.input.replaced,
             vectors: self.input.vectors,
@@ -778,7 +804,34 @@ impl Pass<'_, '_> {
             custom_reference: self.input.store.custom_reference(fragment.box_),
             scale: self.input.scale,
             scrollbars: self.input.scrollbars,
+            thumb: self.thumb(fragment),
         }
+    }
+
+    /// Where `fragment` sits on its track, when it is a scrollbar thumb.
+    fn thumb(&self, fragment: &Fragment) -> Option<crate::emit::scrollbar::ThumbTrack> {
+        let FragmentKind::Scrollbar {
+            axis,
+            part: zgui_layout::fragment::ScrollbarPart::Thumb,
+        } = fragment.kind
+        else {
+            return None;
+        };
+        let travel = zgui_layout::scroll_region::bar::live::travel_of_box(
+            self.input.store,
+            fragment.box_,
+            axis,
+        )?;
+        let near = match axis {
+            zgui_layout::Axis::Horizontal => fragment.border_box.origin.x.0,
+            zgui_layout::Axis::Vertical => fragment.border_box.origin.y.0,
+        };
+        Some(crate::emit::scrollbar::ThumbTrack {
+            owner: fragment.box_,
+            axis,
+            along: near - travel.start,
+            free: travel.free(),
+        })
     }
 
     /// Where a line fragment was cut off by `text-overflow`, if it was.
@@ -820,7 +873,7 @@ impl Pass<'_, '_> {
             return 0;
         }
         let store = self.input.store;
-        let mut hash = zgui_scene::ContentHash::new().u32(slices.len() as u32);
+        let mut hash = zgui_space::ContentHash::new().u32(slices.len() as u32);
         for slice in slices {
             let style = self
                 .painter
@@ -922,31 +975,79 @@ impl Pass<'_, '_> {
         (u64::from(at.x.0.to_bits()) << 32) | u64::from(at.y.0.to_bits()) | 1
     }
 
-    /// Fails if the range about to be replayed draws a raster that has been freed underneath it.
-    ///
-    /// # Panics
-    ///
-    /// Naming the fragment and the keys, when [`PaintInput::verify_replays`] is set and the record
-    /// holds a key its cache no longer has. Nothing further along can produce a better message:
-    /// the display list is exactly what it was last frame, the geometry never moved, and the only
-    /// evidence downstream is a letter that is the wrong letter.
-    fn verify_replay(&self, fragment: &Fragment) {
-        if !self.input.verify_replays {
+    /// Emits the outline of the box `key`, whose first fragment is `frag`, into its own chunk
+    /// when the damage reaches it.
+    fn outline(
+        &mut self,
+        store: &LayoutStore,
+        key: BoxKey,
+        frag: FragKey,
+        style_ref: PaintStyleRef,
+        owned: Option<OwnedPaints>,
+    ) {
+        let Some(fragment) = store.fragment(frag) else {
+            return;
+        };
+        if !self.reaches(self.anchored(fragment, fragment.ink)) {
             return;
         }
-        let stale = self
-            .painter
-            .cache
-            .stale_resources(fragment, self.input.resources);
-        assert!(
-            stale.is_empty(),
-            "fragment {:?} is about to replay a range naming {} raster(s) its cache no longer \
-             holds, the first of them {:?}: the rectangles they name are free to be handed to \
-             other content, so the replay draws whatever took their place",
-            fragment.key,
-            stale.len(),
-            stale.first(),
+        let Some(mut style) = self.painter.styles.get(style_ref).cloned() else {
+            return;
+        };
+        if let Some(over) = self.anim_of(store, key) {
+            crate::lower::anim::compose(&mut style, over);
+        }
+        let mut emission = self.emission(fragment, &style, &[], None, &[]);
+        emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
+        let painter = &mut *self.painter;
+        let mut rec = Recorder::new(
+            self.tables,
+            &mut painter.outline,
+            painter.sync.as_mut().and_then(CompositorSync::resolver),
+            crate::lower::transform::of(fragment),
+            fragment.clip,
         );
+        self.report.primitives += order::outline(&mut rec, &emission);
+        if let Some(sync) = &mut painter.sync {
+            sync.record_extra(
+                store,
+                fragment,
+                crate::sync::Part::Outline,
+                &mut painter.outline,
+                self.tables,
+            );
+        }
+    }
+
+    /// Notes where the tile images of a replayed fragment are shown, moved by `offset` from where
+    /// they were recorded, so the end of the walk rasterises the ones the frame needs.
+    fn show_replayed_tiles(
+        &self,
+        fragment: &Fragment,
+        offset: zgui_geom::Size<DevicePx, Device>,
+        transform: zgui_space::SpatialId,
+        clip: zgui_space::ClipId,
+    ) {
+        let (Some(tiles), Some(layers)) = (
+            self.painter.cache.tiles(fragment.key),
+            self.input.vector_masks.layers(),
+        ) else {
+            return;
+        };
+        let placement = crate::emit::vector::VectorPlacement {
+            clip,
+            transform,
+            scale: self.input.scale,
+        };
+        for &(key, local) in tiles.iter() {
+            crate::emit::vector::show_tile(
+                layers,
+                self.tables,
+                placement,
+                key,
+                local.translate(offset),
+            );
+        }
     }
 
     /// Emits one fragment, replaying its recorded range when nothing about it changed.
@@ -968,10 +1069,8 @@ impl Pass<'_, '_> {
         // The marks drawn *with* a line are part of what it paints, and one of them can be the
         // only thing it paints: an emptied field's line box has no width, so its ink alone is a
         // rectangle no damage can reach and the caret standing on it would be culled away.
-        let mut cull = self.where_drawn(
-            fragment,
-            crate::damage::ink::cull_rect(store, fragment, self.input.scale),
-        );
+        let ink = crate::damage::ink::cull_rect(store, fragment, self.input.scale);
+        let mut cull = self.where_drawn(fragment, ink);
         if let Some(marks) = crate::damage::marks::extent(
             fragment,
             self.input.highlights,
@@ -980,9 +1079,23 @@ impl Pass<'_, '_> {
         ) {
             cull = cull.union(marks);
         }
-        if !self.reaches(cull) {
+        let reached = self.reaches(cull)
+            || self
+                .retained(fragment)
+                .is_some_and(|drawn| self.reaches(drawn));
+        if !reached {
             return;
         }
+        // Measured in the fragment's anchor, so the place stays right while that anchor moves.
+        let drawn = match crate::damage::marks::extent(
+            fragment,
+            self.input.highlights,
+            self.input.scale,
+            None,
+        ) {
+            Some(marks) => ink.union(marks),
+            None => ink,
+        };
         let clip = fragment.clip;
         let transform = crate::lower::transform::of(fragment);
         let slices = inline_slices(store, fragment);
@@ -1022,7 +1135,7 @@ impl Pass<'_, '_> {
             anim,
             alpha: self.alpha().to_bits(),
             subpixel: crate::emit::text::keeps_subpixel(
-                self.scene,
+                self.tables,
                 transform,
                 self.input.capabilities.subpixel_text,
                 self.opaque(),
@@ -1045,25 +1158,44 @@ impl Pass<'_, '_> {
                 .layers()
                 .is_some_and(|layers| layers.tiles_alive(id))
         });
-        let reuse = if tiles_gone {
+        // A fragment the compositor holds no chunk for has nothing an offset could move.
+        let unrecorded = self
+            .painter
+            .sync
+            .as_ref()
+            .is_some_and(|sync| !sync.knows(fragment.key));
+        // A thumb is recorded at the start of its track, so a move along the track changes no
+        // record, while an offset would move it a second time.
+        let thumb = self.painter.sync.is_some()
+            && matches!(
+                fragment.kind,
+                FragmentKind::Scrollbar {
+                    part: zgui_layout::fragment::ScrollbarPart::Thumb,
+                    ..
+                }
+            );
+        let reuse = if tiles_gone || unrecorded || thumb {
             Reuse::Encode
         } else {
             self.painter
                 .cache
-                .reuse(self.scene, fragment, painted, phase)
+                .reuse(self.tables, fragment, painted, phase)
         };
         match reuse {
             Reuse::Replay(offset) => {
-                self.verify_replay(fragment);
-                let (source, chunk) = self
+                let items = self
                     .painter
                     .cache
-                    .chunk(fragment.key)
-                    .expect("a replayable fragment has a recorded chunk");
-                let range = self.scene.replay_chunk(chunk, offset, source);
-                let pushed = (range.end - range.start) as usize;
-                self.report.primitives += pushed;
+                    .items(fragment.key)
+                    .expect("a replayable fragment has a record");
+                self.report.primitives += items;
+                self.show_replayed_tiles(fragment, offset, transform, clip);
                 self.painter.cache.replayed(fragment);
+                if let Some(sync) = &mut self.painter.sync
+                    && let Some(inks) = sync.replayed(fragment, offset)
+                {
+                    self.moved_ink(fragment, inks);
+                }
             }
             Reuse::Encode => {
                 let Some(mut style) = self.painter.styles.get(style_ref).cloned() else {
@@ -1077,23 +1209,27 @@ impl Pass<'_, '_> {
                     self.emission(fragment, &style, &decorations, text_fill.as_ref(), &inline);
                 emission.box_placement.owned =
                     owned.map(|owned| (PropertyOwner::of(fragment.box_), owned));
-                // Emptied immediately before the encoding rather than after it, so that whatever a
-                // source placed for somebody else — a run visited and then declined, a fragment
-                // that returned early above — cannot be attributed to this fragment and held for
-                // as long as this fragment lives.
-                self.named.clear();
-                self.input.resources.take_named(&mut self.named);
-                // Read either side of the encoding: a refusal in between is a raster the fragment
-                // draws that had nowhere to go, and it leaves a hole in the chunk that nothing
-                // downstream can see.
-                let refusals = self.input.resources.refusals();
-                // Everything the emitters push between here and the take is the fragment's own,
-                // captured before the cull so the record is the painting and never one position's
-                // clipped part of it.
-                self.scene
-                    .begin_chunk_capture(self.painter.cache.take_capture_scratch());
-                let emitted = order::fragment_tracked(self.scene, fragment, &emission);
-                let chunk = self.scene.take_chunk_capture();
+                self.tables.begin_minting();
+                let painter = &mut *self.painter;
+                let mut rec = Recorder::new(
+                    self.tables,
+                    &mut painter.items,
+                    painter.sync.as_mut().and_then(CompositorSync::resolver),
+                    transform,
+                    clip,
+                );
+                let emitted = order::fragment_tracked(&mut rec, fragment, &emission);
+                let minted = self.tables.take_minted();
+                let items = painter.items.len();
+                if let Some(sync) = &mut painter.sync {
+                    let replaced = sync.record(
+                        store,
+                        fragment,
+                        (&mut painter.items, pixels(ink)),
+                        self.tables,
+                    );
+                    self.recorded(fragment, cull, replaced);
+                }
                 self.report.primitives += emitted.pushed;
                 if matches!(fragment.kind, FragmentKind::Vector | FragmentKind::Custom)
                     && let Some(node) = fragment.node
@@ -1103,30 +1239,28 @@ impl Pass<'_, '_> {
                         routes: emitted.vector_routes,
                     });
                 }
-                self.named.clear();
-                self.input.resources.take_named(&mut self.named);
                 if let Some(owed) = emitted.layer.owed {
                     self.report.layers_owed.push(owed);
                 }
                 self.painter.cache.encoded(
-                    self.scene,
+                    self.tables,
                     fragment,
                     painted,
                     Encoding {
-                        chunk,
-                        resources: &self.named,
+                        minted,
+                        items,
+                        drawn,
                         // A deferred drawing drew nothing this frame, which a record would replay.
-                        complete: self.input.resources.refusals() == refusals
-                            && !emitted.layer.deferred,
+                        complete: !emitted.layer.deferred,
                         layer: LayerRecord {
                             phase: phase.filter(|_| emitted.layer.sprite),
                             provisional: emitted.layer.provisional,
                             promote: emitted.layer.promote,
                             tiled: emitted.layer.tiled,
+                            tiles: emitted.layer.tiles.clone(),
                             window: emitted.layer.window,
                         },
                     },
-                    self.input.resources,
                 );
             }
         }
@@ -1134,6 +1268,46 @@ impl Pass<'_, '_> {
             self.report.emitted.push(frag);
         }
     }
+}
+
+/// What recording a box's backdrop writes into and reads.
+struct Backdropped<'a> {
+    tables: &'a mut Tables,
+    items: &'a mut Items,
+    sync: Option<&'a mut CompositorSync>,
+    store: &'a LayoutStore,
+    shaders: &'a dyn crate::content::shader::ShaderSource,
+    scale: f32,
+}
+
+/// Records the backdrop of the box whose first fragment is `fragment` into its own chunk, and
+/// returns how many items it has.
+fn backdrop(
+    into: Backdropped<'_>,
+    fragment: &Fragment,
+    style: &crate::lower::PaintStyle,
+    computed: &zgui_css::ComputedStyle,
+) -> usize {
+    let Backdropped {
+        tables,
+        items,
+        mut sync,
+        store,
+        shaders,
+        scale,
+    } = into;
+    let mut rec = Recorder::new(
+        tables,
+        items,
+        sync.as_deref_mut().and_then(CompositorSync::resolver),
+        crate::lower::transform::of(fragment),
+        fragment.clip,
+    );
+    let recorded = group::backdrop(&mut rec, style, computed, fragment, shaders, scale);
+    if let Some(sync) = sync {
+        sync.record_extra(store, fragment, crate::sync::Part::Backdrop, items, tables);
+    }
+    recorded
 }
 
 /// The parts of nested inline boxes a line paints, in tree order.
@@ -1166,7 +1340,7 @@ impl stacking::Visitor for Pass<'_, '_> {
         if !self.reaches(ink) {
             counter::bump(Counter::NodesVisited);
             self.report.skipped_subtrees += 1;
-            counter::add(Counter::PrimitivesCulled, 1);
+            counter::bump(Counter::PaintSubtreesCulled);
             return false;
         }
         true
@@ -1183,7 +1357,7 @@ impl stacking::Visitor for Pass<'_, '_> {
             };
             if !self.reaches(ink) {
                 self.report.skipped_subtrees += 1;
-                counter::add(Counter::PrimitivesCulled, 1);
+                counter::bump(Counter::PaintSubtreesCulled);
                 return false;
             }
         } else {
@@ -1227,49 +1401,56 @@ impl stacking::Visitor for Pass<'_, '_> {
         let isolation = own.map_or(Isolation::None, |fragment| {
             group::isolation(&style, fragment)
         });
+        if let Some(sync) = &mut self.painter.sync {
+            sync.isolate(
+                key,
+                own.and_then(|fragment| {
+                    group::effect(
+                        &style,
+                        fragment,
+                        isolation,
+                        self.input.shaders,
+                        self.input.scale,
+                    )
+                }),
+            );
+        }
         // A subtree at zero alpha composites nothing. Every fragment under it is already refused
         // one at a time by `order::vanished`, so what this saves is the walk itself: the ink
         // query, the lowered style and its copy, the animation lookup and the sorted child list,
         // for every box below a panel that is laid out and invisible. A closed disclosure costs
         // its own box rather than its contents.
         //
-        // Refused before either stack is pushed, and before a band or a group target is opened, so
-        // the leave that never comes has nothing to withdraw.
+        // Refused before either stack is pushed, and before a band is opened, so the leave that
+        // never comes has nothing to withdraw.
         if isolation.alpha() == 0.0 {
+            // The backdrop chunk sits outside the box's group, which the zero alpha fades.
+            if let Some(sync) = &mut self.painter.sync {
+                sync.drop_extra(key, crate::sync::Part::Backdrop);
+            }
             self.report.skipped_subtrees += 1;
-            counter::add(Counter::PrimitivesCulled, 1);
+            counter::bump(Counter::PaintSubtreesCulled);
             return false;
         }
         // The two stacks are pushed once per entered box and popped once per leave, whatever the
         // box turned out to have: a push made conditionally and a pop made on a different condition
         // is how the alpha in force comes to belong to somebody else's subtree.
-        if let Some(fragment) = own
-            && fragment.flags.contains(FragmentFlags::HAS_TRANSFORM)
-            && let Some(space) = fragment.transform
-            && self.scene.open_place_band(space).is_some()
-        {
-            self.bands.push(key);
-        }
         if let Some(fragment) = own {
-            self.report.primitives += group::backdrop(
-                self.scene,
+            self.report.primitives += backdrop(
+                Backdropped {
+                    tables: self.tables,
+                    items: &mut self.painter.outline,
+                    sync: self.painter.sync.as_mut(),
+                    store,
+                    shaders: self.input.shaders,
+                    scale: self.input.scale,
+                },
+                fragment,
                 &style,
                 &node.style,
-                fragment,
-                fragment.clip,
-                self.input.shaders,
-                self.input.scale,
             );
             if isolation.needs_target() {
-                let boundary = group::open(
-                    self.scene,
-                    &style,
-                    fragment,
-                    fragment.clip,
-                    self.input.shaders,
-                    self.input.scale,
-                );
-                self.open.push((key, boundary));
+                counter::bump(Counter::GroupTargets);
                 self.report.groups += 1;
             }
         }
@@ -1309,35 +1490,35 @@ impl stacking::Visitor for Pass<'_, '_> {
 
     fn leave(&mut self, store: &LayoutStore, key: BoxKey) {
         // The outline is drawn after the box's descendants, which is Appendix E's step ten.
-        if let Some((frag, style_ref, owned)) = self.outlines.pop().flatten()
-            && let Some(fragment) = store.fragment(frag)
-            && self.reaches(self.anchored(fragment, fragment.ink))
-            && let Some(entry) = self.painter.styles.get(style_ref)
-        {
-            // Copied only for an animating box, for the reason `enter` gives.
-            let style = match self.anim_of(store, key) {
-                Some(over) => {
-                    let mut composed = entry.clone();
-                    crate::lower::anim::compose(&mut composed, over);
-                    Cow::Owned(composed)
+        match self.outlines.pop().flatten() {
+            Some((frag, style_ref, owned)) => self.outline(store, key, frag, style_ref, owned),
+            None => {
+                if let Some(sync) = &mut self.painter.sync {
+                    sync.drop_extra(key, crate::sync::Part::Outline);
                 }
-                None => Cow::Borrowed(entry),
-            };
-            let mut emission = self.emission(fragment, &style, &[], None, &[]);
-            emission.box_placement.owned = owned.map(|owned| (PropertyOwner::of(key), owned));
-            self.report.primitives += order::outline(self.scene, &emission);
+            }
         }
         self.alpha.pop();
         self.opaque.pop();
         self.decorations.leave();
         self.text_fills.leave();
-        if self.open.last().is_some_and(|(opener, _)| *opener == key) {
-            let (_, boundary) = self.open.pop().expect("just checked");
-            group::close(self.scene, &boundary);
-        }
-        if self.bands.last() == Some(&key) {
-            self.bands.pop();
-            self.scene.close_place_band();
-        }
     }
+}
+
+/// Returns `rect`, in whole device pixels, as a rectangle of device pixel lengths.
+#[expect(
+    clippy::cast_precision_loss,
+    reason = "device coordinates are far under the 2^24 an f32 holds exactly"
+)]
+fn device_px(rect: Rect<i32, Device>) -> Rect<DevicePx, Device> {
+    Rect::new(
+        zgui_geom::Point::new(
+            DevicePx(rect.origin.x as f32),
+            DevicePx(rect.origin.y as f32),
+        ),
+        zgui_geom::Size::new(
+            DevicePx(rect.size.width as f32),
+            DevicePx(rect.size.height as f32),
+        ),
+    )
 }

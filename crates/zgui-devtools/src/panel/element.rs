@@ -136,26 +136,16 @@ pub(crate) fn ElementPanel(
 }
 
 /// The routes selected by one element, using the concrete general backend where one was needed.
-fn routes(
-    routes: zgui_paint::VectorRoutes,
-    backend: Option<zgui::render::VectorBackend>,
-) -> String {
-    let atlas = routes.contains(zgui_paint::VectorRoute::AtlasMask);
+fn routes(routes: zgui_paint::VectorRoutes, backend: Option<iceblink::VectorBackend>) -> String {
     let general = match backend {
-        Some(zgui::render::VectorBackend::Vello) => "Vello",
-        Some(zgui::render::VectorBackend::Coverage) => "coverage rasterizer",
-        Some(zgui::render::VectorBackend::Other) => "general vector rasterizer",
+        Some(iceblink::VectorBackend::Compute) => "Vello",
+        Some(iceblink::VectorBackend::Raster) => "coverage rasterizer",
+        Some(_) => "general vector rasterizer",
         None => "general vector rasterizer (pending)",
     };
-    let rest = match (
-        atlas,
-        routes.contains(zgui_paint::VectorRoute::GeneralRaster),
-    ) {
-        (true, true) => Some(format!("atlas / CPU mask + {general}")),
-        (true, false) => Some("atlas / CPU-rasterized mask".to_owned()),
-        (false, true) => Some(general.to_owned()),
-        (false, false) => None,
-    };
+    let rest = routes
+        .contains(zgui_paint::VectorRoute::GeneralRaster)
+        .then(|| general.to_owned());
     let labels: Vec<String> = [
         routes
             .contains(zgui_paint::VectorRoute::Analytic)
@@ -208,28 +198,22 @@ mod tests {
     use super::routes;
 
     #[test]
-    fn route_labels_distinguish_the_atlas_from_vello() {
-        let mut both = zgui_paint::VectorRoutes::NONE;
-        both.insert(zgui_paint::VectorRoute::AtlasMask);
-        assert_eq!(routes(both, None), "atlas / CPU-rasterized mask");
-        both.insert(zgui_paint::VectorRoute::GeneralRaster);
+    fn route_labels_name_each_route_and_the_general_backend() {
+        let mut general = zgui_paint::VectorRoutes::NONE;
+        general.insert(zgui_paint::VectorRoute::GeneralRaster);
+        assert_eq!(routes(general, None), "general vector rasterizer (pending)");
         assert_eq!(
-            routes(both, Some(zgui::render::VectorBackend::Vello)),
-            "atlas / CPU mask + Vello"
+            routes(general, Some(iceblink::VectorBackend::Compute)),
+            "Vello"
         );
 
         let mut analytic = zgui_paint::VectorRoutes::NONE;
         analytic.insert(zgui_paint::VectorRoute::Analytic);
         assert_eq!(routes(analytic, None), "analytic quads");
-        analytic.insert(zgui_paint::VectorRoute::AtlasMask);
+        analytic.insert(zgui_paint::VectorRoute::GeneralRaster);
         assert_eq!(
-            routes(analytic, None),
-            "analytic quads + atlas / CPU-rasterized mask"
-        );
-        both.insert(zgui_paint::VectorRoute::Analytic);
-        assert_eq!(
-            routes(both, Some(zgui::render::VectorBackend::Vello)),
-            "analytic quads + atlas / CPU mask + Vello"
+            routes(analytic, Some(iceblink::VectorBackend::Compute)),
+            "analytic quads + Vello"
         );
         assert_eq!(routes(zgui_paint::VectorRoutes::NONE, None), "none");
 
@@ -240,13 +224,13 @@ mod tests {
         assert_eq!(routes(marks, None), "analytic quads + marks");
         marks.insert(zgui_paint::VectorRoute::GeneralRaster);
         assert_eq!(
-            routes(marks, Some(zgui::render::VectorBackend::Vello)),
+            routes(marks, Some(iceblink::VectorBackend::Compute)),
             "analytic quads + marks + Vello"
         );
 
         marks.insert(zgui_paint::VectorRoute::PathGlyphs);
         assert_eq!(
-            routes(marks, Some(zgui::render::VectorBackend::Vello)),
+            routes(marks, Some(iceblink::VectorBackend::Compute)),
             "analytic quads + marks + path glyphs + Vello"
         );
 

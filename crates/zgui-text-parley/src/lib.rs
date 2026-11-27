@@ -1,4 +1,4 @@
-//! The text engine: shaping, face resolution, metrics, glyph rasterisation and bidirectional text.
+//! The text engine: shaping, face resolution, metrics and bidirectional text.
 //!
 //! This is the implementation behind the framework's text contracts, and the only crate in the
 //! workspace that names a font engine at all. Everything above it is written against the traits it
@@ -9,12 +9,12 @@
 //! | [`FontSource`](zgui_text::FontSource) | [`FontSystem`] |
 //! | [`FontMetricsSource`](zgui_text::FontMetricsSource) | [`FontSystem`] |
 //! | [`ParagraphShaper`](zgui_text::ParagraphShaper) | [`Shaper`] |
-//! | [`GlyphRaster`](zgui_text::GlyphRaster) | [`Rasteriser`] |
+//! | `iceblink::FontRegistry` | [`CompositorFonts`] |
 //!
 //! ```
 //! use std::sync::Arc;
 //! use zgui_geom::CssPx;
-//! use zgui_scene::PaintSlot;
+//! use zgui_space::PaintSlot;
 //! use zgui_text::{
 //!     BreakRequest, FontSource, ParagraphCache, ParagraphContent, StyledRun, TextMap, lay_out,
 //! };
@@ -80,17 +80,17 @@
 #![deny(missing_docs)]
 #![forbid(unsafe_code)]
 
+pub mod compositor;
 pub mod direction;
 pub mod font;
 pub mod metrics;
-pub mod raster;
 pub mod shape;
 pub mod system;
 
+pub use crate::compositor::CompositorFonts;
 pub use crate::direction::{Controls, LEFT_TO_RIGHT_MARK, RIGHT_TO_LEFT_MARK};
-pub use crate::font::{ColorSupport, script_of};
+pub use crate::font::script_of;
 pub use crate::metrics::{BASE_SIZE, MONOSPACE_BASE_SIZE};
-pub use crate::raster::Rasteriser;
 pub use crate::shape::{
     LineRequest, LineSettings, ResolvedLineMetrics, ShapedLayout, Shaper, SlotBrush,
 };

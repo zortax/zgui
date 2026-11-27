@@ -118,6 +118,11 @@ impl RuntimeWaker {
         &self.gate
     }
 
+    /// Tells the platform that the compositor queued answers for the window of `surface`.
+    pub fn answered(&self, surface: SurfaceId) {
+        self.platform.wake(WakeReason::CompositorAnswered(surface));
+    }
+
     /// Adds a surface to the set a wake concerns.
     pub fn owns(&self, surface: SurfaceId) {
         let mut surfaces = self.surfaces.lock().expect("the set is not poisoned");

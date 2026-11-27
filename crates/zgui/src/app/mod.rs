@@ -1,7 +1,9 @@
 //! An application: a window, what is in it, and what draws it.
 
+mod compositor;
+mod driver;
 pub mod fonts;
-mod graphics;
+mod precision;
 #[cfg(target_arch = "wasm32")]
 mod web;
 
@@ -9,7 +11,24 @@ use zgui_platform::{AppHandler, Decorations, PlatformError};
 use zgui_runtime::AppError;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
+pub use crate::app::compositor::{
+    PIPELINE_DIRECTORY_VARIABLE, Presented, compositor, latency_marks, pipeline_directory,
+};
+pub use crate::app::driver::CompositorDriver;
 pub use crate::app::fonts::Fonts;
+pub use crate::app::precision::GroupPrecision;
+/// Texels read back from a renderer's target, four bytes each and row by row.
+pub use iceblink_wgpu::Pixels;
+
+/// A function that runs a compositor behind a driver.
+pub type ClientMaker =
+    Box<dyn FnOnce(Box<dyn iceblink::Compositor>) -> Box<dyn iceblink::CompositorClient>>;
+
+/// A maker of the renderer a window's compositor draws with, given the window's first size in
+/// device pixels.
+///
+/// It runs on the thread that draws the window's frames.
+pub type CompositorRendererMaker = Box<dyn FnMut([u32; 2]) -> Box<dyn iceblink::Renderer> + Send>;
 #[cfg(target_arch = "wasm32")]
 pub use crate::app::web::Mounted;
 #[cfg(target_arch = "wasm32")]
@@ -162,8 +181,16 @@ pub struct App {
     fonts: std::cell::OnceCell<Fonts>,
     /// What draws its windows, when it is not this machine's own graphics device.
     renderer: Option<zgui_runtime::RendererFactory>,
+    /// The renderer each window's compositor draws with, when the application chose one.
+    compositor_renderer: Option<CompositorRendererMaker>,
     /// How precisely the default renderer holds a plain group, when the application set it.
     group_precision: Option<crate::GroupPrecision>,
+    /// The thread the compositor runs on.
+    compositor_driver: CompositorDriver,
+    /// What runs the compositor behind a driver, when the application supplied it.
+    client_maker: Option<ClientMaker>,
+    /// Where an application drawn offscreen keeps the image presented last.
+    offscreen: Option<Presented>,
     /// The application's own context setup, held until the faces are known.
     ///
     /// Held here rather than passed straight down because the faces are provided in the same scope
@@ -192,7 +219,11 @@ impl App {
             inner: zgui_runtime::App::new(),
             fonts: std::cell::OnceCell::new(),
             renderer: None,
+            compositor_renderer: None,
             group_precision: None,
+            compositor_driver: CompositorDriver::default(),
+            client_maker: None,
+            offscreen: None,
             context: None,
         }
     }
@@ -275,9 +306,8 @@ impl App {
     ///
     /// What a window that draws its own rounded corners needs, so the desktop shows through them.
     /// A transparent window is composed into a
-    /// [`RenderTarget::translucent`](zgui_render::RenderTarget::translucent) target: each pixel is
-    /// a premultiplied colour, a pixel nothing paints has zero alpha, and text is drawn with
-    /// ordinary coverage in place of per-channel coverage.
+    /// translucent target: each pixel is a premultiplied colour, a pixel nothing paints has zero
+    /// alpha, and text is drawn with ordinary coverage in place of per-channel coverage.
     pub fn with_transparent(mut self, transparent: bool) -> Self {
         self.inner.attributes_mut().transparent = transparent;
         self
@@ -538,13 +568,43 @@ impl App {
         self
     }
 
+    /// Draws the frames of each window with the renderer `make` returns for the window's first
+    /// size.
+    ///
+    /// A factory set with [`App::with_renderer`] and offscreen drawing set with
+    /// [`App::with_offscreen`] take precedence.
+    pub fn with_compositor_renderer(mut self, make: CompositorRendererMaker) -> Self {
+        self.compositor_renderer = Some(make);
+        self
+    }
+
+    /// Draws every window into an offscreen texture and keeps the image each frame presents in
+    /// `presented`.
+    ///
+    /// The compositor runs on the window's thread and builds a frame only when the platform steps
+    /// the window, so the image is current once a step returns. The driver set with
+    /// [`App::with_compositor_driver`] and `ZGUI_DRIVER` are ignored. A factory set with
+    /// [`App::with_renderer`] and a client set with [`App::with_compositor_client`] take
+    /// precedence.
+    ///
+    /// ```no_run
+    /// use zgui::prelude::*;
+    ///
+    /// let presented = zgui::app::Presented::default();
+    /// let handler = app()
+    ///     .with_offscreen(presented.clone())
+    ///     .into_handler(|| view! { column() });
+    /// ```
+    pub fn with_offscreen(mut self, presented: Presented) -> Self {
+        self.offscreen = Some(presented);
+        self
+    }
+
     /// Sets how precisely the default renderer holds a plain group of content.
     ///
-    /// The default is [`GroupPrecision::Compact`](crate::GroupPrecision::Compact), which holds a
-    /// plain group in the surface format when that format is `Bgra8Unorm` or `Rgba8Unorm`. That
-    /// target has half the bytes of a sixteen-bit one.
-    /// [`GroupPrecision::High`](crate::GroupPrecision::High) holds every group in sixteen-bit
-    /// float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
+    /// The default is [`GroupPrecision::Compact`], which holds a plain group in eight bits per
+    /// channel. That target has half the bytes of a sixteen-bit one. [`GroupPrecision::High`]
+    /// holds every group in sixteen-bit float. The `ZGUI_GROUP_PRECISION` environment variable (`high` or `compact`) overrides this
     /// value. A renderer set with [`App::with_renderer`] ignores it.
     ///
     /// ```no_run
@@ -558,6 +618,23 @@ impl App {
     /// ```
     pub fn with_group_precision(mut self, precision: crate::GroupPrecision) -> Self {
         self.group_precision = Some(precision);
+        self
+    }
+
+    /// Sets the thread the compositor runs on.
+    ///
+    /// The default is [`CompositorDriver::Threaded`]. The `ZGUI_DRIVER` environment variable
+    /// (`threaded` or `local`) overrides this value.
+    pub fn with_compositor_driver(mut self, driver: CompositorDriver) -> Self {
+        self.compositor_driver = driver;
+        self
+    }
+
+    /// Runs the compositor behind the client `make` returns for it.
+    ///
+    /// A client set here takes precedence over [`App::with_compositor_driver`].
+    pub fn with_compositor_client(mut self, make: ClientMaker) -> Self {
+        self.client_maker = Some(make);
         self
     }
 
@@ -674,16 +751,25 @@ impl App {
     {
         // Before the font thread below, which is the first thread this process starts: the guard
         // inside changes the environment only while the process has one thread.
-        zgui_render_wgpu::gpu::loader::prefer_hardware_vulkan();
+        iceblink_wgpu::prefer_hardware_vulkan();
         // The last point at which the application could have named its own faces has passed, so
         // this is where enumerating the machine's starts — on a thread of its own, alongside
         // opening the window and the graphics device rather than in front of them.
         let fonts = self.fonts.into_inner().unwrap_or_else(Fonts::system);
         let shaping = fonts.clone();
         let group_precision = self.group_precision;
+        let compositor_driver = self.compositor_driver;
+        let client_maker = self.client_maker;
+        let compositor_renderer = self.compositor_renderer;
+        let offscreen = self.offscreen;
+        let stepped = offscreen.is_some();
         let renderer = self
             .renderer
-            .unwrap_or_else(|| graphics::factory(group_precision));
+            .unwrap_or_else(|| match (offscreen, compositor_renderer) {
+                (Some(presented), _) => compositor::offscreen(group_precision, presented),
+                (None, Some(make)) => compositor::wrapping(make),
+                (None, None) => compositor::factory(group_precision),
+            });
         // The faces are provided above every window, so a component that shapes its own text
         // reaches the same collection the frame does. The application's own setup runs after, and
         // therefore resolves them like any other context.
@@ -697,6 +783,11 @@ impl App {
                     setup();
                 }
             })
+            .with_compositor(match client_maker {
+                Some(make) => make(compositor::compositor(&fonts)),
+                None if stepped => compositor::stepped(compositor::compositor(&fonts)),
+                None => compositor::driven(compositor::compositor(&fonts), compositor_driver),
+            })
             .with_renderer(renderer)
             .with_metrics(Box::new({
                 let fonts = fonts.clone();
@@ -705,7 +796,6 @@ impl App {
             .with_text_engine(Box::new(move || {
                 Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
             }))
-            .with_glyph_raster(Box::new(move || fonts.raster()))
             // Installed by default beside the default renderer: an application with no surface
             // elements pays one virtual call per frame, and one with them needs no wiring.
             .with_embed(Box::new(|| Box::new(zgui_wgpu::WgpuSurfaces::new())))

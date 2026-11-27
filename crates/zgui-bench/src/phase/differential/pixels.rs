@@ -7,9 +7,12 @@
 
 use crate::inspect::{Painted, scroll_signature};
 
+use std::sync::atomic::Ordering;
+
 use crate::draw::CAPTURE;
 use crate::phase::Driver;
 use crate::script::{Driven, run_step, script};
+use crate::verify::lock;
 
 /// Runs one of this group's phases, or answers `None` when the name is not one of them.
 pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
@@ -45,38 +48,34 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
             // Every frame is read back for the whole phase. A step that draws nothing leaves the
             // previous readback standing, which is exactly right: nothing was drawn, so what is on
             // the screen is what was on it.
-            capture.want.set(true);
+            capture.want.store(true, Ordering::Relaxed);
             capture
                 .transcribe
-                .set(std::env::var_os("PIXELS_DUMP").is_some());
+                .store(std::env::var_os("PIXELS_DUMP").is_some(), Ordering::Relaxed);
             // One full repaint before the first step, so that "what is on the screen" is a picture
             // rather than nothing. A step that draws no frame leaves the last readback standing,
             // which is right — but at the smallest document sizes the first step of the script
             // draws nothing at all, and without a picture behind it there is nothing to leave.
-            crate::verify::repaint_everything(harness, false);
+            crate::verify::repaint_everything(harness);
             let shoot = || {
                 (
-                    capture
-                        .last
-                        .borrow()
+                    lock(&capture.last)
                         .clone()
                         .expect("the device has drawn at least one frame"),
-                    capture
-                        .composed
-                        .borrow()
+                    lock(&capture.composed)
                         .clone()
                         .expect("the device has composed at least one frame"),
                 )
             };
             let mut painted = Painted::default();
             for (index, step) in script().iter().enumerate() {
-                capture.damages.borrow_mut().clear();
-                capture.full_lists.borrow_mut().clear();
-                capture.every_list.borrow_mut().clear();
+                lock(&capture.damages).clear();
+                lock(&capture.full_lists).clear();
+                lock(&capture.every_list).clear();
                 run_step(harness, step, &live_window);
-                let drawn = std::mem::take(&mut *capture.damages.borrow_mut());
-                let full_lists = std::mem::take(&mut *capture.full_lists.borrow_mut());
-                let every_list = std::mem::take(&mut *capture.every_list.borrow_mut());
+                let drawn = std::mem::take(&mut *lock(&capture.damages));
+                let full_lists = std::mem::take(&mut *lock(&capture.full_lists));
+                let every_list = std::mem::take(&mut *lock(&capture.every_list));
                 let (incremental, incremental_composed) = shoot();
                 let scrolled_before = scroll_signature(&harness.app().windows()[0]);
                 // Where every fragment was when the step ended. The control repaint is meant to
@@ -84,12 +83,12 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 // to establish that: a box laid out again between the two pictures moves everything
                 // below it while the offset stays exactly where it was.
                 let placed_before = crate::verify::geometry(&harness.app().windows()[0]);
-                capture.full_lists.borrow_mut().clear();
-                crate::verify::repaint_everything(harness, false);
+                lock(&capture.full_lists).clear();
+                crate::verify::repaint_everything(harness);
                 let (whole, whole_composed) = shoot();
                 let scrolled_after = scroll_signature(&harness.app().windows()[0]);
                 let placed_after = crate::verify::geometry(&harness.app().windows()[0]);
-                let whole_lists = std::mem::take(&mut *capture.full_lists.borrow_mut());
+                let whole_lists = std::mem::take(&mut *lock(&capture.full_lists));
                 for list in &whole_lists {
                     painted.saw(list);
                 }
@@ -122,7 +121,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 // differs by a channel step or two over the whole band it covers. What that cannot
                 // do is exceed the same instrument's own disagreement with itself, so that is what a
                 // difference has to beat to be a fault.
-                crate::verify::repaint_everything(harness, false);
+                crate::verify::repaint_everything(harness);
                 let (again, _) = shoot();
                 let noise = again.max_difference(&whole);
                 if again != whole {

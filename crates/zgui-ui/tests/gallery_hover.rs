@@ -1,10 +1,13 @@
 //! Every button on the gallery keeps its label while the pointer moves over it and away.
+//!
+//! The live heap stays within [`HEAP_GROWTH`] of its size at rest while the pointer moves.
 
 #[path = "../examples/gallery/app.rs"]
 #[allow(dead_code, reason = "the gallery names the window size it ships at")]
 mod app;
 mod desktop;
 mod device;
+mod heap;
 #[path = "../examples/gallery/section/mod.rs"]
 #[allow(
     dead_code,
@@ -32,6 +35,9 @@ use crate::device::Log;
 const WIDTH: f32 = 3840.0;
 const HEIGHT: f32 = 2125.0;
 const SCALE: f64 = 1.2;
+
+/// The live heap the hovers may add to what the gallery held at rest, in bytes.
+const HEAP_GROWTH: i64 = 256 << 20;
 
 const LABELS: [&str; 12] = [
     "Secondary",
@@ -65,6 +71,13 @@ fn ink(log: &Log, rect: Rect<DevicePx, Device>) -> usize {
         }
     }
     total - counts.values().copied().max().unwrap_or(0)
+}
+
+/// Drops every frame of `log` but the newest.
+fn keep_newest(log: &Log) {
+    let mut frames = log.lock().unwrap_or_else(|held| held.into_inner());
+    let older = frames.len().saturating_sub(1);
+    frames.drain(..older);
 }
 
 fn pointer(at: Point<DevicePx, Device>, action: PointerAction) -> SurfaceEvent {
@@ -106,6 +119,7 @@ fn drive<'a>(
             labels.len()
         );
         let at_rest: Vec<usize> = labels.iter().map(|(_, rect)| ink(log, *rect)).collect();
+        let heap_at_rest = heap::live();
         let mut fails = failures.lock().unwrap_or_else(|held| held.into_inner());
         let mut entered = false;
         let frame = std::time::Duration::from_millis(8);
@@ -113,6 +127,18 @@ fn drive<'a>(
                      when: String,
                      fails: &mut Vec<String>| {
             harness.settle(16);
+
+            // Each frame holds two pictures of the whole window, and the gallery's endless
+            // animations draw a frame every 16 ms
+            keep_newest(log);
+
+            let grown = heap::live() - heap_at_rest;
+            assert!(
+                grown < HEAP_GROWTH,
+                "{when}: the heap grew by {} MiB since the gallery was at rest",
+                grown >> 20
+            );
+
             for (label, rect) in labels.iter() {
                 let now = ink(log, *rect);
                 let rest = at_rest[labels.iter().position(|(l, _)| l == label).expect("listed")];
@@ -189,15 +215,18 @@ fn hovering_every_gallery_button_keeps_every_label() {
     grab::forget();
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     let failures = Mutex::new(Vec::new());
-    zgui::app()
-        .with_title("gallery")
-        .with_size(crate::app::WIDTH, crate::app::HEIGHT)
-        .with_stylesheet(crate::shell::SHEET)
-        .with_renderer(Box::new(device::factory(&log)))
-        .run_on(drive(&log, &failures), || {
-            (Grab, view! { Gallery() }.into_view())
-        })
-        .expect("the gallery ran");
+    device::drawn_on(
+        zgui::app()
+            .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
+            .with_title("gallery")
+            .with_size(crate::app::WIDTH, crate::app::HEIGHT)
+            .with_stylesheet(crate::shell::SHEET),
+        &log,
+    )
+    .run_on(drive(&log, &failures), || {
+        (Grab, view! { Gallery() }.into_view())
+    })
+    .expect("the gallery ran");
     let failures = failures
         .into_inner()
         .unwrap_or_else(|held| held.into_inner());

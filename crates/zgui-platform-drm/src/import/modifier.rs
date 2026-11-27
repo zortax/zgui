@@ -195,8 +195,8 @@ mod tests {
 
     use super::{Offered, intersect, listed, offered};
     use crate::import::{IMAGE_FEATURES, IMAGE_USAGE, VK_FORMAT, vulkan};
+    use iceblink_wgpu::{Gpu, SharedGraphics, wgpu};
     use zgui_drm::format::Modifier;
-    use zgui_render_wgpu::{Gpu, SharedGraphics};
 
     /// Returns a device that enabled what an exported image needs, or `None`.
     ///
@@ -204,7 +204,10 @@ mod tests {
     /// from. A machine with neither says so and asserts nothing, which is the shape `cargo xtask
     /// ledger ignored` prescribes.
     fn opened(test: &str) -> Option<(SharedGraphics, std::sync::Arc<Gpu>)> {
-        let graphics = SharedGraphics::with_extensions(crate::import::EXTENSIONS.to_vec());
+        let graphics = SharedGraphics::with_backends_and_extensions(
+            wgpu::Backends::VULKAN,
+            crate::import::EXTENSIONS.to_vec(),
+        );
         match graphics.open_gpu() {
             Ok(gpu) => Some((graphics, gpu)),
             Err(failure) => {

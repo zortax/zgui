@@ -9,7 +9,7 @@ use std::collections::{BTreeSet, HashMap};
 
 use accesskit::{Node, NodeId};
 use zgui_dom::NodeKey;
-use zgui_scene::SpatialId;
+use zgui_space::SpatialId;
 
 use crate::id::to_a11y;
 use crate::project::geometry::Geometry;

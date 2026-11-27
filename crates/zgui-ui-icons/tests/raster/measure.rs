@@ -1,7 +1,7 @@
 //! Reading a rendering: where the ink is, what colour it is, and how its edges are shaded.
 
 use zgui::geom::{Device, Rect};
-use zgui_render_wgpu::Pixels;
+use zgui_testkit_compositor::Pixels;
 
 /// Whether the pixel at `(x, y)` is exactly `color`.
 pub fn is(pixels: &Pixels, x: i32, y: i32, color: [u8; 4]) -> bool {

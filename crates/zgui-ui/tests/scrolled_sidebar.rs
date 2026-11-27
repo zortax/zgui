@@ -9,6 +9,8 @@
 //! Each fixture scrolls the way a wheel and a touchpad do, at the scales a desktop uses, with the
 //! real damage set. It lets every gesture come to rest without a repaint, and then compares the
 //! composed target with a full repaint of the same moment.
+//!
+//! The compositor moves the port, so most frames of a gesture are the compositor's own.
 
 mod desktop;
 mod device;

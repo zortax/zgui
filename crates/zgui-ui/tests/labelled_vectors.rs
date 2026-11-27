@@ -1,8 +1,8 @@
 //! Boxes painted after a drawing cover it, under the transforms a node graph uses.
 //!
 //! A pan and zoom layer holds stroked edges, each under a translation of its own, and a label box
-//! over the middle of each edge. The label is emitted after its edge, so no edge ink may show
-//! inside a label, whichever raster route the edge takes.
+//! over the middle of each edge. The label is emitted after its edge, so every label shows its own
+//! fill where the transforms put it and no edge ink, whichever raster route the edge takes.
 
 mod desktop;
 mod device;
@@ -106,17 +106,20 @@ fn a_label_covers_its_edge_while_the_view_pans_and_zooms() {
         zoom.set(scale);
         stage.wait_quietly(std::time::Duration::from_millis(34));
         for (index, label) in labels(at, scale).into_iter().enumerate() {
-            let red = stage
-                .composed_colours_in(label)
-                .into_iter()
-                .filter(|(r, g, _)| *r > 60 && *g < 200)
+            // Anything but the label's own green is edge ink over it, or a label not drawn there.
+            let colours = stage.composed_colours_in(label);
+            let other = colours
+                .iter()
+                .filter(|(r, g, b)| *r > 15 || *g < 240 || *b > 15)
                 .count();
-            if red > 0 {
+            if other > 0 {
                 stage.capture_composed(&format!("labelled-{step}"));
             }
             assert_eq!(
-                red, 0,
-                "step {step}, label {index}: {red} edge pixels over the label"
+                other,
+                0,
+                "step {step}, label {index}: {other} of {} pixels inside the label are not its fill",
+                colours.len()
             );
         }
     }

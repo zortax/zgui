@@ -1,0 +1,15 @@
+[package]
+name = "zgui-paint"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iceblink.workspace = true
+# PLANTED VIOLATION: an engine crate depends on an implementation, through an alias.
+renderer.workspace = true
+# PLANTED VIOLATION: an implementation no list names, found by its path into the checkout.
+iceblink-wgsl.workspace = true
+
+[dev-dependencies]
+# PLANTED VIOLATION: a test of an engine crate builds the implementation itself.
+iceblink-core.workspace = true

@@ -133,6 +133,17 @@ pub trait ViewHost {
     /// inside surfaces keeps its own count and freezes on the first hold and thaws on the last.
     fn freeze_scrolling(&self, frozen: bool);
 
+    /// Asks for a frame of the window once the vertical offset of the scroll container `node`, or
+    /// that offset one step of the compositor's motion ahead, leaves `held`, `[low, high)` in CSS
+    /// pixels, while the compositor scrolls the content without frames of the window, or stops
+    /// asking for `None`.
+    ///
+    /// The frame delivers the offset to the container's scroll observers. A host whose frames
+    /// follow every scroll does nothing.
+    fn wake_outside(&self, node: NodeId, held: Option<[f32; 2]>) {
+        let _ = (node, held);
+    }
+
     /// Moves focus to this node.
     fn focus(&self, node: NodeId);
 

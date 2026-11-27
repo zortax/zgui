@@ -5,12 +5,14 @@
 //! layout recorded on the line. A box broken across lines is sliced: a part the box continues past
 //! has no border and no rounded corners on that side (`box-decoration-break: slice`).
 
+use iceblink::{ClipRef, Color as Premultiplied, Line};
 use zgui_css::ComputedStyle;
 use zgui_geom::{Corners, Device, DevicePx, Edges, Rect, Vec2};
 use zgui_layout::inline::slices::{InlineSlice, device_rect};
-use zgui_scene::{ClipId, Scene, SpatialId};
+use zgui_space::{ClipId, SpatialId};
 
 use crate::emit::box_::{self, BoxPlacement};
+use crate::emit::record::Recorder;
 use crate::lower::PaintStyle;
 
 /// One part of a nested inline box, ready to paint.
@@ -115,7 +117,7 @@ fn sliced(mut radii: Corners<Vec2<DevicePx>>, first: bool, last: bool) -> Corner
 /// Emits the shadows, backgrounds and borders of every part, in tree order, and returns how many
 /// primitives were pushed.
 pub fn boxes(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     parts: &[InlinePaint],
     shaders: &dyn crate::content::shader::ShaderSource,
     pointer: Option<zgui_geom::Point<DevicePx, Device>>,
@@ -125,9 +127,9 @@ pub fn boxes(
         if !part.style.visible || part.style.paints_nothing() {
             continue;
         }
-        pushed += box_::outer_shadows(scene, &part.style, part.placement);
-        pushed += box_::background_and_border(scene, &part.style, part.placement, shaders, pointer);
-        pushed += box_::inset_shadows(scene, &part.style, part.placement);
+        pushed += box_::outer_shadows(rec, &part.style, part.placement);
+        pushed += box_::background_and_border(rec, &part.style, part.placement, shaders, pointer);
+        pushed += box_::inset_shadows(rec, &part.style, part.placement);
     }
     pushed
 }
@@ -135,11 +137,11 @@ pub fn boxes(
 /// Emits the outline of every part, in tree order, and returns how many primitives were pushed.
 ///
 /// Drawn after the glyphs, as a box's outline is drawn after its content.
-pub fn outlines(scene: &mut Scene, parts: &[InlinePaint]) -> usize {
+pub fn outlines(rec: &mut Recorder<'_>, parts: &[InlinePaint]) -> usize {
     parts
         .iter()
         .filter(|part| part.style.visible && part.style.outline.is_some())
-        .map(|part| box_::outline(scene, &part.style, part.placement))
+        .map(|part| box_::outline(rec, &part.style, part.placement))
         .sum()
 }
 
@@ -167,18 +169,19 @@ pub fn line_centres(text: &InlineText, thickness: f32) -> [f32; 3] {
     ]
 }
 
-/// Emits the decoration lines of every part that one pass draws, and returns how many primitives
-/// were pushed.
+/// Emits the decoration lines of every part that one pass draws through `clip`, and returns how
+/// many were recorded.
 ///
 /// A line runs across the part's content, which holds the content of every box inside it.
 pub fn decorations(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     parts: &[InlinePaint],
     which: Lines,
-    clip: ClipId,
+    clip: ClipRef,
     transform: SpatialId,
 ) -> usize {
     let mut pushed = 0;
+    let space = rec.space(transform);
     for part in parts {
         let style = &part.style.decoration;
         if !part.style.visible || !style.draws_anything() {
@@ -187,18 +190,21 @@ pub fn decorations(
         let [under, over, through] = line_centres(&part.text, style.thickness);
         let band = style.band();
         let mut draw = |centre: f32| {
-            let rect = Rect::new(
-                zgui_geom::Point::new(DevicePx(part.text.left), DevicePx(centre - band * 0.5)),
-                zgui_geom::Size::new(
-                    DevicePx((part.text.right - part.text.left).max(0.0)),
-                    DevicePx(band),
-                ),
-            );
-            let mut drawn =
-                zgui_scene::Decoration::new(rect, style.thickness, style.color, style.style)
-                    .clipped(clip);
-            drawn.transform = transform.index();
-            pushed += usize::from(scene.push_decoration(drawn).is_some());
+            rec.line(Line {
+                bounds: [
+                    part.text.left,
+                    centre - band * 0.5,
+                    (part.text.right - part.text.left).max(0.0),
+                    band,
+                ],
+                color: Premultiplied(style.color.to_premultiplied_srgb()),
+                thickness: style.thickness,
+                clip,
+                space,
+                style: style.style,
+                _pad: [0; 3],
+            });
+            pushed += 1;
         };
         match which {
             Lines::UnderGlyphs => {
@@ -224,7 +230,7 @@ mod tests {
     use zgui_css::StyleDraft;
     use zgui_geom::{Corners, DevicePx, Point, Rect, Size, Vec2};
     use zgui_layout::inline::slices::InlineSlice;
-    use zgui_scene::{ClipId, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     use super::{InlinePaint, sliced};
 

@@ -51,6 +51,8 @@ pub struct Stage {
     handles: Handles,
     /// Every frame the device drew, in order.
     log: Log,
+    /// The surface's size, in device pixels.
+    extent: (f32, f32),
     /// Where the pointer is, so a press lands where the last move left it.
     pointer: Point<CssPx, Css>,
     /// Whether a pointer has ever been on the surface.
@@ -62,7 +64,8 @@ pub struct Stage {
 }
 
 impl Stage {
-    /// Opens `view` in a window styled by `sheet`, or nothing on a machine with no device.
+    /// Opens `view` in a window styled by `sheet` and drawn through the compositor, or nothing on a
+    /// machine with no device.
     ///
     /// # Panics
     ///
@@ -81,10 +84,11 @@ impl Stage {
         grab::forget();
         let log: Log = Log::default();
         let mut view = view;
-        let handler = zgui::app()
+        let app = zgui::app()
+            .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
             .with_size(WIDTH, HEIGHT)
-            .with_stylesheet(sheet)
-            .with_renderer(Box::new(device::factory(&log)))
+            .with_stylesheet(sheet);
+        let handler = device::drawn_on(app, &log)
             .into_handler(move || (Grab, view().into_view()))
             .expect("the application builds");
         let mut inner: Option<Box<dyn AppHandler>> = None;
@@ -106,6 +110,7 @@ impl Stage {
             harness,
             handles,
             log,
+            extent: (WIDTH, HEIGHT),
             pointer: Point::new(CssPx(0.0), CssPx(0.0)),
             entered: false,
             _turn: turn,
@@ -169,6 +174,7 @@ impl Stage {
 
     /// Resizes the surface, exactly as a compositor does, and lets the frames that asks for run.
     pub fn resize(&mut self, width: f32, height: f32) {
+        self.extent = (width, height);
         self.harness
             .deliver_to_first(SurfaceEvent::Resized(Size::new(
                 DevicePx(width),
@@ -180,13 +186,14 @@ impl Stage {
     /// Tells the window it now shows `scale` device pixels per CSS pixel, as a compositor does.
     #[allow(dead_code, reason = "not every fixture changes the scale")]
     pub fn rescale(&mut self, scale: f64) {
+        self.extent = (
+            (f64::from(WIDTH) * scale) as f32,
+            (f64::from(HEIGHT) * scale) as f32,
+        );
         self.harness
             .deliver_to_first(SurfaceEvent::ScaleFactorChanged {
                 scale_factor: scale,
-                size: Size::new(
-                    DevicePx((f64::from(WIDTH) * scale) as f32),
-                    DevicePx((f64::from(HEIGHT) * scale) as f32),
-                ),
+                size: Size::new(DevicePx(self.extent.0), DevicePx(self.extent.1)),
             });
         self.harness.settle(64);
     }
@@ -199,23 +206,57 @@ impl Stage {
     /// everywhere the frame did not touch — which is not a picture of the window and is not what
     /// anybody is looking at.
     ///
-    /// A surface that comes back from being hidden owes a full redraw, because nothing observed
-    /// what the compositor did to it while it was away. That is the event asked for here: it is one
-    /// a real desktop sends, it costs one frame, and what it produces is the whole window.
+    /// A surface that comes back from being hidden owes a full redraw. That is the event asked
+    /// for here: it is one a real desktop sends, and the frame that answers it runs.
     ///
-    /// The window paces that redraw as it paces a configure: when the last full redraw ran at the
-    /// same moment, the redraw waits for its deadline. The clock moves on one output frame at a
-    /// time until the redraw ran.
+    /// With every frame covering the whole window, the compositor builds no frame when nothing
+    /// changed, so the last frame drawn is already the whole picture. With the real damage set,
+    /// the window is resized by a pixel and back first, which makes the compositor redraw the
+    /// whole output from what it holds. The resize lays the window out again, so the picture
+    /// matches the one before only once the window is at rest.
+    ///
+    /// The window paces these redraws as it paces a configure, so the clock moves on one output
+    /// frame at a time until the whole repaint ran.
     ///
     /// # Panics
     ///
     /// Panics when the window draws nothing after a few output frames.
     pub fn repaint(&mut self) {
+        let whole = device::real_damage();
         let before = self.frames_drawn();
+        if whole {
+            let (width, height) = self.extent;
+            self.resize(width + 1.0, height);
+            self.resize(width, height);
+        }
+        self.shown_again(whole.then_some(before));
+    }
+
+    /// Makes the window record its whole surface again from nothing and draw it over the whole
+    /// output, and waits for it.
+    ///
+    /// Nothing is laid out again, so the picture is the one of the same moment, also while a
+    /// scroll glides.
+    ///
+    /// # Panics
+    ///
+    /// Panics when the window draws nothing after a few output frames.
+    pub fn redraw_from_nothing(&mut self) {
+        let before = self.frames_drawn();
+        device::compositor::repaint_after_next_frame();
+        self.shown_again(Some(before));
+    }
+
+    /// Hides the window and shows it again, and waits until the device has drawn more than
+    /// `before` frames, when given.
+    fn shown_again(&mut self, before: Option<usize>) {
         self.harness.deliver_to_first(SurfaceEvent::Occluded(true));
         self.harness.settle(64);
         self.harness.deliver_to_first(SurfaceEvent::Occluded(false));
         self.harness.settle(64);
+        let Some(before) = before else {
+            return;
+        };
         for _ in 0..4 {
             if self.frames_drawn() > before {
                 return;
@@ -305,6 +346,25 @@ impl Stage {
                 position: self.pointer,
                 delta: zgui::vocab::ScrollDelta::Lines { x: 0.0, y: lines },
                 phase: zgui::vocab::ScrollPhase::Discrete,
+            },
+            modifiers: Modifiers::NONE,
+            timestamp: Timestamp::ORIGIN,
+        });
+        self.harness.advance(TICK);
+        self.harness.pump();
+    }
+
+    /// Delivers one touchpad step of `pixels` CSS pixels down in `phase` and runs exactly one
+    /// frame.
+    #[allow(dead_code, reason = "not every fixture scrolls by touchpad phases")]
+    pub fn touchpad_in(&mut self, pixels: f32, phase: zgui::vocab::ScrollPhase) {
+        self.harness.deliver_to_first(SurfaceEvent::Wheel {
+            event: zgui::vocab::WheelEvent {
+                id: zgui::vocab::PointerId::MOUSE,
+                kind: zgui::vocab::PointerKind::Mouse,
+                position: self.pointer,
+                delta: zgui::vocab::ScrollDelta::Pixels(Size::new(CssPx(0.0), CssPx(pixels))),
+                phase,
             },
             modifiers: Modifiers::NONE,
             timestamp: Timestamp::ORIGIN,
@@ -446,9 +506,7 @@ impl Stage {
         let frame = frames
             .iter()
             .rev()
-            .find(|frame| {
-                !frame.quads.is_empty() || !frame.glyphs.is_empty() || !frame.drawings.is_empty()
-            })
+            .find(|frame| !frame.blank)
             .expect("the window drew something at least once");
         of(frame)
     }
@@ -568,8 +626,26 @@ impl Stage {
     ///
     /// Panics when the node has no box.
     pub fn rect_of(&self, node: zgui::view::NodeId) -> zgui::geom::Rect<DevicePx, Device> {
-        crate::desktop::census::absolute(&self.handles, node)
+        self.shown(node)
             .unwrap_or_else(|| panic!("{node:?} is not laid out, so it covers nothing"))
+    }
+
+    /// Where `node` is in the picture the compositor shows.
+    ///
+    /// The window's own layout moved by however far the compositor scrolled each container
+    /// around `node` ahead of the window, since a frame of the compositor's scrolling runs no
+    /// frame of the window.
+    fn shown(&self, node: zgui::view::NodeId) -> Option<zgui::geom::Rect<DevicePx, Device>> {
+        let mut rect = crate::desktop::census::absolute(&self.handles, node)?;
+        let mut above = self.handles.dom.parent(node);
+        while let Some(container) = above {
+            if let Some(ahead) = crate::device::compositor::scrolled_ahead(container) {
+                rect.origin.x.0 -= ahead.width.0;
+                rect.origin.y.0 -= ahead.height.0;
+            }
+            above = self.handles.dom.parent(container);
+        }
+        Some(rect)
     }
 
     /// Every colour inside `rect` in the most recent frame that drew, one entry per pixel.
@@ -645,7 +721,8 @@ impl Stage {
     /// Panics when the node has no box, because a fixture that quietly aimed at the origin reports
     /// the same thing as a control that does not answer.
     pub fn centre_of(&self, node: zgui::view::NodeId) -> Point<DevicePx, Device> {
-        let rect = crate::desktop::census::absolute(&self.handles, node)
+        let rect = self
+            .shown(node)
             .unwrap_or_else(|| panic!("{node:?} is not laid out, so there is nowhere to aim"));
         Point::new(
             DevicePx(rect.origin.x.0 + rect.size.width.0 / 2.0),
@@ -659,7 +736,8 @@ impl Stage {
     ///
     /// Panics when the node has no box.
     pub fn along(&self, node: zgui::view::NodeId, fraction: f32) -> Point<DevicePx, Device> {
-        let rect = crate::desktop::census::absolute(&self.handles, node)
+        let rect = self
+            .shown(node)
             .unwrap_or_else(|| panic!("{node:?} is not laid out, so there is nowhere to aim"));
         Point::new(
             DevicePx(rect.origin.x.0 + rect.size.width.0 * fraction),

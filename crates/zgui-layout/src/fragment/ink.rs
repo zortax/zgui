@@ -5,12 +5,12 @@
 //! leaves a trail behind whenever the fragment moves. So every decoration that reaches outside the
 //! border box is accounted for here, and the rectangle only ever grows.
 
+use crate::fragment::filter::{Filter, read_extent};
 use zgui_css::ComputedStyle;
 use zgui_css::values::border::OutlineStyleValue;
 use zgui_css::values::color::{current, to_color};
 use zgui_css::values::image::ImageValue;
 use zgui_geom::{Device, DevicePx, Edges, Rect};
-use zgui_scene::{Filter, read_extent};
 
 use crate::fragment::custom_properties::CustomProperties;
 use crate::fragment::filter;
@@ -337,8 +337,8 @@ pub fn edge_reach(
 
 #[cfg(test)]
 mod tests {
+    use crate::fragment::filter::Filter;
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-    use zgui_scene::Filter;
 
     use super::bleed;
 

@@ -137,7 +137,7 @@ pub(crate) struct VectorRendering {
     /// Routes selected by the element and all descendants, for wrappers such as icon spans.
     pub(crate) subtree: zgui_paint::VectorRoutes,
     /// The configured backend for any general-raster routes.
-    pub(crate) backend: Option<zgui::render::VectorBackend>,
+    pub(crate) backend: Option<iceblink::VectorBackend>,
     /// Whether the element was present when Vello paid its lazy initialization cost.
     pub(crate) initialized_vello: bool,
 }
@@ -191,7 +191,11 @@ pub(crate) fn sample_element(window: &Window, node: NodeId, restyle: bool) -> Op
     let vector = (!subtree.is_empty()).then(|| VectorRendering {
         direct,
         subtree,
-        backend: window.renderer().vector_status().backend,
+        backend: window
+            .output_status()
+            .map(|status| status.vector)
+            .unwrap_or_default()
+            .backend,
         initialized_vello: window.vello_initializers().contains(&key),
     });
     Some(Element {

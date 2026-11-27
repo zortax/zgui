@@ -65,6 +65,39 @@ pub(super) fn absorb(damage: &mut DamageSet, rect: Rect<DevicePx, Device>) {
     damage.absorb(pixels(rect));
 }
 
+/// The parts of `port` that content moving by `by` brings into view: a band along each edge the
+/// content moved away from, or the whole port when it moved by the port's extent or more.
+pub(super) fn arrived(
+    port: Rect<DevicePx, Device>,
+    by: (f32, f32),
+) -> impl Iterator<Item = Rect<DevicePx, Device>> {
+    let (left, top) = (port.origin.x.0, port.origin.y.0);
+    let (width, height) = (port.size.width.0, port.size.height.0);
+    if by.0.abs() >= width || by.1.abs() >= height {
+        return [Some(port), None].into_iter().flatten();
+    }
+    let band = |x: f32, y: f32, w: f32, h: f32| {
+        (w > 0.0 && h > 0.0).then(|| {
+            Rect::new(
+                zgui_geom::Point::new(DevicePx(x), DevicePx(y)),
+                Size::new(DevicePx(w), DevicePx(h)),
+            )
+        })
+    };
+    // Content moving up uncovers the bottom of the port, and content moving down the top.
+    let rows = if by.1 < 0.0 {
+        band(left, top + height + by.1, width, -by.1)
+    } else {
+        band(left, top, width, by.1)
+    };
+    let columns = if by.0 < 0.0 {
+        band(left + width + by.0, top, -by.0, height)
+    } else {
+        band(left, top, by.0, height)
+    };
+    [rows, columns].into_iter().flatten()
+}
+
 /// The whole device pixels a rectangle touches.
 ///
 /// Damage is measured in real pixels and a rectangle that covers part of one has to redraw all of

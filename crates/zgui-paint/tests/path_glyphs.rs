@@ -1,4 +1,4 @@
-//! Repeated outlines drawn as glyph marks through the emit walk.
+//! Repeated outlines drawn as marks of placements through the emit walk.
 //!
 //! Every fixture paints through a real content cache, so the path glyph route competes with the
 //! other shape routes as it does in a window.
@@ -6,16 +6,16 @@
 mod support;
 
 use std::sync::Arc;
-use zgui_atlas::AtlasLimits;
 
+use kurbo::{Affine, BezPath};
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
-use zgui_scene::MarkItem;
-use zgui_scene::kurbo::{Affine, BezPath};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
+use zgui_testkit_compositor::{Drawing, Instance};
 
+use support::drawn::number;
 use support::{Element, Harness};
 
 /// A root with one canvas in it, at the origin.
@@ -28,7 +28,6 @@ struct Window {
     handle: SceneHandle,
     vectors: VectorCache,
     content: ContentCache,
-    raster: zgui_testkit_scene::MonoRaster,
 }
 
 impl Window {
@@ -46,25 +45,30 @@ impl Window {
             harness: Harness::new(tree, &format!("{CSS}\n{style}")),
             handle,
             vectors: VectorCache::new(),
-            content: ContentCache::new(AtlasLimits::default()),
-            raster: zgui_testkit_scene::MonoRaster::new(),
+            content: ContentCache::new(),
         }
     }
 
     /// Paints one frame with the general rasteriser built.
     fn paint(&mut self) -> PaintReport {
-        self.harness.paint_cached_vectors_ready(
-            &self.vectors,
-            &mut self.content,
-            &self.raster,
-            true,
-        )
+        self.harness
+            .paint_cached_vectors_ready(&self.vectors, &mut self.content, true)
     }
 
-    /// The marks of the last frame.
-    fn marks(&self) -> &[MarkItem] {
-        &self.harness.scene().primitives.marks
+    /// What the whole output draws.
+    fn drawn(&mut self) -> Drawing {
+        self.harness.redraw()
     }
+}
+
+/// The marks items of `drawing`.
+fn marks(drawing: &Drawing) -> Vec<&Instance> {
+    drawing.of_kind("marks").collect()
+}
+
+/// The placements a marks item draws.
+fn placements(mark: &Instance) -> f32 {
+    number(mark, "placements").expect("a count")
 }
 
 /// The routes every element of a frame took.
@@ -134,23 +138,19 @@ fn scattered_triangles_are_one_union_glyph_mark() {
     let measured = recording.measure(|| report = Some(window.paint()));
     let report = report.expect("a frame");
     assert!(routes(&report).contains(VectorRoute::PathGlyphs));
-    let primitives = &window.harness.scene().primitives;
-    assert!(primitives.vectors.is_empty(), "no vector item");
-    assert!(primitives.mono_sprites.is_empty(), "no mask sprite");
-    assert!(primitives.quads.is_empty(), "no quad");
-    let [mark] = window.marks() else {
-        panic!("{} marks", window.marks().len());
+    let drawing = window.drawn();
+    for kind in ["path", "mono", "quad"] {
+        assert_eq!(drawing.of_kind(kind).count(), 0, "a {kind} in {drawing}");
+    }
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert!(mark.is_union(), "neighbours overlap");
-    assert_eq!(mark.tiles, 16, "one outline, sixteen phases");
-    assert_eq!(mark.glyphs, 16 + 300, "the table and one copy per triangle");
+    assert!(mark.has("union"), "neighbours overlap");
+    assert_eq!(placements(mark), 300.0, "one copy per triangle");
     assert_eq!(measured.get(Counter::VectorRoutePathGlyphs), 1);
-    assert_eq!(measured.get(Counter::PathGlyphTilesRasterised), 16);
     assert_eq!(measured.get(Counter::VectorRouteGeneral), 0);
-    assert_eq!(measured.get(Counter::VectorRouteMask), 0);
 
-    // A pan of the view by a fraction of a pixel finds the split, the sheet and the payload.
-    let payload = Arc::clone(&window.harness.scene().primitives.mark_payloads[0]);
+    // A pan of the view by a fraction of a pixel draws the shape again.
     assert!(window.handle.set_transform(Affine::translate((5.25, -3.5))));
     window.harness.write_canvas_view("mark", &window.handle);
     let measured = recording.measure(|| {
@@ -161,11 +161,6 @@ fn scattered_triangles_are_one_union_glyph_mark() {
         1,
         "a new view draws the shape again"
     );
-    assert_eq!(measured.get(Counter::PathGlyphTilesRasterised), 0);
-    let [again] = window.harness.scene().primitives.mark_payloads.as_slice() else {
-        panic!("one payload");
-    };
-    assert!(Arc::ptr_eq(again, &payload), "a pan keeps the payload");
 }
 
 #[test]
@@ -174,25 +169,12 @@ fn separated_triangles_are_one_direct_glyph_mark() {
     let mut window = Window::new(vec![triangles(&apart())], "");
     let report = window.paint();
     assert!(routes(&report).contains(VectorRoute::PathGlyphs));
-    let [mark] = window.marks() else {
-        panic!("{} marks", window.marks().len());
+    let drawing = window.drawn();
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert!(!mark.is_union(), "the copies are apart");
-    assert_eq!(mark.glyphs, 16 + 60);
-}
-
-#[test]
-fn a_glyph_record_holds_its_sheets() {
-    let _recording = Recording::begin();
-    let mut window = Window::new(vec![triangles(&apart())], "");
-    window.paint();
-    assert_eq!(window.marks().len(), 1);
-    let report = window.content.report();
-    assert_eq!(report.tiles, 1, "one sheet");
-    assert_eq!(
-        report.referenced_tiles, 1,
-        "the record holds the sheet its mark reads"
-    );
+    assert!(!mark.has("union"), "the copies are apart");
+    assert_eq!(placements(mark), 60.0);
 }
 
 #[test]
@@ -212,7 +194,7 @@ fn an_even_odd_or_mixed_overlap_takes_another_route() {
         let mut window = Window::new(vec![shape], "");
         let report = window.paint();
         assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
-        assert!(window.marks().is_empty());
+        assert!(marks(&window.drawn()).is_empty());
     }
     // Apart, neither rule nor turning matters: each copy is drawn alone.
     let mut separated = BezPath::new();
@@ -249,7 +231,7 @@ fn overlapping_figure_eights_take_another_route() {
     );
     let report = window.paint();
     assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
-    assert!(window.marks().is_empty());
+    assert!(marks(&window.drawn()).is_empty());
     // Apart, each copy is drawn alone.
     let mut apart_eights = BezPath::new();
     for &point in &apart() {
@@ -279,33 +261,44 @@ fn a_turned_canvas_takes_another_route() {
     );
     let report = window.paint();
     assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
-    assert!(window.marks().is_empty());
+    assert!(marks(&window.drawn()).is_empty());
 }
 
 #[test]
 fn a_mirrored_canvas_keeps_its_glyphs() {
     let _recording = Recording::begin();
     for transform in ["scale(-1, 1)", "rotate(90deg)", "scale(2)"] {
+        // About the corner, which keeps the doubled triangles on the output.
+        let origin = if transform == "scale(2)" {
+            "; transform-origin: 0 0"
+        } else {
+            ""
+        };
         let mut window = Window::new(
             vec![triangles(&crowded())],
-            &format!("mark {{ transform: {transform} }}"),
+            &format!("mark {{ transform: {transform}{origin} }}"),
         );
         let report = window.paint();
         assert!(
             routes(&report).contains(VectorRoute::PathGlyphs),
             "`transform: {transform}`"
         );
-        assert_eq!(window.marks().len(), 1, "`transform: {transform}`");
+        let drawing = window.drawn();
+        assert_eq!(
+            marks(&drawing).len(),
+            1,
+            "`transform: {transform}`: {drawing}"
+        );
     }
 }
 
 #[test]
-fn a_lone_triangle_keeps_the_mask_route() {
+fn a_lone_triangle_is_a_path() {
     let _recording = Recording::begin();
     let mut window = Window::new(vec![triangles(&[(20.0, 20.0)])], "");
     let report = window.paint();
-    assert!(routes(&report).contains(VectorRoute::AtlasMask));
-    assert!(window.marks().is_empty());
+    assert!(routes(&report).contains(VectorRoute::GeneralRaster));
+    assert!(marks(&window.drawn()).is_empty());
 }
 
 #[test]
@@ -360,15 +353,15 @@ fn a_path_marker_series_is_one_glyph_mark() {
     let measured = recording.measure(|| report = Some(window.paint()));
     let report = report.expect("a frame");
     assert!(routes(&report).contains(VectorRoute::PathGlyphs));
-    let [mark] = window.marks() else {
-        panic!("{} marks", window.marks().len());
+    let drawing = window.drawn();
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert!(mark.is_union());
-    assert_ne!(mark.flags & zgui_scene::MarkFlags::SCREEN, 0);
-    assert_eq!((mark.tiles, mark.glyphs), (16, 16 + 40));
-    assert!(window.harness.scene().primitives.vectors.is_empty());
+    assert!(mark.has("union"));
+    assert!(mark.has("screen"));
+    assert_eq!(placements(mark), 40.0);
+    assert_eq!(drawing.of_kind("path").count(), 0, "{drawing}");
     assert_eq!(measured.get(Counter::VectorRoutePathGlyphs), 1);
-    assert_eq!(measured.get(Counter::PathGlyphTilesRasterised), 16);
 }
 
 #[test]
@@ -376,7 +369,6 @@ fn a_view_pan_keeps_the_path_marker_payload() {
     let mut window = Window::canvas(|scene| scene.push_series(markers()), "");
     let mut recording = Recording::begin();
     window.paint();
-    let payload = Arc::clone(&window.harness.scene().primitives.mark_payloads[0]);
     for (step, transform) in [
         Affine::translate((13.25, -7.5)),
         Affine::translate((40.0, 0.0)) * Affine::scale(1.5),
@@ -395,18 +387,6 @@ fn a_view_pan_keeps_the_path_marker_payload() {
             "step {step}"
         );
         assert_eq!(measured.get(Counter::SeriesPayloadsBuilt), 0, "step {step}");
-        assert_eq!(
-            measured.get(Counter::PathGlyphTilesRasterised),
-            0,
-            "step {step}"
-        );
-        let [again] = window.harness.scene().primitives.mark_payloads.as_slice() else {
-            panic!("one payload");
-        };
-        assert!(
-            Arc::ptr_eq(again, &payload),
-            "step {step} keeps the payload"
-        );
     }
 }
 
@@ -420,9 +400,12 @@ fn a_turned_path_marker_series_draws_through_the_general_route() {
     let report = window.paint();
     assert!(routes(&report).contains(VectorRoute::GeneralRaster));
     assert!(!routes(&report).contains(VectorRoute::PathGlyphs));
-    assert!(window.marks().is_empty());
-    let vectors = &window.harness.scene().primitives.vectors;
-    assert_eq!(vectors.len(), 1, "one item for the fill");
-    // Forty triangles of a move, two lines and a close.
-    assert_eq!(vectors[0].path.elements().len(), 40 * 4);
+    let drawing = window.drawn();
+    assert!(marks(&drawing).is_empty());
+    let paths: Vec<_> = drawing.of_kind("path").collect();
+    let [path] = paths[..] else {
+        panic!("one path for the fill: {drawing}");
+    };
+    // Forty triangles, each one move.
+    assert_eq!(path.text().matches('M').count(), 40, "{drawing}");
 }

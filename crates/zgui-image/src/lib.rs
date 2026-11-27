@@ -161,49 +161,6 @@ pub fn probe_file(path: &Path) -> Result<Size<u32, Device>, DecodeError> {
     Ok(Size::new(width, height))
 }
 
-/// Builds the levels of detail below `decoded`: each half the previous one's extent, down to one
-/// texel.
-///
-/// A 2×2 box filter on the premultiplied, gamma-encoded values. Premultiplied is what makes the
-/// average correct at soft edges; gamma-encoded is a deliberate match for the rest of the
-/// pipeline, which composites in gamma space throughout. Odd extents round down, and the lost row
-/// or column is folded in by clamping the sample to the edge.
-///
-/// Level zero is the input and is *not* in the result: the result is what a caller queues after
-/// it.
-pub fn mip_chain(decoded: &Decoded) -> Vec<Decoded> {
-    let mut levels = Vec::new();
-    let mut source = decoded.clone();
-    while source.size.width > 1 || source.size.height > 1 {
-        let width = (source.size.width / 2).max(1);
-        let height = (source.size.height / 2).max(1);
-        let mut texels = vec![0u8; (width * height * 4) as usize];
-        for y in 0..height {
-            for x in 0..width {
-                let mut sums = [0u32; 4];
-                for (dy, dx) in [(0, 0), (0, 1), (1, 0), (1, 1)] {
-                    let sx = (2 * x + dx).min(source.size.width - 1);
-                    let sy = (2 * y + dy).min(source.size.height - 1);
-                    let at = ((sy * source.size.width + sx) * 4) as usize;
-                    for (sum, &texel) in sums.iter_mut().zip(&source.texels[at..at + 4]) {
-                        *sum += u32::from(texel);
-                    }
-                }
-                let at = ((y * width + x) * 4) as usize;
-                for (out, sum) in texels[at..at + 4].iter_mut().zip(sums) {
-                    *out = ((sum + 2) / 4) as u8;
-                }
-            }
-        }
-        source = Decoded {
-            size: Size::new(width, height),
-            texels: Arc::new(texels),
-        };
-        levels.push(source.clone());
-    }
-    levels
-}
-
 /// In-memory image bytes, addressable through a `src` string.
 ///
 /// `src` is the one wire an image element has, and it carries text. Bytes an application already
@@ -470,36 +427,6 @@ mod tests {
             capped.size,
             Size::new(16, 4),
             "the limit caps whatever the target says"
-        );
-    }
-
-    #[test]
-    fn a_mip_chain_halves_to_one_texel_and_averages_blocks() {
-        // A 4×2 image of two solid halves: black-ish left, white-ish right, opaque.
-        let mut texels = Vec::new();
-        for _row in 0..2 {
-            texels.extend([0u8, 0, 0, 255, 0, 0, 0, 255]);
-            texels.extend([200u8, 200, 200, 255, 200, 200, 200, 255]);
-        }
-        let base = Decoded {
-            size: Size::new(4, 2),
-            texels: Arc::new(texels),
-        };
-        let chain = mip_chain(&base);
-        assert_eq!(
-            chain.iter().map(|level| level.size).collect::<Vec<_>>(),
-            vec![Size::new(2, 1), Size::new(1, 1)],
-            "each level halves, rounding down, until one texel"
-        );
-        assert_eq!(
-            chain[0].texels.as_slice(),
-            &[0, 0, 0, 255, 200, 200, 200, 255],
-            "each texel is its 2×2 block's average"
-        );
-        assert_eq!(
-            chain[1].texels.as_slice(),
-            &[100, 100, 100, 255],
-            "and the last level is the average of everything"
         );
     }
 

@@ -136,7 +136,7 @@ fn a_form_relates_each_field_to_the_text_that_names_it() {
 
     let update = published(&harness);
     assert_every_update_resolves(&harness);
-    zgui_testkit_scene::dump::golden::assert_matches(
+    zgui_testkit::dump::golden::assert_matches(
         &golden("form_with_labels.txt"),
         &zgui_a11y::dump(&update),
     );
@@ -174,7 +174,7 @@ fn a_counter_that_ticks_over_changes_one_accessibility_node() {
         zgui_a11y::dump(&update)
     );
     assert_every_update_resolves(&harness);
-    zgui_testkit_scene::dump::golden::assert_matches(
+    zgui_testkit::dump::golden::assert_matches(
         &golden("counter_increment.txt"),
         &zgui_a11y::dump(&update),
     );
@@ -249,7 +249,7 @@ fn a_combobox_names_the_option_that_is_active_without_moving_focus() {
         "the relation the combobox pattern rests on left the update:\n{}",
         zgui_a11y::dump(&update)
     );
-    zgui_testkit_scene::dump::golden::assert_matches(
+    zgui_testkit::dump::golden::assert_matches(
         &golden("combobox_active_descendant.txt"),
         &zgui_a11y::dump(&update),
     );
@@ -301,7 +301,7 @@ fn a_dialog_is_named_by_its_title_and_owned_by_the_control_that_opened_it() {
 
     let update = published(&harness);
     assert_every_update_resolves(&harness);
-    zgui_testkit_scene::dump::golden::assert_matches(
+    zgui_testkit::dump::golden::assert_matches(
         &golden("dialog_labelled_by.txt"),
         &zgui_a11y::dump(&update),
     );

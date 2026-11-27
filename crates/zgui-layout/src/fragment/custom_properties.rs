@@ -141,7 +141,7 @@ mod tests {
         );
         assert_eq!(
             corner::shape_with(&child, declared),
-            zgui_scene::CornerShape::SQUIRCLE
+            zgui_space::CornerShape::SQUIRCLE
         );
         let border_box = Rect::new(
             Point::new(DevicePx(0.0), DevicePx(0.0)),
@@ -155,15 +155,6 @@ mod tests {
             filter::reads_outside(&child, declared, 1.0),
             filter::reads_outside(&child, CustomProperties::ALL, 1.0)
         );
-    }
-
-    #[test]
-    fn the_interned_effect_names_are_the_scene_effect_names() {
-        use zgui_scene::property;
-        assert_eq!(custom::SHADER.as_str(), property::SHADER);
-        assert_eq!(custom::SHAPE.as_str(), property::SHAPE);
-        assert_eq!(custom::FILTER.as_str(), property::FILTER);
-        assert_eq!(custom::BACKDROP_FILTER.as_str(), property::BACKDROP_FILTER);
     }
 
     /// The store answers for the style a box holds now, through every way a box gets a style.

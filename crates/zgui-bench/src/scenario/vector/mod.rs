@@ -9,16 +9,15 @@
 //! (scenario, variant) pair runs in a process of its own, because the general rasteriser is built
 //! at most once per renderer and a document is mounted through thread-local state.
 //!
-//! The renderer-specific counters (`vector_backend_built`, `vello_renders` and the encode counts)
-//! move only under `ZGUI_BENCH_GPU=1`. Without it the renderer draws nothing, reports its vector
-//! rasteriser as never built, and paint sees the general route as cold.
+//! Without `ZGUI_BENCH_GPU=1` the renderer draws nothing, reports its vector rasteriser as never
+//! built, and paint sees the general route as cold.
 //!
 //! One block per variant:
 //!
 //! ```text
 //! VECTOR <scenario> <variant> <stretch> frames=N paint_p50=.. paint_p95=.. paint_max=.. render_p50=.. render_p95=..
 //! VCOUNT <scenario> <variant> <stretch> <field>=<total> ...
-//! VLIVE  <scenario> <variant> <stretch> atlas_entries_live=<start>-><end> vector_mask_tiles_live=<start>-><end> vector_layer_bytes_live=<start>-><end>
+//! VLIVE  <scenario> <variant> <stretch> atlas_entries_live=<start>-><end> vector_layer_bytes_live=<start>-><end>
 //! ```
 
 mod icons;
@@ -63,31 +62,18 @@ pub(crate) const ALL: [(&str, &str); 18] = [
 pub(super) const TICK: Duration = Duration::from_micros(8_333);
 
 /// The counters a `VCOUNT` line prints, in order.
-const PRINTED: [Counter; 38] = [
-    Counter::VectorBackendBuilt,
-    Counter::VelloRenders,
-    Counter::VectorEncodeHits,
-    Counter::VectorEncodeMisses,
-    Counter::VectorRouteMask,
+const PRINTED: [Counter; 25] = [
     Counter::VectorRouteGeneral,
     Counter::VectorRouteAnalytic,
     Counter::VectorRouteMarks,
     Counter::VectorRoutePathGlyphs,
-    Counter::PathGlyphTilesRasterised,
     Counter::MarksUnionBins,
-    Counter::MarksPayloadBytes,
     Counter::SeriesPayloadsBuilt,
     Counter::SeriesBuildsAsync,
     Counter::SeriesDrawsProvisional,
     Counter::SeriesChunksDrawn,
     Counter::SeriesChunksCulled,
-    Counter::VectorMaskMisses,
-    Counter::VectorMaskBudgetOverflow,
-    Counter::VectorReplaysMoved,
-    Counter::VectorTierChanges,
     Counter::VelloPasses,
-    Counter::AtlasTilesEvicted,
-    Counter::RebuiltAfterEviction,
     Counter::ChunksReencoded,
     Counter::ChunksTranslated,
     Counter::VectorRouteLayer,
@@ -237,9 +223,8 @@ impl Stretch {
             )
         };
         println!(
-            "VLIVE  {scenario} {variant} {name} {} {} {}",
+            "VLIVE  {scenario} {variant} {name} {} {}",
             live(Counter::AtlasEntriesLive),
-            live(Counter::VectorMaskTilesLive),
             live(Counter::VectorLayerBytesLive),
         );
     }

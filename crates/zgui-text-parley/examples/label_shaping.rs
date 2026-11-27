@@ -16,7 +16,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use zgui_geom::CssPx;
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{
     BreakRequest, FontSource, ParagraphContent, ParagraphKey, ParagraphShaper, StyledRun, TextMap,
 };

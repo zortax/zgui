@@ -5,7 +5,7 @@
 //! # The composites that read outside what they write
 //!
 //! A `backdrop-filter` samples the composite *beneath* it, and a `filter: blur()` samples its own
-//! target, in both cases over a region dilated well past the rectangle being written. The scene
+//! target, in both cases over a region dilated well past the rectangle being written. The output
 //! texture is kept between frames and only the damaged rectangles are cleared and redrawn, so
 //! outside a damage rectangle those reads land on the previous frame's final composite — which
 //! already contains the group's own output. For a backdrop that is a feedback loop: a caret-sized
@@ -35,7 +35,7 @@ use zgui_dom::Document;
 use zgui_geom::{Device, Size};
 use zgui_layout::LayoutStore;
 use zgui_layout::fragment::diff::pixels;
-use zgui_scene::Placements;
+use zgui_space::Placements;
 
 use crate::damage::ink::read_extent_of;
 

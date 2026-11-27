@@ -1,27 +1,30 @@
-//! Repeated outlines drawn as glyph marks: the route for a scatter of triangles, crosses or stars.
+//! Repeated outlines drawn as placements: the route for a scatter of triangles, crosses or stars.
 //!
-//! A part of a shape whose subpaths copy a few outlines becomes one [`MarkItem`] whose payload
-//! holds a tile table and one anchor per subpath. Each outline is rasterised once per device scale
-//! into an atlas sheet of 16 phase cells, and every copy draws the cell of its own device phase.
-//! Copies two device pixels apart are painted one by one; copies that come closer are summed into
-//! one coverage first, which is the union a path paints.
+//! A part of a shape whose subpaths copy a few outlines becomes one [`Marks`] item whose payload
+//! holds each outline once, in device pixels, and one placement per subpath. The compositor
+//! rasterises each outline and draws every copy at its own device phase. Copies two device pixels
+//! apart are painted one by one, and copies that come closer are summed into one coverage first,
+//! which is the union a path paints.
 //!
-//! The anchors stay in the shape's own units and the item maps them by the fit, so a canvas
-//! view panned without a zoom keeps the payload, and a moved replay draws new phases from the
-//! same bytes.
+//! The anchors stay in the shape's own units and the item maps them by the fit, so a canvas view
+//! panned without a zoom keeps the payload.
+//!
+//! [`Marks`]: iceblink::Marks
 
 use std::sync::Arc;
 
+use crate::VectorId;
+use iceblink::{MarkFlags, MarkPayload, MarkPlacement};
 use zgui_color::Color;
-use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-use zgui_scene::{MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, VectorId, kurbo, peniko};
+use zgui_geom::{DevicePx, Point, Rect, Size};
 
 use super::document::{density_of, reference, stroke_paint};
 use super::recognise::separated_with;
 use super::split::{self, Split, SplitDeclined, Winding};
 use super::{ShapePaint, ShapeSource, VectorPlacement};
-use crate::content::vectors::path_glyphs::{PHASES, PartPayload};
-use crate::content::vectors::{GlyphRequest, GlyphSheets, VectorMaskSource, VectorMaskStyle};
+use crate::content::vectors::VectorMaskSource;
+use crate::content::vectors::path_glyphs::{PartPayload, PartStyle, outlines};
+use crate::emit::record::Recorder;
 
 /// How many path elements make a failed split worth remembering.
 const REMEMBERED: usize = 64;
@@ -33,20 +36,19 @@ const MARGIN: f32 = 1.0;
 struct Part<'a> {
     /// The part's index in the split's payloads: 0 for the fill, 1 for the stroke.
     index: usize,
-    /// How its coverage is produced.
-    style: VectorMaskStyle<'a>,
-    /// Device pixels per stroke unit.
-    scale: f64,
+    /// How its outlines are produced.
+    style: PartStyle<'a>,
     /// The fill rule of a fill, and `None` for a stroke.
     rule: Option<peniko::Fill>,
 }
 
-/// Emits a shape whose subpaths copy a few outlines as one glyph mark per part, or declines the
+/// Records a shape whose subpaths copy a few outlines as one marks item per part, or declines the
 /// route.
 ///
-/// Nothing is pushed unless both parts take the route.
+/// Nothing is recorded unless both parts take the route. A fill under the even-odd rule declines,
+/// since placements are filled under the nonzero rule.
 pub(super) fn emit_path_glyphs(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     id: VectorId,
     source: &ShapeSource<'_>,
     paint: &ShapePaint,
@@ -69,6 +71,9 @@ pub(super) fn emit_path_glyphs(
         Some(fill) => solid(&fill.paint, paint.fill)?.then_some(fill.rule),
         None => None,
     };
+    if fill == Some(peniko::Fill::EvenOdd) {
+        return None;
+    }
     let inherited_stroke;
     let stroke: Option<(&kurbo::Stroke, bool)> = match &shape.stroke {
         Some(stroke) => solid(&stroke.paint, paint.stroke.unwrap_or(paint.fill))?
@@ -109,8 +114,7 @@ pub(super) fn emit_path_glyphs(
     if let Some(rule) = fill {
         parts.push(Part {
             index: 0,
-            style: VectorMaskStyle::Fill(rule),
-            scale: 1.0,
+            style: PartStyle::Fill,
             rule: Some(rule),
         });
     }
@@ -124,8 +128,7 @@ pub(super) fn emit_path_glyphs(
         };
         parts.push(Part {
             index: 1,
-            style: VectorMaskStyle::Stroke(style),
-            scale,
+            style: PartStyle::Stroke { style, scale },
             rule: None,
         });
     }
@@ -150,13 +153,8 @@ pub(super) fn emit_path_glyphs(
     };
     let mut lowered: smallvec::SmallVec<[(Lowered, &Part<'_>); 2]> = smallvec::SmallVec::new();
     for part in &parts {
-        let sheets = masks.glyph_sheets(GlyphRequest {
-            geometries: &found.geometries,
-            style: part.style,
-            scale: part.scale,
-        })?;
         lowered.push((
-            lower(&shape.path, linear, &found, &sheets, part, &place, masks)?,
+            lower(&shape.path, linear, &found, part, &place, masks)?,
             part,
         ));
     }
@@ -164,6 +162,8 @@ pub(super) fn emit_path_glyphs(
     // The device bounds, taken back through the transform: what the marks paint in the
     // fragment's space.
     let inverse = affine.invert()?;
+    let clip = rec.clip(placement.clip);
+    let space = rec.space(placement.transform);
     let mut pushed = 0;
     for (part, which) in lowered {
         let [x0, y0, x1, y1] = part.ink;
@@ -175,11 +175,18 @@ pub(super) fn emit_path_glyphs(
         let paint_ref = match which.rule {
             Some(_) => {
                 let fill = shape.fill.as_ref().expect("a fill part has a fill");
-                reference(scene, &fill.paint, paint.fill)
+                reference(rec.tables(), &fill.paint, paint.fill)
             }
-            None => stroke_paint(scene, source, paint),
+            None => stroke_paint(rec.tables(), source, paint),
         };
-        pushed += push(scene, part, bounds, paint_ref, source.fit, placement);
+        let paint_ref = rec.paint(paint_ref);
+        let mut item = super::marks::item(bounds, paint_ref, &part.payload, (clip, space));
+        let [a, b, c, d, e, f] = source.fit.as_coeffs();
+        item.flags = part.flags;
+        item.axes = [a as f32, b as f32, c as f32, d as f32];
+        item.origin = [e as f32, f as f32];
+        rec.marks(item, part.payload);
+        pushed += 1;
     }
     Some(pushed)
 }
@@ -212,41 +219,50 @@ fn split_of(
 
 /// One part's payload and flags, and what its copies paint on the device.
 struct Lowered {
-    /// The table and the anchors.
+    /// The outlines and the anchors.
     payload: Arc<MarkPayload>,
-    /// [`MarkFlags`] bits.
-    flags: u32,
-    /// How many words lead as the table.
-    tiles: u32,
-    /// The atlas texture the cells lie in.
-    texture: u32,
+    /// How the copies are combined.
+    flags: MarkFlags,
     /// What the copies paint, as `[x0, y0, x1, y1]` on the device.
     ink: [f64; 4],
 }
 
-/// The payload of one part over `sheets`, from the split's cache while it was built from the same
-/// sheets, or `None` for a union that would fill holes.
+/// The payload of one part, from the split's cache while it was built in the same style, or
+/// `None` for outlines past the size cap or a union that would fill holes.
 fn lower(
     path: &Arc<kurbo::BezPath>,
     linear: [f64; 4],
     found: &Split,
-    sheets: &GlyphSheets,
     part: &Part<'_>,
     place: &dyn Fn(f64, f64) -> [f64; 2],
     masks: &dyn VectorMaskSource,
 ) -> Option<Lowered> {
-    // Where each copy can put a pixel: the union of its cells from the pixel of its anchor, and
-    // the pixel within seven eighths left of the anchor and an eighth right of it.
+    let style = part.style.key();
+    let held = masks.glyph_splits().and_then(|mut splits| {
+        let entry = splits.held(path, linear)?;
+        let held = entry.payloads[part.index].as_ref()?;
+        (held.style == style).then(|| {
+            (
+                Arc::clone(&held.payload),
+                held.union,
+                Arc::clone(&held.reach),
+            )
+        })
+    });
+    let (cached, shapes, reach) = match held {
+        Some((payload, union, reach)) => (Some((payload, union)), Vec::new(), reach),
+        None => {
+            let built = outlines(&found.geometries, part.style)?;
+            (None, built.shapes, built.reach)
+        }
+    };
+    // Where each copy can put a pixel: its outline from its anchor, and a pixel on each side for
+    // the quantised anchor and the whole-pixel raster.
     let rect = |index: usize| {
         let [x, y] = found.anchors[index];
         let [x, y] = place(f64::from(x), f64::from(y));
-        let reach = sheets.reach[usize::from(found.of[index])];
-        [
-            x + f64::from(reach[0]) - 0.875,
-            y + f64::from(reach[1]) - 0.875,
-            x + f64::from(reach[2]) + 0.125,
-            y + f64::from(reach[3]) + 0.125,
-        ]
+        let [x0, y0, x1, y1] = reach[usize::from(found.of[index])];
+        [x + x0 - 1.0, y + y0 - 1.0, x + x1 + 1.0, y + y1 + 1.0]
     };
     let mut ink = [
         f64::INFINITY,
@@ -266,43 +282,39 @@ fn lower(
     if !ink.iter().all(|value| value.is_finite()) {
         return None;
     }
-    let tiles = (found.geometries.len() * PHASES) as u32;
-    let held = masks.glyph_splits().and_then(|mut splits| {
-        let entry = splits.held(path, linear)?;
-        let held = entry.payloads[part.index].as_ref()?;
-        (*held.keys == sheets.keys[..]).then(|| (Arc::clone(&held.payload), held.union))
-    });
-    let (payload, union) = match held {
-        Some(held) => held,
+    let (payload, union) = match cached {
+        Some(cached) => cached,
         None => {
-            let largest = sheets
-                .reach
+            let largest = reach
                 .iter()
-                .map(|reach| (reach[2] - reach[0]).max(reach[3] - reach[1]) as f32 + 1.0)
+                .map(|[x0, y0, x1, y1]| (x1 - x0).max(y1 - y0) as f32 + 2.0)
                 .fold(0.0f32, f32::max);
             let union = !separated_with(found.anchors.len(), largest, MARGIN, |index| {
                 rect(index).map(|value| value as f32)
             });
-            let mut glyphs = Vec::with_capacity(sheets.table.len() + found.anchors.len());
-            glyphs.extend_from_slice(&sheets.table);
-            for (index, (&[x, y], &outline)) in found.anchors.iter().zip(&found.of).enumerate() {
-                glyphs.push([
-                    x.to_bits(),
-                    y.to_bits(),
-                    u32::from(outline),
-                    tiles + index as u32,
-                ]);
-            }
+            let placements = found
+                .anchors
+                .iter()
+                .zip(&found.of)
+                .map(|(&[x, y], &outline)| MarkPlacement {
+                    x,
+                    y,
+                    shape: u32::from(outline),
+                    _pad: 0,
+                })
+                .collect();
             let payload = Arc::new(MarkPayload {
-                glyphs,
+                shapes,
+                placements,
                 ..MarkPayload::default()
             });
             if let Some(mut splits) = masks.glyph_splits()
                 && let Some(entry) = splits.held(path, linear)
             {
                 entry.payloads[part.index] = Some(PartPayload {
-                    keys: sheets.keys.clone().into_boxed_slice(),
+                    style,
                     union,
+                    reach: Arc::clone(&reach),
                     payload: Arc::clone(&payload),
                 });
             }
@@ -310,52 +322,29 @@ fn lower(
         }
     };
     // The interior of overlapping copies is their union under the nonzero rule when every
-    // outline winds one way everywhere. Winding both ways, or under the even-odd rule, an
-    // overlap can be a hole, which no sum of coverage draws.
-    if union {
-        let holes = match part.rule {
-            Some(peniko::Fill::EvenOdd) => true,
-            Some(peniko::Fill::NonZero) => found
-                .geometries
-                .iter()
-                .fold(Winding::default(), |held, geometry| {
-                    held.union(geometry.winding)
-                })
-                .mixed(),
-            None => false,
-        };
+    // outline winds one way everywhere. Winding both ways, an overlap can be a hole, which no
+    // sum of coverage draws. A stroke's outline is always the union of its segments'.
+    if union && part.rule.is_some() {
+        let holes = found
+            .geometries
+            .iter()
+            .fold(Winding::default(), |held, geometry| {
+                held.union(geometry.winding)
+            })
+            .mixed();
         if holes {
             return None;
         }
     }
     Some(Lowered {
         payload,
-        flags: if union { MarkFlags::UNION } else { 0 },
-        tiles,
-        texture: sheets.texture,
+        flags: if union {
+            MarkFlags::UNION
+        } else {
+            MarkFlags::default()
+        },
         ink,
     })
-}
-
-/// Pushes one part as one glyph mark, and returns how many survived.
-fn push(
-    scene: &mut Scene,
-    lowered: Lowered,
-    bounds: Rect<DevicePx, Device>,
-    paint: PaintRef,
-    fit: kurbo::Affine,
-    placement: VectorPlacement,
-) -> usize {
-    let mut item = MarkItem::new(bounds, paint, lowered.payload.counts());
-    let [a, b, c, d, e, f] = fit.as_coeffs();
-    item.flags = lowered.flags;
-    item.clip = placement.clip.0;
-    item.transform = placement.transform.index();
-    item.axes = [a as f32, b as f32, c as f32, d as f32];
-    item.origin = [e as f32, f as f32];
-    item.tiles = lowered.tiles;
-    item.texture = lowered.texture;
-    usize::from(scene.push_marks(item, lowered.payload).is_some())
 }
 
 #[cfg(test)]

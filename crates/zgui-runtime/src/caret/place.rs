@@ -61,7 +61,7 @@ pub struct Located {
     /// paragraph's, and those are two different spaces the moment anything above the text is
     /// turned, scaled or skewed. Keeping the name of the matrix here is what lets a hit be asked in
     /// the space the glyphs were actually drawn in rather than in the one layout wrote down.
-    pub transform: Option<zgui_scene::SpatialId>,
+    pub transform: Option<zgui_space::SpatialId>,
     /// The lines and their clusters.
     pub lines: LineMap,
     /// How to get between the shaper's string and the document's.
@@ -220,7 +220,7 @@ impl Located {
     pub fn hit(
         &self,
         point: Point<DevicePx, Device>,
-        spatial: &zgui_scene::SpatialTree,
+        spatial: &zgui_space::SpatialTree,
     ) -> Option<(usize, Affinity)> {
         let placed =
             zgui_layout::fragment::hit::transform::into_local(point, self.transform, spatial)?;

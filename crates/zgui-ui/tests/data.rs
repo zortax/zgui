@@ -30,6 +30,7 @@ fn scrolled(offset: f32, rows: usize) -> ScrollPosition {
         offset: Point::new(DevicePx(0.0), DevicePx(offset)),
         content_size: Size::new(DevicePx(300.0), DevicePx(rows as f32 * ROW)),
         scrollport: Size::new(DevicePx(300.0), DevicePx(PORT)),
+        ..ScrollPosition::default()
     }
 }
 

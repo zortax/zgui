@@ -3,14 +3,12 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use zgui_geom::{Scale, Size};
+use iceblink_wgpu::{Builder, WgpuRenderer};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
-use zgui_render::RenderTarget;
-use zgui_render_wgpu::{Builder, WgpuRenderer, wgpu};
 use zgui_runtime::{App, AppError, Runtime};
 use zgui_view::{BuildCx, IntoView, View};
-use zgui_wgpu::{SurfaceElementExt, SurfaceRenderCx, SurfaceRenderer, WgpuSurfaces};
+use zgui_wgpu::{SurfaceElementExt, SurfaceRenderCx, SurfaceRenderer, WgpuSurfaces, wgpu};
 
 /// The colour the renderer clears to, as stored bytes.
 const CLEARED: [u8; 4] = [255, 128, 0, 255];
@@ -80,8 +78,11 @@ impl SurfaceRenderer for ReadBack {
     }
 }
 
-/// A window drawn by a real wgpu renderer into an offscreen texture.
-fn app(renderer: WgpuRenderer, surface: ReadBack) -> Harness<Runtime> {
+/// A window drawn by the compositor's wgpu renderer into an offscreen texture.
+fn app(
+    renderer: impl FnOnce() -> WgpuRenderer + Send + 'static,
+    surface: ReadBack,
+) -> Harness<Runtime> {
     let mut renderer = Some(renderer);
     let mut surface = Some(surface);
     let handler = App::new()
@@ -90,20 +91,23 @@ fn app(renderer: WgpuRenderer, surface: ReadBack) -> Harness<Runtime> {
         .with_stylesheet(
             "root { display: block; width: 64px; height: 64px } surface { width: 32px; height: 32px }",
         )
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = renderer.take().expect("one window asks for one renderer");
-                zgui_render::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
+                let make = renderer.take().expect("one window asks for one renderer");
+                Ok(zgui_testkit_compositor::factory(move || {
+                    let mut renderer = make();
+                    iceblink::Renderer::configure(&mut renderer, target);
+                    renderer
+                }))
             },
         ))
         .with_text_engine(Box::new(|| {
             Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
+                zgui_testkit::MonoShaper::new(),
             ))
-        }))
-        .with_glyph_raster(Box::new(|| {
-            Arc::new(zgui_testkit_scene::MonoRaster::new())
         }))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let surface = surface.take().expect("the view is built once");
@@ -123,17 +127,14 @@ fn app(renderer: WgpuRenderer, surface: ReadBack) -> Harness<Runtime> {
 
 #[test]
 fn a_renderer_asking_for_copy_src_can_copy_its_texture_to_a_buffer() {
-    let target = RenderTarget::new(Size::new(64, 64), Scale::new(1.0));
-    let renderer = match Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false) {
-        Ok(renderer) => renderer,
-        Err(failure) => {
-            eprintln!("skipped: no usable graphics device ({failure})");
-            return;
-        }
-    };
+    let open = || Builder::new().offscreen([64, 64], wgpu::TextureFormat::Bgra8Unorm);
+    if let Err(failure) = open() {
+        eprintln!("skipped: no usable graphics device ({failure})");
+        return;
+    }
     let read = Arc::new(Mutex::new(None));
     let mut app = app(
-        renderer,
+        move || open().expect("a device opens, which the test answered beforehand"),
         ReadBack {
             read: Arc::clone(&read),
         },

@@ -1,4 +1,5 @@
-//! Scene transcripts: what the paint stage actually produced, as text a review can read.
+//! Compositor transcripts: what the compositor draws of what the paint stage recorded, as text a
+//! review can read.
 //!
 //! A transcript is the regression artifact for this stage because it is *diffable*. A golden that
 //! is only a count — "twelve primitives" — passes while every one of them changes; a transcript
@@ -9,24 +10,25 @@ mod support;
 use std::path::PathBuf;
 
 use support::{Element, Harness};
-use zgui_testkit_scene::dump::golden;
+use zgui_testkit::dump::golden;
 
 /// The golden for one named scene.
 fn path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/goldens/scene")
+        .join("tests/goldens/compositor")
         .join(format!("{name}.txt"))
 }
 
-/// Renders `harness`'s finished scene and compares it against the golden called `name`.
-fn assert_scene(name: &str, harness: &Harness) {
-    // A transcript prints each primitive in its own space, which the poison test mode moves by
+/// Draws `harness`'s whole output and compares what the compositor draws against the golden
+/// called `name`.
+fn assert_drawing(name: &str, harness: &mut Harness) {
+    let drawing = harness.redraw();
+    // A transcript prints each instance in its own space, which the poison test mode moves by
     // design. The assertions beside each transcript still run.
     if support::poison() != 0.0 {
         return;
     }
-    let transcript = zgui_testkit_scene::transcript::of(&harness.scene, &harness.damage);
-    golden::assert_matches(&path(name), transcript.as_str());
+    golden::assert_matches(&path(name), drawing.transcript().as_str());
 }
 
 #[test]
@@ -54,7 +56,7 @@ fn card_with_shadow() {
         256.0,
     );
     harness.paint_everything();
-    assert_scene("card_with_shadow", &harness);
+    assert_drawing("card_with_shadow", &mut harness);
 }
 
 #[test]
@@ -99,21 +101,20 @@ fn overlay_layer_order() {
     );
     let _ = (toast, page);
 
-    let quads = &harness.scene.primitives.quads;
+    let drawing = harness.redraw();
+    let quads = drawing.quads();
     let toast_quad = quads
         .iter()
-        .find(|quad| quad.bounds[3] == 32.0)
+        .position(|quad| quad.bounds()[3] == 32.0)
         .expect("the toast's quad");
     let page_quad = quads
         .iter()
-        .find(|quad| quad.bounds[3] == 120.0)
+        .position(|quad| quad.bounds()[3] == 120.0)
         .expect("the page's quad");
     assert!(
-        toast_quad.order > page_quad.order,
-        "the toast at {} has to sort over the page at {}",
-        toast_quad.order,
-        page_quad.order
+        toast_quad > page_quad,
+        "the toast has to be drawn over the page: {drawing}"
     );
 
-    assert_scene("overlay_layer_order", &harness);
+    assert_drawing("overlay_layer_order", &mut harness);
 }

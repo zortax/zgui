@@ -7,9 +7,8 @@
 
 mod raster;
 
-use raster::measure::{self, Level};
+use raster::measure;
 use raster::page::{self, INK, LID, LID_TOP, PANEL};
-use raster::script::MARKER;
 
 /// The runs, or nothing on a machine with no graphics device.
 macro_rules! runs {
@@ -251,100 +250,25 @@ fn a_quad_before_the_drawing_is_under_it_and_a_quad_after_it_is_over_it() {
     }
 }
 
-/// A frame whose document draws nothing plans no rasterisation pass.
+/// A frame whose document draws nothing draws no path.
 #[test]
-fn a_document_with_no_drawing_in_it_costs_no_rasterisation() {
+fn a_document_with_no_drawing_in_it_draws_no_path() {
     let runs = runs!();
     for frame in &runs.bare {
         assert_eq!(frame.items, 0, "the bare document produced a drawing");
-        assert_eq!(
-            frame.vector_passes, 0,
-            "a frame with no drawing in it planned a rasterisation pass"
-        );
+        assert_eq!(frame.paths, 0, "a frame with no drawing in it drew a path");
     }
-    // The turned icon, on the same device through the same renderer, does plan one — so the count
-    // above is about this document rather than about a number nothing ever moves. The upright icon
-    // is no comparison: it arrives as a coverage mask, which needs no pass.
+    // The turned icon, on the same device through the same compositor, does draw one, so the
+    // count above is about this document rather than about a number nothing ever moves. The
+    // upright icon is no comparison: it arrives as a path mask.
     let turned = page::Runs::settled(&runs.turned);
     assert!(
-        turned.vector_passes > 0,
-        "a turned icon planned no rasterisation pass ({} drawings)",
+        turned.paths > 0,
+        "a turned icon drew no path ({} drawings)",
         turned.items
     );
     let bare = page::Runs::settled(&runs.bare);
     if let Some((x, y, found)) = measure::first_unlike(&bare.full, |_, _| true, PANEL) {
         panic!("({x}, {y}) of the bare panel came back {found:?} rather than {PANEL:?}");
     }
-}
-
-/// A repaint scissored to the drawing redraws that rectangle and leaves the rest alone.
-///
-/// The target is filled with a colour that appears in no frame first. Whatever the scissored draw
-/// does not touch is still that colour afterwards, and whatever it does touch is the frame.
-#[test]
-fn a_repaint_scissored_to_the_drawing_touches_that_rectangle_and_nothing_else() {
-    let runs = runs!();
-    let frame = page::Runs::settled(&runs.marked);
-    let rectangle = frame.declared.expect("a drawing was planned");
-    let scissored = frame.scissored.as_ref().expect("a scissored repaint ran");
-
-    let inside = |x: i32, y: i32| rectangle.contains(zgui::geom::Point::new(x, y));
-    let outside = move |x: i32, y: i32| !inside(x, y);
-
-    // Outside: still the marker, so the draw physically did not write there.
-    let untouched = measure::count(scissored, outside);
-    assert!(
-        untouched > 10_000,
-        "only {untouched} pixels lie outside the drawing's rectangle in a {}px window",
-        page::SURFACE
-    );
-    if let Some((x, y, found)) = measure::first_unlike(scissored, outside, MARKER) {
-        panic!(
-            "({x}, {y}) is outside the damage rectangle {rectangle:?} and came back {found:?} \
-             rather than the {MARKER:?} that was on the target before the repaint: the scissor \
-             did not hold"
-        );
-    }
-
-    // Inside: the frame, exactly as a full repaint draws it.
-    if let Some((x, y, was, now)) = measure::first_difference(&frame.full, scissored, inside) {
-        panic!(
-            "({x}, {y}) is inside the damage rectangle and a full repaint drew {was:?} where the \
-             scissored one drew {now:?}: the rectangle was not redrawn"
-        );
-    }
-    // And the rectangle really did change, so the comparison above is not two copies of the marker.
-    let changed = measure::count(scissored, |x, y| {
-        inside(x, y) && scissored.rgba(x, y) != MARKER
-    });
-    assert!(
-        changed > 2_000,
-        "only {changed} pixels inside the rectangle differ from what was on the target before the \
-         repaint, so nothing was redrawn"
-    );
-}
-
-/// The same frame reached by a scissored repaint is the same bytes as a full one.
-#[test]
-fn a_scissored_repaint_is_pixel_identical_to_a_full_one() {
-    let runs = runs!();
-    let frame = page::Runs::settled(&runs.marked);
-    let replayed = frame.replayed.as_ref().expect("a replayed repaint ran");
-    if let Some((x, y, full, partial)) =
-        measure::first_difference(&frame.full, replayed, |_, _| true)
-    {
-        panic!(
-            "({x}, {y}) came back {full:?} from a full repaint and {partial:?} from a repaint \
-             scissored to the drawing"
-        );
-    }
-    // Non-vacuity: the two readbacks are of a picture with an icon in it, not of two blank targets.
-    assert!(
-        matches!(
-            measure::level(replayed, page::centre().0 as i32, 32, INK, PANEL),
-            Level::Near | Level::Between
-        ),
-        "the replayed rendering has no ink at the top of the ring, so the comparison compared two \
-         empty panels"
-    );
 }

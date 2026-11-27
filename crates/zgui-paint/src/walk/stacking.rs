@@ -7,9 +7,9 @@
 //!
 //! Which pass a box belongs to, whether it establishes a context and what it sorts by inside its
 //! pass are all the layout stage's answers, called from here. What this adds is the shape the
-//! emission needs and a flat list cannot give: an *enter* and a *leave* for each box, so a group can
-//! be opened before its subtree and closed after it, and an outline can be drawn after the
-//! descendants it must sit over.
+//! emission needs and a flat list cannot give: an *enter* and a *leave* for each box, so state
+//! pushed for a subtree is popped after it, and an outline can be drawn after the descendants it
+//! must sit over.
 
 use std::borrow::Cow;
 
@@ -104,8 +104,8 @@ mod tests {
 
     #[test]
     fn a_box_whose_subtree_is_skipped_is_never_left() {
-        // The pairing matters: a group opened on the way in and closed on the way out would be left
-        // open by a skip that still reported a leave, or closed twice by one that reported two.
+        // The pairing matters: state pushed on the way in would be popped by a skip that still
+        // reported a leave, or popped twice by one that reported two.
         let store = LayoutStore::new(zgui_dom::Document::new().store().document());
         let missing = box_key(7);
         let mut trace = Trace {

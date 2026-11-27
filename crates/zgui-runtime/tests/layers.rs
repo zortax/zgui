@@ -5,92 +5,30 @@
 //! rasters through the frames the paint report asks for, that the window parks afterwards, and
 //! that a drawing owed before a scroll shift is drawn where the shift moved it.
 
+mod support;
+
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 use std::time::Duration;
 
-use zgui_bits::DamageSet;
-use zgui_platform::Surface;
 use zgui_profile::Counter;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle, VectorBackend, VectorStatus,
-};
-use zgui_runtime::{App, AppError};
-use zgui_scene::Scene;
-use zgui_testkit_scene::counters::Recording;
+use zgui_runtime::App;
+use zgui_testkit::counters::Recording;
 use zgui_view::{Anchor, BuildCx, IntoView, View};
 
 /// One frame, reduced to what these cases ask about.
 #[derive(Clone, Copy, Debug)]
 struct Frame {
-    /// General vector items in the display list.
+    /// Paths the output shows.
     vectors: usize,
-    /// Colour sprites in the display list.
+    /// Images the output shows.
     sprites: usize,
 }
 
 /// The frames a run produced.
 type Log = Rc<RefCell<Vec<Frame>>>;
-
-/// A renderer that records every frame and draws nothing.
-struct Recorder {
-    log: Log,
-    target: Option<RenderTarget>,
-    atlas: zgui_atlas::MemorySink,
-}
-
-impl Renderer for Recorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, scene: &Scene, _damage: &DamageSet) -> FrameOutcome {
-        self.log.borrow_mut().push(Frame {
-            vectors: scene.primitives.vectors.len(),
-            sprites: scene.primitives.color_sprites.len(),
-        });
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn vector_status(&self) -> VectorStatus {
-        VectorStatus {
-            backend: Some(VectorBackend::Vello),
-            initialized: false,
-        }
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
-    }
-}
 
 /// Mounts a document styled by `css`, with every frame recorded into `log`.
 fn mount(
@@ -103,17 +41,19 @@ fn mount(
         .with_title("layers")
         .with_size(800.0, 600.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Recorder {
-                    log: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
+        .with_probe(support::watched(move || {
+            let log = Rc::clone(&factory);
+            Box::new(
+                move |drawing: &zgui_testkit_compositor::Drawing, _damage: &_| {
+                    log.borrow_mut().push(Frame {
+                        vectors: drawing.of_kind("path").count(),
+                        sprites: drawing.of_kind("color").count(),
+                    });
+                },
+            )
+        }))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)
@@ -285,291 +225,5 @@ fn layer_bytes_stay_within_the_budget() {
     assert!(
         highest > limit / 2,
         "the budget was never approached: {highest}"
-    );
-}
-
-/// What a [`Composer`] found and did.
-#[derive(Default)]
-struct Composed {
-    /// Which pixels of the composed target hold a drawing.
-    inked: Vec<bool>,
-    width: i32,
-    height: i32,
-    /// Pixels of a sprite in the display list that the target shows blank.
-    blank: usize,
-    /// When set, every pixel of every sprite is checked, damaged or not.
-    audit: bool,
-    shifts: usize,
-}
-
-impl Composed {
-    fn at(&self, x: i32, y: i32) -> usize {
-        (y * self.width + x) as usize
-    }
-
-    /// Every pixel of `rect` inside the target.
-    fn each(&self, rect: [i32; 4]) -> impl Iterator<Item = (i32, i32)> + use<> {
-        let [left, top, right, bottom] = [
-            rect[0].max(0),
-            rect[1].max(0),
-            rect[2].min(self.width),
-            rect[3].min(self.height),
-        ];
-        (top..bottom).flat_map(move |y| (left..right).map(move |x| (x, y)))
-    }
-}
-
-/// A renderer that keeps a composed target of one bit per pixel: whether a drawing is on it.
-struct Composer {
-    state: Rc<RefCell<Composed>>,
-    target: Option<RenderTarget>,
-    atlas: zgui_atlas::MemorySink,
-}
-
-impl Renderer for Composer {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        let mut state = self.state.borrow_mut();
-        state.width = target.size.width;
-        state.height = target.size.height;
-        state.inked = vec![false; (target.size.width * target.size.height) as usize];
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn shifts_composed_pixels(&self) -> bool {
-        true
-    }
-
-    fn shift_composed(&mut self, shift: zgui_render::ScrollShift) {
-        let mut state = self.state.borrow_mut();
-        state.shifts += 1;
-        let (Some(from), Some(to)) = (shift.source(), shift.destination()) else {
-            return;
-        };
-        let before = state.inked.clone();
-        for dy in 0..to.size.height {
-            for dx in 0..to.size.width {
-                let read = state.at(from.origin.x + dx, from.origin.y + dy);
-                let write = state.at(to.origin.x + dx, to.origin.y + dy);
-                state.inked[write] = before[read];
-            }
-        }
-    }
-
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let mut state = self.state.borrow_mut();
-        let surface = [0, 0, state.width, state.height];
-        let damaged: Vec<[i32; 4]> = if damage.is_full() {
-            vec![surface]
-        } else {
-            damage
-                .rects()
-                .iter()
-                .map(|rect| {
-                    [
-                        rect.origin.x,
-                        rect.origin.y,
-                        rect.origin.x + rect.size.width,
-                        rect.origin.y + rect.size.height,
-                    ]
-                })
-                .collect()
-        };
-        let inside = |x: i32, y: i32| {
-            damaged
-                .iter()
-                .any(|rect| x >= rect[0] && y >= rect[1] && x < rect[2] && y < rect[3])
-        };
-        let sprites: Vec<[i32; 4]> = scene
-            .primitives
-            .color_sprites
-            .iter()
-            .map(|sprite| {
-                let [x, y, width, height] = sprite.bounds;
-                let (dx, dy) =
-                    scene
-                        .spatial
-                        .resolve_at(sprite.transform)
-                        .map_or((0.0, 0.0), |matrix| {
-                            let [x, y, _] = matrix.transform_point(0.0, 0.0, 0.0);
-                            (x, y)
-                        });
-                [
-                    (x + dx).round() as i32,
-                    (y + dy).round() as i32,
-                    (x + dx + width).round() as i32,
-                    (y + dy + height).round() as i32,
-                ]
-            })
-            .collect();
-        // What the target shows where the display list says a drawing is, before this frame
-        // draws over the damage.
-        for sprite in &sprites {
-            for (x, y) in state.each(*sprite) {
-                if (state.audit || !inside(x, y)) && !state.inked[state.at(x, y)] {
-                    state.blank += 1;
-                }
-            }
-        }
-        for rect in &damaged {
-            for (x, y) in state.each(*rect) {
-                let at = state.at(x, y);
-                state.inked[at] = false;
-            }
-        }
-        for sprite in &sprites {
-            for (x, y) in state.each(*sprite) {
-                if inside(x, y) {
-                    let at = state.at(x, y);
-                    state.inked[at] = true;
-                }
-            }
-        }
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn vector_status(&self) -> VectorStatus {
-        VectorStatus {
-            backend: Some(VectorBackend::Vello),
-            initialized: false,
-        }
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
-    }
-}
-
-/// A zigzag of `teeth` teeth across a 32 unit document, filled with a ramp ending in `colour`.
-///
-/// The layer cache estimates two microseconds for each path element, so a few of these revealed at
-/// once exceed the budget that a cold rasteriser gives first rasters.
-fn zigzag(colour: u32, teeth: usize) -> String {
-    use std::fmt::Write as _;
-    let mut path = String::from("M0 32");
-    for tooth in 0..teeth {
-        let x = 32.0 * tooth as f64 / teeth as f64;
-        let _ = write!(path, " L{x:.3} {}", if tooth % 2 == 0 { 0 } else { 4 });
-    }
-    path.push_str(" L32 32 Z");
-    format!(
-        r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32"><defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#{colour:06x}"/></linearGradient></defs><path d="{path}" fill="url(#a)"/></svg>"##
-    )
-}
-
-#[test]
-fn a_drawing_owed_before_a_scroll_shift_is_drawn_where_the_shift_put_it() {
-    use zgui_geom::{Css, CssPx, Point};
-    use zgui_vocab::{Modifiers, ScrollDelta, ScrollPhase, Timestamp, WheelEvent};
-
-    const PORT: &str = "root { display: block; width: 800px; height: 600px }
-         .port { display: flex; flex-direction: column; gap: 4px; width: 800px; height: 600px;
-                 overflow: auto; background-color: #101010 }
-         .art { display: block; width: 60px; height: 60px; flex: none }";
-    let _recording = Recording::begin();
-    let state: Rc<RefCell<Composed>> = Rc::default();
-    let factory = Rc::clone(&state);
-    let lit = RwSignal::new(false);
-    let handler = App::new()
-        .with_title("layers")
-        .with_size(800.0, 600.0)
-        .with_stylesheet(PORT)
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Composer {
-                    state: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
-        .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
-            let mut port = zgui_elements::r#box()
-                .class("port")
-                .style_property("background-color", move || {
-                    lit.get().then(|| "#202020".to_owned())
-                });
-            for index in 0..120_u32 {
-                port = port.child(
-                    zgui_elements::vector()
-                        .class("art")
-                        .document(&zigzag(index * 0x02_03_07, 1_400)),
-                );
-            }
-            Box::new(port.into_view().build(cx))
-        })
-        .expect("the reactive runtime installs");
-    let mut harness = zgui_platform_headless::Harness::new(handler);
-    harness.settle(16);
-
-    let deferred = zgui_profile::counter::get(Counter::VectorLayersDeferred);
-    for _ in 0..12 {
-        harness.deliver_to_first(zgui_platform::SurfaceEvent::Wheel {
-            event: WheelEvent {
-                id: zgui_vocab::PointerId::MOUSE,
-                kind: zgui_vocab::PointerKind::Mouse,
-                position: Point::<CssPx, Css>::new(CssPx(200.0), CssPx(300.0)),
-                delta: ScrollDelta::Pixels(zgui_geom::Size::new(CssPx(0.0), CssPx(256.0))),
-                phase: ScrollPhase::Discrete,
-            },
-            modifiers: Modifiers::NONE,
-            timestamp: Timestamp::ORIGIN,
-        });
-        harness.advance(TICK);
-        harness.pump();
-    }
-    // A second for the glide to finish.
-    for _ in 0..120 {
-        harness.advance(TICK);
-        harness.pump();
-    }
-    assert!(
-        zgui_profile::counter::get(Counter::VectorLayersDeferred) > deferred,
-        "the scroll deferred no drawing, so nothing was owed across a shift"
-    );
-    assert!(
-        state.borrow().shifts > 0,
-        "no frame of the scroll was a shift"
-    );
-    assert_eq!(
-        state.borrow().blank,
-        0,
-        "a drawn sprite showed blank pixels"
-    );
-
-    // Redraw the whole port and check every drawing on it against the target as it stood.
-    state.borrow_mut().audit = true;
-    lit.set(true);
-    harness.advance(TICK);
-    harness.pump();
-    assert_eq!(
-        state.borrow().blank,
-        0,
-        "a drawing on the screen was never drawn after the shift moved it"
     );
 }

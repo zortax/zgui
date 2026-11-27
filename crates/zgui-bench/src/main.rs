@@ -3,8 +3,8 @@
 //!
 //! The real gallery — the very source files `crates/zgui-ui/examples/gallery` ships, included
 //! through `#[path]` so the two cannot drift — driven against the headless platform with the real
-//! cascade, the real layout, the real font engine and the real glyph rasteriser. Nothing here is a
-//! fixture written to be measured, with the two exceptions the scenarios need and name.
+//! cascade, the real layout, the real font engine, and the real compositor and glyph rasteriser. Nothing here is a fixture written to be measured, with the two
+//! exceptions the scenarios need and name.
 //!
 //! ```text
 //! cargo run -p zgui-bench --release -- scenarios
@@ -75,6 +75,7 @@ mod section;
 #[path = "../../zgui-ui/examples/gallery/shell.rs"]
 mod shell;
 
+mod cpu;
 mod draw;
 mod drive;
 mod gallery;
@@ -92,11 +93,10 @@ mod verify;
 
 use zgui::geom::{CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
-use zgui_platform_headless::Harness;
 
 use crate::draw::mounted_recorder;
 use crate::drive::every_size;
-use crate::gallery::{HEIGHT, STILL, WIDTH, mounted_scheme, runtime};
+use crate::gallery::{HEIGHT, STILL, WIDTH, mounted_scheme};
 use crate::inspect::{document, swatch_centres};
 
 fn main() {
@@ -159,6 +159,10 @@ fn main() {
         crate::scenario::vector::main(&size, variant.as_deref());
         return;
     }
+    if phase == "scroll-deadlines" {
+        crate::scenario::deadlines::run();
+        return;
+    }
     if phase == "scenario" {
         zgui_profile::latency::start_epoch();
         let outcome = crate::scenario::run(&size);
@@ -178,10 +182,15 @@ fn main() {
     // The picture differential is two photographs of one state taken a little apart in time, so the
     // document it compares is mounted with its endless animations stopped. See [`STILL_SHEET`].
     STILL.with(|still| still.set(phase == "pixels"));
+    // The comparisons read the picture a window shows, so their windows draw every frame whole.
+    crate::draw::draw_whole(matches!(
+        phase.as_str(),
+        "verify" | "theme-check" | "scroll-resize"
+    ));
 
     zgui_profile::latency::start_epoch();
 
-    let mut harness = Harness::new(runtime(&size));
+    let mut harness = crate::gallery::harness(&size);
     let live_scheme = mounted_scheme();
     let live_full = mounted_recorder();
     harness.deliver_to_first(SurfaceEvent::Resized(Size::new(

@@ -9,7 +9,7 @@ mod support;
 
 use support::{Element, Harness};
 use zgui_profile::Counter;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 
 /// A root with `count` identically classed children.
 fn rows(count: usize) -> Element {
@@ -144,7 +144,7 @@ fn a_translucent_row_of_disjoint_children_allocates_no_group_target() {
         "fifty non-overlapping rows folded their alpha rather than taking fifty targets"
     );
     assert!(
-        measurement.get(Counter::PrimitivesEmitted) >= 50,
+        harness.redraw().quads().len() >= 50,
         "and they were drawn, rather than skipped into a zero that looks like a win"
     );
 }

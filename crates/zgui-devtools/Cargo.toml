@@ -23,6 +23,8 @@ include.workspace = true
 # application that had to enable a feature as well would be one whose tree tab was silently empty.
 zgui = { path = "../zgui", version = "0.1.0", features = ["instrument"] }
 zgui-css = { path = "../zgui-css", version = "0.1.0" }
+# The renderer's memory and vector reports a window's renderer answers in.
+iceblink.workspace = true
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 # The parity declarations, read straight from the crates that make them: the inspector reports
 # what this build supports, and a table copied from them would report what it used to support.
@@ -43,6 +45,8 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # the pointer does and what a headless test cannot.
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-view-dom = { path = "../zgui-view-dom", version = "0.1.0" }
+# The compositor the window under test draws through, and a renderer that draws nowhere.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [features]
 default = ["counters"]

@@ -9,11 +9,12 @@
 //! has reverted to the one it shares with its siblings, so it is being drawn through the very same
 //! lowering they are; a value written into that lowering would fade all of them together.
 
+use crate::paints::{Paint, PaintOwner, PaintRole};
 use zgui_color::Color;
 use zgui_dom::side::AnimOverride;
 use zgui_dom::{Document, NodeKey};
 use zgui_geom::{DevicePx, Edges};
-use zgui_scene::{Paint, PaintOwner, PaintRole, PropertyOwner};
+use zgui_space::PropertyOwner;
 
 use crate::lower::PaintStyle;
 
@@ -90,7 +91,7 @@ pub fn compose(style: &mut PaintStyle, over: &AnimOverride) {
 /// sides with a width. A primitive names the family, so a change of family changes the signature
 /// and encodes the box again.
 ///
-/// [`PaintTable::owned`]: zgui_scene::PaintTable::owned
+/// [`PaintTable::owned`]: crate::paints::PaintTable::owned
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct OwnedPaints(u8);
 
@@ -343,23 +344,23 @@ mod tests {
             style: crate::lower::border::LineStyle::Solid,
         });
         compose(&mut style, &over);
-        let owner = zgui_scene::PropertyOwner::new(7).expect("not the empty word");
+        let owner = zgui_space::PropertyOwner::new(7).expect("not the empty word");
         let owned = OwnedPaints::of(&over, EVERY_SIDE).expect("owned");
         let paints: Vec<_> = owned.paints(owner, &over, EVERY_SIDE).collect();
         assert_eq!(
             paints,
             vec![
                 (
-                    zgui_scene::PaintOwner::new(owner, zgui_scene::PaintRole::Background),
-                    zgui_scene::Paint::Solid(style.background.color)
+                    crate::paints::PaintOwner::new(owner, crate::paints::PaintRole::Background),
+                    crate::paints::Paint::Solid(style.background.color)
                 ),
                 (
-                    zgui_scene::PaintOwner::new(owner, zgui_scene::PaintRole::BorderSides),
-                    zgui_scene::Paint::Sides(style.border.colors)
+                    crate::paints::PaintOwner::new(owner, crate::paints::PaintRole::BorderSides),
+                    crate::paints::Paint::Sides(style.border.colors)
                 ),
                 (
-                    zgui_scene::PaintOwner::new(owner, zgui_scene::PaintRole::Outline),
-                    zgui_scene::Paint::Solid(style.outline.expect("an outline").color)
+                    crate::paints::PaintOwner::new(owner, crate::paints::PaintRole::Outline),
+                    crate::paints::Paint::Solid(style.outline.expect("an outline").color)
                 ),
             ]
         );
@@ -384,16 +385,16 @@ mod tests {
         let colors = [red, red, blue, red].map(|color| zgui_css::values::color::to_color(&color));
         assert_eq!(
             border_paint(colors, bottom),
-            zgui_scene::Paint::Solid(colors[2])
+            crate::paints::Paint::Solid(colors[2])
         );
-        let owner = zgui_scene::PropertyOwner::new(7).expect("not the empty word");
+        let owner = zgui_space::PropertyOwner::new(7).expect("not the empty word");
         assert!(owned.paints(owner, &over, bottom).any(|(name, paint)| {
-            name.role == zgui_scene::PaintRole::BorderSides
-                && paint == zgui_scene::Paint::Solid(colors[2])
+            name.role == crate::paints::PaintRole::BorderSides
+                && paint == crate::paints::Paint::Solid(colors[2])
         }));
         assert!(matches!(
             border_paint(colors, EVERY_SIDE),
-            zgui_scene::Paint::Sides(_)
+            crate::paints::Paint::Sides(_)
         ));
     }
 }

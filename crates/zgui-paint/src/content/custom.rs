@@ -1,23 +1,22 @@
 //! The seam a custom element's paint half plugs into, and the constrained painter it draws with.
 //!
-//! A custom element's primitives land at Appendix E step 4 — inside its own background and
-//! border, before its descendants, under its fragment's clip and transform — which is the same
-//! argument the vector arm makes: sorted, clipped, moved and faded exactly like a background.
-//! What is different is who produces them, and [`ScenePainter`] is the door that keeps that safe:
-//! every push goes through the scene's own insertion path, so draw-order assignment, clip culling
-//! and replay accounting hold whatever the implementation does.
+//! A custom element's items land at Appendix E step 4, inside its own background and border,
+//! before its descendants, under its fragment's clip and transform. That is the same argument the
+//! vector arm makes: they are ordered, clipped, moved and faded exactly like a background. What is
+//! different is who produces them, and [`ScenePainter`] is the door that keeps that safe: every
+//! item goes through the fragment's recorder, under the fragment's clip and transform.
 
 use std::sync::Arc;
 
+use iceblink::{BorderStyle, PaintRef, Quad, ShaderQuad};
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::kurbo;
-use zgui_scene::prim::quad::BorderStyle;
-use zgui_scene::{
-    ClipId, ColorSprite, MonoSprite, PaintRef, Quad, Scene, ShadedQuad, ShaderId, ShaderParams,
-    SpatialId, SubpixelSprite, VectorId,
-};
-use zgui_text::GlyphFormat;
+
+use crate::VectorId;
+use zgui_css::shader::ShaderId;
+use zgui_space::{ClipId, SpatialId};
+
+use crate::emit::record::{Recorder, flat_radii, local_rect};
 
 /// Where a custom element's painting comes from.
 ///
@@ -54,12 +53,13 @@ impl CustomPaintSource for NoCustom {
 /// background can.
 ///
 /// What it exposes is deliberately the invariant-preserving subset: solid-filled and stroked
-/// rounded rectangles through the quad pipeline, and arbitrary paths through the vector pipeline
-/// with per-shape paint. No group or layer boundaries — those are matched pairs the walk manages
-/// — and no clip creation: an element wanting an inner clip gives a child `overflow: hidden`.
+/// rounded rectangles through the quad pipeline, arbitrary paths through the vector pipeline with
+/// per-shape paint, and runs of glyphs. No group or layer boundaries — those are matched pairs the
+/// walk manages — and no clip creation: an element wanting an inner clip gives a child
+/// `overflow: hidden`.
 pub struct ScenePainter<'a> {
-    /// The display list being built.
-    pub(crate) scene: &'a mut Scene,
+    /// The fragment's chunk, and the display list behind it.
+    pub(crate) rec: Recorder<'a>,
     /// The element's content box, whose corner is the painter's origin.
     pub(crate) content_box: Rect<DevicePx, Device>,
     /// The fragment's clip chain.
@@ -74,8 +74,6 @@ pub struct ScenePainter<'a> {
     pub(crate) shape_paint: crate::emit::vector::ShapePaint,
     /// The shared cache used by eligible solid paths.
     pub(crate) vector_masks: &'a dyn crate::content::vectors::VectorMaskSource,
-    /// Where a run the element shaped itself gets its rasterised tiles.
-    pub(crate) glyph_placements: &'a dyn crate::emit::text::GlyphPlacementSource,
     /// Whether per-channel coverage survives this fragment's destination and transform.
     pub(crate) text_subpixel: bool,
     /// The identity vector items are encoded under, from the fragment.
@@ -113,21 +111,16 @@ impl ScenePainter<'_> {
         self.shape_paint.fill
     }
 
-    /// Fills a rounded rectangle with one colour, through the quad pipeline.
+    /// Fills a rounded rectangle with one colour, as a quad.
     ///
-    /// This is the cheap path — the one a background costs — and the reason a custom element
+    /// This is the cheap path, the one a background costs, and the reason a custom element
     /// exists at all: retained widgets built from it pay neither a texture nor a rasterisation.
     pub fn fill(&mut self, rect: Rect<DevicePx, Device>, corner_radius: f32, color: Color) {
-        let quad = Quad::filled(
-            self.placed(rect),
-            PaintRef::solid(self.scene.paints.solid(self.faded(color))),
-        )
-        .with_radii(corners(corner_radius))
-        .clipped(self.clip);
-        self.push_quad(quad);
+        let fill = self.rec.color(self.faded(color));
+        self.push_quad(rect, corner_radius, fill, [0.0; 4], PaintRef::NONE);
     }
 
-    /// Strokes a rounded rectangle `width` wide with one colour, through the quad pipeline.
+    /// Strokes a rounded rectangle `width` wide with one colour, as a quad.
     pub fn stroke(
         &mut self,
         rect: Rect<DevicePx, Device>,
@@ -135,51 +128,54 @@ impl ScenePainter<'_> {
         width: f32,
         color: Color,
     ) {
-        let stroke = PaintRef::solid(self.scene.paints.solid(self.faded(color)));
-        let quad = Quad::filled(self.placed(rect), PaintRef::NONE)
-            .with_radii(corners(corner_radius))
-            .with_border([width; 4], stroke, BorderStyle::Solid)
-            .clipped(self.clip);
-        self.push_quad(quad);
+        let stroke = self.rec.color(self.faded(color));
+        self.push_quad(rect, corner_radius, PaintRef::NONE, [width; 4], stroke);
     }
 
     /// Fills a rounded rectangle with an application's own shader.
     ///
-    /// `shader` names an effect the renderer was told about, and `params` is what it draws with.
-    /// The rectangle is the effect's whole world: it is given coordinates measured from that
+    /// `shader` is a declared application shader, and `params` is the block it draws with. A change
+    /// to `params` is drawn on the next frame without the element painting again. The rectangle is the effect's whole world: it is given coordinates measured from that
     /// rectangle's own corner, and the framework applies the fragment's clip, its transform and its
-    /// folded alpha to whatever the effect returns.
-    ///
-    /// # What replays
-    ///
-    /// The parameters are read here, so an element whose revision is unchanged draws the
-    /// parameters it drew last time. Anything the effect is meant to follow — a pointer, a
-    /// progress value, a phase — has to be part of what the element's revision counts.
+    /// folded alpha to whatever the effect returns. Nothing is drawn for a shader no program was
+    /// declared under.
     pub fn shade(
         &mut self,
         rect: Rect<DevicePx, Device>,
         corner_radius: f32,
         shader: ShaderId,
-        params: ShaderParams,
+        params: &crate::content::shader::SharedParams,
     ) {
         if !shader.is_some() {
             return;
         }
-        let slot = self.scene.shader_params.intern(params);
-        let shaded = ShadedQuad::new(self.placed(rect), shader, slot)
-            .with_radii(corners(corner_radius))
-            .clipped(self.clip)
-            .transformed(self.transform)
-            .faded(self.alpha);
-        self.pushed += usize::from(self.scene.push_shaded(shaded).is_some());
+        let Some((shader, params)) = self.rec.shader_slots_shared(shader, params) else {
+            return;
+        };
+        let quad = ShaderQuad {
+            bounds: local_rect(self.placed(rect)),
+            radii: flat_radii(corners(corner_radius)),
+            shapes: iceblink::ROUND,
+            border: [0.0; 4],
+            fill: PaintRef::NONE,
+            stroke: PaintRef::NONE,
+            paint_origin: [0.0; 2],
+            clip: self.rec.clip(self.clip),
+            space: self.rec.space(self.transform),
+            shader,
+            params,
+            opacity: self.alpha,
+        };
+        self.rec.shader_quad(quad);
+        self.pushed += 1;
     }
 
-    /// Draws one shape — a path with its own fill and stroke — through the vector pipeline.
+    /// Draws one shape, a path with its own fill and stroke, as vector content.
     ///
-    /// The path is in the painter's coordinates; per-shape paint is the whole shape vocabulary a
+    /// The path is in the painter's coordinates. Per-shape paint is the whole shape vocabulary a
     /// vector document has, including [`Ink::Inherited`](zgui_svg::Ink) resolving to the
-    /// element's `color`. Dearer than [`fill`](ScenePainter::fill) — a shape is rasterised — so a
-    /// widget reaches for it for the geometry quads cannot say.
+    /// element's `color`. Dearer than [`fill`](ScenePainter::fill), since a shape is rasterised, so
+    /// a widget reaches for it for the geometry quads cannot say.
     pub fn shape(&mut self, shape: &zgui_svg::Shape) {
         // The painter's coordinates start at the content box, so the shape is placed there by a
         // translation and the path itself is not copied.
@@ -189,11 +185,10 @@ impl ScenePainter<'_> {
         );
         self.shapes_pushed += 1;
         // The fragment's identity in the high bits, the shape's index in the low: stable across
-        // frames for the same fragment, distinct within it, which is what the rasteriser's
-        // encoding cache keys on.
+        // frames for the same fragment and distinct within it.
         let id = VectorId((self.vector_id.0 << 16) | (self.shapes_pushed & 0xFFFF));
         let emitted = crate::emit::vector::document::emit_tracked(
-            self.scene,
+            &mut self.rec,
             id,
             &crate::emit::vector::ShapeSource::translated(shape, offset),
             &self.shape_paint,
@@ -217,13 +212,13 @@ impl ScenePainter<'_> {
     /// `Shaper::shape_line` answers in.
     ///
     /// `color` paints the run, and the run's own brush slot is not read: an element that shaped its
-    /// own text names its own colour. A colour face keeps its own colours and is drawn at `color`'s
-    /// alpha. Glyphs are drawn from atlas tiles, grayscale or with per-channel coverage the way the
-    /// text stage decides it for this fragment. A glyph with no pixels draws nothing.
+    /// own text names its own colour. A colour glyph keeps its own colours and is drawn at
+    /// `color`'s alpha. The run asks for per-channel coverage where the text stage would for this
+    /// fragment, and is drawn at its variation coordinates and with its synthesis.
     ///
     /// # What replays
     ///
-    /// An element whose revision is unchanged does not paint again: its recorded primitives are
+    /// An element whose revision is unchanged does not paint again: its recorded items are
     /// replayed as they stand. So everything read here — the text, the colour, the positions — must
     /// be part of what the element's revision counts, or the screen keeps showing the last frame
     /// this ran on.
@@ -233,61 +228,22 @@ impl ScenePainter<'_> {
         origin: Point<DevicePx, Device>,
         color: Color,
     ) {
-        let style = run.raster_style(self.text_subpixel);
-        // The absolute origin, before anything is split: the phase a glyph is rasterised at follows
-        // from where it lands on the surface, and splitting the painter-local position first would
-        // rasterise for a phase the glyph is never drawn at.
-        let absolute = Point::new(
-            DevicePx(self.content_box.origin.x.0 + origin.x.0),
-            DevicePx(self.content_box.origin.y.0 + origin.y.0),
-        );
-        let mut placed = Vec::new();
-        self.glyph_placements
-            .place_run(run, style, absolute, &mut placed);
-
-        let color = self.faded(color);
-        let format = crate::content::glyphs::format_of(style);
-        let transform = self.transform.index();
-        let sprites: Vec<GlyphSprite> = placed
-            .iter()
-            .map(|glyph| match format {
-                // A colour glyph is a picture rather than a coverage mask, so it carries its own
-                // colours and is not tinted.
-                GlyphFormat::Color => {
-                    let mut sprite =
-                        ColorSprite::new(glyph.bounds, glyph.resource).clipped(self.clip);
-                    sprite.transform = transform;
-                    sprite.opacity = color.alpha();
-                    GlyphSprite::Color(sprite)
-                }
-                GlyphFormat::Subpixel => {
-                    let mut sprite =
-                        SubpixelSprite::new(glyph.bounds, glyph.resource, color).clipped(self.clip);
-                    sprite.transform = transform;
-                    GlyphSprite::Subpixel(sprite)
-                }
-                GlyphFormat::Mono => {
-                    let mut sprite =
-                        MonoSprite::new(glyph.bounds, glyph.resource, color).clipped(self.clip);
-                    sprite.transform = transform;
-                    GlyphSprite::Mono(sprite)
-                }
-            })
-            .collect();
-
-        // The glyphs of one run sit side by side in one colour, so the scene orders them as one
-        // group: one question to its tree for the whole run.
-        let inks: Vec<Rect<DevicePx, Device>> = sprites.iter().map(GlyphSprite::ink).collect();
-        self.scene.begin_run(&inks, self.clip, transform);
-        for sprite in sprites {
-            let landed = match sprite {
-                GlyphSprite::Color(sprite) => self.scene.push_color_sprite(sprite),
-                GlyphSprite::Subpixel(sprite) => self.scene.push_subpixel_sprite(sprite),
-                GlyphSprite::Mono(sprite) => self.scene.push_mono_sprite(sprite),
-            };
-            self.pushed += usize::from(landed.is_some());
+        let paint = self.rec.color(self.faded(color));
+        if run.glyphs.is_empty() || paint.kind == iceblink::PaintKind::NONE {
+            return;
         }
-        self.scene.end_run();
+        let draw = crate::emit::text::RunDraw {
+            origin: [
+                self.content_box.origin.x.0 + origin.x.0,
+                self.content_box.origin.y.0 + origin.y.0,
+            ],
+            paint,
+            clip: self.rec.clip(self.clip),
+            space: self.rec.space(self.transform),
+            flags: crate::emit::text::flags(run.size, self.text_subpixel, false),
+        };
+        crate::emit::text::record(&mut self.rec, run, draw);
+        self.pushed += 1;
     }
 
     /// A path convenience over [`ScenePainter::shape`]: fills `path` with one colour.
@@ -296,7 +252,7 @@ impl ScenePainter<'_> {
             path: Arc::new(path.into()),
             fill: Some(zgui_svg::Fill {
                 paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Solid(color)),
-                rule: zgui_scene::peniko::Fill::NonZero,
+                rule: peniko::Fill::NonZero,
             }),
             stroke: None,
             clips: Vec::new(),
@@ -319,31 +275,31 @@ impl ScenePainter<'_> {
         color.with_alpha(color.alpha() * self.alpha)
     }
 
-    /// Pushes one quad under the fragment's transform, counting what survived the cull.
-    fn push_quad(&mut self, quad: Quad) {
-        let quad = quad.transformed(self.transform);
-        self.pushed += usize::from(self.scene.push_quad(quad).is_some());
-    }
-}
-
-/// One glyph of a run, built before the run is pushed.
-enum GlyphSprite {
-    /// A colour glyph.
-    Color(ColorSprite),
-    /// A glyph with per-channel coverage.
-    Subpixel(SubpixelSprite),
-    /// A glyph with one coverage channel.
-    Mono(MonoSprite),
-}
-
-impl GlyphSprite {
-    /// The rectangle the glyph paints.
-    fn ink(&self) -> Rect<DevicePx, Device> {
-        match self {
-            Self::Color(sprite) => sprite.ink(),
-            Self::Subpixel(sprite) => sprite.ink(),
-            Self::Mono(sprite) => sprite.ink(),
-        }
+    /// Records one quad over `rect` in painter coordinates, through the fragment's clip and under
+    /// its transform.
+    fn push_quad(
+        &mut self,
+        rect: Rect<DevicePx, Device>,
+        corner_radius: f32,
+        fill: PaintRef,
+        border: [f32; 4],
+        stroke: PaintRef,
+    ) {
+        let quad = Quad {
+            bounds: local_rect(self.placed(rect)),
+            radii: flat_radii(corners(corner_radius)),
+            shapes: iceblink::ROUND,
+            border,
+            fill,
+            stroke,
+            paint_origin: [0.0; 2],
+            clip: self.rec.clip(self.clip),
+            space: self.rec.space(self.transform),
+            style: BorderStyle::SOLID,
+            _pad: [0; 3],
+        };
+        self.rec.quad(quad);
+        self.pushed += 1;
     }
 }
 
@@ -361,85 +317,52 @@ fn corners(radius: f32) -> Corners<Vec2<DevicePx>> {
 #[cfg(test)]
 mod tests {
     use super::ScenePainter;
-    use core::cell::RefCell;
+    use crate::Tables;
+    use iceblink::{GlyphFlags, PaintRef};
     use zgui_color::Color;
-    use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-    use zgui_scene::{ClipId, Scene, SpatialId};
-    use zgui_text::{FaceId, RasterStyle, ShapedGlyph, ShapedRun};
+    use zgui_geom::{DevicePx, Point, Rect, Size};
+    use zgui_space::{ClipId, SpatialId};
+    use zgui_text::{FaceId, ShapedGlyph, ShapedRun};
 
-    use crate::emit::text::{GlyphPlacementSource, PlacedGlyph};
+    use crate::emit::record::{Recorder, Recording};
 
-    /// A placement source that answers with fixed tiles and records what it was asked.
-    #[derive(Default)]
-    struct FixedTiles {
-        /// How many tiles to answer with.
-        tiles: usize,
-        /// The style and the origin each call carried.
-        asked: RefCell<Vec<(RasterStyle, Point<DevicePx, Device>)>>,
-    }
+    /// Two glyphs of one face.
+    const GLYPHS: [ShapedGlyph; 2] = [
+        ShapedGlyph {
+            glyph: 4,
+            x: 0.0,
+            y: 12.0,
+        },
+        ShapedGlyph {
+            glyph: 5,
+            x: 8.0,
+            y: 12.0,
+        },
+    ];
 
-    impl GlyphPlacementSource for FixedTiles {
-        fn place_run(
-            &self,
-            _run: &ShapedRun<'_>,
-            style: RasterStyle,
-            origin: Point<DevicePx, Device>,
-            out: &mut Vec<PlacedGlyph>,
-        ) {
-            self.asked.borrow_mut().push((style, origin));
-            for index in 0..self.tiles {
-                out.push(PlacedGlyph {
-                    resource: zgui_atlas::AtlasTile {
-                        texture: zgui_atlas::TextureId::new(zgui_atlas::TextureKind::Mono, 0),
-                        tile: zgui_atlas::TileId(index as u32),
-                        bounds: Rect::new(zgui_geom::Point::new(0, 0), zgui_geom::Size::new(6, 9)),
-                    }
-                    .into(),
-                    bounds: Rect::new(
-                        Point::new(DevicePx(index as f32 * 8.0), DevicePx(0.0)),
-                        Size::new(DevicePx(6.0), DevicePx(9.0)),
-                    ),
-                });
-            }
-        }
-    }
-
-    /// A run of one glyph over one face.
-    const GLYPHS: [ShapedGlyph; 1] = [ShapedGlyph {
-        glyph: 4,
-        x: 0.0,
-        y: 12.0,
-    }];
-
-    /// A run, coloured or not.
-    fn run(has_color: bool) -> ShapedRun<'static> {
+    /// A run of [`GLYPHS`] at one variation instance.
+    fn run() -> ShapedRun<'static> {
         ShapedRun {
             face: FaceId(1),
             size: 16.0,
-            instance: zgui_text::VariationInstance::DEFAULT,
+            coords: &[8192],
             synthetic_bold: 0.0,
             synthetic_slant: 0.0,
-            has_color,
-            brush: zgui_scene::PaintSlot(3),
+            brush: zgui_space::PaintSlot(3),
             glyphs: &GLYPHS,
             text_start: 0,
         }
     }
 
-    /// A painter over `scene`, with a content box at a deliberately fractional origin.
-    fn painter<'a>(
-        scene: &'a mut Scene,
-        placements: &'a FixedTiles,
-        subpixel: bool,
-        alpha: f32,
-    ) -> ScenePainter<'a> {
+    /// A painter recording through `rec`, with a content box at a deliberately fractional origin.
+    fn painter(rec: Recorder<'_>, subpixel: bool, alpha: f32) -> ScenePainter<'_> {
         ScenePainter {
-            scene,
+            rec,
             content_box: Rect::new(
                 Point::new(DevicePx(10.5), DevicePx(20.25)),
                 Size::new(DevicePx(100.0), DevicePx(40.0)),
             ),
-            clip: ClipId(7),
+            clip: ClipId::ROOT,
             transform: SpatialId::VIEWPORT,
             alpha,
             scale: 1.0,
@@ -449,9 +372,8 @@ mod tests {
                 stroke_width: 0.0,
             },
             vector_masks: &crate::content::vectors::NoVectorMasks,
-            glyph_placements: placements,
             text_subpixel: subpixel,
-            vector_id: zgui_scene::VectorId(0),
+            vector_id: crate::VectorId(0),
             shapes_pushed: 0,
             vector_routes: crate::emit::vector::VectorRoutes::NONE,
             pushed: 0,
@@ -461,10 +383,9 @@ mod tests {
     /// A shape is drawn from its own path, placed at the content box by a translation.
     #[test]
     fn a_custom_shape_is_placed_at_its_content_box() {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(200, 100));
-        let placements = FixedTiles::default();
-        let mut path = zgui_scene::kurbo::BezPath::new();
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(200, 100));
+        let mut path = kurbo::BezPath::new();
         path.move_to((0.0, 0.0));
         path.line_to((12.0, 1.0));
         path.line_to((3.0, 9.0));
@@ -473,193 +394,66 @@ mod tests {
             path: std::sync::Arc::new(path),
             fill: Some(zgui_svg::Fill {
                 paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
-                rule: zgui_scene::peniko::Fill::NonZero,
+                rule: peniko::Fill::NonZero,
             }),
             stroke: None,
             clips: Vec::new(),
         };
-        let mut painter = painter(&mut scene, &placements, false, 1.0);
-        painter.clip = ClipId::ROOT;
-        painter.shape(&shape);
+        let mut recording = Recording::new();
+        let rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
+        painter(rec, false, 1.0).shape(&shape);
 
-        let item = &scene.primitives.vectors[0];
+        let item = &recording.paths()[0];
         assert!(
             std::sync::Arc::ptr_eq(&item.path, &shape.path),
             "the painter's own path is drawn, not a copy"
         );
-        assert_eq!(
-            item.placement,
-            zgui_scene::kurbo::Affine::translate((10.5, 20.25))
-        );
-        let bounds = item.placed_bounds();
-        assert_eq!((bounds.x0, bounds.y0), (10.5, 20.25));
-        assert_eq!(
-            item.local_ink.origin,
-            Point::new(DevicePx(10.5), DevicePx(20.25))
-        );
+        assert_eq!(item.placement, kurbo::Affine::translate((10.5, 20.25)));
     }
 
+    /// A run is one glyph run at the content box plus its origin, in the folded colour and at its
+    /// own instance.
     #[test]
-    fn a_grayscale_run_becomes_one_mono_sprite_for_each_tile() {
-        let mut scene = Scene::new();
-        let placements = FixedTiles {
-            tiles: 3,
-            ..FixedTiles::default()
-        };
-        let mut painter = painter(&mut scene, &placements, false, 1.0);
+    fn a_run_is_recorded_at_its_content_box_in_the_folded_colour() {
+        let mut tables = Tables::new();
+        let mut recording = Recording::new();
+        let rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut painter = painter(rec, false, 0.5);
         painter.glyphs(
-            &run(false),
+            &run(),
             Point::new(DevicePx(4.0), DevicePx(2.0)),
             Color::srgb(1.0, 0.0, 0.0, 1.0),
         );
-        let pushed = painter.pushed;
+        assert_eq!(painter.pushed, 1);
 
-        assert_eq!(pushed, 3, "one primitive per tile");
-        assert_eq!(scene.primitives.mono_sprites.len(), 3);
-        assert!(scene.primitives.subpixel_sprites.is_empty());
-        assert!(scene.primitives.color_sprites.is_empty());
-        assert_eq!(placements.asked.borrow()[0].0, RasterStyle::Grayscale);
-        for sprite in &scene.primitives.mono_sprites {
-            assert_eq!(sprite.clip_id(), ClipId(7));
-            assert_eq!(sprite.transform, SpatialId::VIEWPORT.index());
-        }
-    }
-
-    #[test]
-    fn a_subpixel_capable_fragment_asks_for_per_channel_coverage() {
-        let mut scene = Scene::new();
-        let placements = FixedTiles {
-            tiles: 1,
-            ..FixedTiles::default()
+        let [run] = recording.glyph_runs() else {
+            panic!("one run was recorded: {:?}", recording.glyph_runs());
         };
-        let mut painter = painter(&mut scene, &placements, true, 1.0);
-        painter.glyphs(
-            &run(false),
-            Point::new(DevicePx(0.0), DevicePx(0.0)),
-            Color::srgb(1.0, 0.0, 0.0, 1.0),
-        );
-
-        assert_eq!(placements.asked.borrow()[0].0, RasterStyle::Subpixel);
-        assert_eq!(scene.primitives.subpixel_sprites.len(), 1);
-        assert!(scene.primitives.mono_sprites.is_empty());
-    }
-
-    #[test]
-    fn a_colour_face_takes_the_colour_path_whatever_the_fragment_says() {
-        for subpixel in [false, true] {
-            let mut scene = Scene::new();
-            let placements = FixedTiles {
-                tiles: 1,
-                ..FixedTiles::default()
-            };
-            let mut painter = painter(&mut scene, &placements, subpixel, 0.5);
-            painter.glyphs(
-                &run(true),
-                Point::new(DevicePx(0.0), DevicePx(0.0)),
-                Color::srgb(1.0, 0.0, 0.0, 1.0),
-            );
-
-            assert_eq!(placements.asked.borrow()[0].0, RasterStyle::Color);
-            assert_eq!(scene.primitives.color_sprites.len(), 1);
-            assert!(scene.primitives.mono_sprites.is_empty());
-            assert!(scene.primitives.subpixel_sprites.is_empty());
-            // The picture keeps its own colours and is drawn at the folded alpha.
-            assert!((scene.primitives.color_sprites[0].opacity - 0.5).abs() < 1.0e-6);
-        }
-    }
-
-    #[test]
-    fn the_origin_handed_on_is_absolute_and_is_split_only_once() {
-        let mut scene = Scene::new();
-        let placements = FixedTiles {
-            tiles: 1,
-            ..FixedTiles::default()
-        };
-        let mut painter = painter(&mut scene, &placements, false, 1.0);
-        painter.glyphs(
-            &run(false),
-            Point::new(DevicePx(4.0), DevicePx(2.0)),
-            Color::srgb(1.0, 0.0, 0.0, 1.0),
-        );
-
-        let (_, origin) = placements.asked.borrow()[0];
-        assert_eq!(
-            origin.x.0, 14.5,
-            "the content box's fractional origin reaches the split"
-        );
-        assert_eq!(origin.y.0, 22.25);
-    }
-
-    #[test]
-    fn a_group_alpha_is_folded_into_the_colour() {
-        let mut scene = Scene::new();
-        let placements = FixedTiles {
-            tiles: 1,
-            ..FixedTiles::default()
-        };
-        let opaque = Color::srgb(1.0, 0.0, 0.0, 1.0);
-        let mut painter = painter(&mut scene, &placements, false, 0.25);
-        painter.glyphs(
-            &run(false),
-            Point::new(DevicePx(0.0), DevicePx(0.0)),
-            opaque,
-        );
-
-        let drawn = scene.primitives.mono_sprites[0].color;
-        let faded = opaque.with_alpha(0.25).to_premultiplied_srgb();
-        assert_eq!(drawn, faded);
-    }
-
-    #[test]
-    fn a_run_the_source_placed_nothing_for_draws_nothing() {
-        let mut scene = Scene::new();
-        let placements = FixedTiles::default();
-        let mut painter = painter(&mut scene, &placements, false, 1.0);
-        painter.glyphs(
-            &run(false),
-            Point::new(DevicePx(0.0), DevicePx(0.0)),
-            Color::srgb(1.0, 0.0, 0.0, 1.0),
-        );
-
-        assert_eq!(painter.pushed, 0);
-        assert!(scene.primitives.mono_sprites.is_empty());
-    }
-
-    #[test]
-    fn a_run_of_glyphs_stands_above_its_band_at_one_order_without_overlaps() {
-        let mut scene = Scene::new();
-        scene.begin_frame(zgui_geom::Size::new(400, 400));
-        let band = scene.paints.solid(Color::srgb(0.2, 0.2, 0.2, 1.0));
-        scene.push_quad(zgui_scene::Quad::filled(
-            Rect::new(
-                Point::new(DevicePx(0.0), DevicePx(0.0)),
-                Size::new(DevicePx(200.0), DevicePx(60.0)),
-            ),
-            zgui_scene::PaintRef::solid(band),
-        ));
-        let placements = FixedTiles {
-            tiles: 4,
-            ..FixedTiles::default()
-        };
-        let mut painter = painter(&mut scene, &placements, false, 1.0);
-        painter.clip = ClipId::ROOT;
-        painter.glyphs(
-            &run(false),
-            Point::new(DevicePx(0.0), DevicePx(0.0)),
-            Color::srgb(1.0, 1.0, 1.0, 1.0),
-        );
-
-        let orders: Vec<_> = scene
-            .primitives
-            .mono_sprites
+        let origins: Vec<[f32; 2]> = recording
+            .glyphs(run)
             .iter()
-            .map(|sprite| sprite.order)
+            .map(|glyph| [glyph.x, glyph.y])
             .collect();
-        assert_eq!(
-            orders,
-            [2, 2, 2, 2],
-            "the run stands above the band, side by side"
-        );
-        assert_eq!(scene.order_overlaps().map(|found| found.len()), Ok(0));
+        assert_eq!(origins, [[14.5, 34.25], [22.5, 34.25]]);
+        assert_eq!(run.paint, PaintRef::color([128, 0, 0, 128]));
+        assert_eq!(recording.coords(run), &[8192]);
+    }
+
+    /// The fragment decides whether a run asks for per-channel coverage.
+    #[test]
+    fn a_run_asks_for_per_channel_coverage_where_the_fragment_allows_it() {
+        for subpixel in [false, true] {
+            let mut tables = Tables::new();
+            let mut recording = Recording::new();
+            let rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
+            painter(rec, subpixel, 1.0).glyphs(
+                &run(),
+                Point::new(DevicePx(0.0), DevicePx(0.0)),
+                Color::BLACK,
+            );
+            let flags = recording.glyph_runs()[0].flags;
+            assert_eq!(flags.contains(GlyphFlags::SUBPIXEL), subpixel);
+            assert!(!flags.contains(GlyphFlags::SILHOUETTE));
+        }
     }
 }

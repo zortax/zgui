@@ -6,17 +6,17 @@
 //! properties were written, the box was built, and no stage turned either into a primitive.
 //!
 //! So this drives the component the way an application does: through the umbrella, over the
-//! headless platform, and asks the renderer what it was handed. It is deliberately the *component*
+//! headless platform, and asks the compositor what it drew. It is deliberately the *component*
 //! rather than the `<vector>` element under it, because the size of an icon comes from the sheet the
 //! component installs — `--zui-icon-size` resolving through a second variable to a fallback — and a
 //! box that resolved to nothing paints nothing however well the element works.
 
-use std::sync::Arc;
+mod screen;
+
 use std::sync::Mutex;
 
-use zgui::platform::{AppHandler, PlatformError, Surface};
+use zgui::platform::{AppHandler, PlatformError};
 use zgui::prelude::*;
-use zgui::runtime::AppError;
 use zgui_ui_icons::prelude::*;
 use zgui_ui_icons::set::mark::CHECK;
 
@@ -29,114 +29,21 @@ struct Shape {
     height: f64,
     /// What fills it, as premultiplied sRGB, when a solid colour does.
     fill: Option<[f32; 4]>,
-    /// Whether the size is the geometry's own. A vector item records its geometry. A coverage
-    /// sprite records its tile, which is the geometry rounded out to whole pixels.
-    exact: bool,
 }
 
-/// The colour `paint` resolves to in `scene`, as premultiplied sRGB, when it is a solid colour.
-fn solid(scene: &zgui::scene::Scene, paint: zgui::scene::PaintRef) -> Option<[f32; 4]> {
-    match scene.paints.get(paint.id()?) {
-        Some(zgui::scene::Paint::Solid(color)) => Some(color.to_premultiplied_srgb()),
-        _ => None,
-    }
-}
-
-/// A shape of `[x, y, width, height]`.
-fn sized(bounds: [f32; 4], fill: Option<[f32; 4]>) -> Shape {
-    Shape {
-        width: f64::from(bounds[2]),
-        height: f64::from(bounds[3]),
-        fill,
-        exact: false,
-    }
-}
-
-/// The shapes of every frame of the run, in order.
+/// The shapes of every frame, in the order they were drawn.
 static SHAPES: Mutex<Vec<Vec<Shape>>> = Mutex::new(Vec::new());
 
-/// A renderer that records the shapes of every frame and draws nothing.
-///
-/// A shape arrives as a vector item, a mark item, a coverage sprite or a quad, depending on the
-/// route the display list gives it, so all four are recorded.
-#[derive(Debug, Default)]
-struct Recorder {
-    /// Where tiles go, so the upload path still runs.
-    atlas: zgui::atlas::MemorySink,
-    /// What it was pointed at.
-    target: Option<zgui::render::RenderTarget>,
-}
-
-impl zgui::render::Renderer for Recorder {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: zgui::render::RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<zgui::render::RenderTarget> {
-        self.target
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        zgui::render::TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::default()
-    }
-
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        let primitives = &scene.primitives;
-        let mut frame: Vec<Shape> = primitives
-            .vectors
-            .iter()
-            .map(|item| {
-                let bounds = item.placed_bounds();
-                Shape {
-                    width: bounds.width(),
-                    height: bounds.height(),
-                    fill: item.fill.and_then(|reference| solid(scene, reference)),
-                    exact: true,
-                }
-            })
-            .collect();
-        frame.extend(
-            primitives
-                .marks
-                .iter()
-                .map(|mark| sized(mark.bounds, solid(scene, mark.paint))),
-        );
-        frame.extend(
-            primitives
-                .mono_sprites
-                .iter()
-                .map(|sprite| sized(sprite.bounds, Some(sprite.color))),
-        );
-        frame.extend(
-            primitives
-                .quads
-                .iter()
-                .map(|quad| sized(quad.bounds, solid(scene, quad.fill))),
-        );
-        SHAPES.lock().expect("the log is not poisoned").push(frame);
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.atlas
-    }
+/// The shapes `drawing` drew, with the solid colour each is filled with.
+fn shapes(drawing: &zgui_testkit_compositor::Drawing) -> Vec<Shape> {
+    screen::shapes(drawing)
+        .into_iter()
+        .map(|(instance, [width, height])| Shape {
+            width,
+            height,
+            fill: instance.color("fill").or_else(|| instance.color("paint")),
+        })
+        .collect()
 }
 
 /// Drives the application over buffers for a few turns and stops.
@@ -165,13 +72,17 @@ const SHEET: &str = ":root { color: rgb(0, 128, 255) }
 #[test]
 fn an_icon_mounted_in_a_window_paints_a_shape_the_size_its_own_sheet_gave_it() {
     app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_title("icon")
         .with_size(200.0, 120.0)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
-            let mut renderer = Recorder::default();
-            zgui::render::Renderer::configure(&mut renderer, target);
-            Ok::<_, AppError>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+        .with_compositor_renderer(screen::watched(|| {
+            Box::new(|drawing| {
+                SHAPES
+                    .lock()
+                    .expect("the log is not poisoned")
+                    .push(shapes(drawing));
+            })
         }))
         .run_on(buffers, || view! { Card() })
         .expect("the application ran");
@@ -191,12 +102,12 @@ fn an_icon_mounted_in_a_window_paints_a_shape_the_size_its_own_sheet_gave_it() {
     // the sheet, about the fit and about the outline at once, and which "larger than nothing" would
     // not be: a box that collapsed to a point still produces a primitive, of no extent.
     //
-    // A coverage sprite is the geometry rounded out to whole pixels, which adds less than one pixel
-    // at each edge. That is less than the step to the next icon size.
+    // A path mask is the geometry rounded out to whole pixels, which adds less than one pixel at
+    // each edge. That is less than the step to the next icon size.
     let written = zgui::elements::kurbo::Shape::bounding_box(&CHECK.path());
     let ratio = 20.0 / CHECK.view_box();
     let shape = settled[0];
-    let rounding = if shape.exact { 0.0 } else { 2.0 };
+    let rounding = 2.0;
     let fits = |drawn: f64, asked: f64| drawn > asked - 0.01 && drawn < asked + rounding + 0.01;
     assert!(
         fits(shape.width, written.width() * ratio) && fits(shape.height, written.height() * ratio),

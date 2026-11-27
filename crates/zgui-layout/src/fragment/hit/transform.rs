@@ -40,7 +40,7 @@
 
 use smallvec::SmallVec;
 use zgui_geom::{Device, DevicePx, Matrix4, Point};
-use zgui_scene::{SpatialId, SpatialTree};
+use zgui_space::{SpatialId, SpatialTree};
 
 /// Maps a device-space point into the coordinate system `space` names.
 ///
@@ -51,7 +51,7 @@ use zgui_scene::{SpatialId, SpatialTree};
 /// ```
 /// use zgui_geom::{Device, DevicePx, Matrix4, Point};
 /// use zgui_layout::fragment::hit::transform::into_local;
-/// use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+/// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
 ///
 /// let mut tree = SpatialTree::with_viewport();
 /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -218,7 +218,7 @@ fn shift_of(matrix: &Matrix4) -> Option<(f32, f32)> {
 #[cfg(test)]
 mod tests {
     use zgui_geom::{Affine2, Device, DevicePx, Point};
-    use zgui_scene::{OwnSpace, PropertyOwner, SpatialId, SpatialTree};
+    use zgui_space::{OwnSpace, PropertyOwner, SpatialId, SpatialTree};
 
     use super::into_local;
 

@@ -223,6 +223,16 @@ impl<T> ChunkArena<T> {
         self.get(key).is_some()
     }
 
+    /// Reports whether `key` names a value that was removed and is still readable until the next
+    /// [`ChunkArena::recycle`].
+    pub fn is_removed(&self, key: Key<T>) -> bool {
+        key.domain() == self.domain
+            && self
+                .slots
+                .resolve(key.index(), key.generation())
+                .is_some_and(|index| self.slots.state(index) == SlotState::Removed)
+    }
+
     /// Marks a slot dead.
     ///
     /// The value stays in place and [`ChunkArena::get`] keeps resolving it until

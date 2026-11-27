@@ -9,13 +9,15 @@
 //! list built on it, and [`DataTable`](crate::data_table::DataTable) uses the same mechanism for
 //! its body.
 
+mod hold;
 mod list;
 mod style;
 mod window;
 
+pub use crate::virtualize::hold::{held_offsets, keep_built};
 pub use crate::virtualize::list::{VirtualList, VirtualListProps};
 pub use crate::virtualize::style::VirtualListStyle;
-pub use crate::virtualize::window::{MAX_EXTENT, VirtualWindow, window};
+pub use crate::virtualize::window::{MAX_EXTENT, VirtualWindow, window, window_ahead};
 
 use zgui::prelude::*;
 use zgui::reactive::LocalStorage;
@@ -76,7 +78,9 @@ pub struct Virtualize {
 impl Virtualize {
     /// Watches `viewport`, a scroll container holding `rows` rows of `row_size` CSS pixels each.
     ///
-    /// `overscan` is how many rows to build beyond each edge of the port.
+    /// `overscan` is how many rows to build beyond each edge of the port. A port the compositor
+    /// moves also builds the rows one frame of its motion ahead, see [`window_ahead`]. Rows are
+    /// dropped only when a row has to be built, see [`keep_built`].
     ///
     /// The handle observes the container's scroll position, which is a share in one observation
     /// held for as long as the calling scope lives. It is taken when `viewport` binds rather than
@@ -91,11 +95,12 @@ impl Virtualize {
     ) -> Self {
         let row_size = row_size.into();
         let scroll = viewport.observe_scroll();
+        on_cleanup_local(move || viewport.wake_outside(None));
         Self {
             // A list torn down while its scroll position still moves can find the count or the
             // row height gone before the observation. Every input is read so that a gone one
             // answers with an empty window.
-            window: Memo::new(move |_| {
+            window: Memo::new(move |previous: Option<&VirtualWindow>| {
                 let (Some(position), Some(count), Some(size)) =
                     (scroll.try_get(), rows.try_get(), row_size.try_get())
                 else {
@@ -110,13 +115,20 @@ impl Virtualize {
                 } else {
                     1.0
                 };
-                window(
+                let port = position.scrollport.height.0 / scale;
+                let motion = position.motion.height.0 / scale;
+                let next = window_ahead(
                     count,
                     size,
-                    position.scrollport.height.0 / scale,
+                    port,
                     position.offset.y.0 / scale,
                     overscan,
-                )
+                    motion,
+                );
+                let next = keep_built(previous, next);
+                // A port the compositor moves wakes the window once a row has to be built.
+                viewport.wake_outside(Some(held_offsets(&next, port, overscan)));
+                next
             }),
         }
     }
@@ -156,6 +168,7 @@ mod tests {
             offset: Point::new(DevicePx(0.0), DevicePx(offset)),
             content_size: Size::new(DevicePx(200.0), DevicePx(content)),
             scrollport: Size::new(DevicePx(200.0), DevicePx(port)),
+            ..ScrollPosition::default()
         }
     }
 

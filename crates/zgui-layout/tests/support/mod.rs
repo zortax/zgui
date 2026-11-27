@@ -341,7 +341,7 @@ impl MeasureContent for Images {
     }
 
     fn paint_slot(&mut self, _paint: &zgui_text_style::TextPaint) -> zgui_text::Brush {
-        zgui_scene::PaintSlot(0)
+        zgui_space::PaintSlot(0)
     }
 }
 
@@ -362,9 +362,9 @@ pub(crate) fn measurer_with_images(width: f32, height: f32) -> Content {
 /// frame, the scroll offsets, the hit index and the damage the pass accumulated.
 pub(crate) struct Frame {
     /// Every clip chain in the document.
-    pub(crate) clips: zgui_scene::ClipTable,
+    pub(crate) clips: zgui_space::ClipTable,
     /// Every transform in it.
-    pub(crate) spatial: zgui_scene::SpatialTree,
+    pub(crate) spatial: zgui_space::SpatialTree,
     /// Where each scroll container is scrolled to.
     pub(crate) scroll: zgui_layout::scroll_region::ScrollOffsets,
     /// What is under a point.
@@ -377,8 +377,8 @@ impl Frame {
     /// A frame that has drawn nothing yet.
     pub(crate) fn new() -> Self {
         Self {
-            clips: zgui_scene::ClipTable::rooted(),
-            spatial: zgui_scene::SpatialTree::with_viewport(),
+            clips: zgui_space::ClipTable::rooted(),
+            spatial: zgui_space::SpatialTree::with_viewport(),
             scroll: zgui_layout::scroll_region::ScrollOffsets::new(),
             hit: zgui_layout::HitIndex::new(),
             damage: zgui_bits::DamageSet::new(),
@@ -472,7 +472,7 @@ pub(crate) fn fragments(
     root: zgui_layout::BoxKey,
     dirty: &mut impl zgui_layout::fragment::diff::FrameDirty,
 ) {
-    fragments_after(frame, store, root, dirty, &zgui_scene::Placements::EMPTY);
+    fragments_after(frame, store, root, dirty, &zgui_space::Placements::EMPTY);
 }
 
 /// [`fragments`], with `drawn` as the matrices the standing fragments were last published with.
@@ -481,7 +481,7 @@ pub(crate) fn fragments_after(
     store: &mut LayoutStore,
     root: zgui_layout::BoxKey,
     dirty: &mut impl zgui_layout::fragment::diff::FrameDirty,
-    drawn: &zgui_scene::Placements,
+    drawn: &zgui_space::Placements,
 ) {
     let mut tables = zgui_layout::fragment::build::Tables {
         clips: &mut frame.clips,

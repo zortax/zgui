@@ -3,7 +3,7 @@ name = "zgui-paint"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Paint stage: computed style and fragments into scene primitives"
+description = "Paint stage: computed style and fragments into compositor chunks"
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
@@ -16,8 +16,6 @@ include.workspace = true
 web-time.workspace = true
 # Generation-checked handles, which a fragment key is one of.
 zgui-arena = { path = "../zgui-arena", version = "0.1.0" }
-# Glyph tiles and mask tiles are named by the primitives this crate emits.
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 # The damage set this stage grows and then reads.
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }
@@ -29,10 +27,8 @@ zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 # Fragments, their ink, their clips and the read-extent registry this stage expands damage over.
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
-# What the device can do decides what is emitted, not only how it is drawn: without dual-source
-# blending there is no subpixel sprite to emit at all.
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# The clip chains, coordinate systems and journaled tables fragments are painted through.
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 # Vector documents. The paint stage is where a document becomes primitives, so it is where the
 # document model is named; the reader itself is behind that crate's own parse boundary.
 zgui-svg = { path = "../zgui-svg", version = "0.1.0" }
@@ -44,6 +40,11 @@ zgui-text = { path = "../zgui-text", version = "0.1.0" }
 # The shared text a drawing's source arrives in, which the vector cache holds to know it again.
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 
+# The compositor contract fragments are recorded into.
+iceblink.workspace = true
+# Path geometry and fill rules, which vector documents are made of.
+kurbo.workspace = true
+peniko.workspace = true
 rustc-hash.workspace = true
 smallvec.workspace = true
 thiserror.workspace = true
@@ -51,12 +52,14 @@ tracing.workspace = true
 zeno.workspace = true
 
 [dev-dependencies]
+# The compositor the sync's chunks are committed to, from the one factory tests take it from.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 # The paint key that decides *damage* is computed there; this crate's lowering key must stay a
 # subset of it, and the test that says so needs both.
 zgui-style = { path = "../zgui-style", version = "0.1.0" }
 # The counters have to be compiled in, or every budget stays green while measuring nothing.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }
 
 [lints]
 workspace = true

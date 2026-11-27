@@ -13,21 +13,13 @@ mod support;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::Arc;
 
-use zgui_bits::DamageSet;
 use zgui_geom::{Device, DevicePx, Rect};
-use zgui_platform::Surface;
 use zgui_profile::Counter;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
-use zgui_runtime::{App, AppError, Runtime};
-use zgui_scene::Scene;
-use zgui_testkit_scene::counters::Recording;
+use zgui_runtime::{App, FrameProbe, Runtime, Window};
+use zgui_testkit::counters::Recording;
 use zgui_view::{AnyView, BuildCx, IntoView, Show, View};
 
 /// The application column is moved off the origin, so a box laid out against it lands somewhere
@@ -45,57 +37,24 @@ const ROWS: usize = 300;
 /// The window's own area in device pixels, which is what a full repaint costs.
 const SURFACE_AREA: i64 = 400 * 300;
 
-/// What one frame was drawn against: whether the set was the whole surface, and its area otherwise.
+/// What one frame's paint walk was gated on: whether the set was the whole surface, and its area otherwise.
 type Log = Rc<RefCell<Vec<(bool, Option<i64>, Option<Rect<i32, Device>>)>>>;
 
-/// A renderer that records the damage of every frame and draws nothing.
+/// A probe that records the region every frame's paint walk was gated on.
 struct Recorder {
     /// Where the frames go.
     log: Log,
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
 }
 
-impl Renderer for Recorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, _scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+impl FrameProbe for Recorder {
+    fn frame_ended(&self, window: &Window) {
+        let painted = window
+            .last_frame_report()
+            .expect("a frame that ended has a report")
+            .painted;
         self.log
             .borrow_mut()
-            .push((damage.is_full(), damage.area(), damage.bounds()));
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
+            .push((painted.is_full(), painted.area(), painted.bounds()));
     }
 }
 
@@ -106,28 +65,18 @@ fn window(
     request: RwSignal<Option<usize>>,
     log: &Log,
 ) -> zgui_platform_headless::Harness<Runtime> {
-    let factory = Rc::clone(log);
     let handler = App::new()
         .with_title("overlay")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Recorder {
-                    log: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
-        .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+        .with_probe(Rc::new(Recorder {
+            log: Rc::clone(log),
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
+        .with_text_engine(Box::new(|| {
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
+        }))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let mut list = zgui_elements::column().class("list");
             for row in 0..ROWS {
@@ -238,7 +187,7 @@ fn contains(outer: Rect<i32, Device>, inner: Rect<i32, Device>) -> bool {
 }
 
 /// Fails unless a change spliced the box tree: no whole build, and a bounded number of new boxes.
-fn assert_spliced(what: &str, moved: &zgui_testkit_scene::counters::Measurement, most: u64) {
+fn assert_spliced(what: &str, moved: &zgui_testkit::counters::Measurement, most: u64) {
     let builds = moved.get(Counter::BoxTreeBuilds);
     assert_eq!(
         builds, 0,

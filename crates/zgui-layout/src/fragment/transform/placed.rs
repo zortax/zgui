@@ -10,7 +10,7 @@
 
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Rect};
-use zgui_scene::{Placements, SpatialId};
+use zgui_space::{Placements, SpatialId};
 
 use crate::fragment::FragKey;
 use crate::tree::store::LayoutStore;

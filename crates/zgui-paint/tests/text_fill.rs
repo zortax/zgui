@@ -68,3 +68,114 @@ fn asking_without_a_ramp_changes_nothing() {
         "there is no ramp to paint the text with, so the text is painted in `color`"
     );
 }
+
+/// A ramp painting the text fills the glyphs of the line with one gradient across the line box.
+#[test]
+fn a_ramp_painting_the_text_fills_its_glyphs() {
+    use zgui_css::StyleDraft;
+    use zgui_geom::{DevicePx, Point, Rect, Size};
+    use zgui_layout::fragment::ParagraphId;
+    use zgui_paint::Tables;
+    use zgui_paint::emit::text::{self, GlyphSource, TextPlacement};
+    use zgui_paint::lower::background::{GradientShape, GradientSpec, SpecStop};
+    use zgui_space::{ClipId, SpatialId};
+
+    /// Two glyphs of one run.
+    struct TwoGlyphs;
+
+    const GLYPHS: [zgui_text::ShapedGlyph; 2] = [
+        zgui_text::ShapedGlyph {
+            glyph: 5,
+            x: 0.0,
+            y: 16.0,
+        },
+        zgui_text::ShapedGlyph {
+            glyph: 6,
+            x: 10.0,
+            y: 16.0,
+        },
+    ];
+
+    impl GlyphSource for TwoGlyphs {
+        fn visit_line(
+            &self,
+            _paragraph: ParagraphId,
+            _line: u16,
+            visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
+        ) {
+            visit(zgui_text::ShapedRun {
+                face: zgui_text::FaceId(0),
+                size: 16.0,
+                coords: &[],
+                synthetic_bold: 0.0,
+                synthetic_slant: 0.0,
+                brush: zgui_space::PaintSlot(0),
+                glyphs: &GLYPHS,
+                text_start: 0,
+            });
+        }
+
+        fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+            None
+        }
+    }
+
+    let ramp = GradientSpec {
+        shape: GradientShape::Linear {
+            angle: core::f32::consts::FRAC_PI_2,
+        },
+        stops: smallvec::smallvec![
+            SpecStop {
+                color: zgui_color::Color::BLACK,
+                position: None,
+            },
+            SpecStop {
+                color: zgui_color::Color::WHITE,
+                position: None,
+            },
+        ],
+        interpolation: zgui_color::Interpolation::new(zgui_color::ColorSpace::Srgb),
+        repeating: false,
+    };
+    let style = zgui_paint::lower(&StyleDraft::initial().build(), 1.0);
+    let mut scene = Tables::new();
+    let mut lone =
+        support::chunk::Lone::record(&mut scene, (SpatialId::VIEWPORT, ClipId::ROOT), |rec| {
+            text::emit(
+                rec,
+                &TwoGlyphs,
+                ParagraphId(0),
+                0,
+                &style,
+                text::Inherited {
+                    text_fill: Some(&ramp),
+                    decorations: &[],
+                    inline: &[],
+                },
+                TextPlacement {
+                    line: Rect::new(
+                        Point::new(DevicePx(20.0), DevicePx(30.0)),
+                        Size::new(DevicePx(64.0), DevicePx(20.0)),
+                    ),
+                    clip: ClipId::ROOT,
+                    transform: SpatialId::VIEWPORT,
+                    opaque_target: true,
+                    subpixel_capable: false,
+                    scale: 1.0,
+                    ellipsis: None,
+                },
+            );
+        });
+
+    let drawing = lone.redraw();
+    let paths: Vec<_> = drawing.of_kind("path").collect();
+    assert_eq!(paths.len(), 2, "one filled outline per glyph: {drawing}");
+    for path in paths {
+        assert_eq!(path.paint("fill").as_deref(), Some("linear"), "{drawing}");
+        assert_eq!(
+            (path.field("from"), path.field("to")),
+            (Some("(20, 40)"), Some("(84, 40)")),
+            "the ramp runs across the line box: {drawing}"
+        );
+    }
+}

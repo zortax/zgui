@@ -26,6 +26,7 @@
 //! testing under a stationary pointer** is what stops a dropdown that opens under the cursor from
 //! never being hovered.
 
+use iceblink::{FrameOutcome, RenderTarget, SkipReason, SubpixelOrder};
 use web_time::Instant;
 
 use zgui_bits::{DamageSet, Dirty};
@@ -35,7 +36,6 @@ use zgui_layout::tree::LayoutTree;
 use zgui_paint::PaintInput;
 use zgui_platform::Clock;
 use zgui_profile::{Counter, counter};
-use zgui_render::{FrameOutcome, RenderTarget, SkipReason};
 
 use crate::window::Window;
 
@@ -62,6 +62,8 @@ pub struct FrameReport {
     pub paint_elapsed: std::time::Duration,
     /// What the renderer made of it.
     pub outcome: FrameOutcome,
+    /// The device pixels whose content the paint walk recorded again.
+    pub painted: DamageSet,
     /// Whether anything asked for another frame from inside this one.
     pub needs_another_frame: bool,
     /// How many elements the restyle touched.
@@ -77,6 +79,8 @@ pub struct FrameReport {
 pub(crate) enum DeadlineKind {
     /// Timers, tasks, animation, resize or presentation produce a normal frame.
     Render,
+    /// The compositor's own scrolling needs a frame, which runs no pipeline of the window's.
+    Compose,
     /// Cold-resource trimming only; no paint or presentation is requested.
     Maintenance,
 }
@@ -108,15 +112,11 @@ impl Window {
     /// runs then is built for whatever the window is at that moment rather than for the configure
     /// that installed the deadline.
     pub fn queue(&mut self, event: zgui_platform::SurfaceEvent) -> bool {
-        // Evidence of visibility ends a starvation hold. Input reaches windows the compositor is
-        // drawing, and a configure, a focus or an occlusion report is the compositor speaking
-        // about this surface — each says the buffers are being consumed again. The request is
-        // what turns the cleared latch back into frames: the parked deadlines re-arm at the end
-        // of the frame it buys.
-        if self.starved && Self::clears_starvation(&event) {
-            self.starved = false;
-            self.starve_backoff = crate::window::STARVE_BACKOFF_START;
-            self.request_frame();
+        // A gesture the compositor moves the content for needs no frame of the window's.
+        if let zgui_platform::SurfaceEvent::Wheel { event: wheel, .. } = &event
+            && self.hand_wheel_early(wheel)
+        {
+            return false;
         }
         let wants_a_frame = match &event {
             zgui_platform::SurfaceEvent::Resized(size) => self.resized(*size, self.scale),
@@ -196,18 +196,6 @@ impl Window {
         wants_a_frame
     }
 
-    /// Whether this event is evidence the compositor is consuming the surface's buffers again.
-    fn clears_starvation(event: &zgui_platform::SurfaceEvent) -> bool {
-        event.is_input()
-            || matches!(
-                event,
-                zgui_platform::SurfaceEvent::Resized(_)
-                    | zgui_platform::SurfaceEvent::ScaleFactorChanged { .. }
-                    | zgui_platform::SurfaceEvent::Focused(true)
-                    | zgui_platform::SurfaceEvent::Occluded(false)
-            )
-    }
-
     /// Runs one frame.
     ///
     /// The whole of it runs with the window's own scope current, which is what makes the free
@@ -219,9 +207,22 @@ impl Window {
     /// thing, and in a release build a tooltip that silently never opens.
     pub fn frame(&mut self, clock: &dyn Clock) -> FrameReport {
         match self.scope.as_ref().map(|scope| scope.owner().clone()) {
-            Some(owner) => owner.with(|| self.run_frame(clock)),
-            None => self.run_frame(clock),
+            Some(owner) => owner.with(|| self.run(clock)),
+            None => self.run(clock),
         }
+    }
+
+    /// Runs the frame that was asked for: one that only presents the compositor's scrolling, or
+    /// a whole one.
+    fn run(&mut self, clock: &dyn Clock) -> FrameReport {
+        // Before the kind of frame is chosen, so an answer that asks for a frame makes this one a
+        // whole one, and before a whole frame counts as started and adopts the offsets the
+        // compositor shows.
+        self.take_answers();
+        if self.only_compositor_owed() {
+            return self.tick_compositor(clock);
+        }
+        self.run_frame(clock)
     }
 
     /// What the last frame did, or `None` before the first frame.
@@ -236,39 +237,9 @@ impl Window {
     /// The frame was composed and its damage retired when it ran. This is only the copy to the
     /// surface and the handover, and what the answer to that means for the next frame.
     pub fn present_held(&mut self, clock: &dyn Clock) {
-        let now = clock.now();
-        let outcome = self.renderer.present_held();
+        self.compositor.request_frame();
+        let outcome = self.draw_output(clock.timestamp()).outcome;
         zgui_profile::latency::note_with("f.present_held", || format!("{outcome:?}"));
-        self.settle_retry(outcome, now);
-        self.show_first_frame(outcome);
-    }
-
-    /// Records when a frame is owed again after `outcome`, and what a presented frame resets.
-    fn settle_retry(&mut self, outcome: FrameOutcome, now: Instant) {
-        self.retry_after = match outcome {
-            FrameOutcome::Skipped(SkipReason::Timeout) => {
-                self.starved = true;
-                let backoff = self.starve_backoff;
-                self.starve_backoff = (backoff * 2).min(crate::window::STARVE_BACKOFF_CAP);
-                tracing::info!(
-                    backoff_s = backoff.as_secs(),
-                    "the surface acquisition timed out; treating the window as starved and \
-                     probing after the backoff"
-                );
-                zgui_profile::latency::note_with("f.starved", || {
-                    format!("backoff={}s", backoff.as_secs())
-                });
-                Some(now + backoff)
-            }
-            _ if self.starved => self.retry_after,
-            _ if outcome.wants_another_frame() => Some(now + self.refresh_interval()),
-            _ => None,
-        };
-        if matches!(outcome, FrameOutcome::Presented(_)) {
-            // A presented frame is the compositor consuming the surface again, so the next
-            // starvation — a workspace switch months later — starts from the short wait.
-            self.starve_backoff = crate::window::STARVE_BACKOFF_START;
-        }
     }
 
     /// Leaves the surface hidden after its first frame, for a window the application shows itself.
@@ -278,7 +249,7 @@ impl Window {
 
     /// Shows the surface once its first frame has reached it. Where the platform reports no
     /// presentation, that frame also counts as shown.
-    fn show_first_frame(&mut self, outcome: FrameOutcome) {
+    pub(crate) fn show_first_frame(&mut self, outcome: FrameOutcome) {
         if matches!(outcome, FrameOutcome::Presented(_)) && !self.surface.reports_presentation() {
             self.handle.set_presented();
         }
@@ -303,23 +274,9 @@ impl Window {
         }
     }
 
-    /// Records the moment this frame is for, and how long the previous one took.
-    ///
-    /// The frame *moment* rather than the wall clock: it is the same one the framework's own
-    /// animations are sampled against, so an effect and a CSS animation on one element agree about
-    /// what time it is. Computed here, at the top of the frame, so every stage of the frame is
-    /// told the same moment however long the frame takes.
+    /// Records the frame moment this frame is for.
     fn note_frame_moment(&mut self, at: zgui_vocab::Timestamp) {
-        let opened = *self.opened_at.get_or_insert(at);
-        let delta = self
-            .painted_at
-            .map_or(0.0, |last| at.saturating_since(last).as_secs_f32());
         self.painted_at = Some(at);
-        self.frame_clock = zgui_scene::FrameClock {
-            seconds: at.saturating_since(opened).as_secs_f32(),
-            delta,
-            scale: self.scale,
-        };
     }
 
     /// The frame itself, with the window's scope already current.
@@ -333,23 +290,11 @@ impl Window {
         self.note_frame_moment(timestamp);
 
         self.frame_started();
+        counter::bump(Counter::ZguiFrames);
         self.gate.begin_frame();
         self.document.borrow().begin_frame();
-        // Both are this frame's answers about this frame's movement, and a frame that inherited
-        // either would decide what to draw from what the last one moved.
-        self.rigid_moves = zgui_layout::fragment::diff::RigidMoves::default();
-        self.damage_before_layout = DamageSet::new();
-        self.damage_after_layout = DamageSet::new();
-        self.layout_passes = 0;
-        self.scrolled_this_frame.clear();
-
-        // The starvation probe. The retry deadline this frame was woken at is the one attempt the
-        // latch allows, so the frame runs unlatched — its present is the probe — and the next
-        // timeout re-latches it with a longer wait. A frame that runs for any other reason while
-        // the latch holds — a timer's — keeps the latch and skips the present.
-        if self.starved && self.retry_after.is_some_and(|at| at <= now) {
-            self.starved = false;
-        }
+        // Before the input, so a hit test reads the offsets the compositor shows.
+        self.adopt_compositor_scroll();
 
         // The events that arrived since the last frame, and the commands their handlers issued.
         zgui_profile::latency::note_with("f.drain", || self.queued.len().to_string());
@@ -387,7 +332,7 @@ impl Window {
         // cascade again are marked before the traversal goes looking for work, and the values it
         // writes for the ones that do not are in place before anything is painted.
         mark("f.animate");
-        let animated = self.animate(timestamp);
+        let animated = self.animate(self.shown_at(timestamp));
 
         // Which changes can affect a computed style is answered from an index the restyle
         // repopulates, so the frame in which the sheets changed takes the full path throughout.
@@ -478,6 +423,8 @@ impl Window {
                 self.damage.rects()
             )
         });
+        // Not before, so the cascade and the layout run while a driver thread builds the renderer.
+        self.await_renderer();
         // After layout, because a picture's demand *is* its laid-out content box: this is the
         // first moment the loader can know how many device pixels each image actually needs, and
         // the decode it kicks is sized by the answer.
@@ -518,13 +465,7 @@ impl Window {
         // appeared or went wrote the hit index, and a frame that wrote nothing there leaves the
         // pointer over exactly what it was over.
         mark("f.rehit");
-        if self.hit.generation() != self.rehit_seen {
-            self.rehit_seen = self.hit.generation();
-            counter::bump(Counter::HitRetests);
-            self.rehit();
-        }
-        mark("f.publish_brushes");
-        self.publish_text_brushes();
+        self.rehit_if_moved();
         // After layout, because where a caret goes is a question about the lines this frame
         // produced; before the paint, because what it damages has to be in the set the emit walk
         // is gated on. A caret that blinked moves no fragment at all, so nothing else in the frame
@@ -544,18 +485,6 @@ impl Window {
         let outcome = self.paint_and_draw();
         let paint_elapsed = paint_start.elapsed();
         mark("f.painted");
-        // Immediately after the frame that produced them, and against the output this window is
-        // actually on: what the acquisition made this frame wait for is how much earlier than
-        // necessary it was started, and what the frame cost is both what is left of the interval to
-        // schedule into and what the next hold has to leave room for.
-        //
-        // The cost is measured from the release and not from the request, so it is the frame's own
-        // work and not the hold before it. The servo adds its own hold back on, because it is the
-        // only thing that knows how much of the interval it gave away.
-        let cost = clock.now().saturating_duration_since(now);
-        let interval = self.refresh_interval();
-        self.present
-            .observed(self.renderer.acquire_block(), cost, interval);
         // Named for what it counts. A window with nothing moving in it is supposed to leave this
         // alone, so the assertion written against it — that a still document draws nothing over
         // three hundred refreshes — reads as zero when it holds rather than as three hundred.
@@ -568,11 +497,7 @@ impl Window {
         // been presented.
         if outcome.retires_damage() {
             self.damage = DamageSet::new();
-            self.damage_extent = self.renderer.target().map(|target| target.size);
-            // The chunk notes were consumed by the same submission. A skipped frame keeps them
-            // for the next drawn one, and anything noted after this point — a budget eviction —
-            // stands until then.
-            self.scene.clear_chunk_notes();
+            self.damage_extent = self.target.map(|target| device_size(target.size));
         }
         // A drawing drawn from a stretched layer, or deferred by the layer budget, is encoded
         // again on the next frame that reaches it. Its rectangles are what reaches it, and the
@@ -587,12 +512,6 @@ impl Window {
         // late in the frame, is kept for the next frame's layout pass.
         if self.owes_scrolls() {
             self.request_frame();
-        }
-        if matches!(outcome, zgui_render::FrameOutcome::Recovered) {
-            // The renderer rebuilt its device and holds nothing resident. Re-noting every
-            // record's chunk lets the next frame restore residence in one pass of uploads,
-            // rather than serving each chunk transiently until its fragment encodes again.
-            self.painter.renote_chunks(&mut self.scene);
         }
 
         // After the renderer, and before the arenas are recycled. After, because what a screen
@@ -629,37 +548,6 @@ impl Window {
         let needs_another_frame =
             owed || changed_during || flush.needs_another_frame || drained || observed;
 
-        // The renderer's own answer is a source too, and it is the only one that speaks for the
-        // frame *after* the work was submitted. An acquisition that timed out, one against a surface
-        // the compositor has replaced underneath the frame, one the graphics API rejected and a
-        // device that had to be rebuilt all leave the window showing the picture it had before —
-        // while the damage that would have corrected it is retired, because the work *was* submitted
-        // and the composed target does hold this frame's pixels. Nothing else in the list above
-        // knows a frame is owed: the document did not change, no timer is due, and the reactive
-        // graph is settled. So the window stops redrawing until something unrelated happens to ask,
-        // which is a freeze that ends when the pointer crosses the window, or never.
-        //
-        // It is owed *later* rather than now, and that is the whole difference between this source
-        // and every other one. What these outcomes report is the presentation engine having nothing
-        // to hand over, and that is resolved by the compositor coming back to the surface rather
-        // than by this process asking again sooner. Asked again straight away, the frame runs the
-        // whole pipeline and then waits inside the acquisition for as long as the graphics API is
-        // willing to wait — on the thread that reads input — and the next one does it again: one
-        // stall becomes a run of them, and the window answers nothing throughout.
-        //
-        // [`FrameOutcome::wants_another_frame`] is what decides, and it is false for exactly the
-        // outcomes that must not ask at all: an occluded surface, a frame that damaged nothing, and
-        // a device that could not be rebuilt.
-        //
-        // A timed-out acquisition is the exception, and it is the starvation latch's to answer. The
-        // old rule — try again one refresh interval later — re-enters the block immediately: a
-        // surface the compositor stopped drawing makes every acquisition wait the whole of what
-        // the graphics API allows, on the thread that reads input, and one stall becomes an
-        // unbounded run of them. So a timeout latches the window as starved and owes a probe at a
-        // growing distance instead, and a frame that ran under the latch leaves the probe's moment
-        // where it was.
-        self.settle_retry(outcome, now);
-
         // Measured from when the last normal frame finished, so a continuously active document
         // never trims a working set and a parked one gets exactly one maintenance wake.
         self.maintenance_due = Some(clock.now() + crate::window::MAINTENANCE_DELAY);
@@ -670,6 +558,7 @@ impl Window {
         // frame of its own — that would be a spin at whatever rate the machine can manage — so what
         // brings the loop back is the deadline this leaves, and a window that stopped animating
         // leaves none at all.
+        self.compose_lead.record(started.elapsed());
         self.pace_animations(now);
 
         // The one place an in-frame request becomes a real one. An occluded surface is excluded,
@@ -679,8 +568,6 @@ impl Window {
             self.request_frame();
         }
 
-        self.show_first_frame(outcome);
-
         // Last, with everything this frame produced still standing: the scene it emitted, the
         // damage it answered, the layout it computed, and this report. The handle is cloned out
         // first because the probe is handed the window it is stored on.
@@ -688,6 +575,7 @@ impl Window {
             elapsed: started.elapsed(),
             paint_elapsed,
             outcome,
+            painted: self.painted,
             needs_another_frame,
             restyled,
             timers_fired,
@@ -756,25 +644,15 @@ impl Window {
         } else {
             None
         };
-        // The blink is excluded while the surface is hidden or starved, for the same reason the
-        // animation deadline is: a caret blinking behind a minimised window is a loop running at
-        // two frames a second, for ever, drawing nothing anyone can see.
+        // The blink is excluded while the surface is hidden or its presenter starved, for the same
+        // reason the animation deadline is: a caret blinking behind a minimised window is a loop
+        // running at two frames a second, for ever, drawing nothing anyone can see.
         let blink = (!(self.occluded || self.starved))
             .then(|| self.carets.next_flip(now))
             .flatten();
         // The next step boundary of the stepped animations, excluded on a hidden or starved
         // surface for the reason the blink is.
         let hold = self.hold_due.filter(|_| !(self.occluded || self.starved));
-        // A frame being held back owes a moment of its own, and it is the only source that owes one
-        // for a frame that has already been asked for. Without it a window whose whole reason to
-        // draw is the input it has already queued is held and never woken again.
-        let held = self.present.due();
-        // The frame the renderer asked for and could not be given. Excluded while the surface is
-        // hidden for the same reason the animation and the blink are — and deliberately *not*
-        // excluded while it is starved, because under the latch this moment is the probe, and the
-        // probe is the only thing that finds out the compositor came back without an event saying
-        // so.
-        let retry = self.retry_after.filter(|_| !self.occluded);
         let render = [
             animation,
             timer,
@@ -782,8 +660,6 @@ impl Window {
             resize,
             blink,
             hold,
-            held,
-            retry,
         ]
         .into_iter()
         .flatten()
@@ -798,48 +674,29 @@ impl Window {
         // This can only bite a source whose moment is fixed rather than derived from the present
         // one, which is every source there is: an animation on a phase laid down before the resize
         // began, a timer whose callback came due while the pointer was still dragging the edge.
-        //
-        // A held frame is a gate of exactly the same kind and is treated as one: while one is being
-        // held every frame is refused, so a moment before it is released is a wake that draws
-        // nothing.
-        let render = render.map(|earliest| {
-            [resize, held]
-                .into_iter()
-                .flatten()
-                .fold(earliest, Instant::max)
-        });
-        match (render, self.maintenance_due) {
-            (Some(render), Some(maintenance)) if render <= maintenance => Some(ScheduledDeadline {
-                at: render,
-                kind: DeadlineKind::Render,
-            }),
-            (Some(_), Some(maintenance)) => Some(ScheduledDeadline {
-                at: maintenance,
-                kind: DeadlineKind::Maintenance,
-            }),
-            (Some(render), None) => Some(ScheduledDeadline {
-                at: render,
-                kind: DeadlineKind::Render,
-            }),
-            (None, Some(maintenance)) => Some(ScheduledDeadline {
-                at: maintenance,
-                kind: DeadlineKind::Maintenance,
-            }),
-            (None, None) => None,
-        }
+        let render = render.map(|earliest| resize.map_or(earliest, |resize| earliest.max(resize)));
+        // The driver's frames are paced on their own, and a whole frame due no later serves them.
+        let compose = self
+            .driven
+            .due()
+            .filter(|_| !self.occluded)
+            .map(|at| resize.map_or(at, |resize| at.max(resize)));
+        [
+            (render, DeadlineKind::Render),
+            (compose, DeadlineKind::Compose),
+            (self.maintenance_due, DeadlineKind::Maintenance),
+        ]
+        .into_iter()
+        .filter_map(|(at, kind)| Some(ScheduledDeadline { at: at?, kind }))
+        .min_by_key(|deadline| deadline.at)
     }
 
     /// Services a maintenance-only deadline without building or presenting a frame.
     pub(crate) fn maintain(&mut self, timestamp: zgui_vocab::Timestamp) {
         self.maintenance_due = None;
-        self.renderer.release_idle_resources();
-        // The release gave back the chunks the renderer held resident, and a chunk is made
-        // resident again only when it is noted. Content that never encodes again would otherwise
-        // be uploaded afresh by every frame that draws it, for the rest of the window's life; noted
-        // here, the next drawn frame makes the whole cache resident in one pass.
-        self.painter.renote_chunks(&mut self.scene);
+        self.compositor.release_idle_resources();
         let mut cx = crate::embed::EmbedMaintenanceCx {
-            renderer: &mut *self.renderer,
+            renderer: crate::embed::RendererQueue(&self.compositor),
             content: &mut self.content,
             timestamp,
         };
@@ -849,15 +706,18 @@ impl Window {
     /// Runs the embed host's sync step, and folds what it reported into the animation gate.
     fn sync_embeds(&mut self, timestamp: zgui_vocab::Timestamp) {
         let placements = self.host.placements();
-        // Measured on this frame's matrices, so kept apart for a scroll that moves composed pixels.
         let mut damage = DamageSet::new();
+        let mut redrawn = DamageSet::new();
+        let mut transaction = self.compositor.transaction();
         let mut cx = crate::embed::EmbedSyncCx {
             document: &self.document,
             layout: &self.layout,
             placements: &placements,
-            renderer: &mut *self.renderer,
+            renderer: crate::embed::RendererQueue(&self.compositor),
             content: &mut self.content,
+            transaction: &mut transaction,
             damage: &mut damage,
+            redrawn: &mut redrawn,
             intrinsics: &self.replaced_surfaces,
             revision: self.dom.revision(),
             scale: self.scale,
@@ -879,7 +739,10 @@ impl Window {
         let report = self.embed.sync(&mut cx);
         self.embed_animating = report.animating;
         self.damage.absorb_set(&damage);
-        self.damage_after_layout.absorb_set(&damage);
+        drop(placements);
+        if !transaction.is_empty() {
+            self.submit_embed_transaction(transaction, &redrawn);
+        }
     }
 
     /// Whether anything in the document is animating.
@@ -899,6 +762,10 @@ impl Window {
         // A pending frame callback is one by the same measure: it asked for the next frame, and
         // it stops asking by not registering again.
         if self.host.has_frame_callbacks() {
+            return true;
+        }
+        // A shader that reads the clock draws something different on every frame.
+        if self.painter.draws_time() {
             return true;
         }
         let document = self.document.borrow();
@@ -959,8 +826,12 @@ impl Window {
     /// with horizontal stripes in a known order. The display is asked on every frame, because a
     /// window moves between displays. A change of the answer changes every glyph on the surface,
     /// so the whole surface is damaged.
-    fn settle_text_coverage(&mut self) {
-        let order = if self.renderer.capabilities().subpixel_text && !self.translucent {
+    pub(super) fn settle_text_coverage(&mut self) {
+        let device = self
+            .compositor
+            .status()
+            .is_some_and(|status| status.caps.subpixel_text);
+        let order = if device && !self.translucent {
             self.text_antialiasing
                 .order(self.surface.subpixel_layout(), self.scale)
         } else {
@@ -977,26 +848,25 @@ impl Window {
             layout = ?self.surface.subpixel_layout(),
             scale = self.scale,
             translucent = self.translucent,
-            device = self.renderer.capabilities().subpixel_text,
+            device,
             "text is drawn with {}",
             match order {
-                Some(zgui_render::SubpixelOrder::RedToBlue) => {
+                Some(SubpixelOrder::RedToBlue) => {
                     "one coverage for each colour stripe, red to blue"
                 }
-                Some(zgui_render::SubpixelOrder::BlueToRed) => {
+                Some(SubpixelOrder::BlueToRed) => {
                     "one coverage for each colour stripe, blue to red"
                 }
                 None => "one coverage for each pixel",
             }
         );
         self.subpixel_order = order;
-        if let Some(order) = order {
-            self.renderer.set_subpixel_order(order);
-        }
+        self.compositor.set_subpixel_order(order);
         self.damage = DamageSet::full();
     }
 
-    /// Reconfigures the renderer for the surface, when the surface moved.
+    /// Takes the surface's extent as the output's target, which the frame's commit configures,
+    /// when the surface moved.
     ///
     /// The extent is read from the **surface** and never from the event that asked for the frame.
     /// That is what makes a superseded configure cost nothing rather than cost a frame that is
@@ -1032,21 +902,18 @@ impl Window {
                 self.refresh_interval().as_micros()
             )
         });
-        let target = RenderTarget::new(
-            Size::new(size.width.0 as i32, size.height.0 as i32),
-            zgui_geom::Scale::new(self.scale),
-        );
-        let target = if self.translucent {
-            target.translucent()
-        } else {
-            target
+        let target = RenderTarget {
+            size: [size.width.0 as u32, size.height.0 as u32],
+            scale: self.scale,
+            opaque: !self.translucent,
         };
-        let was = self.renderer.target();
-        self.renderer.configure(target);
+        let was = self.target.replace(target);
+        self.configuring = Some(target);
         let widest = |a: Size<i32, zgui_geom::Device>, b: Size<i32, zgui_geom::Device>| {
             Size::new(a.width.max(b.width), a.height.max(b.height))
         };
-        let extent = was.map_or(target.size, |was| widest(was.size, target.size));
+        let size = device_size(target.size);
+        let extent = was.map_or(size, |was| widest(device_size(was.size), size));
         self.damage_extent = Some(
             self.damage_extent
                 .map_or(extent, |held| widest(held, extent)),
@@ -1055,12 +922,8 @@ impl Window {
         // larger extent exposes. A change of scale or opacity changes every pixel there is, and so
         // does a first configure, which has no picture to keep.
         match was {
-            Some(was)
-                if was.scale == target.scale
-                    && was.opaque == target.opaque
-                    && self.renderer.composed_survives_configure() =>
-            {
-                for band in exposed(was.size, target.size) {
+            Some(was) if was.scale == target.scale && was.opaque == target.opaque => {
+                for band in exposed(device_size(was.size), size) {
                     self.damage.absorb(band);
                 }
             }
@@ -1217,7 +1080,7 @@ impl Window {
         // for a pass over the records or a large batch. Until then such a paragraph is an old
         // one like any other: the brush is part of its key, so a later claim of the slot that
         // finds it draws it through that claim's colour.
-        let dropping: &[zgui_scene::PaintSlot] =
+        let dropping: &[zgui_space::PaintSlot] =
             if records || released.len() as u64 >= super::brushes::SWEEP_AFTER_DROPPED {
                 &released
             } else {
@@ -1233,7 +1096,7 @@ impl Window {
     /// Writes the text colours the cascade moved through the slots that name them.
     ///
     /// This is the one step of the restyle's tail the style engine cannot own: the table belongs
-    /// to the display list, and the style engine does not depend on it. It runs here — after the
+    /// to the text engine, and the style engine does not depend on it. It runs here — after the
     /// cascade has settled and before anything is laid out — because a paragraph cached from an
     /// earlier frame has to resolve to the new colour in the frame the cascade changed it, and
     /// re-shaping to achieve that is exactly what the indirection exists to avoid.
@@ -1244,7 +1107,6 @@ impl Window {
         }
         let applied = super::brushes::apply(&mut self.text_slots, self.text.text_paints(), updates);
         super::brushes::publish(&self.text_slots, self.text.text_paints());
-        self.brushes_moved |= applied.recoloured;
         if !applied.rewritten.is_empty() {
             self.redraw_inline_text(&applied.rewritten);
         }
@@ -1291,30 +1153,6 @@ impl Window {
         drop(layout);
         let dropped = self.text.forget_paragraphs(&reshape.paragraphs);
         zgui_profile::latency::note_with("t.reshaped", || format!("{dropped}/{}", reshape.boxes));
-    }
-
-    /// Copies the brushes into the display list, which is where the emitter reads them.
-    ///
-    /// Two tables exist because two things need one at times when they cannot share a borrow: the
-    /// text engine claims slots while layout measures, and the display list is read while the emit
-    /// walk runs. Reconciling them is therefore somebody's job, and this is the one place that
-    /// holds both.
-    ///
-    /// It runs **after layout**, not beside [`Window::update_text_brushes`]. A slot is claimed the
-    /// first time a paragraph is flattened, which is inside the layout pass — so a copy taken
-    /// before it would be one slot short for every string that appeared this frame, and every one
-    /// of them would be drawn in its element's own `color` for exactly one frame. That is a defect
-    /// with no symptom at all in a document whose text colour is already the inherited one.
-    fn publish_text_brushes(&mut self) {
-        let table = self.text.text_paints();
-        // A frame that moved no colour and flattened no new paragraph copies nothing: the claim
-        // count is what every claim moves, and the brushes themselves are only ever rewritten by
-        // the step above.
-        if table.claims() == self.scene.text_paints.claims() && !self.brushes_moved {
-            return;
-        }
-        self.brushes_moved = false;
-        self.scene.text_paints = table.clone();
     }
 
     /// Brings the box tree back into agreement with the document, patching it where it can.
@@ -1457,6 +1295,7 @@ impl Window {
         });
         zgui_profile::latency::mark("f.fragments");
 
+        let reach = self.widen_moving_ports();
         let mut layout = self.layout.borrow_mut();
         let Some(root) = layout.root() else {
             return;
@@ -1467,8 +1306,8 @@ impl Window {
         // pass. The walk puts their old ink on the device through these.
         let drawn = self.host.placements();
         let mut tables = zgui_layout::fragment::build::Tables {
-            clips: &mut self.scene.clips,
-            spatial: &mut self.scene.spatial,
+            clips: &mut self.tables.clips,
+            spatial: &mut self.tables.spatial,
             drawn: &drawn,
             device,
             scroll: scroll.composed(),
@@ -1482,20 +1321,15 @@ impl Window {
         // re-renders — reports both passes' moves, and the accessibility stage drains them.
         let mut marks = zgui_layout::fragment::diff::DocumentMarks::for_document(&mut document)
             .recording_moves(&mut self.a11y_moves);
-        // Before the first walk of the frame and no other: what stands here on a later pass is
-        // mostly the earlier pass's own movement, which is the one thing this must not collect.
-        if self.layout_passes == 0 {
-            self.damage_before_layout = self.damage;
-        }
-        self.layout_passes += 1;
         counter::bump(Counter::LayoutPasses);
         // Damage the pass finds outside every extent the surface has had since the last drawn
-        // frame is cut away as it is absorbed, rather than merged first and clipped after.
-        self.damage.set_bound(
-            self.damage_extent
-                .map(|extent| zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), extent)),
-        );
-        let mut moved = zgui_layout::fragment::diff::rebuild_in(
+        // frame is cut away as it is absorbed, rather than merged first and clipped after. The
+        // margins of the ports the compositor moves are kept.
+        self.damage.set_bound(self.damage_extent.map(|extent| {
+            let surface = zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), extent);
+            reach.map_or(surface, |reach| surface.union(reach))
+        }));
+        zgui_layout::fragment::diff::rebuild_in(
             &mut self.diff_scratch,
             &mut layout,
             &mut self.hit,
@@ -1504,17 +1338,6 @@ impl Window {
             root,
             &mut self.damage,
         );
-        // A pass measures old ink on the placements the pass before it published. After a pass
-        // that moved a content space, those are the places a pixel move puts the drawn pixels, so
-        // that old ink is not moved again.
-        if self.rigid_moves.count > 0 {
-            moved.beyond.absorb_set(&moved.drawn);
-            moved.drawn = DamageSet::new();
-        }
-        // Merged rather than assigned: a scroll delivered to a listener can re-render and relay
-        // out inside the frame that delivered it, so the frame's answer is every pass's together.
-        // The walk seeds its own `beyond` from whatever the frame had already damaged.
-        self.rigid_moves = self.rigid_moves.and(moved);
         drop(drawn);
         layout.reclaim_paragraphs();
         // The fragments name their matrices by an index into the table that was just filled, so
@@ -1527,13 +1350,12 @@ impl Window {
         // wants one; only what has already been sent can be left describing where a box used to be,
         // and until a frame has sent one there is nothing to correct. This is the same test the
         // accessibility tree itself is built behind, for the same reason.
-        self.moved_spaces.clear();
         // And only when the tree was written to at all: a document that is not animating,
         // not scrolling something sticky and not being restructured re-establishes every
         // coordinate system it had with the matrix it had, and nothing can have moved.
-        let watching = self.a11y.held() > 0 && self.scene.spatial.written_since_recycle();
+        let watching = self.a11y.held() > 0 && self.tables.spatial.written_since_recycle();
         self.host.publish_placements(
-            &self.scene.spatial,
+            &self.tables.spatial,
             watching.then_some(&mut self.moved_spaces),
         );
         // A content space that moved only because its container scrolled moves nothing the
@@ -1542,12 +1364,22 @@ impl Window {
         if !self.moved_spaces.is_empty() {
             let mut moved = self.moved_spaces.clone();
             moved.sort_unstable();
-            let spatial = &self.scene.spatial;
+            let spatial = &self.tables.spatial;
             self.moved_spaces.retain(|&id| {
                 spatial
                     .outside_content(id)
                     .is_none_or(|outside| moved.binary_search(&outside).is_ok())
             });
+        }
+    }
+
+    /// Re-tests what is under a pointer that has not moved, when the hit index changed since the
+    /// last test.
+    pub(crate) fn rehit_if_moved(&mut self) {
+        if self.hit.generation() != self.rehit_seen {
+            self.rehit_seen = self.hit.generation();
+            counter::bump(Counter::HitRetests);
+            self.rehit();
         }
     }
 
@@ -1566,8 +1398,8 @@ impl Window {
                 document: &document,
                 layout: &layout,
                 hit: &self.hit,
-                clips: &self.scene.clips,
-                spatial: &self.scene.spatial,
+                clips: &self.tables.clips,
+                spatial: &self.tables.spatial,
                 scale: zgui_geom::Scale::new(self.scale),
                 filter: &filter,
             };
@@ -1593,7 +1425,12 @@ impl Window {
     /// which is not a blank glyph but whichever glyph occupied the rectangle before.
     fn paint_and_draw(&mut self) -> FrameOutcome {
         use zgui_profile::latency::mark;
-        let vector_before = self.renderer.vector_status();
+        let vector_before = self
+            .compositor
+            .status()
+            .map(|status| status.vector)
+            .unwrap_or_default();
+        self.open_transaction();
         let size = self.surface.size();
         let viewport = Size::new(size.width.0 as i32, size.height.0 as i32);
         // A built rasteriser takes a shape the mask route declines at no setup cost, so the mask
@@ -1607,54 +1444,28 @@ impl Window {
         let retired = self.layout.borrow_mut().drain_retired_paint();
         // Read before the sink is borrowed, because what the device can do changes what is
         // *emitted* and not only how it is drawn.
-        let mut capabilities = self.renderer.capabilities();
+        let mut capabilities = self
+            .compositor
+            .status()
+            .map_or(iceblink::RenderCapabilities::MINIMAL, |status| status.caps);
         // What the device can blend is narrowed to what this window draws on its display.
         capabilities.subpixel_text = self.subpixel_order.is_some();
-        // Decided inside the borrow below, performed after it: the copy belongs in the renderer's
-        // own frame, and the renderer is not reachable while the layout store is borrowed.
-        let shift: Option<zgui_render::ScrollShift>;
         let vector_report;
+        let transaction;
+        let margins = self.scroll_margins();
         {
             let layout = self.layout.borrow();
             // Before anything reads the set. What a scroll absorbs is where every moved fragment
             // was and is, which for a document taller than its window reaches far past the surface
-            // on both sides; the renderer would cut that to the surface anyway, and until it is
-            // cut the emit walk's subtree skip cannot refuse anything, so a scroll of one screenful
-            // walks and paints the whole document.
-            // Before the damage is read, and before it is grown: a scroll that can be answered by
-            // moving pixels the renderer already has replaces the whole port with the bands the
-            // move leaves undefined, and everything the frame damaged for any *other* reason is
-            // kept and drawn over them.
-            shift = self.scroll_shift(viewport).ok();
-            if let Some(shift) = shift {
-                // Everything this frame owes that the copy does not answer: what it owed before
-                // any layout pass, what the passes damaged beyond their movement, what the stages
-                // after them damaged, and the bands the copy uncovers. What is dropped is exactly
-                // the movement's own damage, which is the whole port and is what the copy is for.
-                //
-                // What was owed before layout names pixels of the drawn frame: inherited damage,
-                // owed layers, and the old and new places of what the animation stage moved and
-                // recoloured, measured before layout wrote the content space. So does the old ink
-                // of what the passes removed or changed. The copy moves those pixels, so that
-                // damage moves with them.
-                self.damage = DamageSet::new();
-                shift.carry_set(&self.damage_before_layout, &mut self.damage);
-                shift.carry_set(&self.rigid_moves.drawn, &mut self.damage);
-                self.damage.absorb_set(&self.rigid_moves.beyond);
-                self.damage.absorb_set(&self.damage_after_layout);
-                shift.expose_into(&mut self.damage);
+            // on both sides. Until it is cut to the surface the emit walk's subtree skip cannot
+            // refuse anything, so a scroll of one screenful walks and paints the whole document.
+            // The margins of the nodes the compositor moves are recorded beyond the surface, so
+            // the set is cut to them too.
+            let mut bound = zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport);
+            for band in &margins.bands {
+                bound = bound.union(*band);
             }
-            self.damage
-                .clip_to(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport));
-            zgui_profile::latency::note_with("d.postshift", || {
-                format!(
-                    "by={:?} inherited={:?} beyond={:?} after={:?}",
-                    shift.map(|s| s.by),
-                    self.damage_before_layout.rects(),
-                    self.rigid_moves.beyond.rects(),
-                    self.damage.rects()
-                )
-            });
+            self.damage.clip_to(bound);
             mark("p.expand");
             zgui_paint::expand(
                 &layout,
@@ -1675,38 +1486,19 @@ impl Window {
                     &self.host.placements(),
                 );
             }
-            self.scene.begin_frame(viewport);
-            // What this frame's application effects are told about it. Nothing the framework draws
-            // reads any of it, so a document with no effect in it pays three floats.
-            self.scene.set_frame_clock(self.frame_clock);
-            // After the log has been emptied and before anything is pushed into it, which is the
-            // only moment the names can begin being kept. A window that was never asked for them
-            // pays a bool and two clears of empty vectors.
-            self.scene
-                .record_spatial_dependencies(self.check_spatial_dependencies);
-            // A cold cache rasterises its first frame's glyphs on the layout workers first. The
-            // walk takes the answers where it asks for them, so the atlas is the same as without.
-            if let Some(pool) = &self.layout_pool {
-                self.content.prefetch_glyphs(
-                    &layout,
-                    &self.text,
-                    self.raster.as_ref(),
-                    pool,
-                    zgui_paint::GlyphPrediction {
-                        scale: self.scale,
-                        subpixel: capabilities.subpixel_text,
-                    },
-                );
+            // The parts of the margins the last frame did not record are damaged after the cut.
+            let cut = self.damage.bound();
+            self.damage.set_bound(cut.map(|cut| cut.union(bound)));
+            for band in &margins.fresh {
+                self.damage.absorb(*band);
             }
+            self.damage.set_bound(cut);
+            self.painted = self.damage;
+            self.tables.begin_frame(viewport);
             // No renderer is borrowed here, and none is reachable from anything the walk touches.
-            // Rasterising a glyph, giving it a tile and growing the atlas to hold it are decided
-            // against this window's own state; what a device is asked to do about any of it is
-            // queued and performed at the flush below.
-            let content = self
-                .content
-                .frame(&layout, &self.text, self.raster.as_ref());
+            let content = self.content.frame(&layout, &self.text);
             if !retired.is_empty() {
-                self.painter.retire(&retired, &mut self.scene, &content);
+                self.painter.retire(&retired, &mut self.tables);
             }
             // The device pixel ratio and what the device can do are both properties of this
             // window, and both change what is emitted: the first decides where a snapped edge
@@ -1731,7 +1523,6 @@ impl Window {
                 scale: self.scale,
                 capabilities,
                 glyphs: &content,
-                glyph_placements: &content,
                 placements: Some(&placements),
                 highlights: self.carets.plan(),
                 replaced: &content,
@@ -1753,12 +1544,6 @@ impl Window {
                     .router
                     .pointers()
                     .position_of(zgui_vocab::PointerId::MOUSE),
-                // The same object again, and deliberately: what it answers here is not "give me
-                // this" but "keep this". A range this frame records is replayed by later frames
-                // without any of them looking a glyph up, so the record is what tells the atlas
-                // those tiles are still on the screen.
-                resources: &content,
-                verify_replays: self.verify_replays,
                 // A translucent surface is composited over something else, and per-channel text
                 // coverage has no meaning there: the paint demotes it to ordinary coverage.
                 opaque_surface: !self.translucent,
@@ -1771,7 +1556,7 @@ impl Window {
                 ),
                 // A full set means the surface and nothing more. Without the bound, the walk visits
                 // every fragment of the document, also the rows of a long scroll container.
-                surface: Some(zgui_geom::Rect::new(zgui_geom::Point::new(0, 0), viewport)),
+                surface: Some(bound),
                 ..PaintInput::new(&layout, &self.damage)
             };
             zgui_profile::latency::note_with("d.postexpand", || {
@@ -1785,9 +1570,27 @@ impl Window {
             });
             mark("p.emit");
             let before = glyph_counts();
-            let report = self.painter.emit(&input, &mut self.scene);
+            let report = self.painter.emit(&input, &mut self.tables);
+            if let Some(sync) = self.painter.compositor() {
+                self.driven.write_animations(sync);
+            }
+            transaction = self
+                .painter
+                .compositor()
+                .and_then(|sync| sync.close(&layout, &mut self.tables));
+            let removed = self
+                .painter
+                .compositor_ref()
+                .map(|sync| sync.removed_ink().to_vec())
+                .unwrap_or_default();
             vector_report = report.vector_routes;
             self.layers_owed = report.layers_owed;
+            // The compositor measures a recording's damage on the whole device, so the ink is
+            // declared whole, also where it reaches past the surface.
+            self.recorded_ink = iceblink::damage::DamageSet::new();
+            for ink in report.recorded_ink.iter().chain(&removed) {
+                self.recorded_ink.absorb(crate::window::declared::of(*ink));
+            }
             let after = glyph_counts();
             zgui_profile::latency::note_with("p.finish", || {
                 format!(
@@ -1798,6 +1601,15 @@ impl Window {
                     report.skipped_subtrees
                 )
             });
+        }
+        self.vouch(&margins.measured);
+        // The driver applies a configuration with the next commit, so nothing may commit between
+        // the two, such as the embed transaction.
+        if let Some(target) = self.configuring.take() {
+            self.compositor.configure(target);
+        }
+        if let Some(transaction) = transaction {
+            self.submit_transaction(transaction);
         }
         let mut touched = rustc_hash::FxHashMap::default();
         for report in vector_report {
@@ -1867,37 +1679,15 @@ impl Window {
                 &mut self.content,
             );
         }
-        // Before the scene is finished, which is where a sprite still carrying a name rather than a
-        // placement is refused: the arrays are sorted there, and a placeholder has no texture to be
-        // sorted by. Costs an empty-list check on a frame every one of whose rasters was placed as
-        // it was reached, which is every frame that rasterises as it walks.
-        self.scene.resolve_resources(self.content.registry());
-        self.scene.finish(&self.damage);
-        // Before the renderer indexes a dense array of matrices with the numbers this list carries.
-        // A primitive whose coordinate system changed hands under it draws a real box's content
-        // through an unrelated box's matrix, and every other check the project has agrees with the
-        // result: the bytes did not move, the geometry did not move, and the pixels are plausible.
-        self.scene.check_spatial_dependencies();
         mark("p.upload");
-        match self.content.flush(self.renderer.texture_sink()) {
-            // Every queued write reached the device, so a shared attachment's tile can stand in
-            // for its host texels from here on: the cache gives its copies back, and the loader
-            // gives back its own for every tile the cache vouches is resident. Small pictures
-            // keep theirs — the constant says why.
-            Ok(_) => {
-                self.content
-                    .settle_uploaded(crate::images::RETAIN_SMALL_BYTES);
-                let content = &self.content;
-                self.images
-                    .release_uploaded(|handle| content.image_tile_resident(handle));
-            }
-            // A refused upload is not a reason to drop the frame: what did reach the device still
-            // draws, and the tiles that did not stay queued for the next one — and every host
-            // copy is kept, which is the safe direction.
-            Err(error) => {
-                tracing::warn!(target: "zgui::paint", %error, "an atlas upload was refused");
-            }
-        }
+        // A shared attachment the frame served stands in for its host texels from here on: the
+        // cache gives its copies back, and the loader gives back its own for every attachment the
+        // cache vouches is served. Small pictures keep theirs — the constant says why.
+        self.content
+            .settle_uploaded(crate::images::RETAIN_SMALL_BYTES);
+        let content = &self.content;
+        self.images
+            .release_uploaded(|handle| content.image_tile_resident(handle));
         // Uploaded pictures whose tiles this frame found gone — evicted, or lost with the device
         // — have no host copy to re-upload from; the loader decodes them again from their
         // sources, and the completion's wake brings the frame that shows them.
@@ -1913,24 +1703,21 @@ impl Window {
         // stated no level to come back under.
         self.enforce_budgets();
 
-        if self.occluded || self.starved {
+        if self.occluded {
             // Nothing is acquired and nothing is presented, and the frame still ran: a callback
-            // fired and a sleeping task resumed behind a minimised window. A starved surface takes
-            // the same door for the same reason — its acquisition would block the loop for up to a
-            // second, and the probe is the one frame allowed to pay that.
+            // fired and a sleeping task resumed behind a minimised window.
             return FrameOutcome::Skipped(SkipReason::Occluded);
         }
         zgui_profile::latency::note_with("p.draw", || {
             format!("{}x{}", viewport.width, viewport.height)
         });
-        // Handed over before the draw and after the occlusion check, because a window that is not
-        // going to draw is not going to have anything to move either — and a shift recorded now and
-        // drawn against a later frame would move pixels a different scroll offset already moved.
-        if let Some(shift) = shift {
-            self.renderer.shift_composed(shift);
-        }
-        let outcome = self.renderer.draw(&self.scene, &self.damage);
-        let vector_after = self.renderer.vector_status();
+        let drawn = self.draw_output(self.painted_at.unwrap_or(zgui_vocab::Timestamp::ORIGIN));
+        let outcome = drawn.outcome;
+        let vector_after = self
+            .compositor
+            .status()
+            .map(|status| status.vector)
+            .unwrap_or_default();
         if !vector_before.initialized && vector_after.initialized {
             // Once per renderer: the build is the costliest single step a frame can take, so the
             // log names what asked for it.
@@ -1941,7 +1728,7 @@ impl Window {
                 first = ?complex_this_frame.first(),
                 "the general vector rasteriser was built"
             );
-            if vector_after.backend == Some(zgui_render::VectorBackend::Vello) {
+            if vector_after.backend == Some(iceblink::VectorBackend::Compute) {
                 self.vello_initializers = complex_this_frame;
             }
         }
@@ -1969,6 +1756,12 @@ fn exposed(
         )
     });
     right.into_iter().chain(bottom)
+}
+
+/// Returns a target's size in device pixels.
+fn device_size(size: [u32; 2]) -> Size<i32, zgui_geom::Device> {
+    let [width, height] = size.map(|side| i32::try_from(side).unwrap_or(i32::MAX));
+    Size::new(width, height)
 }
 
 /// Whether layout batches ride the pool, which `ZGUI_LAYOUT_BATCHES=0` opts a run out of.

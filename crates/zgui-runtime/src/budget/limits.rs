@@ -1,10 +1,10 @@
-//! The levels the entry-counted caches are held to, and what each number is derived from.
+//! The levels the caches and the compositor's atlas are held to, and what each number is derived
+//! from.
 //!
 //! Two of the registered caches are budgeted in entries and one — decoded images — in bytes, and
 //! the numbers are stated here rather than at their use so that the derivation is in one place
-//! and can be argued with. The glyph atlas's level is
-//! [`ATLAS_SOFT_BYTES`](crate::window::ATLAS_SOFT_BYTES) and belongs beside the window that
-//! installs it; the remaining caches state no level at all — see their adapters for why.
+//! and can be argued with. The remaining caches state no level at all — see their adapters for why.
+//! The compositor's atlas is held to [`ATLAS_BYTES`].
 //!
 //! # Where the numbers come from
 //!
@@ -82,6 +82,13 @@ pub const PLACED_DRAWINGS: usize = 16_384;
 /// whose fragments never die — records now outlive visits, so nothing else bounds them. Evicting
 /// one is a clean miss: the next frame that reaches its fragment encodes it again.
 pub const PAINT_CHUNK_BYTES: u64 = 64 * 1024 * 1024;
+
+/// How many bytes of atlas pages the compositor holds before unpinned entries are evicted.
+///
+/// The compositor evicts down to it when it builds a frame. Pinned entries stay, so the atlas can
+/// remain above it.
+// The base's per-window level: several times a text-heavy document's glyphs.
+pub const ATLAS_BYTES: u64 = 64 * 1024 * 1024;
 
 /// The levels one window holds its entry-counted caches to.
 ///

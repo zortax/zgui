@@ -1,10 +1,9 @@
 //! What an effect is drawn with, and how an application changes it.
 
-use std::sync::{Arc, Mutex};
+use iceblink::ParamsBlock as Block;
+use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderReads, SharedParams};
 
-use zgui_render_wgpu::ParamsLayout;
-use zgui_scene::{MAX_PARAMS_BYTES, ShaderId, ShaderParams as Block};
-use zgui_wgsl::ShaderReads;
+use crate::program::ParamsLayout;
 
 /// A structure an effect's `Params` is written as.
 ///
@@ -71,27 +70,19 @@ impl ShaderParams for NoParams {
     fn write(&self, _out: &mut [u8; MAX_PARAMS_BYTES]) {}
 }
 
-/// What one mounted effect is currently drawn with.
-#[derive(Debug)]
-struct Slot {
-    /// The block, framework half and application half together.
-    params: Block,
-    /// How many times the block has changed, so a caller can tell whether it owes a repaint.
-    revision: u64,
-}
-
 /// A registered effect, and the parameters it draws with.
 ///
 /// Cloning shares the parameters: two clones are two names for one effect, and setting the
-/// parameters through either is seen through both.
+/// parameters through either is seen through both. A change is drawn on the next frame of every
+/// window that draws the effect, without the element that paints it painting again.
 #[derive(Debug)]
 pub struct ShaderHandle<P> {
-    /// The handle a display list names the effect by.
+    /// The handle the effect was declared under.
     id: ShaderId,
     /// What the effect reads that changes on its own.
     reads: ShaderReads,
-    /// The parameters, shared between clones.
-    slot: Arc<Mutex<Slot>>,
+    /// The parameters, shared between clones and with the windows that draw them.
+    params: SharedParams,
     /// The parameter structure this handle is written with.
     marker: core::marker::PhantomData<fn(P)>,
 }
@@ -101,7 +92,7 @@ impl<P> Clone for ShaderHandle<P> {
         Self {
             id: self.id,
             reads: self.reads,
-            slot: Arc::clone(&self.slot),
+            params: self.params.clone(),
             marker: core::marker::PhantomData,
         }
     }
@@ -113,26 +104,18 @@ impl<P: ShaderParams> ShaderHandle<P> {
         Self {
             id,
             reads,
-            slot: Arc::new(Mutex::new(Slot {
-                params: Block::EMPTY,
-                revision: 0,
-            })),
+            params: SharedParams::new(),
             marker: core::marker::PhantomData,
         }
     }
 
     /// Draws with `params` from now on.
     ///
-    /// The pointer the framework fills in is kept: it is the framework's half of the block and an
-    /// application does not write it.
-    ///
-    /// This changes what the *next* painting draws. An element that does not repaint keeps showing
-    /// the parameters it was painted with, so a change here belongs beside whatever bumps the
-    /// element's paint revision.
+    /// The pointer set with [`set_pointer`](ShaderHandle::set_pointer) is kept.
     pub fn set_params(&self, params: P) {
-        self.update(|held| {
-            held.params.user = [0; MAX_PARAMS_BYTES];
-            params.write(&mut held.params.user);
+        self.params.update(|block| {
+            block.user = [0; MAX_PARAMS_BYTES];
+            params.write(&mut block.user);
         });
     }
 
@@ -141,10 +124,13 @@ impl<P: ShaderParams> ShaderHandle<P> {
     /// Only useful to an effect that declared it reads the pointer; a handle whose effect did not
     /// is drawn identically whatever this says.
     pub fn set_pointer(&self, pointer: [f32; 2], hovered: bool) {
-        self.update(|held| held.params = held.params.with_pointer(pointer, hovered));
+        self.params.update(|block| {
+            block.pointer = pointer;
+            block.hovered = if hovered { 1.0 } else { 0.0 };
+        });
     }
 
-    /// The handle a display list names this effect by.
+    /// The handle the effect was declared under, which items draw it by.
     pub fn id(&self) -> ShaderId {
         self.id
     }
@@ -156,32 +142,25 @@ impl<P: ShaderParams> ShaderHandle<P> {
 
     /// The block the effect is currently drawn with.
     pub fn params(&self) -> Block {
-        self.slot.lock().map_or(Block::EMPTY, |held| held.params)
+        self.params.block()
+    }
+
+    /// The block shared with the windows that draw the effect.
+    pub fn shared(&self) -> &SharedParams {
+        &self.params
     }
 
     /// How many times the parameters have changed.
-    ///
-    /// Fold it into a custom element's paint revision, and the element repaints exactly when the
-    /// effect would draw something different.
     pub fn revision(&self) -> u64 {
-        self.slot.lock().map_or(0, |held| held.revision)
-    }
-
-    /// Applies `change` and counts it.
-    fn update(&self, change: impl FnOnce(&mut Slot)) {
-        if let Ok(mut held) = self.slot.lock() {
-            change(&mut held);
-            held.revision = held.revision.wrapping_add(1);
-        }
+        self.params.revision()
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{NoParams, ShaderHandle, ShaderParams};
-    use zgui_render_wgpu::{ParamsField, ParamsLayout};
-    use zgui_scene::ShaderId;
-    use zgui_wgsl::ShaderReads;
+    use crate::program::{ParamsField, ParamsLayout};
+    use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderReads};
 
     #[repr(C)]
     #[derive(Clone, Copy, Default)]
@@ -207,7 +186,7 @@ mod tests {
             ],
         };
 
-        fn write(&self, out: &mut [u8; zgui_scene::MAX_PARAMS_BYTES]) {
+        fn write(&self, out: &mut [u8; MAX_PARAMS_BYTES]) {
             super::ParamsValue::write(self.first, &mut out[0..4]);
             super::ParamsValue::write(self.second, &mut out[4..8]);
         }
@@ -268,6 +247,6 @@ mod tests {
     fn an_effect_with_no_parameters_still_has_a_block() {
         let handle: ShaderHandle<NoParams> = ShaderHandle::new(ShaderId(2), ShaderReads::NOTHING);
         handle.set_params(NoParams);
-        assert_eq!(handle.params().user, [0u8; zgui_scene::MAX_PARAMS_BYTES]);
+        assert_eq!(handle.params().user, [0u8; MAX_PARAMS_BYTES]);
     }
 }

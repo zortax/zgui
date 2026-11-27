@@ -71,6 +71,7 @@ pub mod budget;
 pub mod caret;
 pub mod clipboard;
 pub mod commands;
+pub mod compositor;
 pub mod desktop;
 pub mod dispatch;
 mod documents;
@@ -95,8 +96,7 @@ pub mod window;
 pub mod windows;
 
 pub use crate::app::{
-    App, ExitPolicy, Failure, MetricsFactory, RasterFactory, RendererFactory, Runtime, TextFactory,
-    ViewFactory,
+    App, ExitPolicy, Failure, MetricsFactory, RendererFactory, Runtime, TextFactory, ViewFactory,
 };
 pub use crate::binding::{HostBinding, NoBinding};
 pub use crate::budget::{BudgetReport, Budgeted, CacheId, CacheReport};
@@ -107,6 +107,7 @@ pub use crate::commands::{
 pub use crate::editing::Editors;
 pub use crate::embed::{
     EmbedHost, EmbedMaintenanceCx, EmbedMemoryReport, EmbedSyncCx, EmbedSyncReport, NoEmbeds,
+    RendererQueue,
 };
 pub use crate::error::AppError;
 pub use crate::frame_callbacks::FrameCallbacks;
@@ -123,7 +124,6 @@ pub use crate::timer::Timers;
 pub use crate::wake::{FrameGate, RuntimeWaker};
 pub use crate::window::anim::cadence::AnimationCadence;
 pub use crate::window::frame::FrameReport;
-pub use crate::window::present::PresentPace;
 pub use crate::window::resize::ResizePace;
 pub use crate::window::text_aa::TextAntialiasing;
 pub use crate::window::{MAINTENANCE_DELAY, Window, WindowContent};

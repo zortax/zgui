@@ -1,18 +1,14 @@
-//! `corner-shape` through the whole application, from a style sheet to the display list.
+//! `corner-shape` through the whole application, from a style sheet to what the window draws.
 //!
 //! The unit tests say the property parses and the device tests say each shape draws. What is
 //! asserted here is the wiring in between: that a style sheet reaches the box's own quad *and* the
 //! clip the box gives its children, which are the two halves that have to agree or content shows
 //! its corners past the card holding it.
 
-use std::sync::Arc;
-
-use zgui::platform::{Surface, SurfaceEvent};
+use zgui::platform::{AppHandler, PlatformError, SurfaceEvent};
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
-use zgui::runtime::{AppError, Runtime};
-use zgui::view::{Anchor, BuildCx};
 use zgui_platform_headless::Harness;
+use zgui_testkit_compositor::{Drawing, Instance, Screen};
 
 const SHEET: &str = zgui::css!(
     "root { display: block; width: 300px; height: 200px }
@@ -35,90 +31,77 @@ const SHEET: &str = zgui::css!(
      }"
 );
 
-/// The application, with one smoothed card holding one child.
-fn mounted() -> Harness<Runtime> {
-    let handler = zgui::runtime::App::new()
+/// The corner exponents a quad or a clip link cut to a squircle carries.
+const SQUIRCLE: &str = "shapes=[4, 4, 4, 4]";
+
+/// Returns what the application shows, with one smoothed card holding one child.
+fn drawn() -> Drawing {
+    let screen = Screen::new();
+    let shown = screen.shown();
+    let mut screen = Some(screen);
+    let drive = |handler: Box<dyn AppHandler>| -> Result<(), PlatformError> {
+        let mut harness = Harness::new(handler);
+        harness.deliver_to_first(SurfaceEvent::Resized(zgui::geom::Size::new(
+            zgui::geom::DevicePx(300.0),
+            zgui::geom::DevicePx(200.0),
+        )));
+        harness.settle(32);
+        Ok(())
+    };
+    zgui::app()
         .with_title("corner-shape")
         .with_size(300.0, 200.0)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(
-            |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-                Renderer::configure(&mut renderer, target);
-                Ok::<_, AppError>(Box::new(renderer) as Box<dyn Renderer>)
-            },
-        ))
-        .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
+        .with_compositor_renderer(Box::new(move |_size| {
+            Box::new(screen.take().expect("the application opens one window"))
+                as Box<dyn iceblink::Renderer>
         }))
-        .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
-            Box::new(
-                view! {
-                    box(class = "root") {
-                        box(class = "card") { box(class = "inner") {} }
-                        box(class = "plain") {}
-                    }
+        .run_on(drive, || {
+            view! {
+                box(class = "root") {
+                    box(class = "card") { box(class = "inner") {} }
+                    box(class = "plain") {}
                 }
-                .into_view()
-                .build(cx),
-            )
+            }
         })
-        .expect("the reactive runtime installs");
-    let mut harness = Harness::new(handler);
-    harness.deliver_to_first(SurfaceEvent::Resized(zgui::geom::Size::new(
-        zgui::geom::DevicePx(300.0),
-        zgui::geom::DevicePx(200.0),
-    )));
-    harness.settle(32);
-    harness
+        .expect("the application ran");
+    shown.drawing().expect("the window drew a frame")
+}
+
+/// Returns the quad filled with the opaque colour `rgb`.
+fn filled(drawing: &Drawing, rgb: [f32; 3]) -> &Instance {
+    let [r, g, b] = rgb;
+    drawing
+        .quads()
+        .into_iter()
+        .find(|quad| quad.color("fill") == Some([r, g, b, 1.0]))
+        .unwrap_or_else(|| panic!("no quad is filled with {rgb:?}:\n{drawing}"))
 }
 
 #[test]
 fn a_style_sheet_cuts_the_box_it_names_and_the_clip_that_box_gives_its_children() {
-    let mut harness = mounted();
-    let window = &mut harness.app_mut().windows_mut()[0];
-    let scene = window.scene();
+    let drawing = drawn();
 
-    let card = scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| quad.radii[0] > 0.0)
-        .expect("the card reached the display list");
-    assert_eq!(
-        card.corner_shape(),
-        zgui_scene::CornerShape::SQUIRCLE,
-        "the box the sheet named is cut to the shape it named"
+    let card = filled(&drawing, [1.0, 0.0, 0.0]);
+    assert!(
+        card.has(SQUIRCLE),
+        "the box the sheet named is cut to the shape it named: {}",
+        card.text()
     );
 
     // The child is drawn through the clip the card gives it, and that clip has to be cut the same
     // way or the child's own corners show past the card's.
-    let inner = scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| quad.clip_id() != zgui_scene::ClipId::ROOT)
-        .expect("the child is drawn through a clip of its own");
+    let inner = filled(&drawing, [0.0, 1.0, 0.0]);
+    let clip = inner.field("clip").unwrap_or_else(|| {
+        panic!(
+            "the child is drawn through a clip of its own: {}",
+            inner.text()
+        )
+    });
     assert!(
-        scene
-            .clips
-            .links(inner.clip_id())
-            .iter()
-            .any(|link| matches!(
-                link,
-                zgui_scene::ClipLink::RoundedRect { shape, .. }
-                    if *shape == zgui_scene::CornerShape::SQUIRCLE
-            )),
-        "the clip the card gives its children is cut the way the card is"
-    );
-    // And the flattened form the shader actually reads carries it too.
-    let resolved = scene.clips.resolve(inner.clip_id());
-    assert_eq!(
-        resolved.rounded[0].shape,
-        zgui_scene::CornerShape::SQUIRCLE.get(),
-        "the chain flattens to a test the shading code cuts the same way"
+        clip.contains("radii=") && clip.contains(SQUIRCLE),
+        "the clip the card gives its children is cut the way the card is: {clip}"
     );
 }
 
@@ -126,16 +109,13 @@ fn a_style_sheet_cuts_the_box_it_names_and_the_clip_that_box_gives_its_children(
 /// document changes shape the moment one card asks for a smoothed corner.
 #[test]
 fn a_box_beside_the_one_that_named_a_shape_is_still_the_ellipse() {
-    let mut harness = mounted();
-    let window = &mut harness.app_mut().windows_mut()[0];
-    let scene = window.scene();
-    let plain = scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| quad.radii[0] == 12.0)
-        .expect("the sibling reached the display list");
-    assert_eq!(plain.corner_shape(), zgui_scene::CornerShape::ROUND);
+    let drawing = drawn();
+    let plain = filled(&drawing, [0.0, 0.0, 1.0]);
+    assert!(
+        plain.field("radii").is_some() && plain.field("shapes").is_none(),
+        "the sibling is a round box: {}",
+        plain.text()
+    );
 }
 
 /// The shape inherits, because every unregistered custom property does — and here that is wanted
@@ -143,16 +123,13 @@ fn a_box_beside_the_one_that_named_a_shape_is_still_the_ellipse() {
 /// able to say once. A descendant that wants the ellipse back writes `round`.
 #[test]
 fn the_shape_inherits_and_a_descendant_can_take_it_back() {
-    let mut harness = mounted();
-    let window = &mut harness.app_mut().windows_mut()[0];
-    let scene = window.scene();
+    let drawing = drawn();
     // The child inside the card inherited the shape. It has no radii, so it draws exactly as it
     // would have — which is why the inheritance is survivable as well as wanted.
-    let inner = scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| quad.clip_id() != zgui_scene::ClipId::ROOT && quad.radii[0] == 0.0)
-        .expect("the child reached the display list");
-    assert_eq!(inner.corner_shape(), zgui_scene::CornerShape::SQUIRCLE);
+    let inner = filled(&drawing, [0.0, 1.0, 0.0]);
+    assert!(
+        inner.field("radii").is_none() && inner.has(SQUIRCLE),
+        "the child carries the inherited shape: {}",
+        inner.text()
+    );
 }

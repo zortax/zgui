@@ -20,7 +20,7 @@ pub mod timing;
 pub mod visibility;
 
 pub use crate::frame::ahead::Ahead;
-pub use crate::frame::pace::Pacer;
+pub use crate::frame::pace::{Composer, Pacer};
 pub use crate::frame::presentation::Presentation;
 pub use crate::frame::timing::Timing;
 pub use crate::frame::visibility::Visibility;

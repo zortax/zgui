@@ -1,9 +1,7 @@
 //! The collection, the faces it has issued handles for, and the one lock over both.
 
 use fontique::{Collection, CollectionOptions, SourceCache};
-use rustc_hash::FxHashMap;
 
-use crate::font::color::ColorSupport;
 use crate::font::registry::FaceTable;
 use crate::system::options::FontSystemOptions;
 
@@ -20,8 +18,6 @@ pub(crate) struct Shared {
     pub(crate) sources: SourceCache,
     /// The handles this system has issued.
     pub(crate) faces: FaceTable,
-    /// Which colour mechanisms each face carries, keyed by file identity and face index.
-    colors: FxHashMap<(u64, u32), ColorSupport>,
 }
 
 impl Shared {
@@ -39,21 +35,10 @@ impl Shared {
             }),
             // Shared, so every context cloned from this system — the frame's shaper and each of its
             // forks — resolves one font file to one blob. An unshared cache gives each clone its
-            // own copy of the data, and everything keyed by blob identity downstream — the glyph
-            // raster above all — then treats the same face as a different font per shaper.
+            // own copy of the data, and everything keyed by blob identity downstream — the face table
+            // above all — then treats the same face as a different font per shaper.
             sources: SourceCache::new_shared(),
             faces: FaceTable::default(),
-            colors: FxHashMap::default(),
         }
-    }
-
-    /// The colour mechanisms one face carries, read once per file and remembered.
-    pub(crate) fn color_support(&mut self, key: (u64, u32), data: &[u8]) -> ColorSupport {
-        if let Some(support) = self.colors.get(&key) {
-            return *support;
-        }
-        let support = ColorSupport::probe(data, key.1);
-        self.colors.insert(key, support);
-        support
     }
 }

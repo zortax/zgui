@@ -8,16 +8,12 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use zgui_atlas::TextureSink;
-use zgui_bits::DamageSet;
-use zgui_platform::{PlatformError, Surface};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
-use zgui_render_wgpu::{Builder, WgpuRenderer};
+use iceblink_wgpu::{Builder, WgpuRenderer};
+use zgui_platform::{PlatformError, Surface};
 use zgui_runtime::AppError;
-use zgui_scene::Scene;
 
 use crate::tape::Shared;
 
@@ -68,14 +64,11 @@ impl Renderer for Timed {
 
     fn configure(&mut self, target: RenderTarget) {
         let at = Instant::now();
-        self.extent = (
-            target.size.width.max(0) as u32,
-            target.size.height.max(0) as u32,
-        );
+        self.extent = (target.size[0], target.size[1]);
         self.tape.borrow_mut().at(
             at,
             "gpu.cfg0",
-            format!("{}x{}@{}", self.extent.0, self.extent.1, target.scale.get()),
+            format!("{}x{}@{}", self.extent.0, self.extent.1, target.scale),
         );
         self.inner.configure(target);
         self.tape.borrow_mut().now("gpu.cfg1", "");
@@ -85,7 +78,12 @@ impl Renderer for Timed {
         self.inner.target()
     }
 
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        let damage = &frame.damage.draw;
         let began = Instant::now();
         self.tape.borrow_mut().at(
             began,
@@ -98,7 +96,7 @@ impl Renderer for Timed {
                 damage.rects().len()
             ),
         );
-        let outcome = self.inner.draw(scene, damage);
+        let outcome = self.inner.draw(frame);
         let detail = match outcome {
             FrameOutcome::Presented(stats) => {
                 format!(
@@ -121,20 +119,8 @@ impl Renderer for Timed {
         outcome
     }
 
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
@@ -153,22 +139,25 @@ pub(crate) fn build(
     surface: &Arc<dyn Surface>,
     target: RenderTarget,
     tape: Shared,
-) -> Result<Box<dyn Renderer>, AppError> {
+) -> Result<iceblink::RendererFactory, AppError> {
     let Some(handles) = Arc::clone(surface).gpu_shared() else {
         return Err(AppError::Platform(PlatformError::Backend(
             "this window offers no handles a graphics API can draw into".to_owned(),
         )));
     };
-    // The notify only when asked for, matching the application default.
-    let builder = Builder::new();
-    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
-        let presented = Arc::clone(surface);
-        builder.with_pre_present(Box::new(move |_| {
-            presented.pre_present_notify();
-        }))
-    } else {
-        builder
-    };
-    let inner = builder.for_surface(target, handles)?;
-    Ok(Box::new(Timed::new(inner, tape)))
+    let surface = Arc::clone(surface);
+    Ok(Box::new(move || {
+        // The notify only when asked for, matching the application default.
+        let builder = Builder::new();
+        let notify = matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify");
+        let builder = if notify {
+            builder.with_pre_present(Box::new(move |_| {
+                surface.pre_present_notify();
+            }))
+        } else {
+            builder
+        };
+        let inner = builder.for_surface(target.size, target.opaque, handles)?;
+        Ok(Box::new(Timed::new(inner, tape)) as Box<dyn Renderer>)
+    }))
 }

@@ -55,7 +55,6 @@ pub(crate) fn first_match(
             .find(|font| font.index() == index)
             .cloned()
     });
-    let colors = shared.color_support((blob.id(), index), blob.data());
     // The axis values reported are the face's own and not the ones asked for, which is what tells
     // a caller that a weight it wanted is going to have to be synthesised.
     let weight = own.as_ref().map_or(400.0, |font| font.weight().value());
@@ -76,7 +75,6 @@ pub(crate) fn first_match(
                 slant,
                 width,
                 is_variable: variable,
-                has_color: colors.any(),
             }),
     )
 }

@@ -1,9 +1,8 @@
 //! Which of a window's fields are budgeted caches, and what the frame does about them.
 //!
 //! The registry is a visitor rather than a list, and this is why: the caches are fields of the
-//! window and each of them needs a different second half of the window to do its part — the atlas
-//! needs the renderer's texture sink, the shaping cache needs the layout store, the target pool is
-//! only reachable through the renderer. Visiting them one at a time is what lets each borrow what
+//! window and each of them needs a different second half of the window to do its part — the
+//! shaping cache needs the layout store, the target pool is only reachable through the renderer. Visiting them one at a time is what lets each borrow what
 //! it needs for exactly as long as it is being visited, without any of them being moved out of the
 //! window to be budgeted.
 //!
@@ -11,8 +10,8 @@
 //! visited here is covered by them without anyone remembering to go and add it to a test.
 
 use crate::budget::caches::{
-    DecodedImagesBudget, DeviceMemoryBudget, GlyphAtlasBudget, PaintChunksBudget,
-    ParagraphShapingBudget, RenderTargetsBudget, VectorLayersBudget, VectorResourcesBudget,
+    DecodedImagesBudget, DeviceMemoryBudget, PaintChunksBudget, ParagraphShapingBudget,
+    RenderTargetsBudget, VectorLayersBudget, VectorResourcesBudget,
 };
 use crate::budget::manager::{self, Budgeted, CacheRegistry};
 use crate::budget::report::{BudgetReport, CacheId};
@@ -22,32 +21,24 @@ use crate::window::Window;
 impl CacheRegistry for Window {
     fn for_each(&mut self, visit: &mut dyn FnMut(&mut dyn Budgeted)) {
         let embed_memory = self.embed.memory();
-        // First, before the atlas: its forget releases atlas and table holds, which has to happen
-        // while the caches those holds are in still resolve them.
+        // First: its forget releases table holds, which has to happen while the tables those holds
+        // are in still resolve them.
         let chunk_bytes = self.budgets.limits().paint_chunk_bytes;
         visit(&mut PaintChunksBudget::new(
             &mut self.painter,
-            &mut self.scene,
-            &mut self.content,
+            &mut self.tables,
             chunk_bytes,
             self.budgets.tracked(CacheId::PaintChunks),
         ));
-        // Before the atlas, whose forget clears the layers with everything else in it.
         let size = self.surface.size();
         let layer_bytes = crate::budget::caches::layers::layer_limit(
             size.width.0.max(0.0) as u32,
             size.height.0.max(0.0) as u32,
         );
         visit(&mut VectorLayersBudget::new(
-            &mut self.painter,
-            &mut self.scene,
             &mut self.content,
             layer_bytes,
             self.budgets.tracked(CacheId::VectorLayers),
-        ));
-        visit(&mut GlyphAtlasBudget::new(
-            &mut self.content,
-            self.budgets.tracked(CacheId::GlyphAtlas),
         ));
         let decoded_bytes = self.budgets.limits().decoded_image_bytes;
         visit(&mut DecodedImagesBudget::new(
@@ -69,15 +60,18 @@ impl CacheRegistry for Window {
             drawings,
             self.budgets.tracked(CacheId::VectorResources),
         ));
+        let status = self.compositor.status();
+        let compositor = &self.compositor;
         visit(&mut RenderTargetsBudget::new(
-            &mut *self.renderer,
+            status,
+            &mut || compositor.release_cached_targets(),
             self.budgets.tracked(CacheId::RenderTargets),
         ));
         // Last, and not a cache: everything else the renderer holds on the device. It frees
         // nothing and states no level; what it does is make the registry's total the process's
         // total rather than the small part of it that happens to be reproducible.
         visit(&mut DeviceMemoryBudget::new(
-            &mut *self.renderer,
+            status,
             embed_memory.callback_owned,
             self.budgets.tracked(CacheId::DeviceMemory),
         ));
@@ -114,9 +108,7 @@ impl Window {
 
     /// Changes the levels this window's entry-counted caches are held to.
     ///
-    /// Nothing is freed here; the new levels take effect at the end of the next frame. The atlas's
-    /// own level is not among them — it is a byte figure held by the atlas and set through
-    /// [`ContentCache::set_soft_bytes`](zgui_paint::ContentCache::set_soft_bytes).
+    /// Nothing is freed here; the new levels take effect at the end of the next frame.
     pub fn set_cache_limits(&mut self, limits: CacheLimits) {
         self.budgets.set_limits(limits);
     }
@@ -164,7 +156,7 @@ impl Window {
             .extend(self.diff_scratch.take_retired_clips());
         let layout = self.layout.borrow();
         let walked = self
-            .scene
+            .tables
             .clips
             .slots()
             .max(layout.fragment_count() as usize / FRAGMENTS_PER_SLOT);
@@ -172,12 +164,12 @@ impl Window {
             return;
         }
         // A fragment re-encoded later emits under the chain it stored at build.
-        let scene = &mut self.scene;
+        let tables = &mut self.tables;
         layout.each_fragment(|fragment| {
-            scene.clips.use_of(fragment.clip);
+            tables.clips.use_of(fragment.clip);
         });
         drop(layout);
-        scene.clips.evict_retired_chains(&mut self.retired_clips);
+        tables.clips.evict_retired_chains(&mut self.retired_clips);
     }
 
     /// Frees the clip chains nothing can reach any more, on a stride of frames.
@@ -203,16 +195,16 @@ impl Window {
         /// The most chains one sweep frees, so the change journal stays a delta for its readers.
         const CAP: usize = 2_048;
 
-        if !epoch.get().is_multiple_of(STRIDE) || self.scene.clips.slots() < FLOOR {
+        if !epoch.get().is_multiple_of(STRIDE) || self.tables.clips.slots() < FLOOR {
             return;
         }
-        let scene = &mut self.scene;
+        let tables = &mut self.tables;
         let layout = self.layout.borrow();
         layout.each_fragment(|fragment| {
-            scene.clips.use_of(fragment.clip);
+            tables.clips.use_of(fragment.clip);
         });
         drop(layout);
-        scene.clips.evict_unreachable_chains(KEEP_GENERATIONS, CAP);
+        tables.clips.evict_unreachable_chains(KEEP_GENERATIONS, CAP);
     }
 
     /// Frees the paint entries nothing holds and no recent frame drew, on a stride of frames.
@@ -235,10 +227,10 @@ impl Window {
         /// The most entries one sweep frees, so the change journal stays a delta for its readers.
         const CAP: usize = 2_048;
 
-        if !epoch.get().is_multiple_of(STRIDE) || self.scene.paints.slots() < FLOOR {
+        if !epoch.get().is_multiple_of(STRIDE) || self.tables.paints.slots() < FLOOR {
             return;
         }
-        self.scene.paints.evict_unreachable(KEEP_GENERATIONS, CAP);
+        self.tables.paints.evict_unreachable(KEEP_GENERATIONS, CAP);
     }
 
     /// Drops everything every budgeted cache holds.

@@ -20,7 +20,7 @@ use zgui_layout::boxtree::patch;
 use zgui_layout::tree::print::to_text;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_profile::Counter;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 
 /// How many rows the port holds.
 const ROWS: usize = 8;
@@ -172,6 +172,29 @@ fn one_row_of_travel_rebuilds_one_row() {
         shape(&to_text(&store)),
         shape(&to_text(&fixture.box_tree())),
         "the spliced tree is not the tree a build from the root produces"
+    );
+}
+
+#[test]
+fn one_row_of_travel_marks_the_order_of_no_row_that_stayed() {
+    let _recording = Recording::begin();
+    let mut fixture = port();
+    let mut store = fixture.box_tree();
+    let kept: Vec<BoxKey> = (1..ROWS)
+        .flat_map(|index| boxes(&store, &fixture, ROW_NAMES[index]))
+        .collect();
+
+    let pane = shift(&mut fixture, "row0", "row8");
+    let version = store.order_version();
+    patch::rebuild(&mut store, &fixture.document, &owes_children(pane))
+        .expect("a row arriving in a column of rows is confined");
+
+    let mut marked = Vec::new();
+    store.order_dirty_since(version, &mut marked);
+    let stayed: Vec<&BoxKey> = kept.iter().filter(|row| marked.contains(row)).collect();
+    assert!(
+        stayed.is_empty(),
+        "the splice marked rows that stayed: {stayed:?}"
     );
 }
 

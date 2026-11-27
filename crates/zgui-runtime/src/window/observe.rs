@@ -144,6 +144,7 @@ impl Window {
                         offset: measured.scroll_offset,
                         content_size: measured.content_size,
                         scrollport: measured.scrollport,
+                        motion: self.scroll_motion(key),
                     }),
                 );
             }

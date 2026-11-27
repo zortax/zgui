@@ -57,10 +57,12 @@ struct Escalated {
     scenario: String,
     /// How many primitives reached the display list.
     emitted: u64,
-    /// How many a clip refused.
+    /// How many the compositor culled, and the scene refused by a clip.
     culled: u64,
     /// How many insertions the draw-order tree took.
     inserts: u64,
+    /// How many subtrees the paint walk did not enter.
+    subtrees: u64,
 }
 
 /// The repository this harness was built from.
@@ -195,6 +197,7 @@ fn escalations(text: &str) -> Vec<Escalated> {
                 emitted: field.next()?.parse().ok()?,
                 culled: field.next()?.parse().ok()?,
                 inserts: field.next()?.parse().ok()?,
+                subtrees: field.nth(2)?.parse().ok()?,
             })
         })
         .collect()
@@ -396,19 +399,19 @@ fn render(
     out.push_str(
         "## Where the frame's cost is\n\
          \n\
-         The three counters below are what decides whether the scene rebuild is the dominant cost \
+         The counters below are what decides whether the scene rebuild is the dominant cost \
          of a frame, which is the question a retention scheme would be the answer to. They are \
          recorded for every scenario rather than for the one somebody suspected, because a number \
          that exists only where it was expected proves nothing about anywhere else.\n\
          \n\
-         | scenario | primitives emitted | primitives culled | bounds-tree inserts |\n\
-         |---|---:|---:|---:|\n",
+         | scenario | primitives emitted | primitives culled | paint subtrees culled | bounds-tree inserts |\n\
+         |---|---:|---:|---:|---:|\n",
     );
     for row in escalated {
         let _ = writeln!(
             out,
-            "| {} | {} | {} | {} |",
-            row.scenario, row.emitted, row.culled, row.inserts
+            "| {} | {} | {} | {} | {} |",
+            row.scenario, row.emitted, row.culled, row.subtrees, row.inserts
         );
     }
     if !notes.is_empty() {

@@ -337,6 +337,19 @@ fn offsets(window: &zgui_runtime::Window) -> (f32, f32) {
     (inner, outer)
 }
 
+/// Where the scroll container `key` is shown, in device pixels: the window's own offset and how far
+/// the compositor scrolled it ahead of that.
+fn shown_offset(window: &zgui_runtime::Window, key: zgui_dom::side::BoxKey) -> f32 {
+    let element = element_of(window, key);
+    let held = window.scroll().borrow().offset_of(element).y.0;
+    let ahead = window
+        .scrolls_ahead()
+        .into_iter()
+        .find(|(container, _)| *container == zgui_view_dom::id::to_view(element))
+        .map_or(0.0, |(_, ahead)| ahead.height.0);
+    held + ahead
+}
+
 #[test]
 fn a_smooth_scroll_travels_over_several_frames_and_parks_with_a_deadline() {
     let mut harness = listing(200);
@@ -365,26 +378,19 @@ fn a_smooth_scroll_travels_over_several_frames_and_parks_with_a_deadline() {
     );
     harness.settle(4);
     assert_eq!(
-        window(&harness)
-            .scroll()
-            .borrow()
-            .offset_of(element_of(window(&harness), container))
-            .y,
-        DevicePx(0.0),
+        shown_offset(window(&harness), container),
+        0.0,
         "a smooth scroll that has been asked for and not yet had any time has not moved"
     );
 
     harness.advance(FRAME);
     harness.settle(4);
-    let first = window(&harness)
-        .scroll()
-        .borrow()
-        .offset_of(element_of(window(&harness), container))
-        .y
-        .0;
+    harness.advance(FRAME);
+    harness.settle(4);
+    let first = shown_offset(window(&harness), container);
     assert!(
         first > 0.0 && first < 400.0,
-        "a smooth scroll that arrived in one frame is not a smooth scroll: it reached {first}"
+        "a smooth scroll that arrived at once is not a smooth scroll: it reached {first}"
     );
     assert!(
         harness.parked_deadline().is_some(),
@@ -743,10 +749,11 @@ fn a_drag_that_leaves_the_scrollport_keeps_carrying_the_list_it_started_on() {
     let before = topmost_row_top(window(&harness), 20.0);
 
     // Down the screen, out of the bottom of the 120-pixel scrollport and over the root below it.
+    // The press lands on a row above the horizontal scrollbar, which would capture the finger.
     drag_finger(
         &mut harness,
-        110.0,
-        &[(140.0, 16), (170.0, 32), (200.0, 48), (230.0, 64)],
+        90.0,
+        &[(120.0, 16), (150.0, 32), (180.0, 48), (210.0, 64)],
     );
 
     let after = topmost_row_top(window(&harness), 20.0);

@@ -8,15 +8,22 @@
 //! another process — the thing that injects the input being measured — can put its own timestamps
 //! on the same axis.
 
-use std::cell::RefCell;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-/// A shared handle on the recording.
-pub(crate) type Shared = Rc<RefCell<Tape>>;
+/// A shared handle on the recording, written from the window's thread and the drawing thread.
+#[derive(Clone)]
+pub(crate) struct Shared(Arc<Mutex<Tape>>);
+
+impl Shared {
+    /// Returns the recording, for one write.
+    pub(crate) fn borrow_mut(&self) -> MutexGuard<'_, Tape> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// One recorded moment.
 struct Moment {
@@ -43,9 +50,9 @@ pub(crate) struct Tape {
 }
 
 impl Tape {
-    /// A recording whose zero is now, to be written to `path`.
-    pub(crate) fn new(path: PathBuf) -> Shared {
-        Rc::new(RefCell::new(Self {
+    /// Returns a shared recording whose zero is now, to be written to `path`.
+    pub(crate) fn shared(path: PathBuf) -> Shared {
+        Shared(Arc::new(Mutex::new(Self {
             base: Instant::now(),
             base_unix_ns: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -53,7 +60,7 @@ impl Tape {
             path,
             written: 0,
             moments: Vec::with_capacity(1 << 16),
-        }))
+        })))
     }
 
     /// Records that `stage` happened at `at`, described by `detail`.

@@ -34,6 +34,8 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
+use iceblink_wgpu::Supplied;
+use iceblink_wgpu::{Gpu, SharedGraphics, wgpu};
 use zgui_drm::commit;
 use zgui_drm::device::Interface;
 use zgui_drm::format::{Format, Modifier};
@@ -41,8 +43,6 @@ use zgui_drm::{Device, Error};
 use zgui_platform_drm::{
     Copied, Cursor, DrmDisplay, EXTENSIONS, FORMAT, Handover, Imported, Output, Scanout,
 };
-use zgui_render_wgpu::target::swapchain::Supplied;
-use zgui_render_wgpu::{Gpu, SharedGraphics, wgpu};
 
 /// How many buffers the imported shape drives a display from.
 ///
@@ -91,7 +91,8 @@ struct Machine {
 /// Four ways to get nothing, and each names itself: no graphics device, no display device, a
 /// display device that cannot be read, and nothing plugged in.
 fn machine(test: &str) -> Option<Machine> {
-    let graphics = SharedGraphics::with_extensions(EXTENSIONS.to_vec());
+    let graphics =
+        SharedGraphics::with_backends_and_extensions(wgpu::Backends::VULKAN, EXTENSIONS.to_vec());
     let gpu = match graphics.open_gpu() {
         Ok(gpu) => gpu,
         Err(failure) => {

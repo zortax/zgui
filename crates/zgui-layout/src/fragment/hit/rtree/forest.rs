@@ -14,7 +14,7 @@
 //! pays anyway.
 
 use zgui_geom::{Device, DevicePx, Rect};
-use zgui_scene::SpatialId;
+use zgui_space::SpatialId;
 
 use crate::fragment::FragKey;
 use crate::fragment::hit::rtree::home::Homes;
@@ -210,7 +210,7 @@ mod tests {
     use zgui_arena::{ArenaKind, DocumentId, DomainId, Generation, Key};
     use zgui_geom::Matrix4;
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-    use zgui_scene::{OwnSpace, PropertyOwner, SpatialTree};
+    use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
 
     use super::Forest;
     use crate::fragment::FragKey;

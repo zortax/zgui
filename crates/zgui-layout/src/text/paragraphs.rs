@@ -1,11 +1,11 @@
 //! A text engine, the paragraphs it has shaped, and the brushes they are drawn with.
 
 use zgui_profile::{Counter, counter};
-use zgui_scene::{TextPaint as SceneTextPaint, TextPaintTable};
 use zgui_text::{
     BreakRequest, BrokenParagraph, Brush, ParagraphCache, ParagraphContent, ParagraphKey,
     ParagraphShaper, ShapedClusters, ShapedGlyphs, ShapedRun, StrutMetrics,
 };
+use zgui_text::{TextPaint as BrushPaint, TextPaintTable};
 use zgui_text_style::{TextPaint, TextStyle};
 
 use crate::measure::{MeasureContent, MeasureRequest, Measured, NaturalSize, ShapedSummary};
@@ -365,6 +365,10 @@ impl<S: ParagraphShaper, R> ShapedGlyphs for Paragraphs<S, R> {
         };
         self.shaper.visit_line(shaped, line, visit);
     }
+
+    fn brush(&self, brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        self.paints.get(brush).copied()
+    }
 }
 
 impl<S: ParagraphShaper, R> ShapedClusters for Paragraphs<S, R> {
@@ -475,7 +479,7 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         debug_assert!(
             self.paints
                 .slot_of(address)
-                .is_none_or(|slot| { self.paints.get(slot) == Some(&SceneTextPaint::new(colour)) }),
+                .is_none_or(|slot| { self.paints.get(slot) == Some(&BrushPaint::new(colour)) }),
             "a run is being shaped into a brush slot that holds another colour: the way back from \
              its cascade result to a slot has been pointed at something else's"
         );
@@ -485,7 +489,7 @@ impl<S: ParagraphShaper, R: MeasureContent> MeasureContent for Paragraphs<S, R> 
         let slot = self.paints.slot_for(address, || {
             pinned.push(held);
             claimed = true;
-            SceneTextPaint::new(colour)
+            BrushPaint::new(colour)
         });
         // The pins go only in `release_brushes`, which runs after the brush table's owner forgets
         // keys.

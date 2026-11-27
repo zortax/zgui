@@ -48,7 +48,7 @@ fn loader() -> ImageLoader {
 #[test]
 fn shown_pictures_are_pinned_and_history_is_evictable() {
     let mut loader = loader();
-    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+    let mut content = ContentCache::new();
     let mut tracked = Tracked::default();
     let budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
 
@@ -67,7 +67,7 @@ fn shown_pictures_are_pinned_and_history_is_evictable() {
 fn a_shared_source_is_counted_once() {
     let mut loader = ImageLoader::new(IntrinsicTable::new(), 2048);
     loader.insert_ready_for_tests("shared.png", &[node(3), node(4), node(5)], decoded());
-    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+    let mut content = ContentCache::new();
     let mut tracked = Tracked::default();
     let budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
 
@@ -80,7 +80,7 @@ fn a_shared_source_is_counted_once() {
 #[test]
 fn eviction_takes_history_only() {
     let mut loader = loader();
-    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+    let mut content = ContentCache::new();
     let mut tracked = Tracked::default();
     let mut budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
 
@@ -98,7 +98,7 @@ fn eviction_takes_history_only() {
 #[test]
 fn it_states_the_configured_level() {
     let mut loader = loader();
-    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+    let mut content = ContentCache::new();
     let mut tracked = Tracked::default();
     let budget = DecodedImagesBudget::new(&mut loader, &mut content, 12_345, &mut tracked);
 
@@ -110,7 +110,7 @@ fn it_states_the_configured_level() {
 #[test]
 fn forget_drops_everything_but_keeps_the_names() {
     let mut loader = loader();
-    let mut content = ContentCache::new(zgui_atlas::AtlasLimits::default());
+    let mut content = ContentCache::new();
     let mut tracked = Tracked::default();
     let mut budget = DecodedImagesBudget::new(&mut loader, &mut content, BYTES, &mut tracked);
 

@@ -15,13 +15,10 @@
 //! The run-time assertions exist so that this is not a file that merely compiles: an entry point
 //! that resolved and then built nothing would leave a compile-only case green.
 
-use std::cell::Cell;
-use std::rc::Rc;
-use std::sync::Arc;
-
-use zgui::platform::{AppHandler, PlatformError, Surface};
+use zgui::platform::{AppHandler, PlatformError};
 use zgui::prelude::*;
 use zgui::runtime::AppError;
+use zgui_testkit_compositor::Screen;
 
 // The scoped style sheet a component carries, named after the component. This is what declares a
 // *type* called `App` in this module.
@@ -48,64 +45,6 @@ fn App() -> impl IntoView {
     }
 }
 
-/// A renderer that counts frames and draws nothing.
-#[derive(Default)]
-struct Counting {
-    /// The surface it was pointed at.
-    target: Option<zgui::render::RenderTarget>,
-    /// How many quads the last frame put in the display list.
-    quads: Rc<Cell<usize>>,
-    /// Where its tiles go.
-    atlas: zgui::atlas::MemorySink,
-}
-
-impl zgui::render::Renderer for Counting {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: zgui::render::RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<zgui::render::RenderTarget> {
-        self.target
-    }
-
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        self.quads
-            .set(self.quads.get() + scene.primitives.quads.len());
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: zgui::render::MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        zgui::render::TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.atlas
-    }
-}
-
 #[test]
 fn a_root_component_called_app_does_not_take_over_the_entry_point() -> Result<(), AppError> {
     // The style sheet's `App` is a type in this module, and the component's `App` is a function in
@@ -114,28 +53,25 @@ fn a_root_component_called_app_does_not_take_over_the_entry_point() -> Result<()
     assert!(App::CLASS.starts_with("zs-"));
     assert!(App::CSS.contains(App::CLASS));
 
-    let quads = Rc::new(Cell::new(0));
-    let counted = Rc::clone(&quads);
+    let screen = Screen::new();
+    let shown = screen.shown();
+    let mut screen = Some(screen);
     let handler = app()
         .with_title("root")
         .with_application_id("dev.zgui.RootNamedApp")
         .with_size(200.0, 120.0)
         .with_stylesheet(":root { background-color: #101216; display: block }")
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: zgui::render::RenderTarget| {
-                let mut renderer = Counting {
-                    quads: Rc::clone(&counted),
-                    ..Counting::default()
-                };
-                zgui::render::Renderer::configure(&mut renderer, target);
-                Ok::<_, AppError>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
-            },
-        ))
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
+        .with_compositor_renderer(Box::new(move |_size| {
+            Box::new(screen.take().expect("the application opens one window"))
+                as Box<dyn iceblink::Renderer>
+        }))
         .into_handler(|| view! { App() })?;
 
     drive(handler)?;
+    let quads = shown.drawing().map_or(0, |drawing| drawing.quads().len());
     assert!(
-        quads.get() > 0,
+        quads > 0,
         "the application named its root `App` and drew nothing, so the entry point resolved to \
          something that never ran the view"
     );

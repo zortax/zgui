@@ -7,7 +7,7 @@ use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
 use zgui_profile::{Counter, counter};
-use zgui_scene::{ClipId, ClipLink, ClipNode, ClipTable, SpatialId, SpatialTree};
+use zgui_space::{ClipId, ClipLink, ClipNode, ClipTable, SpatialId, SpatialTree};
 
 use crate::fragment::FragKey;
 use crate::fragment::hit::HitOrder;
@@ -426,7 +426,7 @@ impl HitIndex {
     /// use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
     /// use zgui_layout::fragment::hit::{HitEntry, HitIndex};
     /// use zgui_layout::fragment::transform::transformed_bounds;
-    /// use zgui_scene::{ClipTable, OwnSpace, PropertyOwner, SpatialTree};
+    /// use zgui_space::{ClipTable, OwnSpace, PropertyOwner, SpatialTree};
     /// # use zgui_arena::{ArenaKind, DocumentId, DomainId, Generation, Key};
     /// # let frag = Key::new(
     /// #     1,
@@ -632,24 +632,11 @@ fn clipped_in(
     // usually the tightest one, so a miss is usually found soonest.
     let mut cursor = clip;
     while let Some(ClipNode::Link { link, parent, .. }) = clips.get(cursor) {
-        let inside = match *link {
-            ClipLink::RoundedRect {
-                rect, radii, space, ..
-            } => carried(space).is_some_and(|local| {
-                crate::fragment::hit::entry::covers_rounded(rect, radii, local)
-            }),
-            // A sampled mask decides coverage per pixel, which is a question for whatever holds the
-            // coverage tile. Its rectangle is the most this index can test.
-            ClipLink::Mask {
-                tile, transform, ..
-            } => carried(transform).is_some_and(|local| {
-                let bounds = tile.bounds;
-                local.x.0 >= bounds.origin.x as f32
-                    && local.y.0 >= bounds.origin.y as f32
-                    && local.x.0 <= (bounds.origin.x + bounds.size.width) as f32
-                    && local.y.0 <= (bounds.origin.y + bounds.size.height) as f32
-            }),
-        };
+        let ClipLink::RoundedRect {
+            rect, radii, space, ..
+        } = *link;
+        let inside = carried(space)
+            .is_some_and(|local| crate::fragment::hit::entry::covers_rounded(rect, radii, local));
         if !inside {
             return false;
         }
@@ -662,7 +649,7 @@ fn clipped_in(
 mod tests {
     use zgui_arena::{ArenaKind, DocumentId, DomainId, Generation, Key};
     use zgui_geom::{Corners, DevicePx, Point, Rect, Size, Vec2};
-    use zgui_scene::{ClipTable, SpatialTree};
+    use zgui_space::{ClipTable, SpatialTree};
 
     use super::{HitIndex, Stored};
     use crate::fragment::FragKey;

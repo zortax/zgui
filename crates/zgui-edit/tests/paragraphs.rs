@@ -17,9 +17,9 @@ use zgui_edit::select::Selection;
 use zgui_geom::CssPx;
 use zgui_interned::ElementName;
 use zgui_profile::Counter;
-use zgui_scene::PaintSlot;
-use zgui_testkit_scene::MonoShaper;
-use zgui_testkit_scene::counters::Recording;
+use zgui_space::PaintSlot;
+use zgui_testkit::MonoShaper;
+use zgui_testkit::counters::Recording;
 use zgui_text::{BreakRequest, ParagraphCache, ParagraphContent, StyledRun, TextMap, lay_out};
 use zgui_text_style::{ParagraphStyle, TextStyle};
 
@@ -111,7 +111,7 @@ impl Textarea {
 }
 
 /// The shaper's own held form, named so the cache can be declared.
-type MonoLayout = zgui_testkit_scene::MonoLayout;
+type MonoLayout = zgui_testkit::MonoLayout;
 
 /// The text one node of the document holds.
 fn paragraph_text(document: &Document, node: NodeIndex) -> String {

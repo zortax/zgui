@@ -465,22 +465,23 @@ fn an_empty_field_with_nothing_under_it_can_be_typed_into() {
     // And the letters are on the screen. Text in the document is not text a person can see: the
     // whole of this defect was a field that held the right string, reported the right value and
     // put the caret in the right place while drawing nothing, and every assertion above it is
-    // satisfied by exactly that. So the claim is made against the display list — one sprite per
-    // typed character, each with a tile that has area to sample.
-    let window = &script.harness.app().windows()[0];
-    let sprites = &window.scene().primitives.mono_sprites;
+    // satisfied by exactly that. So the claim is made against the drawing — one sprite per typed
+    // character, each with area to draw.
+    let drawing = support::drawing(&script.harness.app().windows()[0]);
+    let sprites = drawing.glyphs();
     assert_eq!(
         sprites.len(),
         2,
-        "two typed characters must be two glyphs in the display list, and the field drew {} — \
-         the document is right and the screen is blank",
+        "two typed characters must be two glyphs in the drawing, and the field drew {} — the \
+         document is right and the screen is blank: {drawing}",
         sprites.len()
     );
     for sprite in sprites {
+        let [_, _, width, height] = sprite.bounds();
         assert!(
-            sprite.tile.bounds[2] > 0 && sprite.tile.bounds[3] > 0,
-            "a sprite reading an empty rectangle of the atlas draws nothing: {:?}",
-            sprite.tile
+            width > 0.0 && height > 0.0,
+            "a sprite with no area draws nothing: {}",
+            sprite.text()
         );
     }
 }

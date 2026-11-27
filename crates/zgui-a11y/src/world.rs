@@ -9,7 +9,7 @@
 use zgui_dom::{Document, NodeKey, NodeKind};
 use zgui_layout::scroll_region::ScrollOffsets;
 use zgui_layout::tree::store::LayoutStore;
-use zgui_scene::Placements;
+use zgui_space::Placements;
 use zgui_vocab::Semantics;
 
 /// The document, its geometry and its focus, as one frame's projection reads them.
@@ -131,7 +131,7 @@ mod tests {
         let marker = document.append(root, NodeKind::Marker, ElementName::new("#marker"));
         let text = document.append(root, NodeKind::Text, ElementName::new("#text"));
         let layout = LayoutStore::new(document.store().document());
-        let placements = zgui_scene::Placements::new();
+        let placements = zgui_space::Placements::new();
         let world = World {
             document: &document,
             layout: &layout,
@@ -174,7 +174,7 @@ mod tests {
             .expect("not poisoned");
 
         let layout = LayoutStore::new(document.store().document());
-        let placements = zgui_scene::Placements::new();
+        let placements = zgui_space::Placements::new();
         let world = World {
             document: &document,
             layout: &layout,

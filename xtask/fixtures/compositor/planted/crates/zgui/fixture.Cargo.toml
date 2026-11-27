@@ -1,0 +1,9 @@
+[package]
+name = "zgui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iceblink.workspace = true
+iceblink-core.workspace = true
+renderer.workspace = true

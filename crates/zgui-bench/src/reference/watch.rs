@@ -11,15 +11,11 @@
 //! frame identical to the last damages nothing and is refused, and counting a refused frame would
 //! report a fraction the surface never showed.
 
-use std::cell::RefCell;
-use std::rc::Rc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use zgui::bits::DamageSet;
-use zgui::render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
 };
-use zgui::scene::Scene;
 
 /// What one drawn frame damaged.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -40,8 +36,26 @@ pub struct Damaged {
     pub rects: usize,
 }
 
-/// The frames a run drew, in order.
-pub type Log = Rc<RefCell<Vec<Damaged>>>;
+/// The frames a run drew, in order, written on the thread that draws them.
+#[derive(Clone, Debug, Default)]
+pub struct Log(Arc<Mutex<Vec<Damaged>>>);
+
+impl Log {
+    /// Returns a log holding `frames`.
+    pub fn of(frames: Vec<Damaged>) -> Self {
+        Self(Arc::new(Mutex::new(frames)))
+    }
+
+    /// Returns the frames, for one read.
+    pub fn borrow(&self) -> MutexGuard<'_, Vec<Damaged>> {
+        self.borrow_mut()
+    }
+
+    /// Returns the frames, for one write.
+    pub fn borrow_mut(&self) -> MutexGuard<'_, Vec<Damaged>> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
 
 /// The mean damage fraction over `log`, or `None` when nothing was drawn.
 ///
@@ -92,7 +106,7 @@ impl Renderer for Watching {
     }
 
     fn configure(&mut self, target: RenderTarget) {
-        self.surface = f64::from(target.size.width) * f64::from(target.size.height);
+        self.surface = f64::from(target.size[0]) * f64::from(target.size[1]);
         self.inner.configure(target);
     }
 
@@ -100,12 +114,17 @@ impl Renderer for Watching {
         self.inner.target()
     }
 
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
     #[expect(
         clippy::cast_precision_loss,
         reason = "a damaged area in device pixels is bounded by the surface, which is millions"
     )]
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
-        let outcome = self.inner.draw(scene, damage);
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        let outcome = self.inner.draw(frame);
+        let damage = &frame.damage.draw;
         if matches!(outcome, FrameOutcome::Presented(_)) && self.surface > 0.0 {
             let fraction = if damage.is_full() {
                 1.0
@@ -121,20 +140,8 @@ impl Renderer for Watching {
         outcome
     }
 
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {
@@ -145,13 +152,10 @@ impl Renderer for Watching {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use super::{Damaged, Log, full_frames, mean_fraction};
 
     fn log_of(fractions: &[(f64, bool)]) -> Log {
-        Rc::new(RefCell::new(
+        Log::of(
             fractions
                 .iter()
                 .map(|&(fraction, full)| Damaged {
@@ -160,7 +164,7 @@ mod tests {
                     rects: 1,
                 })
                 .collect(),
-        ))
+        )
     }
 
     #[test]

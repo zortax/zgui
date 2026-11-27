@@ -13,7 +13,7 @@ with an embedded scripting language; a browser is simply the case that needs all
 Before naming what you would have to write: the cascade, selector matching, inheritance, custom
 properties, media and container queries, computed values, flexbox, grid, block and float layout,
 inline layout and bidirectional text, shaping and line breaking, fragment generation, hit testing,
-stacking contexts, damage tracking, the display list, GPU compositing, path rendering, the
+stacking contexts, damage tracking, compositor chunks, GPU compositing, path rendering, the
 accessibility tree, input dispatch with capture and bubble, scrolling with chaining and momentum,
 transitions and animations, and text editing with a caret, selection, undo and composition.
 
@@ -132,10 +132,11 @@ impl ReplacedContent for MyMedia {
 }
 ```
 
-Two things about this seam are deliberate. It does **not** paint — a replaced node's pixels are an
-atlas sprite or an external texture, which belong to the scene rather than to the document, and a
-document that could name them would have an edge to the renderer it is designed not to have. The
-painting half is a separate hook installed beside the scene, keyed by the same `ReplacedId`. And it
+Two things about this seam are deliberate. It does **not** paint — a replaced node's pixels are a
+compositor image or an external texture, which belong to the paint stage rather than to the
+document, and a document that could name them would have an edge to the renderer it is designed not
+to have. The painting half is a separate hook installed beside the paint stage, keyed by the same
+`ReplacedId`. And it
 must be `Send + Sync`, because it is consulted from layout workers, while a paint source holds
 device resources that usually cannot be.
 
@@ -179,7 +180,7 @@ order within a frame is fixed and is the whole content of the contract:
 Nothing in this framework implements `HostBinding`. It exists so that somebody building a browser
 has one object to install rather than a fork of the loop.
 
-### 7. Fonts — `FontSource`, `FontMetricsSource`, `ParagraphShaper`, `GlyphRaster` (L4)
+### 7. Fonts — `FontSource`, `FontMetricsSource`, `ParagraphShaper`, `ShapedGlyphs` (L4)
 
 Four seams, so a font engine can be replaced or absent without a consumer changing:
 
@@ -188,7 +189,7 @@ Four seams, so a font engine can be replaced or absent without a consumer changi
 | `FontMetricsSource` | a font system, or `FixedMetrics` | the cascade, resolving `ex`, `ch`, `cap`, `ic` |
 | `FontSource` | a font collection | face resolution and `@font-face` |
 | `ParagraphShaper` | a text engine | layout, once per paragraph and many times per width |
-| `GlyphRaster` | a rasteriser | painting, once per distinct glyph |
+| `ShapedGlyphs` | a text engine | painting, once per line it draws |
 
 Preserve the split between shaping and breaking. Shaping is the expensive operation. Line breaking
 is the cheap operation. Layout can ask for the size of one paragraph at many candidate widths while
@@ -231,10 +232,10 @@ appended and carried out once the dispatch completes.
 `zgui-view-dom` is the implementation of these over zgui's own document, and is worth reading as the
 worked example.
 
-### 9. A renderer or a platform of your own (L1/L2)
+### 9. A compositor, a renderer or a platform of your own
 
-Below all of this, `Renderer`, `VectorRaster` and the `zgui-platform` traits are replaceable in the
-same way. See [writing a `Renderer`](renderer.md).
+Below all of this, the compositor's `Compositor` and `Renderer` traits and the `zgui-platform`
+traits are replaceable in the same way. See [drawing through a compositor](renderer.md).
 
 ## What a browser would still have to bring
 

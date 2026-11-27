@@ -25,22 +25,34 @@ pub(crate) const WIDTH: f32 = 1600.0;
 /// How tall it opens.
 pub(crate) const HEIGHT: f32 = 1000.0;
 
+/// Opens a headless platform over the runtime for one document size.
+///
+/// The desktop animates its own wheel detents, so the compositor applies every step at once and
+/// nothing is in flight when a window forgets what it recorded.
+pub(crate) fn harness(size: &str) -> zgui_platform_headless::Harness<Runtime> {
+    let desktop = zgui::platform::scroll::ScrollSettings::desktop()
+        .with_wheel(zgui::platform::scroll::WheelMotion::Continuous);
+    zgui_platform_headless::Harness::over(
+        zgui_platform_headless::Headless::new().with_scroll_settings(desktop),
+        runtime(size),
+    )
+}
+
 /// Builds the runtime for one document size.
 pub(crate) fn runtime(size: &str) -> Runtime {
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let app = zgui::runtime::App::new()
         .with_title("gallery-scale")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(sheet())
-        .with_renderer(Box::new(renderer))
+        .with_compositor(crate::draw::client(crate::draw::compositor(&fonts)))
+        .with_renderer(renderer())
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
-        }))
-        .with_glyph_raster(Box::new(move || raster.raster()));
+        }));
     let built = match size {
         "s0" => app.into_handler(|cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(view! { Gallery0() }.into_view().build(cx))

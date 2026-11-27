@@ -36,6 +36,8 @@ use crate::mutate::structure::StructureLog;
 pub(crate) struct Batch {
     /// How many nested calls are inside the open batch, or zero when none is open.
     pub(crate) depth: u32,
+    /// Whether the open batch reached the store for a change.
+    pub(crate) changed: bool,
     /// What each changed element looked like before it changed.
     pub(crate) snapshots: SnapshotStore,
     /// Which parents' child lists changed, and what that can have affected.

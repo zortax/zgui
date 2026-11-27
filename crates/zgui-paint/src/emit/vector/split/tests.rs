@@ -1,4 +1,4 @@
-use zgui_scene::kurbo::{BezPath, PathEl};
+use kurbo::{BezPath, PathEl};
 
 use super::{MAX_GEOMETRIES, SplitDeclined, Winding, geometry_of, split};
 

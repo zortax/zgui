@@ -11,6 +11,8 @@
 #![forbid(unsafe_code)]
 
 mod effect;
+mod layout;
+mod mode;
 mod params;
 
 use proc_macro::TokenStream;

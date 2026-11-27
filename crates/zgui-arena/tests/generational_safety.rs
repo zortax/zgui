@@ -33,11 +33,16 @@ struct Model {
 impl Model {
     /// Checks the arena against the model, from both directions.
     fn check(&self, arena: &ChunkArena<u32>) -> Result<(), TestCaseError> {
-        for (key, value, _) in &self.resolving {
+        for (key, value, live) in &self.resolving {
             prop_assert_eq!(
                 arena.get(*key),
                 Some(value),
                 "a key that was issued and not yet dropped must resolve to its own value"
+            );
+            prop_assert_eq!(
+                arena.is_removed(*key),
+                !live,
+                "a resolving key is removed exactly when its value awaits the recycle"
             );
         }
         for key in &self.dead {
@@ -45,6 +50,10 @@ impl Model {
                 arena.get(*key),
                 None,
                 "a key whose value is gone must never resolve, however its slot is reused"
+            );
+            prop_assert!(
+                !arena.is_removed(*key),
+                "a dropped value is not awaiting the recycle"
             );
         }
         let live = self.resolving.iter().filter(|(_, _, live)| *live).count();

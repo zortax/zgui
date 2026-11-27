@@ -31,7 +31,8 @@ fn application(lockable: bool) -> Harness<Runtime> {
     let handler = App::new()
         .without_primary_window()
         .with_exit_policy(ExitPolicy::Explicit)
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .into_handler(|_cx: &mut zgui_view::BuildCx<'_>| unreachable!("there is no primary window"))
         .expect("the reactive runtime installs");
     let mut capabilities = PlatformCapabilities::none();
@@ -196,7 +197,8 @@ fn a_refused_lock_with_no_window_leaves_the_application_running() {
     // had no window closes none, so the application hears of the refusal.
     let handler = App::new()
         .without_primary_window()
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .into_handler(|_cx: &mut zgui_view::BuildCx<'_>| unreachable!("there is no primary window"))
         .expect("the reactive runtime installs");
     let mut harness = Harness::over(

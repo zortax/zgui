@@ -18,7 +18,7 @@ use std::borrow::Cow;
 use zgui_css::values::effect::{IsolationValue, MixBlendModeValue};
 use zgui_css::values::size::{PositionValue, ZIndexValue};
 use zgui_dom::side::BoxKey;
-use zgui_scene::StackingContextId;
+use zgui_space::StackingContextId;
 
 use crate::node::box_node::BoxNode;
 use crate::node::kind::FormattingContext;
@@ -54,7 +54,7 @@ pub fn establishes(store: &LayoutStore, key: BoxKey) -> bool {
 }
 
 /// [`establishes`], for a box already in hand.
-fn establishes_node(node: &BoxNode) -> bool {
+pub(crate) fn establishes_node(node: &BoxNode) -> bool {
     if node.parent.is_none() {
         // The root box's context is the one everything else is painted into.
         return true;

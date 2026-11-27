@@ -1,0 +1,7 @@
+output 1 size=200x120 scale=1 opaque
+batches 1
+  quads 0..2 ink=rect(0, 0, 200, 120)
+    quad bounds=rect(0, 0, 200, 120) fill=solid premul[0.8667, 0.8667, 0.8667, 1]
+    quad bounds=rect(8, 8, 120, 32) fill=solid premul[0.1333, 0.1333, 0.1333, 1]
+cover rect(1, 1, 198, 118) batch=0 at=0
+cover rect(9, 9, 118, 30) batch=0 at=1

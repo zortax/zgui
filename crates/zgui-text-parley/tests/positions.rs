@@ -9,7 +9,7 @@
 
 mod support;
 
-use zgui_text::{ParagraphShaper, RasterStyle, ShapedGlyph, ShapedRun};
+use zgui_text::{ParagraphShaper, ShapedGlyph, ShapedRun};
 use zgui_text_parley::Controls;
 use zgui_text_style::Direction;
 
@@ -103,50 +103,31 @@ fn a_second_line_is_not_offset_by_the_first() {
     );
 }
 
-/// The run a glyph belongs to names a face the rasteriser can actually serve.
+/// The run a glyph belongs to names a face the compositor's font registry knows.
 #[test]
-fn a_run_names_a_face_and_a_size_a_rasteriser_can_use() {
+fn a_run_names_a_face_and_a_size_the_compositor_can_draw() {
+    use iceblink::FontRegistry;
+
     let (fonts, mut shaper) = support::shaper(Controls::Verbatim);
     let fixture = support::Fixture::new("handgloves", Direction::LeftToRight);
     let shaped = shaper.shape(&fixture.content());
-    let raster = zgui_text_parley::Rasteriser::new(fonts);
+    let registry = zgui_text_parley::CompositorFonts::new(fonts);
 
-    let mut drawn = 0;
+    let mut runs = 0;
     shaper.visit_line(&shaped, 0, &mut |run: ShapedRun<'_>| {
         assert!(run.size > 0.0, "a run drawn at no size draws nothing");
-        for glyph in run.glyphs {
-            let key = run.key_for(*glyph, 0.0, run.raster_style(false));
-            if let Some(image) = zgui_text::GlyphRaster::raster(&raster, &key) {
-                assert!(image.is_well_formed());
-                drawn += usize::from(!image.is_empty());
-            }
-        }
+        assert!(
+            registry.get(iceblink::FontId(run.face.0)).is_some(),
+            "the run names {:?}, which the registry does not know",
+            run.face
+        );
+        assert!(
+            run.glyphs.iter().all(|glyph| glyph.glyph != 0),
+            "every letter of the line is in the face"
+        );
+        runs += 1;
     });
-    assert!(
-        drawn >= 8,
-        "only {drawn} of the line's glyphs rasterised, so the handle the run reports is not one \
-         the rasteriser can resolve"
-    );
-}
-
-/// The subpixel phase a glyph's position falls at is what the key carries, and it varies.
-#[test]
-fn the_phase_in_a_key_comes_from_the_glyph_position() {
-    let (_, mut shaper) = support::shaper(Controls::Verbatim);
-    let fixture = support::Fixture::new("handgloves handgloves", Direction::LeftToRight);
-    let shaped = shaper.shape(&fixture.content());
-
-    let mut phases = std::collections::BTreeSet::new();
-    shaper.visit_line(&shaped, 0, &mut |run: ShapedRun<'_>| {
-        for glyph in run.glyphs {
-            phases.insert(run.key_for(*glyph, 0.0, RasterStyle::Grayscale).offset);
-        }
-    });
-    assert!(
-        phases.len() > 1,
-        "every glyph of a proportional face landed on the same subpixel phase, so the phase is \
-         being taken from something other than the position: {phases:?}"
-    );
+    assert!(runs > 0, "the line has a run");
 }
 
 /// A run reports where its text starts in the caller's string, with the direction mark left out.

@@ -149,28 +149,33 @@ fn objects(window: &Window) -> Group {
 
 /// What the renderer reports, and the device's own allocator when the renderer has a device.
 fn gpu(window: &Window, vram_mib: Option<u64>) -> Group {
-    let renderer = window.renderer();
+    let mut group = window.inspect_renderer(renderer_group).unwrap_or_default();
+    if let Some(mib) = vram_mib {
+        group.push(("nvidia_used_bytes", mib * 1024 * 1024));
+    }
+    group
+}
+
+/// What `renderer` reports, and its device's own allocator when it has a device.
+fn renderer_group(renderer: &mut dyn iceblink::Renderer) -> Group {
     let memory = renderer.memory();
     let mut group = vec![
         ("renderer_fixed_bytes", memory.fixed),
         ("renderer_targets_bytes", memory.targets),
-        ("renderer_scratch_bytes", memory.scratch),
-        ("renderer_atlases_bytes", memory.atlases),
-        ("renderer_buffers_bytes", memory.buffers),
+        ("renderer_scratch_bytes", memory.vector),
+        ("renderer_atlases_bytes", memory.atlas),
+        ("renderer_buffers_bytes", memory.chunks),
         ("renderer_total_bytes", memory.total()),
     ];
     let wgpu = renderer
         .as_any()
-        .and_then(|any| any.downcast_ref::<zgui_render_wgpu::WgpuRenderer>());
+        .and_then(|any| any.downcast_ref::<iceblink_wgpu::WgpuRenderer>());
     group.push(("renderer_is_wgpu", u64::from(wgpu.is_some())));
     if let Some(report) = wgpu.and_then(|wgpu| wgpu.gpu().device().generate_allocator_report()) {
         group.push(("allocator_allocated_bytes", report.total_allocated_bytes));
         group.push(("allocator_reserved_bytes", report.total_reserved_bytes));
         group.push(("allocator_blocks", report.blocks.len() as u64));
         group.push(("allocator_allocations", report.allocations.len() as u64));
-    }
-    if let Some(mib) = vram_mib {
-        group.push(("nvidia_used_bytes", mib * 1024 * 1024));
     }
     group
 }
@@ -195,7 +200,6 @@ pub(crate) fn sizes() -> Group {
             "paint::Record",
             size_of::<zgui_paint::walk::replay::Record>() as u64,
         ),
-        ("ChunkPrims", size_of::<zgui::scene::ChunkPrims>() as u64),
         (
             "ShapedParagraph<ShapedLayout>",
             size_of::<zgui::text::ShapedParagraph<zgui_text_parley::ShapedLayout>>() as u64,

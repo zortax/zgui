@@ -1,9 +1,8 @@
 //! A custom element drawing its own glyphs, through the real frame loop.
 //!
-//! What is asserted is the two things the seam promises. A run the element shaped itself reaches
-//! the display list as sprites, at the position the element asked for. And a frame that changes
-//! nothing replays those sprites rather than painting again — which only works if every tile they
-//! read is still held, so the same test covers the resource half.
+//! What is asserted is the two things the seam promises. A run the element shaped itself is drawn
+//! as glyphs at the position the element asked for. And a frame that changes nothing does not ask
+//! the element to paint again.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -45,7 +44,10 @@ const GLYPHS: [ShapedGlyph; 3] = [
     },
 ];
 
-/// An application whose window records rather than draws, with a glyph rasteriser installed.
+/// An application whose window draws through a compositor onto a recording renderer.
+///
+/// The compositor's glyph rasteriser draws every glyph as a box on the baseline, half the em size
+/// wide and three quarters of it high.
 fn app<V>(css: &str, view: V) -> Harness<Runtime>
 where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor> + 'static,
@@ -54,19 +56,17 @@ where
         .with_title("glyphs")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
             |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-                zgui_render::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
+                Ok(zgui_testkit_compositor::screen(target))
             },
         ))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .with_custom(Box::new(|_document| zgui_custom::sources()))
         .into_handler(view)
         .expect("the reactive runtime installs");
@@ -90,10 +90,9 @@ impl CustomElement for Label {
         let run = ShapedRun {
             face: FaceId(0),
             size: 16.0,
-            instance: zgui_custom::VariationInstance::DEFAULT,
+            coords: &[],
             synthetic_bold: 0.0,
             synthetic_slant: 0.0,
-            has_color: false,
             brush: PaintSlot(0),
             glyphs: &GLYPHS,
             text_start: 0,
@@ -102,13 +101,16 @@ impl CustomElement for Label {
     }
 }
 
-/// The scene the window last composed.
-fn sprites(app: &mut Harness<Runtime>) -> Vec<zgui_paint::MonoSprite> {
-    app.app_mut().windows_mut()[0]
-        .scene()
-        .primitives
-        .mono_sprites
-        .clone()
+/// The glyphs the window drawn onto the test's first screen shows, as `[x, y, width, height]` and
+/// colour.
+fn glyphs() -> Vec<([f32; 4], Option<String>)> {
+    zgui_testkit_compositor::screens()[0]
+        .drawing()
+        .expect("the window drew a frame")
+        .glyphs()
+        .into_iter()
+        .map(|glyph| (glyph.bounds(), glyph.paint("paint")))
+        .collect()
 }
 
 /// The custom element's border box.
@@ -155,43 +157,40 @@ fn label_app() -> Harness<Runtime> {
 }
 
 #[test]
-fn an_elements_own_run_reaches_the_display_list_as_sprites() {
+fn an_elements_own_run_is_drawn_where_it_asked() {
     PAINTS.store(0, Ordering::SeqCst);
     let mut app = label_app();
     app.settle(16);
 
-    let drawn = sprites(&mut app);
-    assert_eq!(drawn.len(), GLYPHS.len(), "one sprite per glyph");
-
-    let (box_x, box_y) = custom_box(&app.app_mut().windows_mut()[0]);
-    // The first glyph's tile starts at the run's origin plus the rasteriser's own bearing, which
-    // is what makes this an assertion about placement rather than about the fixture's bitmap.
-    let first = drawn
-        .iter()
-        .map(|sprite| sprite.ink().origin.x.0)
-        .fold(f32::MAX, f32::min);
-    assert!(
-        (first - (box_x + origin().x.0)).abs() <= 2.0,
-        "the run landed at the element's content box plus the origin it asked for: \
-         {first} against {}",
-        box_x + origin().x.0
+    let drawn = glyphs();
+    assert_eq!(
+        drawn.len(),
+        GLYPHS.len(),
+        "one glyph drawn per glyph shaped"
     );
 
-    let baselines: Vec<f32> = drawn.iter().map(|sprite| sprite.ink().origin.y.0).collect();
+    let (box_x, box_y) = custom_box(&app.app_mut().windows_mut()[0]);
+    let mut xs: Vec<f32> = drawn.iter().map(|(bounds, _)| bounds[0]).collect();
+    xs.sort_by(f32::total_cmp);
     assert!(
-        baselines.windows(2).all(|pair| pair[0] == pair[1]),
+        (xs[0] - (box_x + origin().x.0)).abs() <= 1.0,
+        "the run landed at the element's content box plus the origin it asked for: {} against {}",
+        xs[0],
+        box_x + origin().x.0
+    );
+    // The advances the run asked for survived, in whole pixels.
+    assert_eq!(xs[1] - xs[0], 8.0);
+    assert_eq!(xs[2] - xs[1], 8.0);
+
+    let tops: Vec<f32> = drawn.iter().map(|(bounds, _)| bounds[1]).collect();
+    assert!(
+        tops.windows(2).all(|pair| pair[0] == pair[1]),
         "every glyph of one run sits on one baseline"
     );
     assert!(
-        baselines[0] > box_y,
+        tops[0] > box_y,
         "and below the top of the element's content box"
     );
-
-    // The advances the run asked for survived, in whole pixels.
-    let mut xs: Vec<f32> = drawn.iter().map(|s| s.ink().origin.x.0).collect();
-    xs.sort_by(f32::total_cmp);
-    assert_eq!(xs[1] - xs[0], 8.0);
-    assert_eq!(xs[2] - xs[1], 8.0);
 }
 
 #[test]
@@ -216,13 +215,11 @@ fn repainting_the_whole_surface_draws_the_same_glyphs_in_the_same_places() {
     PAINTS.store(0, Ordering::SeqCst);
     let mut app = label_app();
     app.settle(16);
-    let first = sprites(&mut app);
+    let first = glyphs();
     assert_eq!(first.len(), GLYPHS.len());
 
     // Coming back from occlusion asks for every pixel again while changing no input to any of
-    // them. Whether the fragment replays its recorded range or encodes it afresh, the tiles it
-    // draws from have to still be there — and with `verify_replays` on under debug assertions, a
-    // range whose resources had been released panics here rather than drawing wrongly.
+    // them, so the fragment's recorded items have to draw what they drew before.
     let surface = app
         .platform()
         .offscreens()
@@ -236,15 +233,9 @@ fn repainting_the_whole_surface_draws_the_same_glyphs_in_the_same_places() {
     app.advance(std::time::Duration::from_millis(50));
     app.settle(8);
 
-    let second = sprites(&mut app);
     assert_eq!(
-        second.len(),
-        first.len(),
-        "the repaint drew the element's glyphs again"
+        glyphs(),
+        first,
+        "the repaint drew the element's glyphs at the same places in the same colour"
     );
-    for (before, after) in first.iter().zip(&second) {
-        assert_eq!(before.ink(), after.ink(), "at the same place");
-        assert_eq!(before.color, after.color, "in the same colour");
-        assert_eq!(before.tile, after.tile, "out of the same tile");
-    }
 }

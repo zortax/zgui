@@ -1,6 +1,6 @@
 //! How recognised prims become a mark's payload.
 
-use zgui_scene::MarkFlags;
+use iceblink::MarkFlags;
 
 use super::{dedupe, runs};
 use crate::emit::vector::recognise::{BUTT, Decomposition, Orientation, ROUND, SQUARE};
@@ -25,7 +25,7 @@ fn capsules(capsules: &[([f32; 4], u8, u8)]) -> Decomposition {
 
 /// Whether a payload vertex is a run separator.
 fn separator(vertex: [f32; 2]) -> bool {
-    vertex[0].is_nan() && vertex[1].is_nan()
+    vertex[0].is_nan() && vertex[1] == 0.0
 }
 
 #[test]
@@ -38,7 +38,10 @@ fn round_joined_capsules_become_nan_separated_runs() {
     ]);
     let mut vertices = Vec::new();
     let flags = runs(&found, &mut vertices).expect("one cap at every outer end");
-    assert_eq!(flags, MarkFlags::caps(MarkFlags::BUTT, MarkFlags::BUTT));
+    assert_eq!(
+        flags,
+        MarkFlags::caps(MarkFlags::CAP_BUTT, MarkFlags::CAP_BUTT)
+    );
     let shape: Vec<Option<[f32; 2]>> = vertices
         .iter()
         .map(|vertex| (!separator(*vertex)).then_some(*vertex))
@@ -63,7 +66,10 @@ fn a_dot_is_a_run_of_two_equal_vertices() {
     let found = capsules(&[([4.0, 4.0, 4.0, 4.0], ROUND, ROUND)]);
     let mut vertices = Vec::new();
     let flags = runs(&found, &mut vertices).expect("round caps");
-    assert_eq!(flags, MarkFlags::caps(MarkFlags::ROUND, MarkFlags::ROUND));
+    assert_eq!(
+        flags,
+        MarkFlags::caps(MarkFlags::CAP_ROUND, MarkFlags::CAP_ROUND)
+    );
     assert_eq!(vertices.len(), 4);
     assert_eq!(vertices[1], vertices[2]);
 }
@@ -101,8 +107,6 @@ fn duplicate_discs_go_only_past_eightfold_overdraw() {
 fn an_overlapping_fill_with_a_hole_is_no_union() {
     use std::sync::Arc;
 
-    use zgui_scene::peniko;
-
     // A ring written as two circles turning opposite ways: under the nonzero rule the inner one
     // is a hole, which no sum of coverage draws.
     let ring = Decomposition {
@@ -120,7 +124,7 @@ fn an_overlapping_fill_with_a_hole_is_no_union() {
     let lowered = |found: &Decomposition, rule| {
         super::lower(
             Arc::new(found.clone()),
-            zgui_scene::kurbo::Affine::IDENTITY,
+            kurbo::Affine::IDENTITY,
             &affine,
             Some(rule),
             &crate::content::vectors::NoVectorMasks,

@@ -33,7 +33,7 @@ use zgui_platform::{
 };
 
 use crate::driver::WaylandState;
-use crate::frame::Presentation;
+use crate::frame::{Composer, Presentation};
 use crate::surface::state::{Bounds, Shared};
 
 /// What a surface needs from the loop it belongs to.
@@ -113,6 +113,8 @@ pub struct WaylandSurface {
     shell: Arc<crate::surface::role::xdg::XdgShell>,
     /// The channel an assistive technology talks to.
     a11y: A11y,
+    /// The thread the loop runs on.
+    loop_thread: std::thread::ThreadId,
     /// The seat's own requests, which belong to the loop rather than to this surface.
     ///
     /// A cursor shape and an interactive drag are both asked of a *seat*, and there is one seat
@@ -148,6 +150,7 @@ impl WaylandSurface {
             placement,
             parent_extent,
             reposition_token: std::sync::atomic::AtomicU32::new(1),
+            loop_thread: std::thread::current().id(),
             shell: links.shell,
             a11y: A11y::open(id, links.waker),
             seat: links.seat,
@@ -417,8 +420,8 @@ impl WaylandSurface {
 
     /// Ends a delivered [`SurfaceEvent::PresentReady`].
     /// `began` is when the present began.
-    pub(crate) fn finish_present(&self, began: Instant, now: Instant) {
-        self.shared().end_of_present(began, now);
+    pub(crate) fn finish_present(&self, began: Instant) {
+        self.shared().end_of_present(began);
         self.end_drawing();
     }
 
@@ -599,7 +602,21 @@ impl Surface for WaylandSurface {
     }
 
     fn present_now(&self) -> bool {
-        self.shared().pacer.present_now(Instant::now())
+        let mut shared = self.shared();
+        // A driver thread asks from its own thread. Only a frame asked about on the loop's thread
+        // during a redraw is that redraw's own.
+        let composer = if std::thread::current().id() != self.loop_thread {
+            if shared.visibility.is_hidden() {
+                Composer::Loop
+            } else {
+                Composer::Driver
+            }
+        } else if shared.drawing {
+            Composer::Redraw
+        } else {
+            Composer::Loop
+        };
+        shared.pacer.present_now(Instant::now(), composer)
     }
 
     fn redraw_declined(&self) {

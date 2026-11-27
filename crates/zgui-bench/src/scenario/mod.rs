@@ -16,6 +16,7 @@
 
 pub(crate) mod band;
 mod cold;
+pub(crate) mod deadlines;
 mod fixture;
 mod hover;
 mod idle;
@@ -78,8 +79,10 @@ pub(crate) struct Outcome {
 pub(crate) struct Escalation {
     /// How many primitives reached the display list.
     pub(crate) primitives_emitted: u64,
-    /// How many were refused by a clip before they got there.
+    /// How many the compositor culled, and the scene refused by a clip.
     pub(crate) primitives_culled: u64,
+    /// How many subtrees the paint walk did not enter.
+    pub(crate) paint_subtrees_culled: u64,
     /// How many insertions the draw-order tree took.
     pub(crate) bounds_tree_inserts: u64,
     /// How many recorded paintings were encoded from scratch.
@@ -104,6 +107,7 @@ pub(crate) fn counters(moved: &zgui_profile::Counters) -> Escalation {
     Escalation {
         primitives_emitted: moved.primitives_emitted,
         primitives_culled: moved.primitives_culled,
+        paint_subtrees_culled: moved.paint_subtrees_culled,
         bounds_tree_inserts: moved.bounds_tree_inserts,
         chunks_reencoded: moved.chunks_reencoded,
         chunks_translated: moved.chunks_translated,
@@ -128,12 +132,16 @@ pub(crate) fn median(samples: &mut [f64]) -> f64 {
 /// A document that has just opened owes a first cascade, a first layout, a first shaping of every
 /// run and a first emission of every primitive. Measuring an interaction before that has settled
 /// measures the opening.
+///
+/// A driver on a thread of its own is waited for before every turn, so it is at rest too.
 pub(crate) fn quiet(harness: &mut Harness<Runtime>) {
     harness.settle(256);
     for _ in 0..8 {
+        crate::draw::wait_for_driver();
         harness.advance(std::time::Duration::from_micros(16_667));
         harness.pump();
     }
+    crate::draw::wait_for_driver();
     harness.settle(256);
     zgui_profile::counter::reset();
 }
@@ -197,16 +205,18 @@ pub(crate) fn print(outcome: &Outcome) {
         println!("NOTE\t{}\t{note}", outcome.scenario);
     }
     println!(
-        "ESCALATION\t{}\t{}\t{}\t{}\t{}\t{}",
+        "ESCALATION\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
         outcome.scenario,
         outcome.counters.primitives_emitted,
         outcome.counters.primitives_culled,
         outcome.counters.bounds_tree_inserts,
         outcome.counters.chunks_reencoded,
         outcome.counters.chunks_translated,
+        outcome.counters.paint_subtrees_culled,
     );
     for measurement in &outcome.measurements {
         println!("  {measurement}");
     }
     crate::gpu_time::print(outcome.scenario);
+    crate::cpu::print(outcome.scenario);
 }

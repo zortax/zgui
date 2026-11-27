@@ -21,20 +21,13 @@ mod support;
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Mutex, MutexGuard};
 
-use zgui_bits::DamageSet;
 use zgui_geom::{Device, Rect};
-use zgui_platform::Surface;
 use zgui_profile::{COUNTERS_ENABLED, counter};
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
-use zgui_runtime::{App, AppError, Runtime};
-use zgui_scene::Scene;
+use zgui_runtime::{App, FrameProbe, Runtime, Window};
 use zgui_view::{BuildCx, IntoView, View};
 
 /// Held for the whole of any case that reads a counter.
@@ -73,7 +66,7 @@ const CSS: &str = "root { display: block; width: 400px; height: 300px; padding: 
                    .embossed { text-shadow: 1px 1px 0 rgb(200, 0, 0) }
                    .lit      { background-color: rgb(240, 240, 240) }";
 
-/// What one frame was drawn against.
+/// What one frame's paint walk was gated on.
 #[derive(Debug, Clone, Copy)]
 struct Drawn {
     /// Whether the set was the whole surface.
@@ -85,55 +78,22 @@ struct Drawn {
 /// The frames a run was drawn against, in order.
 type Log = Rc<RefCell<Vec<Drawn>>>;
 
-/// A renderer that records the damage of every frame and draws nothing.
+/// A probe that records the region every frame's paint walk was gated on.
 struct Recorder {
     /// Where the frames go.
     log: Log,
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
 }
 
-impl Renderer for Recorder {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, _scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+impl FrameProbe for Recorder {
+    fn frame_ended(&self, window: &Window) {
+        let painted = window
+            .last_frame_report()
+            .expect("a frame that ended has a report")
+            .painted;
         self.log.borrow_mut().push(Drawn {
-            full: damage.is_full(),
-            bounds: damage.bounds(),
+            full: painted.is_full(),
+            bounds: painted.bounds(),
         });
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
     }
 }
 
@@ -143,22 +103,15 @@ fn subject(
     on: RwSignal<bool>,
     log: &Log,
 ) -> zgui_platform_headless::Harness<Runtime> {
-    let factory = Rc::clone(log);
     let handler = App::new()
         .with_title("sub-relayout")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Recorder {
-                    log: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
+        .with_probe(Rc::new(Recorder {
+            log: Rc::clone(log),
+        }))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             Box::new(
                 zgui_elements::column()

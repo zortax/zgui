@@ -56,17 +56,18 @@ impl Gallery {
         let fonts = Fonts::system();
         let metrics = fonts.clone();
         let shaping = fonts.clone();
-        let raster = fonts.clone();
         let runtime: Runtime = zgui_runtime::App::new()
             .with_title("wall-clock")
             .with_size(1080.0, 720.0)
             .with_stylesheet(SHEET)
+            .with_compositor(zgui_testkit_compositor::driver(zgui::app::compositor(
+                &fonts,
+            )))
             .with_renderer(Box::new(crate::support::renderer::build))
             .with_metrics(Box::new(move || metrics.metrics()))
             .with_text_engine(Box::new(move || {
                 Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
             }))
-            .with_glyph_raster(Box::new(move || raster.raster()))
             .into_handler(|cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
                 Box::new(view! { Page() }.into_view().build(cx))
             })

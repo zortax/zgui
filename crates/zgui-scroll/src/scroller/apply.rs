@@ -65,6 +65,21 @@ impl Scroller {
         moved
     }
 
+    /// Returns `to` kept inside the offsets the scroll container `container` can show, or `None`
+    /// when `container` scrolls nothing.
+    pub fn clamped(
+        &self,
+        store: &LayoutStore,
+        container: NodeKey,
+        to: Point<DevicePx, Device>,
+    ) -> Option<Point<DevicePx, Device>> {
+        let limit = code_region_of_element(store, container)?.limit();
+        Some(Point::new(
+            DevicePx(to.x.0.clamp(0.0, limit.x.0)),
+            DevicePx(to.y.0.clamp(0.0, limit.y.0)),
+        ))
+    }
+
     /// Puts one container at `to`, now or over the next few frames.
     ///
     /// Returns where it landed for an instant scroll and where it is heading for a smooth one, or
@@ -76,11 +91,7 @@ impl Scroller {
         to: Point<DevicePx, Device>,
         behavior: Behavior,
     ) -> Option<Point<DevicePx, Device>> {
-        let limit = code_region_of_element(store, container)?.limit();
-        let clamped = Point::new(
-            DevicePx(to.x.0.clamp(0.0, limit.x.0)),
-            DevicePx(to.y.0.clamp(0.0, limit.y.0)),
-        );
+        let clamped = self.clamped(store, container, to)?;
         let at = self.offset_of(container);
         match behavior {
             Behavior::Auto | Behavior::Instant => {

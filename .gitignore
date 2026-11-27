@@ -13,3 +13,5 @@ flamegraph.svg
 /docs/research
 /docs/shots
 /docs/component-library.md
+# Core dumps that crashing test binaries leave in their working directory
+core.[0-9]*

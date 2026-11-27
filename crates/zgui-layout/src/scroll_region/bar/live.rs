@@ -10,7 +10,7 @@
 
 use zgui_dom::NodeKey;
 use zgui_geom::{Device, DevicePx, Point, Rect};
-use zgui_scene::SpatialTree;
+use zgui_space::SpatialTree;
 
 use crate::axis::Axis;
 use crate::fragment::{FragmentKind, ScrollbarPart};
@@ -23,7 +23,11 @@ use crate::tree::store::LayoutStore;
 /// Answers with nothing for an element that generated no box, was never laid out, or does not
 /// scroll — all three of which are "there is no bar here", which is what a caller does about them.
 pub fn travel_of(store: &LayoutStore, element: NodeKey, axis: Axis) -> Option<Travel> {
-    let box_ = *store.boxes_of(element).first()?;
+    travel_of_box(store, *store.boxes_of(element).first()?, axis)
+}
+
+/// The range the thumb of the box `box_` on `axis` moves in, as the last frame placed it.
+pub fn travel_of_box(store: &LayoutStore, box_: crate::BoxKey, axis: Axis) -> Option<Travel> {
     let frag = *store.fragments_of_box(box_).first()?;
     let fragment = store.fragment(frag)?;
     let content = store.layout_of(box_)?.content_size;

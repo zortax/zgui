@@ -205,7 +205,7 @@ fn ranged_layout(
 /// The ranged path skips runs with an empty range, so this skips them too.
 fn uniform<'a>(content: &'a ParagraphContent<'_>) -> Option<(&'a TextStyle, Brush)> {
     let Some(first) = content.runs.first() else {
-        return Some((initial(), zgui_scene::PaintSlot(0)));
+        return Some((initial(), zgui_space::PaintSlot(0)));
     };
     content
         .runs
@@ -233,7 +233,7 @@ fn initial() -> &'static TextStyle {
 pub(crate) fn default_style(content: &ParagraphContent<'_>) -> LoweredStyle {
     match content.runs.first() {
         Some(StyledRun { style, brush, .. }) => LoweredStyle::of(style, *brush, CssPx::ZERO),
-        None => LoweredStyle::of(&TextStyle::initial(), zgui_scene::PaintSlot(0), CssPx::ZERO),
+        None => LoweredStyle::of(&TextStyle::initial(), zgui_space::PaintSlot(0), CssPx::ZERO),
     }
 }
 
@@ -253,7 +253,7 @@ mod tests {
     use std::sync::Arc;
 
     use zgui_geom::CssPx;
-    use zgui_scene::PaintSlot;
+    use zgui_space::PaintSlot;
     use zgui_text::{FontSource, InlineBoxGeometry, ParagraphContent, StyledRun, TextMap};
     use zgui_text_style::{
         Direction, FamilyName, FontFamilyList, GenericFamily, LineHeight, ParagraphStyle, TextStyle,

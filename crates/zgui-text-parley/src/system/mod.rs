@@ -1,7 +1,6 @@
 //! The font system: one collection, one lock, and the memo that keeps the lock cold.
 
 pub mod generics;
-pub(crate) mod instances;
 pub mod options;
 pub(crate) mod shared;
 
@@ -11,7 +10,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, RwLock};
 
 use crate::metrics::memo::MetricsMemo;
-use crate::system::instances::Instances;
 use crate::system::shared::Shared;
 
 /// The faces a document draws with, and the metrics its cascade resolves against.
@@ -49,10 +47,6 @@ pub struct FontSystem {
     shared: Mutex<Shared>,
     /// Face metrics already answered.
     pub(crate) memo: RwLock<MetricsMemo>,
-    /// The variation instances runs were shaped at.
-    ///
-    /// Here rather than on a shaper so that every fork, and the rasteriser, read one numbering.
-    instances: RwLock<Instances>,
     /// How many times the collection's lock has been taken.
     locks: AtomicU64,
     /// How the system was built.
@@ -65,7 +59,6 @@ impl FontSystem {
         Self {
             shared: Mutex::new(Shared::new(options)),
             memo: RwLock::new(MetricsMemo::default()),
-            instances: RwLock::new(Instances::default()),
             locks: AtomicU64::new(0),
             options,
         }
@@ -97,41 +90,6 @@ impl FontSystem {
             Err(poisoned) => poisoned.into_inner(),
         };
         with(&mut guard)
-    }
-
-    /// The number a run shaped at the normalised variation coordinates `coords` is drawn under.
-    ///
-    /// The default location, empty or all zeros, is [`VariationInstance::DEFAULT`](zgui_text::VariationInstance::DEFAULT). Every other
-    /// location is issued a number once and keeps it.
-    pub fn variation_instance(&self, coords: &[i16]) -> zgui_text::VariationInstance {
-        if coords.is_empty() {
-            return zgui_text::VariationInstance::DEFAULT;
-        }
-        let found = self
-            .instances
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .find(coords);
-        found.unwrap_or_else(|| {
-            self.instances
-                .write()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .intern(coords)
-        })
-    }
-
-    /// The normalised coordinates `instance` stands for, or `None` for the default instance.
-    pub(crate) fn variation_coords(
-        &self,
-        instance: zgui_text::VariationInstance,
-    ) -> Option<std::sync::Arc<[i16]>> {
-        if instance.is_default() {
-            return None;
-        }
-        self.instances
-            .read()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .coords(instance)
     }
 
     /// A font context sharing this system's collection.

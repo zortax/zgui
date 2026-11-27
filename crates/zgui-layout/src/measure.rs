@@ -308,7 +308,7 @@ impl MeasureContent for NoContent {
     }
 
     fn paint_slot(&mut self, _paint: &TextPaint) -> Brush {
-        zgui_scene::PaintSlot(0)
+        zgui_space::PaintSlot(0)
     }
 }
 
@@ -352,7 +352,7 @@ impl MeasureContent for NaturalSize {
     }
 
     fn paint_slot(&mut self, _paint: &TextPaint) -> Brush {
-        zgui_scene::PaintSlot(0)
+        zgui_space::PaintSlot(0)
     }
 }
 
@@ -363,6 +363,10 @@ impl zgui_text::ShapedGlyphs for NoContent {
         _line: u16,
         _visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
+    }
+
+    fn brush(&self, _brush: Brush) -> Option<zgui_text::TextPaint> {
+        None
     }
 }
 

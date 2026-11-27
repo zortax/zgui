@@ -206,8 +206,8 @@ impl Window {
                 document: &document,
                 layout: &layout,
                 hit: &self.hit,
-                clips: &self.scene.clips,
-                spatial: &self.scene.spatial,
+                clips: &self.tables.clips,
+                spatial: &self.tables.spatial,
                 scale: zgui_geom::Scale::new(self.scale),
                 filter: &filter,
             };
@@ -709,6 +709,11 @@ impl Window {
                 delta,
                 phase,
             } => {
+                if let SurfaceEvent::Wheel { event: wheel, .. } = event
+                    && self.hand_scroll(Some(container), wheel)
+                {
+                    return;
+                }
                 // The event's own stamp, which a gesture measures its speed with.
                 let sent = match event {
                     SurfaceEvent::Wheel { timestamp, .. } => *timestamp,
@@ -906,8 +911,8 @@ impl Window {
                 document: &document,
                 layout: &layout,
                 hit: &self.hit,
-                clips: &self.scene.clips,
-                spatial: &self.scene.spatial,
+                clips: &self.tables.clips,
+                spatial: &self.tables.spatial,
                 scale: zgui_geom::Scale::new(self.scale),
                 filter: &filter,
             };

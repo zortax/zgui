@@ -30,6 +30,4 @@ pub struct FaceRecord {
     pub width: f32,
     /// Whether the face has variable axes, and so can be instanced rather than only selected.
     pub is_variable: bool,
-    /// Whether the face carries colour glyphs, which decides which rasterisation path a run takes.
-    pub has_color: bool,
 }

@@ -16,8 +16,9 @@ use zgui_dom::NodeKey;
 use zgui_dom::side::BoxKey;
 use zgui_layout::fragment::diff::pixels;
 use zgui_layout::tree::store::LayoutStore;
-use zgui_scene::{PaintSlot, TextPaint, TextPaintTable};
+use zgui_space::PaintSlot;
 use zgui_style::{TextPaintUpdate, TextRun};
+use zgui_text::{TextPaint, TextPaintTable};
 use zgui_text_style::TextPaintKey;
 
 use crate::window::Window;
@@ -269,12 +270,6 @@ pub(crate) struct TextSlot {
 pub(crate) struct Applied {
     /// The elements whose text has to be shaped again under a slot of their own.
     pub(crate) split: Vec<SlotKey>,
-    /// Whether any update was drawn in a colour its slot did not hold.
-    ///
-    /// False for a batch in which every element moved to a new cascade result of the same
-    /// colour — a font change, a theme flip that left the text colour alone — which then rewrites
-    /// no brush and owes the display list no copy of the table.
-    pub(crate) recoloured: bool,
     /// The elements whose slot took the new colour where it stands. Their glyphs are drawn again
     /// from the frame's damage only, so the frame owes the lines their text is on.
     pub(crate) rewritten: Vec<NodeKey>,
@@ -341,7 +336,6 @@ pub(crate) fn apply(
         })
         .collect();
 
-    let recoloured_any = recoloured.iter().any(|moved| *moved);
     let mut split = Vec::new();
     let mut rewritten = Vec::new();
     let mut emptied = Vec::new();
@@ -421,23 +415,34 @@ pub(crate) fn apply(
     // through and nothing resolves to. The paragraphs of an element that left a slot still name it
     // until they are shaped again later in the frame, so the slot is released at the frame's end.
     slots.orphaned.extend(emptied);
-    Applied {
-        split,
-        recoloured: recoloured_any,
-        rewritten,
-    }
+    Applied { split, rewritten }
 }
 
 /// The boxes whose lines draw the text of `nodes` for them.
 ///
-/// A nested inline box has no rectangle of its own size, so its colour is in no paint record of
-/// its own. The lines of the box that holds it paint its glyphs, with the colour of the slot as the
-/// record encoded it. A box with a rectangle of its own needs nothing here: its own record misses
-/// when its style moves.
+/// The lines paint the glyphs with the colour of the slot as their records encoded it. They are
+/// found as follows:
+///
+/// - A nested inline box has no rectangle of its own size. Its text is on the lines of the box
+///   that holds it.
+/// - Any other box has its own text on the anonymous boxes below it, which have no element whose
+///   restyle would damage them.
 fn inline_text_holders(nodes: &[NodeKey], layout: &LayoutStore) -> FxHashSet<BoxKey> {
     let mut holders = FxHashSet::default();
     for node in nodes {
         for key in layout.boxes_of(*node) {
+            let Some(box_) = layout.get(*key) else {
+                continue;
+            };
+            if !box_.is_nested_inline() {
+                let anonymous = box_.children.iter().filter(|child| {
+                    layout
+                        .get(**child)
+                        .is_some_and(|child| child.kind.is_anonymous())
+                });
+                holders.extend(anonymous);
+                continue;
+            }
             let mut at = *key;
             while let Some(box_) = layout.get(at)
                 && box_.is_nested_inline()
@@ -445,9 +450,7 @@ fn inline_text_holders(nodes: &[NodeKey], layout: &LayoutStore) -> FxHashSet<Box
             {
                 at = parent;
             }
-            if at != *key {
-                holders.insert(at);
-            }
+            holders.insert(at);
         }
     }
     holders
@@ -462,8 +465,8 @@ impl Window {
         if holders.is_empty() {
             return;
         }
-        let scene = &self.scene;
-        let resolve = |id| scene.spatial.resolve(id);
+        let tables = &self.tables;
+        let resolve = |id| tables.spatial.resolve(id);
         let mut fragments = Vec::new();
         for key in holders {
             for frag in layout.fragments_of_box(key) {
@@ -471,8 +474,12 @@ impl Window {
                     continue;
                 };
                 fragments.push(*frag);
-                let ink = fragment.on_device_in(fragment.ink, &scene.spatial);
-                let admitted = scene.clips.bounds_placed(fragment.clip, &resolve);
+                let ink = fragment.on_device_in(fragment.ink, &tables.spatial);
+                let admitted = tables.clips.bounds_widened(
+                    fragment.clip,
+                    &resolve,
+                    self.diff_scratch.widened(),
+                );
                 if let Some(rect) = ink.intersection(admitted)
                     && !rect.is_empty()
                 {
@@ -481,8 +488,7 @@ impl Window {
             }
         }
         drop(layout);
-        self.painter
-            .evict_records(&fragments, &mut self.scene, &self.content.tile_owner());
+        self.painter.evict_records(&fragments, &mut self.tables);
     }
 }
 
@@ -608,8 +614,9 @@ mod tests {
     use zgui_color::Color;
     use zgui_css::{PinnedGroup, StyleDraft};
     use zgui_dom::NodeKey;
-    use zgui_scene::{PaintSlot, TextPaint, TextPaintTable};
+    use zgui_space::PaintSlot;
     use zgui_style::{TextPaintUpdate, TextRun};
+    use zgui_text::{TextPaint, TextPaintTable};
     use zgui_text_style::TextPaintKey;
 
     use super::{TextSlot, TextSlots, apply};

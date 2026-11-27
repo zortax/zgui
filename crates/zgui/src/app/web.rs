@@ -8,13 +8,15 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
+use iceblink::{Renderer, VectorBackend};
+use iceblink_vello::VelloOptions;
+use iceblink_wgpu::{Canvas, PresentPacing, SharedGraphics, wgpu};
 use zgui_platform::PlatformError;
 use zgui_platform_web::Mount;
-use zgui_render::Renderer;
-use zgui_render_wgpu::{Canvas, GroupPrecision, PresentPacing, SharedGraphics, gpu::adapter};
 use zgui_runtime::{AppError, RendererFactory};
 use zgui_view::IntoView;
 
+use crate::GroupPrecision;
 use crate::app::App;
 
 /// An application that runs in a page.
@@ -76,7 +78,8 @@ where
             Canvas(canvas.clone()),
             zgui_platform_web::subpixel_text_suits(),
         )
-        .await?;
+        .await
+        .map_err(AppError::GpuUnavailable)?;
         let precision = app.group_precision.unwrap_or_default();
         describe(&graphics);
         recovery = Some(Recovery {
@@ -148,7 +151,7 @@ fn describe(graphics: &SharedGraphics) {
     let capabilities = gpu.capabilities();
     zgui_platform_web::note(&format!(
         "zgui: drawing with {} on {} (vectors: {}, text: {})",
-        if adapter.backend == zgui_render_wgpu::wgpu::Backend::Gl {
+        if adapter.backend == wgpu::Backend::Gl {
             "WebGL 2"
         } else {
             "WebGPU"
@@ -178,7 +181,7 @@ struct Recovery {
     /// The canvas.
     canvas: zgui_platform_web::HtmlCanvasElement,
     /// The graphics interfaces to try.
-    backends: zgui_render_wgpu::wgpu::Backends,
+    backends: wgpu::Backends,
     /// Whether a recovery is under way.
     running: bool,
 }
@@ -266,26 +269,82 @@ async fn load_page_fonts(app: &App) -> usize {
 ///
 /// WebGPU, then WebGL 2. The page's query string narrows the list: `?renderer=webgl2` or
 /// `?renderer=webgpu`.
-fn backends() -> zgui_render_wgpu::wgpu::Backends {
-    zgui_platform_web::query("renderer").map_or_else(adapter::default_backends, |named| {
-        adapter::parse_backends(&named)
-    })
+fn backends() -> wgpu::Backends {
+    let both = wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL;
+    let Some(named) = zgui_platform_web::query("renderer") else {
+        return both;
+    };
+    named
+        .split(',')
+        .map(|word| match word.trim().to_ascii_lowercase().as_str() {
+            "webgpu" => wgpu::Backends::BROWSER_WEBGPU,
+            "gl" | "gles" | "opengl" | "webgl" | "webgl2" => wgpu::Backends::GL,
+            "all" => both,
+            _ => wgpu::Backends::empty(),
+        })
+        .fold(wgpu::Backends::empty(), |backends, word| backends | word)
 }
 
 /// The renderer factory of a page: every canvas draws on the device that is already open.
 fn factory(graphics: SharedGraphics, precision: GroupPrecision) -> RendererFactory {
+    PAGE_GRAPHICS.with(|page| *page.borrow_mut() = Some(graphics));
+    let paths = super::compositor::PathRenderers::default();
     Box::new(move |surface, target| {
-        let Some(canvas) = zgui_platform_web::canvas_of(surface.id()) else {
+        let id = surface.id();
+        if zgui_platform_web::canvas_of(id).is_none() {
             return Err(AppError::Platform(PlatformError::NoSuchSurface));
-        };
-        // The page presents a canvas when the callback that drew it returns, so the display
-        // paces every frame and nothing is told before a present.
-        let mut renderer =
-            graphics.renderer_for_surface(target, Canvas(canvas), PresentPacing::Display, None)?;
-        renderer.set_group_precision(precision);
-        zgui_render_vector_vello::attach(&mut renderer, target.size);
-        Ok(Box::new(renderer) as Box<dyn Renderer>)
+        }
+        let paths = paths.clone();
+        Ok(Box::new(move || {
+            canvas_renderer(id, target, precision, &paths)
+        }))
     })
+}
+
+thread_local! {
+    /// The device every canvas of the page draws on.
+    static PAGE_GRAPHICS: std::cell::RefCell<Option<SharedGraphics>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Opens a renderer presenting into the canvas of the surface `id` on the page's device.
+fn canvas_renderer(
+    id: zgui_platform::SurfaceId,
+    target: iceblink::RenderTarget,
+    precision: GroupPrecision,
+    paths: &super::compositor::PathRenderers,
+) -> Result<Box<dyn Renderer>, iceblink::GpuUnavailable> {
+    let graphics = PAGE_GRAPHICS
+        .with(|page| page.borrow().clone())
+        .ok_or_else(iceblink::GpuUnavailable::default)?;
+    let canvas = zgui_platform_web::canvas_of(id)
+        .ok_or_else(|| iceblink::GpuUnavailable::default().rejected("canvas", "gone"))?;
+    // The page presents a canvas when the callback that drew it returns, so the display
+    // paces every frame and nothing is told before a present.
+    let mut renderer = graphics.renderer_for_surface(
+        target.size,
+        target.opaque,
+        Canvas(canvas),
+        PresentPacing::Display,
+        None,
+    )?;
+    renderer.set_group_precision(precision.wgpu());
+    // Without a path rasteriser, paths and glyphs on the path route draw nothing.
+    let backend = if renderer.gpu().capabilities().vector_compute {
+        VectorBackend::Compute
+    } else {
+        VectorBackend::Raster
+    };
+    let options = VelloOptions {
+        adapter: None,
+        cache_directory: None,
+    };
+    renderer.set_vector_factory(
+        super::compositor::vectors(options, paths.clone()),
+        backend,
+        "vello",
+    );
+    Ok(Box::new(renderer))
 }
 
 /// The images of a page: the browser loads, decodes and scales each one.

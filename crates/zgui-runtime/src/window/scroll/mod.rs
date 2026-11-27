@@ -20,9 +20,9 @@
 
 mod asked;
 mod bar;
+pub(crate) mod driven;
 mod extent;
 mod frozen;
-pub(crate) mod shift;
 
 use zgui_dom::NodeKey;
 use zgui_geom::{CssPx, Point, Rect, Scale};
@@ -135,6 +135,9 @@ impl Window {
         at: Timestamp,
         allowed: bool,
     ) {
+        if (allowed || wheel.phase == ScrollPhase::Ended) && self.hand_scroll(None, wheel) {
+            return;
+        }
         let latched = self.scroll.borrow().latched();
         match wheel.phase {
             ScrollPhase::Ended if !self.scroll.borrow_mut().lift().is_empty() => {
@@ -439,8 +442,8 @@ impl Window {
             document: &document,
             layout: &layout,
             hit: &self.hit,
-            clips: &self.scene.clips,
-            spatial: &self.scene.spatial,
+            clips: &self.tables.clips,
+            spatial: &self.tables.spatial,
             scale: Scale::new(self.scale),
             filter: &filter,
         };
@@ -478,6 +481,9 @@ impl Window {
         // accessibility action bringing something into view. Leaving those two ways in would make
         // the page jump under a modal surface exactly as restyling the root did, only sometimes.
         if self.is_frozen(container) {
+            return;
+        }
+        if behavior.animates() && self.animate_on_compositor(container, to) {
             return;
         }
         let before = self.scroll.borrow().offset_of(container);
@@ -575,10 +581,6 @@ impl Window {
         if moved.is_empty() {
             return;
         }
-        // Kept before the log is consumed. What the renderer may be asked to translate is decided
-        // at paint time, which is well after this, and this is the only place the frame's own
-        // movements are enumerated.
-        self.scrolled_this_frame.extend_from_slice(&moved);
         let scale = Scale::new(self.scale);
         for scrolled in moved {
             let (node, payload) = {

@@ -79,6 +79,8 @@ pub enum WakeReason {
     ///
     /// The change can come with no resize, or after the last resize of the change.
     SurfaceStateChanged(SurfaceId),
+    /// The compositor queued answers for the window that draws into a surface.
+    CompositorAnswered(SurfaceId),
 }
 
 impl WakeReason {
@@ -89,9 +91,9 @@ impl WakeReason {
     pub fn surfaces(&self) -> &[SurfaceId] {
         match self {
             Self::ReactiveWork { surfaces } => surfaces,
-            Self::A11yTreeRequested(surface) | Self::SurfaceStateChanged(surface) => {
-                core::slice::from_ref(surface)
-            }
+            Self::A11yTreeRequested(surface)
+            | Self::SurfaceStateChanged(surface)
+            | Self::CompositorAnswered(surface) => core::slice::from_ref(surface),
             _ => &[],
         }
     }

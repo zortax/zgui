@@ -1,20 +1,21 @@
 //! What a probe reads about the frame that has just ended.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
-use zgui_bits::DamageSet;
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
+    Renderer,
+};
 use zgui_platform::Surface;
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    Renderer, TextureHandle,
-};
-use zgui_runtime::{App, AppError, FrameProbe, FrameReport, Window};
-use zgui_scene::Scene;
+use zgui_runtime::{App, FrameProbe, FrameReport, Window};
 use zgui_view::{BuildCx, IntoView, View};
+
+mod support;
 
 /// A window with one swatch whose colour a signal decides.
 const CSS: &str = "root { display: block; width: 400px; height: 300px }
@@ -24,11 +25,9 @@ const CSS: &str = "root { display: block; width: 400px; height: 300px }
 /// A renderer that numbers every frame it draws in the draw-call count it reports.
 struct Numbering {
     /// How many frames it has drawn, shared with the test.
-    drawn: Rc<Cell<u32>>,
+    drawn: Arc<AtomicU32>,
     /// The surface it was pointed at.
     target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
 }
 
 impl Renderer for Numbering {
@@ -44,29 +43,20 @@ impl Renderer for Numbering {
         self.target
     }
 
-    fn draw(&mut self, _scene: &Scene, _damage: &DamageSet) -> FrameOutcome {
-        self.drawn.set(self.drawn.get() + 1);
+    fn target_age(&self) -> BufferAge {
+        BufferAge::Unknown
+    }
+
+    fn draw(&mut self, _frame: &Frame) -> FrameOutcome {
+        let drawn = self.drawn.fetch_add(1, Ordering::Relaxed) + 1;
         FrameOutcome::Presented(FrameStats {
-            vector_passes: 0,
-            draw_calls: self.drawn.get(),
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
+            draw_calls: drawn,
+            ..FrameStats::default()
         })
     }
 
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
     fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
+        MemoryReport::default()
     }
 }
 
@@ -81,7 +71,7 @@ struct Seen {
 /// A probe that records the window's report at the end of every frame.
 struct Recording {
     /// The renderer's frame count.
-    drawn: Rc<Cell<u32>>,
+    drawn: Arc<AtomicU32>,
     /// Every frame's record, in order.
     seen: RefCell<Vec<Seen>>,
 }
@@ -90,34 +80,34 @@ impl FrameProbe for Recording {
     fn frame_ended(&self, window: &Window) {
         self.seen.borrow_mut().push(Seen {
             report: window.last_frame_report(),
-            drawn: self.drawn.get(),
+            drawn: self.drawn.load(Ordering::Relaxed),
         });
     }
 }
 
 #[test]
 fn a_probe_reads_the_report_of_the_frame_that_has_just_ended() {
-    let drawn = Rc::new(Cell::new(0));
+    let drawn = Arc::new(AtomicU32::new(0));
     let probe = Rc::new(Recording {
-        drawn: Rc::clone(&drawn),
+        drawn: Arc::clone(&drawn),
         seen: RefCell::new(Vec::new()),
     });
     let lit = RwSignal::new(false);
-    let counter = Rc::clone(&drawn);
+    let counter = Arc::clone(&drawn);
     let handler = App::new()
         .with_title("frame report")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
         .with_probe(Rc::clone(&probe) as Rc<dyn FrameProbe>)
+        .with_compositor(support::client())
         .with_renderer(Box::new(
             move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
                 let mut renderer = Numbering {
-                    drawn: Rc::clone(&counter),
+                    drawn: Arc::clone(&counter),
                     target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
                 };
                 renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
+                support::hand(renderer)
             },
         ))
         .into_handler(move |cx: &mut BuildCx<'_>| {

@@ -26,7 +26,7 @@ pub enum Tab {
     /// between every step of the only workflow the panel has.
     #[default]
     Elements,
-    /// What the last frame did: batches, passes, damage and every counter that moved.
+    /// What the last frame did: draw calls, passes, damage and every counter that moved.
     Frame,
     /// Where the last frame's time went, stage by stage.
     Timeline,

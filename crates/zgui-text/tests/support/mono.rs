@@ -132,11 +132,10 @@ impl ParagraphShaper for MonoShaper {
         visit(ShapedRun {
             face: zgui_text::FaceId(0),
             size: shaped.strut().font_size.0,
-            instance: zgui_text::VariationInstance::DEFAULT,
+            coords: &[],
             synthetic_bold: 0.0,
             synthetic_slant: 0.0,
-            has_color: false,
-            brush: zgui_scene::PaintSlot(0),
+            brush: zgui_space::PaintSlot(0),
             glyphs: &glyphs,
             text_start: 0,
         });

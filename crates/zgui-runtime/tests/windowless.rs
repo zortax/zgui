@@ -34,7 +34,8 @@ fn windowless(setup: impl FnOnce() + 'static) -> Harness<zgui_runtime::Runtime> 
     let handler = App::new()
         .without_primary_window()
         .with_exit_policy(ExitPolicy::Explicit)
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .with_context(setup)
         .into_handler(|_: &mut BuildCx<'_>| -> Box<dyn zgui_view::Anchor> {
             panic!("the view of a primary window was built")

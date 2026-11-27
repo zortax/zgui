@@ -99,11 +99,10 @@ fn shadow_color(color: &zgui_css::values::color::ColorValue, current: &AbsoluteC
 
 /// How far outside its own shape a shadow's painted extent reaches, in device pixels.
 ///
-/// Three standard deviations is where a Gaussian falls below one part in a thousand, under half a
-/// level at eight bits per channel. It is the same constant the display list uses to size a
-/// shadow's own rectangle, taken from there rather than written twice.
+/// The blur reaches three standard deviations past the shadow's shape.
 pub fn reach(spec: &ShadowSpec) -> f32 {
-    zgui_scene::Shadow::BLUR_EXTENT * spec.deviation + spec.spread
+    // A Gaussian falls below one part in a thousand at three standard deviations.
+    3.0 * spec.deviation + spec.spread
 }
 
 #[cfg(test)]

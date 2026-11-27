@@ -168,9 +168,9 @@ components + reactive_graph signals
                 │  fragments, hit regions, damage
                 ▼
         retained paint recordings
-                │  scene + damage rectangles
+                │  compositor chunks, property trees, order
                 ▼
-        wgpu renderer + Vello
+   shared compositor → wgpu renderer + Vello
                 │
                 ▼
        persistent render target
@@ -188,10 +188,10 @@ Each stage passes only the work it owes to the next:
    must run.
 3. **Layout and text.** cephal, zgui's incremental layout engine, patches dirty regions of the box
    tree. Paragraphs are reshaped or rewrapped only when their content, style or width changes.
-4. **Paint.** Unchanged fragments replay their recordings. Changed fragments are recorded again and
-   culled against the damage rectangles.
-5. **Draw.** The renderer composes into a target that lives across frames, so pixels outside the
-   damage keep their previous value.
+4. **Paint.** Unchanged fragments keep their compositor chunks. Changed fragments the damage
+   rectangles reach are recorded again.
+5. **Draw.** The compositor builds a frame from what changed, and the renderer composes it into a
+   target that lives across frames, so pixels the frame does not redraw keep their previous value.
 
 A color change needs paint and no layout. Scrolling moves retained content and draws only the band
 that comes into view. Wide changes, such as a window resize or a new theme, still reach more nodes,

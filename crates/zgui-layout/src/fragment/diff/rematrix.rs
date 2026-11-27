@@ -15,7 +15,7 @@
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Matrix4, Rect};
 use zgui_profile::{Counter, counter};
-use zgui_scene::Content;
+use zgui_space::Content;
 
 use crate::fragment::diff::damage::{overlaps, pairwise_disjoint};
 use crate::fragment::diff::dirty::FrameDirty;
@@ -58,12 +58,12 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
         // Beyond the move's own damage: a frame that moves a port's pixels keeps this damage and
         // drops that.
         if let Some((before, _)) = before {
-            self.damage_drawn_beyond_a_move(
+            self.damage_in(
                 self.device_before(before, anchor),
                 super::Admitted::everything(),
             );
         }
-        self.damage_beyond_a_move(
+        self.damage_in(
             self.device_now(folded.subtree_ink, anchor),
             super::Admitted::everything(),
         );
@@ -163,7 +163,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             Some(_) => self
                 .tables
                 .spatial
-                .of(zgui_scene::PropertyOwner::of(key).content()),
+                .of(zgui_space::PropertyOwner::of(key).content()),
             None => own_anchor,
         };
         let mut disjoint = true;
@@ -222,7 +222,7 @@ impl<D: FrameDirty> Pass<'_, '_, D> {
             return None;
         }
         let spatial = &*self.tables.spatial;
-        let id = spatial.of(zgui_scene::PropertyOwner::of(key).content())?;
+        let id = spatial.of(zgui_space::PropertyOwner::of(key).content())?;
         spatial.get(id).map(|node| node.local)
     }
 }

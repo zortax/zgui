@@ -19,6 +19,8 @@ include.workspace = true
 # the first arrives as the platform contract and the second as the renderer contract — which is
 # what lets the whole loop be exercised with no display server at all.
 [dependencies]
+# The compositor contract a window can draw through.
+iceblink.workspace = true
 web-time.workspace = true
 rustc-hash.workspace = true
 thiserror.workspace = true
@@ -27,7 +29,6 @@ tracing.workspace = true
 # and both are frame-loop concerns: only the loop knows when the document and its geometry agree,
 # and an action has to be dispatched where listeners can be called.
 zgui-a11y = { path = "../zgui-a11y", version = "0.1.0" }
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
 zgui-anim = { path = "../zgui-anim", version = "0.1.0" }
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-color = { path = "../zgui-color", version = "0.1.0" }
@@ -45,11 +46,10 @@ zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # The frame owns scroll offsets and this is where they live: writing one is a fast path over the
 # fragments a frame already has, and the loop is what drives it.
 zgui-scroll = { path = "../zgui-scroll", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-style = { path = "../zgui-style", version = "0.1.0" }
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
 zgui-text-style = { path = "../zgui-text-style", version = "0.1.0" }
@@ -64,6 +64,8 @@ zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 # applies them can answer. A hand-written stand-in for it would be a check written to agree with
 # the thing it is checking.
 accesskit_consumer.workspace = true
+# The paths the vector layer budget tests draw.
+kurbo.workspace = true
 # The key arena, for the one test that has to name a replaced node without a document to take the
 # name from: nothing in the runtime attaches a picture to one, so the fixture builds the identity
 # by hand.
@@ -74,7 +76,9 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # dependency leaves them off, and an application built in release mode ships the inert path.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 # A renderer that records instead of drawing, so the whole loop runs with no graphics device.
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }
+# The compositor a window draws through in the tests, and what its output shows.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [lints]
 workspace = true

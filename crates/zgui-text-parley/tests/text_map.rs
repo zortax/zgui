@@ -4,7 +4,7 @@ mod support;
 
 use std::sync::Arc;
 
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{ParagraphContent, ParagraphShaper, StyledRun, TextMap};
 use zgui_text_parley::Controls;
 use zgui_text_style::{Direction, ParagraphStyle, TextAlign};

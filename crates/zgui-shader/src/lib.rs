@@ -42,13 +42,14 @@
 //!
 //! # What an effect costs
 //!
-//! An effect that declares no [reads](ShaderReads) costs what a background costs: it is one
-//! instance in the same arena every quad lives in, drawn in the same pass, through the same clip,
-//! and it repaints only when its parameters or its element change.
+//! An effect that declares no [reads](ShaderReads) is one shader quad, drawn through the same clip
+//! a background is, and it is drawn again only when its parameters or its element change. Items
+//! that draw one effect with equal parameters share one parameter block, so a renderer can draw
+//! them in one call.
 //!
-//! An effect that declares `Time` repaints every refresh for as long as it is on screen, because
-//! it draws something different every frame and nothing else knows that. That is the whole reason
-//! the declaration exists.
+//! An effect that declares `Time` is drawn again on every frame for as long as it is shown,
+//! because it draws something different every frame and nothing else knows that. That is the
+//! whole reason the declaration exists.
 //!
 //! # The root the expansion names
 //!
@@ -81,14 +82,15 @@ pub use crate as shader;
 mod effect;
 mod handle;
 mod paint;
+mod program;
 
 pub use crate::effect::ShaderEffect;
 pub use crate::handle::{NoParams, ParamsValue, ShaderHandle, ShaderParams};
 pub use crate::paint::ShaderPainterExt;
+pub use crate::program::{EffectProgram, ParamsField, ParamsLayout};
 
-pub use zgui_render_wgpu::{EffectProgram, ParamsField, ParamsLayout};
-pub use zgui_scene::{ShaderId, ShaderParams as ShaderParamsBlock};
+pub use iceblink::ParamsBlock as ShaderParamsBlock;
+pub use zgui_paint::content::shader::{MAX_PARAMS_BYTES, ShaderId, ShaderMode, ShaderReads};
 // The derive and the trait share a name deliberately, the way `Debug` does: one is a macro and the
 // other a type, and an application writes `#[derive(ShaderParams)]` against the trait it names.
 pub use zgui_shader_macro::{ShaderParams, shader};
-pub use zgui_wgsl::{MAX_PARAMS_BYTES, ShaderMode, ShaderReads};

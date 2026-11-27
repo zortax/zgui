@@ -76,10 +76,10 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
+use iceblink::{RenderTarget, Renderer};
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::{Surface, SurfaceEvent};
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{AppError, Runtime};
 use zgui::view::{Anchor, BuildCx};
 use zgui_platform_headless::Harness;
@@ -251,103 +251,19 @@ impl Args {
     }
 }
 
-/// A texture sink that accepts every upload and keeps nothing.
-struct NullSink;
-
-impl zgui::atlas::TextureSink for NullSink {
-    fn create_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _size: Size<i32, zgui::geom::Device>,
-        _format: zgui::atlas::TextureFormat,
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn write_texture(
-        &mut self,
-        _texture: zgui::atlas::TextureId,
-        _bounds: zgui::geom::Rect<i32, zgui::geom::Device>,
-        _format: zgui::atlas::TextureFormat,
-        _bytes: &[u8],
-    ) -> Result<(), zgui::atlas::SinkError> {
-        Ok(())
-    }
-
-    fn destroy_texture(&mut self, _texture: zgui::atlas::TextureId) {}
-}
-
-/// A renderer that accepts each frame and keeps nothing of it.
-struct NullRenderer {
-    /// The surface it was configured for.
-    target: Option<RenderTarget>,
-    /// Where tiles are uploaded.
-    sink: NullSink,
-    /// The next handle an external texture is given.
-    next: u64,
-}
-
-impl Renderer for NullRenderer {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(
-        &mut self,
-        _scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.next += 1;
-        zgui::render::TextureHandle(self.next)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.sink
-    }
-}
-
 /// Builds the renderer the window draws through, charged to [`Tag::Renderer`].
 fn renderer(gpu: bool) -> zgui::runtime::RendererFactory {
     Box::new(move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-        alloc_tag::scope(Tag::Renderer, || -> Result<Box<dyn Renderer>, AppError> {
-            if !gpu {
-                return Ok(Box::new(NullRenderer {
-                    target: Some(target),
-                    sink: NullSink,
-                    next: 0,
-                }));
-            }
-            let mut device = zgui_render_wgpu::Builder::new()
-                .offscreen(
-                    target,
-                    zgui_render_wgpu::wgpu::TextureFormat::Bgra8Unorm,
-                    false,
-                )
-                .map_err(AppError::GpuUnavailable)?;
-            zgui_render_vector_vello::attach(&mut device, target.size);
-            Ok(Box::new(device))
-        })
+        let factory: iceblink::RendererFactory = Box::new(move || {
+            alloc_tag::scope(Tag::Renderer, || {
+                if !gpu {
+                    return Ok(Box::new(zgui_bench::renderers::NullRenderer::new(target))
+                        as Box<dyn Renderer>);
+                }
+                Ok(Box::new(zgui_bench::renderers::device(target)?) as Box<dyn Renderer>)
+            })
+        });
+        Ok::<_, AppError>(factory)
     })
 }
 
@@ -359,7 +275,6 @@ fn open<R: ProbeRow>(args: &Args) -> Result<(Harness<Runtime>, Ctx<R>), String> 
         .map_err(|error| format!("font: {error:?}"))?;
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts;
     let unvirtualized = !args.mode.virtualized();
     let ctx_cell: Rc<RefCell<Option<Ctx<R>>>> = Rc::new(RefCell::new(None));
     let ctx_for_view = Rc::clone(&ctx_cell);
@@ -369,12 +284,12 @@ fn open<R: ProbeRow>(args: &Args) -> Result<(Harness<Runtime>, Ctx<R>), String> 
         .with_stylesheet(row::SHEET)
         .with_style_threads(0)
         .with_layout_threads(0)
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(renderer(args.gpu))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let ctx = ctx_for_view
                 .borrow()

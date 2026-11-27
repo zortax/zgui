@@ -11,19 +11,10 @@
 
 mod support;
 
-use std::sync::Arc;
-
-use zgui_bits::DamageSet;
-use zgui_platform::Surface;
 use zgui_profile::{COUNTERS_ENABLED, Counter, counter};
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, FrameStats, MemoryReport, RenderCapabilities, RenderTarget,
-    Renderer, TextureHandle,
-};
-use zgui_runtime::{App, AppError, Runtime};
-use zgui_scene::Scene;
+use zgui_runtime::{App, Runtime};
 use zgui_view::{BuildCx, IntoView, View};
 
 /// A window with a paragraph in it and a great deal of surface around it.
@@ -35,74 +26,17 @@ const CSS: &str = "root { display: block; width: 400px; height: 300px; padding: 
 /// to be about.
 const ROWS: usize = 24;
 
-/// A renderer that draws nowhere and counts nothing, so the counters describe the frame alone.
-struct Quiet {
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
-}
-
-impl Renderer for Quiet {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, _scene: &Scene, _damage: &DamageSet) -> FrameOutcome {
-        FrameOutcome::Presented(FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
-    }
-}
-
 /// A window of rows with one line of text among them, reading `count`.
 fn window(count: RwSignal<i32>) -> zgui_platform_headless::Harness<Runtime> {
     let handler = App::new()
         .with_title("reuse")
         .with_size(400.0, 300.0)
         .with_stylesheet(CSS)
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn Surface>, target: RenderTarget| {
-                let mut renderer = Quiet {
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, AppError>(Box::new(renderer))
-            },
-        ))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let mut column = zgui_elements::column().class("root");
             for _ in 0..ROWS {

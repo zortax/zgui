@@ -28,8 +28,9 @@
 //! valid file takes two to three times as long. The sweep gives every scenario a private cache
 //! directory next to its binary and runs this scenario once before it measures, so the measured
 //! start always finds a valid file, and the user's own cache has no effect. Set `ZGUI_FONT_CACHE`
-//! before the sweep (for example to `off`) to measure another state. Glyphs for the first frame are
-//! rasterised on the layout pool, so the number also depends on how many cores the process gets.
+//! before the sweep (for example to `off`) to measure another state. The compositor
+//! rasterises the first frame's glyphs at its commit on worker threads, so the
+//! number also depends on how many cores the process gets.
 
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
@@ -48,6 +49,10 @@ pub(crate) fn run() -> Outcome {
         DevicePx(crate::gallery::WIDTH),
         DevicePx(crate::gallery::HEIGHT),
     )));
+    harness.settle(256);
+    // The first frame is painted once a driver on a thread of its own has drawn it, and the
+    // window has taken what it answered.
+    crate::draw::wait_for_driver();
     harness.settle(256);
     let elapsed = started.elapsed();
     drop(gpu);
@@ -75,9 +80,7 @@ pub(crate) fn run() -> Outcome {
                 tolerance: SCHEDULER_TOLERANCE,
             },
             rationale: "measured at 49-66 ms headless across twelve starts with a warm font \
-                        cache, and 112-163 ms with the cache off; the first frame's glyphs are \
-                        rasterised on the layout pool, so the cores the process gets set the \
-                        spread",
+                        cache, and 112-163 ms with the cache off",
             budget: Some(250.0),
             spread: Some(first),
         }]

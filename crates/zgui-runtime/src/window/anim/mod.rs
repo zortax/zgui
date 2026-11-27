@@ -16,6 +16,7 @@
 //! records that moment beside the phase.
 
 pub mod cadence;
+pub(crate) mod lead;
 mod place;
 mod recolor;
 mod trace;
@@ -49,17 +50,29 @@ impl Window {
             drop(document);
             let mut document = self.document.borrow_mut();
             let layout = self.layout.borrow();
+            let surface = self.tables.viewport();
             // The display list is handed to the tick rather than consulted after it, because what
             // an element owes is decided from whether the box could be moved without composing it —
             // and that is answerable only by whatever holds the coordinate systems.
             let mut writing = place::Writing {
-                scene: &mut self.scene,
+                tables: &mut self.tables,
                 layout: &layout,
                 scale: self.scale,
                 damage: zgui_bits::DamageSet::new(),
                 painter: &self.painter,
+                moved: Vec::new(),
+                surface,
+                widened: self.diff_scratch.widened(),
             };
             let tick = self.animator.tick(&mut document, &report, &mut writing);
+            if !writing.moved.is_empty() {
+                // What is under a stationary pointer moved, and so did what a screen reader was
+                // told about the boxes drawn in the written systems.
+                self.hit.note_space_moved();
+                if self.a11y.held() > 0 {
+                    self.moved_spaces.extend_from_slice(&writing.moved);
+                }
+            }
             (tick, writing.damage)
         };
         // A boundary sampled a little early shows the old step, so the wake lands just after it.
@@ -104,6 +117,9 @@ impl Window {
     /// moment the frame was *for* — every animated value in it was interpolated against it — and a
     /// phase measured from the end of a frame would move with how long the frame took.
     ///
+    /// Under a driver that paces itself, the phase is moved onto the driver's latch less the time the
+    /// window's frames take, so each frame reaches the latch it is meant for.
+    ///
     /// An occluded window keeps nothing. Its animations go on running against the clock and are
     /// drawn correctly whenever it is shown again, but the phase they were on describes a rate the
     /// window was not running at, and an occlusion is not bounded by anything.
@@ -117,7 +133,22 @@ impl Window {
             self.animation.park();
             return;
         }
-        self.animation.advance(now, self.refresh_interval());
+        let interval = self.refresh_interval();
+        self.animation.advance(now, interval);
+        if let Some(latch) = self.driver_latch() {
+            self.animation
+                .align(latch.checked_sub(self.compose_lead.get()), now, interval);
+        }
+    }
+
+    /// Returns when the window's driver latches the frame this window committed last, for a driver
+    /// that paces itself.
+    fn driver_latch(&self) -> Option<web_time::Instant> {
+        if self.compositor.pacing() != iceblink::DriverPacing::SelfPaced {
+            return None;
+        }
+        let (due, _) = self.compositor.commit_frame(self.refresh_interval())?;
+        Some(self.frame_clock_moment(due))
     }
 
     /// Marks the animations this frame's cascade created, which its tick could not have seen.

@@ -1,0 +1,376 @@
+//! The spatial tree: which coordinate system a box's content is drawn in, and what it resolves to.
+
+use smallvec::SmallVec;
+use zgui_geom::Matrix4;
+
+use crate::spatial::id::{PropertyOwner, SPATIAL_DOMAIN, SpatialId};
+use crate::spatial::node::{Anchoring, OwnSpace, SpatialNode};
+use crate::spatial::tree::PropertyTree;
+
+/// Every coordinate system in the document.
+pub type SpatialTree = PropertyTree<SpatialId, SpatialNode>;
+
+impl SpatialTree {
+    /// A tree with the viewport in it and nothing else.
+    ///
+    /// The viewport is established here rather than by the box walk so that it is the first
+    /// occupant of the first slot and stays so — which is what makes [`SpatialId::VIEWPORT`] a
+    /// constant, and a primitive that carries no coordinate system of its own a primitive built
+    /// out of a zero.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{SpatialId, SpatialTree};
+    ///
+    /// let tree = SpatialTree::with_viewport();
+    /// assert_eq!(tree.viewport(), SpatialId::VIEWPORT);
+    /// assert_eq!(tree.resolve(SpatialId::VIEWPORT), Some(Matrix4::IDENTITY));
+    /// ```
+    ///
+    /// Under the poison test mode the tree also holds the document's own coordinate system, a
+    /// child of the viewport — see [`SpatialTree::document`].
+    pub fn with_viewport() -> Self {
+        let mut tree = Self::new(SPATIAL_DOMAIN);
+        let viewport = tree.root(PropertyOwner::VIEWPORT);
+        let poison = crate::spatial::poison::origin();
+        if poison != 0.0 {
+            tree.establish(
+                PropertyOwner::DOCUMENT,
+                SpatialNode {
+                    parent: Some(viewport),
+                    local: Matrix4::translation(-poison, -poison, 0.0),
+                    anchoring: Anchoring::Scrolling,
+                },
+            );
+        }
+        tree
+    }
+
+    /// The coordinate system the document is drawn in.
+    pub fn viewport(&self) -> SpatialId {
+        self.of(PropertyOwner::VIEWPORT)
+            .unwrap_or(SpatialId::VIEWPORT)
+    }
+
+    /// The coordinate system the document's root box is laid out in.
+    ///
+    /// The node [`PropertyOwner::DOCUMENT`] established, which only the poison test mode
+    /// establishes, and the viewport otherwise. See [`poison`](crate::spatial::poison).
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{Anchoring, PropertyOwner, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::new(zgui_space::SPATIAL_DOMAIN);
+    /// let viewport = tree.root(PropertyOwner::VIEWPORT);
+    /// assert_eq!(tree.document(), viewport);
+    ///
+    /// let document = tree.establish(
+    ///     PropertyOwner::DOCUMENT,
+    ///     SpatialNode {
+    ///         parent: Some(viewport),
+    ///         local: Matrix4::translation(-8.0, -8.0, 0.0),
+    ///         anchoring: Anchoring::Scrolling,
+    ///     },
+    /// );
+    /// assert_eq!(tree.document(), document);
+    /// ```
+    pub fn document(&self) -> SpatialId {
+        self.of(PropertyOwner::DOCUMENT)
+            .unwrap_or_else(|| self.viewport())
+    }
+
+    /// The coordinate system everything else is expressed in.
+    ///
+    /// Named like every other node, after the box that establishes it, so that a document which
+    /// replaces its root is not left with two roots.
+    pub fn root(&mut self, owner: PropertyOwner) -> SpatialId {
+        self.establish(
+            owner,
+            SpatialNode {
+                parent: None,
+                local: Matrix4::IDENTITY,
+                anchoring: Anchoring::Scrolling,
+            },
+        )
+    }
+
+    /// The coordinate system a box's own content is drawn in, and the one its children descend
+    /// into.
+    ///
+    /// `own` is [`OwnSpace::of`]'s answer for the box. `None` there is the overwhelming majority
+    /// and is the whole of the deduplication this tree provides: the box takes the name of the
+    /// space above it, so a thousand identical rows resolve to one node and one matrix rather than
+    /// to a thousand equal ones. A box that had a coordinate system of its own and no longer does
+    /// gives it back here.
+    ///
+    /// Giving one back costs a lookup by owner, and asking is what finds out there is nothing to
+    /// give back, so every box drawn in the space above it pays that lookup once per frame. A
+    /// caller that already knows the box held no coordinate system last time — because it kept the
+    /// name the box was drawn under — takes `parent` without asking and pays nothing.
+    ///
+    /// ```
+    /// use zgui_arena::DomainId;
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::new(DomainId::FIRST);
+    /// let root = tree.root(PropertyOwner::new(1).expect("a handle is never the empty word"));
+    ///
+    /// for row in 2..1_002 {
+    ///     let owner = PropertyOwner::new(row).expect("a handle is never the empty word");
+    ///     assert_eq!(tree.space_of(root, owner, None), root);
+    /// }
+    /// assert_eq!(tree.len(), 1, "a thousand untransformed rows name one coordinate system");
+    /// ```
+    pub fn space_of(
+        &mut self,
+        parent: SpatialId,
+        owner: PropertyOwner,
+        own: Option<OwnSpace>,
+    ) -> SpatialId {
+        match own {
+            None => {
+                self.release(owner);
+                parent
+            }
+            Some(own) => self.establish(
+                owner,
+                SpatialNode {
+                    parent: Some(parent),
+                    local: own.local,
+                    anchoring: own.anchoring,
+                },
+            ),
+        }
+    }
+
+    /// A fingerprint of what a coordinate system currently resolves to.
+    ///
+    /// A structural name does not move when the matrix under it does — that is the whole point of
+    /// naming a coordinate system after the box that establishes it — so a name alone cannot tell
+    /// something that cached output whether the matrix it drew through is still that matrix. This
+    /// can, at the cost of one walk to the root.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let moved = |x| OwnSpace::of(Some(Matrix4::translation(x, 0.0, 0.0)), None, false);
+    ///
+    /// let card = tree.space_of(tree.viewport(), owner, moved(4.0));
+    /// let before = tree.fingerprint(card);
+    /// assert_eq!(tree.space_of(tree.viewport(), owner, moved(9.0)), card, "same name");
+    /// assert_ne!(tree.fingerprint(card), before, "and a different matrix under it");
+    /// ```
+    pub fn fingerprint(&self, id: SpatialId) -> Option<u64> {
+        use crate::content::Content;
+        Some(self.resolve(id)?.content_hash())
+    }
+
+    /// The matrix the coordinate system occupying `slot` maps onto the device.
+    ///
+    /// What a slot number alone can be turned into: a primitive carries the slot and nothing else,
+    /// so anything reading a primitive back — a transcript, a check that a drawn thing was drawn
+    /// where it is — comes in through here.
+    pub fn resolve_at(&self, slot: u32) -> Option<Matrix4> {
+        self.resolve(self.at(slot)?)
+    }
+
+    /// The matrix mapping a coordinate system's own coordinates onto the device.
+    ///
+    /// The product of the node's own transform with every transform above it, in that order, which
+    /// is the same matrix composing the box against its parent arrives at. `None` if any node in
+    /// the chain has been given back: a name that no longer resolves has no answer rather than a
+    /// plausible one.
+    ///
+    /// The product is composed from the root down: a root resolves to its own transform, and every
+    /// other node to its own transform followed by its parent's answer. [`Placements`] composes in
+    /// the same order from each parent's kept answer, so the two agree in every bit.
+    ///
+    /// [`Placements`]: crate::Placements
+    ///
+    /// ```
+    /// use zgui_arena::DomainId;
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{Anchoring, OwnSpace, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::new(DomainId::FIRST);
+    /// let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
+    /// let root = tree.root(owner(1));
+    ///
+    /// let moved = |x| OwnSpace { local: Matrix4::translation(x, 0.0, 0.0), anchoring: Anchoring::Scrolling };
+    /// let outer = tree.space_of(root, owner(2), Some(moved(10.0)));
+    /// let inner = tree.space_of(outer, owner(3), Some(moved(4.0)));
+    ///
+    /// assert_eq!(tree.resolve(inner), Some(Matrix4::translation(14.0, 0.0, 0.0)));
+    /// ```
+    pub fn resolve(&self, id: SpatialId) -> Option<Matrix4> {
+        let mut chain = SmallVec::<[&Matrix4; 8]>::new();
+        let mut next = Some(id);
+        while let Some(current) = next {
+            let node = self.get(current)?;
+            chain.push(&node.local);
+            next = node.parent;
+        }
+        let mut down = chain.into_iter().rev();
+        let root = *down.next()?;
+        Some(down.fold(root, |above, local| local.then(&above)))
+    }
+
+    /// The matrix mapping `id`'s own coordinates into `ancestor`'s.
+    ///
+    /// The identity when the two are the same node, and `None` when `ancestor` is not above `id` —
+    /// which is also how "is this coordinate system inside that one" is asked, because the walk
+    /// that answers it is the walk that produces the matrix and doing both at once costs one of
+    /// them.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = |raw| PropertyOwner::new(raw).expect("a handle is never the empty word");
+    /// let slid = |x| OwnSpace::of(Some(Matrix4::translation(x, 0.0, 0.0)), None, false);
+    /// let card = tree.space_of(tree.viewport(), owner(2), slid(4.0));
+    /// let label = tree.space_of(card, owner(3), slid(1.0));
+    ///
+    /// assert_eq!(tree.relative(label, card), Some(Matrix4::translation(1.0, 0.0, 0.0)));
+    /// assert_eq!(tree.relative(card, card), Some(Matrix4::IDENTITY));
+    /// assert_eq!(tree.relative(card, label), None, "the label is below the card, not above it");
+    /// ```
+    pub fn relative(&self, id: SpatialId, ancestor: SpatialId) -> Option<Matrix4> {
+        // A search for what is drawn under one node asks this for every primitive, and most of
+        // them are outside that node. So the chain is first walked by name, and the products are
+        // made only for a chain that reaches `ancestor`.
+        let mut next = Some(id);
+        loop {
+            let current = next?;
+            if current == ancestor {
+                break;
+            }
+            next = self.get(current)?.parent;
+        }
+        let mut matrix = Matrix4::IDENTITY;
+        let mut current = id;
+        while current != ancestor {
+            let node = self.get(current)?;
+            matrix = matrix.then(&node.local);
+            current = node.parent?;
+        }
+        Some(matrix)
+    }
+
+    /// The nearest coordinate system at or above `id` that is not the content of a scroll
+    /// container.
+    ///
+    /// A content system moves when its container scrolls and nothing else does. A reader that
+    /// measures geometry relative to the container asks this to find the system whose movement
+    /// does change that geometry. `None` when the walk reaches a name that is no longer live.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{Anchoring, PropertyOwner, ScrollPort, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let content = tree.establish(
+    ///     owner.content(),
+    ///     SpatialNode {
+    ///         parent: Some(tree.viewport()),
+    ///         local: Matrix4::translation(0.0, -40.0, 0.0),
+    ///         anchoring: Anchoring::Content(ScrollPort::EMPTY),
+    ///     },
+    /// );
+    /// assert_eq!(tree.outside_content(content), Some(tree.viewport()));
+    /// assert_eq!(tree.outside_content(tree.viewport()), Some(tree.viewport()));
+    /// ```
+    pub fn outside_content(&self, id: SpatialId) -> Option<SpatialId> {
+        let mut current = id;
+        loop {
+            let node = self.get(current)?;
+            if !node.anchoring.is_content() {
+                return Some(current);
+            }
+            current = node.parent?;
+        }
+    }
+
+    /// How far `outer`'s coordinates sit from `inner`'s, when only content systems lie between.
+    ///
+    /// `Some(by)` when `inner` is `outer`, or is reached from it down through content systems
+    /// only: a rectangle measured in `outer` is at `rect + by` in `inner`. A content system's own
+    /// transform is its container's scroll offset, a translation, so the answer is exact. `None`
+    /// for any other pair, and when the walk reaches a name that is no longer live.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{Anchoring, PropertyOwner, ScrollPort, SpatialNode, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let content = tree.establish(
+    ///     owner.content(),
+    ///     SpatialNode {
+    ///         parent: Some(tree.viewport()),
+    ///         local: Matrix4::translation(0.0, -40.0, 0.0),
+    ///         anchoring: Anchoring::Content(ScrollPort::EMPTY),
+    ///     },
+    /// );
+    /// assert_eq!(tree.across_content(content, tree.viewport()), Some((0.0, 40.0)));
+    /// assert_eq!(tree.across_content(tree.viewport(), content), None);
+    /// ```
+    pub fn across_content(&self, inner: SpatialId, outer: SpatialId) -> Option<(f32, f32)> {
+        let mut by = (0.0, 0.0);
+        let mut current = inner;
+        loop {
+            if current == outer {
+                return Some(by);
+            }
+            let node = self.get(current)?;
+            if !node.anchoring.is_content() {
+                return None;
+            }
+            let translation = node.local.columns[3];
+            by = (by.0 - translation[0], by.1 - translation[1]);
+            current = node.parent?;
+        }
+    }
+
+    /// Writes where one coordinate system sits within the one above it.
+    ///
+    /// The single route by which an established coordinate system's own matrix changes, whether an
+    /// animation is moving it or a restyle gave the box a different `transform`. Two routes would
+    /// be two answers to "has this box moved", and everything downstream that caches output under a
+    /// structural name compares one of them.
+    ///
+    /// Reports whether the value stored is not the one that was there, which is what a caller owes
+    /// damage on. Writing the matrix already held is recorded as no write at all, so
+    /// [`written_since_recycle`](crate::PropertyTree::written_since_recycle) stays false for a
+    /// transform that is holding still.
+    ///
+    /// ```
+    /// use zgui_geom::Matrix4;
+    /// use zgui_space::{OwnSpace, PropertyOwner, SpatialTree};
+    ///
+    /// let mut tree = SpatialTree::with_viewport();
+    /// let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
+    /// let card = tree.space_of(tree.viewport(), owner, OwnSpace::of(Some(Matrix4::IDENTITY), None, false));
+    ///
+    /// assert!(tree.place(card, Matrix4::translation(8.0, 0.0, 0.0)));
+    /// assert!(!tree.place(card, Matrix4::translation(8.0, 0.0, 0.0)), "the same matrix again");
+    /// assert_eq!(tree.resolve(card), Some(Matrix4::translation(8.0, 0.0, 0.0)));
+    /// ```
+    pub fn place(&mut self, id: SpatialId, local: Matrix4) -> bool {
+        let Some(node) = self.get_mut(id) else {
+            return false;
+        };
+        if node.local == local {
+            return false;
+        }
+        node.local = local;
+        self.note_written(id);
+        true
+    }
+}

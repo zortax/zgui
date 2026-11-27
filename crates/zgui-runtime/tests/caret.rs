@@ -1,7 +1,7 @@
 //! The insertion point and the selection reaching the screen, the pointer, and the clipboard.
 //!
 //! Everything here runs through a real window on the headless platform: real platform events, the
-//! real dispatch, the real layout, the real emit walk, and the display list the renderer was handed.
+//! real dispatch, the real layout, the real emit walk, and the frame the compositor drew.
 //! That is the point. The editing model's own crate proves that the model knows where the caret is;
 //! nothing there can prove that anything ever *draws* it, and a caret that is computed and never
 //! painted passes every model test there is while a person sees a field they cannot find their
@@ -113,83 +113,53 @@ impl Script {
         support::first_line_on_device(self.window())
     }
 
-    /// Every quad in the display list, with the colour it is filled in and where it sorts.
+    /// What the window shows.
+    fn drawing(&self) -> zgui_testkit_compositor::Drawing {
+        support::drawing(self.window())
+    }
+
+    /// Every quad the window shows, with the colour it is filled in and where it sorts.
     ///
-    /// Quads and not "primitives": the root's background is a quad too, and a count would be
-    /// satisfied by it. Every assertion below names the rectangle it wants. The fill is resolved
-    /// through the scene's own paint table rather than assumed, because the reference a quad
-    /// carries is an index and an index proves nothing about a colour.
+    /// Quads and not every instance: the root's background is a quad too, and a count would be
+    /// satisfied by it. Every assertion below names the rectangle it wants.
     fn quads(&self) -> Vec<Painted> {
-        let window = self.window();
-        let scene = window.scene();
-        scene
-            .primitives
-            .quads
+        self.drawing()
+            .instances()
             .iter()
-            .map(|quad| Painted {
-                // Through the quad's own coordinate system, which puts it on the device.
-                rect: {
-                    let local = Rect::new(
-                        Point::new(DevicePx(quad.bounds[0]), DevicePx(quad.bounds[1])),
-                        zgui_geom::Size::new(DevicePx(quad.bounds[2]), DevicePx(quad.bounds[3])),
-                    );
-                    scene
-                        .spatial
-                        .resolve_at(quad.transform)
-                        .map_or(local, |matrix| {
-                            zgui_geom::transformed_bounds(&matrix, local)
-                        })
-                },
-                fill: quad
-                    .fill
-                    .id()
-                    .and_then(|id| scene.paints.get(id))
-                    .and_then(|paint| match paint {
-                        zgui_scene::Paint::Solid(color) => Some(*color),
-                        _ => None,
-                    }),
-                order: quad.order,
+            .enumerate()
+            .filter(|(_, instance)| instance.kind() == "quad")
+            .map(|(order, quad)| Painted {
+                rect: rect_of(support::world(quad)),
+                fill: quad.color("fill"),
+                order,
             })
             .collect()
     }
 
-    /// How many glyph sprites the display list holds.
+    /// How many glyph sprites the window shows.
     ///
     /// Read beside every caret assertion, so that "the caret is not there" can be told from "this
     /// frame drew nothing at all".
     fn glyphs(&self) -> usize {
-        self.window().scene().primitives.mono_sprites.len()
+        self.drawing().glyphs().len()
     }
 
-    /// Every glyph sprite of the text, as a rectangle and the order it sorts at.
+    /// Every glyph sprite of the text, as a rectangle and the position it is drawn at.
     ///
-    /// Draw order in this scene is allocated against overlap — two primitives that cannot overlap
-    /// are free to share an order, and here the glyphs left of a band and the glyphs under it
-    /// genuinely take different ones. So a depth claim has to name the glyphs it is a claim about:
-    /// "above every glyph in the document" is false of a correct caret, and asserting it would send
-    /// somebody to fix a painter that is right.
-    fn glyph_sprites(&self) -> Vec<(Rect<DevicePx, Device>, u32)> {
-        let scene = self.window().scene();
-        scene
-            .primitives
-            .mono_sprites
+    /// A depth claim names the glyphs it is a claim about. "Above every glyph in the document" is
+    /// false of a correct caret, which only has to be drawn after the glyphs it stands on.
+    fn glyph_sprites(&self) -> Vec<(Rect<DevicePx, Device>, usize)> {
+        self.drawing()
+            .instances()
             .iter()
-            .map(|sprite| {
-                // Through the sprite's own coordinate system, which puts it on the device.
-                let local = sprite.ink();
-                let placed = scene
-                    .spatial
-                    .resolve_at(sprite.transform)
-                    .map_or(local, |matrix| {
-                        zgui_geom::transformed_bounds(&matrix, local)
-                    });
-                (placed, sprite.order)
-            })
+            .enumerate()
+            .filter(|(_, instance)| matches!(instance.kind(), "mono" | "subpixel" | "color"))
+            .map(|(order, sprite)| (rect_of(support::world(sprite)), order))
             .collect()
     }
 
     /// The glyphs a rectangle lands on top of, and the order each of them sorts at.
-    fn glyphs_under(&self, rect: Rect<DevicePx, Device>) -> Vec<u32> {
+    fn glyphs_under(&self, rect: Rect<DevicePx, Device>) -> Vec<usize> {
         self.glyph_sprites()
             .into_iter()
             .filter(|(bounds, _)| overlaps(*bounds, rect))
@@ -234,12 +204,7 @@ impl Script {
             })
     }
 
-    /// Forces the whole surface to be redrawn, so the display list holds everything again.
-    ///
-    /// A frame emits only what its damage reaches, so a caret that is still on the screen is absent
-    /// from the display list of any frame that damaged nothing near it. Reading such a frame and
-    /// concluding the caret has gone is the mistake this exists to prevent: an un-occlusion is what
-    /// a real compositor produces after a window has been hidden, and it repaints the lot.
+    /// Forces the whole surface to be redrawn, as an un-occlusion does after a window was hidden.
     fn repaint_all(&mut self) {
         self.deliver(SurfaceEvent::Occluded(true));
         self.deliver(SurfaceEvent::Occluded(false));
@@ -263,6 +228,14 @@ impl Script {
     }
 }
 
+/// The rectangle `[x, y, width, height]` in device pixels.
+fn rect_of([x, y, width, height]: [f32; 4]) -> Rect<DevicePx, Device> {
+    Rect::new(
+        Point::new(DevicePx(x), DevicePx(y)),
+        zgui_geom::Size::new(DevicePx(width), DevicePx(height)),
+    )
+}
+
 /// Whether two rectangles share any area at all.
 fn overlaps(a: Rect<DevicePx, Device>, b: Rect<DevicePx, Device>) -> bool {
     a.origin.x.0 < b.origin.x.0 + b.size.width.0
@@ -271,15 +244,15 @@ fn overlaps(a: Rect<DevicePx, Device>, b: Rect<DevicePx, Device>) -> bool {
         && b.origin.y.0 < a.origin.y.0 + a.size.height.0
 }
 
-/// One quad out of the display list: where it lands, what fills it, and where it sorts.
+/// One quad the window shows: where it lands, what fills it, and where it is drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Painted {
     /// Where it lands, in device pixels.
     rect: Rect<DevicePx, Device>,
-    /// The flat colour filling it, and nothing when it is filled with something else.
-    fill: Option<zgui_color::Color>,
-    /// Where it sorts against everything else in the display list.
-    order: u32,
+    /// The flat premultiplied colour filling it, and nothing when it is filled with something else.
+    fill: Option<[f32; 4]>,
+    /// Its position in the drawing, where a later instance is drawn over an earlier one.
+    order: usize,
 }
 
 impl Painted {
@@ -296,12 +269,11 @@ impl Painted {
         let Some(color) = self.fill else {
             return false;
         };
-        (color.alpha() - alpha).abs() < 0.005
+        (color[3] - alpha).abs() < 0.005
             && color
-                .components()
                 .iter()
                 .zip(components)
-                .all(|(got, want)| (got - want).abs() < 0.01)
+                .all(|(got, want)| (got - want * alpha).abs() < 0.01)
     }
 }
 
@@ -411,8 +383,7 @@ fn the_caret_blinks_over_the_virtual_clock_and_settles_visible() {
 
     // It settles *on*. A caret that settled dark would be a field with no insertion point in it
     // for as long as nobody typed, which is exactly the state a person leaves a field in. The
-    // surface is repainted whole first, because a settled caret damages nothing and a frame that
-    // damaged nothing emits nothing — which would read as an absent caret whatever the truth is.
+    // surface is repainted whole first, so the reading is of a fresh frame.
     script
         .harness
         .advance(HALF_PERIOD * PHASES + Duration::from_millis(1));
@@ -827,9 +798,8 @@ fn a_field_emptied_of_everything_still_shows_its_caret() {
         "the emptied field's line box collapsed to nothing"
     );
 
-    // Read over a blink, because a frame that damaged nothing draws nothing and a caret that is
-    // still on the screen is absent from such a frame's display list. Both phases are asserted:
-    // "always drawn" and "correctly drawn" are the same picture on the lit frame alone.
+    // Read over a blink. Both phases are asserted, because "always drawn" and "correctly drawn"
+    // are the same picture on the lit frame alone.
     script.harness.advance(HALF_PERIOD);
     script.harness.settle(8);
     assert!(

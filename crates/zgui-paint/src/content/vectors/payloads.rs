@@ -1,6 +1,6 @@
 //! Mark payloads kept between frames by the identity of what they were built from.
 //!
-//! A mark payload uploads once per allocation: the renderer keeps it resident by its address. A
+//! A mark payload uploads once per allocation: the compositor keeps it resident by its address. A
 //! shape recognised from a path the recognition cache holds, or a series whose data a scene holds,
 //! is lowered to the same payload allocation on every encode while its source lives, so a pan or a
 //! zoom of a canvas view uploads no payload. A turn or a stretch of the view places each shape
@@ -22,10 +22,10 @@
 use std::sync::{Arc, Weak};
 use std::thread::JoinHandle;
 
+use iceblink::{MarkFlags, MarkPayload, MarkPlacement};
+use kurbo::{Affine, BezPath, Point};
 use rustc_hash::FxHashMap;
 use zgui_profile::{Counter, counter};
-use zgui_scene::MarkPayload;
-use zgui_scene::kurbo::{Affine, Point};
 
 use super::recognitions::evict;
 use crate::emit::vector::recognise::Decomposition;
@@ -78,10 +78,10 @@ pub(crate) enum SeriesPart {
         /// The base-two logarithm of the columns per data unit.
         bucket: i32,
     },
-    /// Copies of one outline, drawn from the cells of this sheet.
+    /// Copies of one outline, placed at every point.
     Glyph {
-        /// The atlas handle of the sheet, which the payload's table names.
-        sheet: u64,
+        /// A number equal outlines in equal styles share.
+        outline: u64,
     },
 }
 
@@ -226,8 +226,8 @@ struct ShapeEntry {
     found: Arc<Decomposition>,
     /// The payload.
     payload: Arc<MarkPayload>,
-    /// The [`zgui_scene::MarkFlags`] the lowering found.
-    flags: u32,
+    /// The flags the lowering found.
+    flags: MarkFlags,
     /// The frame it was last looked up in.
     touched: u32,
 }
@@ -340,7 +340,7 @@ impl MarkPayloads {
             return;
         }
         let held = Arc::clone(data);
-        let table = request.table.to_vec();
+        let shapes = request.shapes.to_vec();
         let Request {
             part,
             to_local,
@@ -358,7 +358,7 @@ impl MarkPayloads {
                     far,
                     bounds,
                     max_prims,
-                    table: &table,
+                    shapes: &shapes,
                 };
                 build(&held, request)
             });
@@ -452,7 +452,7 @@ impl MarkPayloads {
         &mut self,
         found: &Arc<Decomposition>,
         union: bool,
-    ) -> Option<(Arc<MarkPayload>, u32)> {
+    ) -> Option<(Arc<MarkPayload>, MarkFlags)> {
         let frame = self.frame;
         let entry = self.shapes.get_mut(&(Arc::as_ptr(found) as usize, union))?;
         if !Arc::ptr_eq(&entry.found, found) {
@@ -469,7 +469,7 @@ impl MarkPayloads {
         found: &Arc<Decomposition>,
         union: bool,
         payload: Arc<MarkPayload>,
-        flags: u32,
+        flags: MarkFlags,
     ) {
         let key = (Arc::as_ptr(found) as usize, union);
         if self.shapes.len() >= MAX_SHAPES && !self.shapes.contains_key(&key) {
@@ -543,8 +543,8 @@ struct Request<'a> {
     bounds: Option<[f64; 4]>,
     /// The most prims a payload holds.
     max_prims: usize,
-    /// The tile table a glyph payload starts with.
-    table: &'a [[u32; 4]],
+    /// The outlines a glyph payload places.
+    shapes: &'a [Arc<BezPath>],
 }
 
 /// The payloads of `part` of the series over `data`, which `to_local` maps to the fragment's
@@ -561,8 +561,7 @@ struct Request<'a> {
 /// centre passes half of [`FAR`], so a steady pan seldom draws a provisional payload. Only a series
 /// with no payload of its family held builds in the frame.
 ///
-/// Each payload holds at most `max_prims` prims. A glyph payload starts with `table`, the tile
-/// table of its sheet.
+/// Each payload holds at most `max_prims` prims. A glyph payload places `shapes`.
 pub(crate) fn series_payload(
     cache: Option<&mut MarkPayloads>,
     data: &Arc<[[f32; 2]]>,
@@ -570,7 +569,7 @@ pub(crate) fn series_payload(
     to_local: Affine,
     device: f64,
     max_prims: usize,
-    table: &[[u32; 4]],
+    shapes: &[Arc<BezPath>],
 ) -> Option<SeriesLookup> {
     let far = FAR / device.clamp(1e-3, 1e3);
     let off = |payload: &SeriesPayload| {
@@ -587,7 +586,7 @@ pub(crate) fn series_payload(
         far,
         bounds: None,
         max_prims,
-        table,
+        shapes,
     };
     let Some(cache) = cache else {
         return build(data, request).map(exact);
@@ -753,8 +752,7 @@ fn centre_of(bounds: [f64; 4], to_local: Affine, far: f64) -> [f64; 2] {
     [centre.x, centre.y]
 }
 
-/// The payloads `request` asks for, of `data`, or `None` for data with no finite point. A glyph
-/// payload starts with the table.
+/// The payloads `request` asks for, of `data`, or `None` for data with no finite point.
 fn build(data: &[[f32; 2]], request: Request<'_>) -> Option<SeriesPayload> {
     let Request {
         part,
@@ -762,7 +760,7 @@ fn build(data: &[[f32; 2]], request: Request<'_>) -> Option<SeriesPayload> {
         far,
         bounds,
         max_prims,
-        table,
+        shapes,
     } = request;
     let bounds = match bounds {
         Some(bounds) => bounds,
@@ -809,21 +807,25 @@ fn build(data: &[[f32; 2]], request: Request<'_>) -> Option<SeriesPayload> {
                 .filter(|[x, y]| x.is_finite() && y.is_finite())
                 .map(|&point| at(point))
                 .collect();
-            let lead = table.len() as u32;
             for chunk in anchors.chunks(max_prims) {
-                let mut glyphs = Vec::with_capacity(table.len() + chunk.len());
-                glyphs.extend_from_slice(table);
-                for (index, [x, y]) in chunk.iter().enumerate() {
-                    glyphs.push([x.to_bits(), y.to_bits(), 0, lead + index as u32]);
-                }
+                let placements = chunk
+                    .iter()
+                    .map(|&[x, y]| MarkPlacement {
+                        x,
+                        y,
+                        shape: 0,
+                        _pad: 0,
+                    })
+                    .collect();
                 payloads.push(Arc::new(MarkPayload {
-                    glyphs,
+                    shapes: shapes.to_vec(),
+                    placements,
                     ..MarkPayload::default()
                 }));
             }
         }
         SeriesPart::Line | SeriesPart::Columns { .. } => {
-            let separator = [f32::NAN, f32::NAN];
+            let separator = [f32::NAN, 0.0];
             let mut vertices = vec![separator];
             let mut run = 0usize;
             let close = |vertices: &mut Vec<[f32; 2]>, run: &mut usize| {
@@ -869,8 +871,8 @@ fn build(data: &[[f32; 2]], request: Request<'_>) -> Option<SeriesPayload> {
         .iter()
         .map(|payload| match part {
             SeriesPart::Disc { .. } => chunk_index(&payload.discs, 0, |disc| [disc[0], disc[1]]),
-            SeriesPart::Glyph { .. } => chunk_index(&payload.glyphs[table.len()..], 0, |word| {
-                [f32::from_bits(word[0]), f32::from_bits(word[1])]
+            SeriesPart::Glyph { .. } => chunk_index(&payload.placements, 0, |placement| {
+                [placement.x, placement.y]
             }),
             SeriesPart::Line | SeriesPart::Columns { .. } => {
                 chunk_index(&payload.vertices, 1, |vertex| *vertex)
@@ -937,12 +939,12 @@ pub(crate) enum Lane {
     Disc,
     /// Polyline vertices.
     Polyline,
-    /// Glyph words, after a tile table of this many words.
-    Glyph(usize),
+    /// Placements.
+    Placement,
 }
 
-/// The part of a payload lane of `len` prims that the chunks `range` hold, as a
-/// [`zgui_scene::MarkItem`] counts it: the first prim, and how many prims from there.
+/// The part of a payload lane of `len` prims that the chunks `range` hold, as a marks item counts
+/// it: the first prim, and how many prims from there.
 ///
 /// A polyline part holds the segments that start in the chunks, the vertex before the first one,
 /// and the vertex after the end of the last one, so the separators keep their meaning at both
@@ -951,11 +953,7 @@ pub(crate) fn part_of(lane: Lane, range: core::ops::Range<usize>, len: usize) ->
     let start = range.start * CHUNK;
     let end = range.end * CHUNK;
     let (first, count) = match lane {
-        Lane::Disc => (start, end.min(len).saturating_sub(start)),
-        Lane::Glyph(tiles) => {
-            let anchors = len.saturating_sub(tiles);
-            (tiles + start, end.min(anchors).saturating_sub(start))
-        }
+        Lane::Disc | Lane::Placement => (start, end.min(len).saturating_sub(start)),
         Lane::Polyline => {
             // Segment `i` strokes vertex `i` to `i + 1`. The first and the last vertex are
             // separators, so the segments are 1 to len - 3.
@@ -977,12 +975,14 @@ pub(crate) fn part_of(lane: Lane, range: core::ops::Range<usize>, len: usize) ->
 mod tests {
     use std::sync::Arc;
 
+    use crate::{Tables, VectorId};
+    use iceblink::{MarkFlags, MarkPayload};
+    use kurbo::{Affine, BezPath, Circle, Shape as _};
     use zgui_canvas::{Brush, CanvasScene};
     use zgui_color::Color;
     use zgui_geom::Size;
     use zgui_profile::Counter;
-    use zgui_scene::kurbo::{Affine, BezPath, Circle, Shape as _};
-    use zgui_scene::{ClipId, MarkPayload, Scene, SpatialId, VectorId};
+    use zgui_space::{ClipId, SpatialId};
 
     use super::{
         CHUNK, EVICTED_SHAPES, Lane, MAX_SHAPES, MarkPayloads, SeriesLookup, SeriesPart,
@@ -1225,7 +1225,7 @@ mod tests {
             zgui_canvas::Series::Line {
                 data: Arc::clone(&data),
                 to_canvas: Affine::scale_non_uniform(100.0, 20.0),
-                stroke: zgui_scene::kurbo::Stroke::new(1.0),
+                stroke: kurbo::Stroke::new(1.0),
                 brush: Brush::Solid(Color::WHITE),
             },
             zgui_canvas::Lod::Columns,
@@ -1395,10 +1395,10 @@ mod tests {
         payloads.begin_frame();
         let found = found();
         let payload = Arc::new(MarkPayload::default());
-        payloads.insert_shape(&found, true, Arc::clone(&payload), 7);
+        payloads.insert_shape(&found, true, Arc::clone(&payload), MarkFlags(7));
         let (held, flags) = payloads.shape(&found, true).expect("held");
         assert!(Arc::ptr_eq(&held, &payload));
-        assert_eq!(flags, 7);
+        assert_eq!(flags, MarkFlags(7));
         assert!(
             payloads.shape(&found, false).is_none(),
             "the union is part of the key"
@@ -1430,10 +1430,11 @@ mod tests {
         assert_eq!(Arc::strong_count(&found), 1, "the recognition is let go");
     }
 
-    /// Draws `drawing` into a scene of its own and returns the payload of its one mark.
+    /// Records `drawing` into a chunk of its own and returns the payload of its one mark.
     fn draw(drawing: &Drawing, source: &CachedMarks) -> Arc<MarkPayload> {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(64, 64));
+        let mut tables = Tables::new();
+        tables.begin_frame(Size::new(64, 64));
+        let mut recording = crate::emit::record::Recording::new();
         let paint = ShapePaint {
             fill: Color::WHITE,
             stroke: None,
@@ -1444,9 +1445,10 @@ mod tests {
             transform: SpatialId::VIEWPORT,
             scale: 1.0,
         };
-        draw_drawing(&mut scene, VectorId(1), drawing, paint, source, placement);
-        assert_eq!(scene.primitives.marks.len(), 1, "the shape draws as a mark");
-        Arc::clone(&scene.primitives.mark_payloads[0])
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
+        draw_drawing(&mut rec, VectorId(1), drawing, paint, source, placement);
+        assert_eq!(recording.marks().len(), 1, "the shape draws as a mark");
+        Arc::clone(recording.payload(&recording.marks()[0]))
     }
 
     #[test]
@@ -1466,10 +1468,12 @@ mod tests {
                 Some(Arc::clone(&found)),
             );
             let payload = Arc::new(MarkPayload::default());
-            source
-                .payloads
-                .borrow_mut()
-                .insert_shape(&found, false, Arc::clone(&payload), 0);
+            source.payloads.borrow_mut().insert_shape(
+                &found,
+                false,
+                Arc::clone(&payload),
+                MarkFlags(0),
+            );
             pins.push(payload);
         }
         source.end_frame();
@@ -1531,7 +1535,7 @@ mod tests {
             }
             let found = found();
             let payload = Arc::new(MarkPayload::default());
-            payloads.insert_shape(&found, false, Arc::clone(&payload), 0);
+            payloads.insert_shape(&found, false, Arc::clone(&payload), MarkFlags(0));
             // Every other entry is pinned.
             if index % 2 == 0 {
                 pins.push(payload);
@@ -1539,7 +1543,12 @@ mod tests {
             found_all.push(found);
         }
         let extra = found();
-        payloads.insert_shape(&extra, false, Arc::new(MarkPayload::default()), 0);
+        payloads.insert_shape(
+            &extra,
+            false,
+            Arc::new(MarkPayload::default()),
+            MarkFlags::default(),
+        );
         assert_eq!(payloads.shapes.len(), MAX_SHAPES - EVICTED_SHAPES + 1);
         assert!(
             payloads.shape(&extra, false).is_some(),
@@ -1695,18 +1704,6 @@ mod tests {
             "the whole line"
         );
         assert_eq!(part_of(Lane::Polyline, 2..2, len), (0, 0));
-    }
-
-    #[test]
-    fn a_glyph_part_starts_past_the_tile_table() {
-        assert_eq!(
-            part_of(Lane::Glyph(16), 1..2, 16 + 2 * CHUNK + 3),
-            (16 + CHUNK as u32, CHUNK as u32)
-        );
-        assert_eq!(
-            part_of(Lane::Glyph(16), 2..3, 16 + 2 * CHUNK + 3),
-            (16 + 2 * CHUNK as u32, 3)
-        );
     }
 
     #[test]

@@ -22,12 +22,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use iceblink::{CompositorClient, RenderTarget};
 use zgui_geom::{Css, CssPx, Size};
 use zgui_platform::{
     AppHandler, Clock, CloseReason, IdlePolicy, PlatformCx, PlatformError, Surface,
     SurfaceAttributes, SurfaceEvent, SurfaceId, WakeReason,
 };
-use zgui_render::{RenderTarget, Renderer};
+use zgui_profile::{Counter, counter};
 use zgui_view::{Anchor, BuildCx};
 
 use crate::commands::{CloseResponse, WindowCommand, WindowCommands, WindowSpec, WindowToken};
@@ -37,26 +38,23 @@ use crate::timer::Timers;
 use crate::wake::{FrameGate, RuntimeWaker};
 use crate::window::{Window, WindowContent};
 
-/// Builds the renderer one surface draws through.
+/// Prepares the renderer that draws one surface's frames.
 ///
 /// It is a callback rather than a fixed type because the graphics backend is a decision an
 /// application makes, and because the whole loop has to be exercisable with a renderer that draws
 /// nowhere — which is not a fallback for a real window but a different thing entirely.
+///
+/// It runs on the window's thread when the window opens, and fails there when the surface cannot
+/// be drawn into. What it returns builds the renderer on the thread that draws the frames of the
+/// window's output of the application's compositor, see [`App::with_compositor`].
 pub type RendererFactory =
-    Box<dyn FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, AppError>>;
+    Box<dyn FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<iceblink::RendererFactory, AppError>>;
 
 /// Builds the text engine a window shapes with.
 pub type TextFactory = Box<dyn FnMut() -> Box<dyn TextEngine>>;
 
 /// Answers the cascade's font-metric questions.
 pub type MetricsFactory = Box<dyn FnMut() -> Arc<dyn zgui_text::FontMetricsSource>>;
-
-/// Turns the glyphs a window shaped into pixels.
-///
-/// Separate from the text engine because the two are used at different times by different code: a
-/// shaper is held mutably while layout measures, and a rasteriser is read from the emit walk while
-/// nothing may be mutated. Shared rather than owned, because one set of faces serves every window.
-pub type RasterFactory = Box<dyn FnMut() -> Arc<dyn zgui_text::GlyphRaster>>;
 
 /// Builds the view one window holds.
 pub type ViewFactory = Box<dyn FnMut(&mut BuildCx<'_>) -> Box<dyn Anchor>>;
@@ -132,14 +130,14 @@ pub struct App {
     attributes: SurfaceAttributes,
     /// What the window should hold.
     options: WindowContent,
-    /// What draws it.
+    /// What builds the frames of every window.
+    compositor: Option<Box<dyn CompositorClient>>,
+    /// What draws them.
     renderer: Option<RendererFactory>,
     /// What shapes its text.
     text: Option<TextFactory>,
     /// What answers the cascade's font-metric questions.
     metrics: Option<MetricsFactory>,
-    /// What turns its glyphs into pixels.
-    raster: Option<RasterFactory>,
     /// What fills its `surface` elements.
     embed: Option<EmbedFactory>,
     /// What answers its custom elements.
@@ -172,10 +170,10 @@ impl App {
         Self {
             attributes: SurfaceAttributes::new("zgui"),
             options: WindowContent::default(),
+            compositor: None,
             renderer: None,
             text: None,
             metrics: None,
-            raster: None,
             embed: None,
             custom: None,
             shared: None,
@@ -367,6 +365,15 @@ impl App {
         self
     }
 
+    /// Installs the driver of the compositor every window draws through.
+    ///
+    /// Each window is a client of it with an output of its own. Without a compositor no window
+    /// opens.
+    pub fn with_compositor(mut self, compositor: Box<dyn CompositorClient>) -> Self {
+        self.compositor = Some(compositor);
+        self
+    }
+
     /// Installs what builds the renderer each window draws through.
     pub fn with_renderer(mut self, factory: RendererFactory) -> Self {
         self.renderer = Some(factory);
@@ -394,15 +401,6 @@ impl App {
     /// Installs what answers each window's custom elements.
     pub fn with_custom(mut self, factory: CustomFactory) -> Self {
         self.custom = Some(factory);
-        self
-    }
-
-    /// Installs what turns each window's glyphs into pixels.
-    ///
-    /// Without one a window lays its text out and draws no glyph at all, which is what an
-    /// application that has chosen a shaper and not a rasteriser has asked for.
-    pub fn with_glyph_raster(mut self, factory: RasterFactory) -> Self {
-        self.raster = Some(factory);
         self
     }
 
@@ -516,14 +514,14 @@ pub struct Runtime {
     /// icons and task-bar grouping against, and a window opened while the application runs belongs
     /// to the same application as the one it was opened from.
     application_id: Option<zgui_vocab::SharedString>,
+    /// The compositor every window draws through, when the application installed one.
+    compositor: Option<crate::compositor::Shared>,
     /// What builds a renderer.
     renderer: RendererFactory,
     /// What builds a text engine.
     text: TextFactory,
     /// What answers the cascade's font-metric questions.
     metrics: MetricsFactory,
-    /// What turns glyphs into pixels.
-    raster: RasterFactory,
     /// What builds an embed host, when the application brought one.
     embed: Option<EmbedFactory>,
     /// What builds a custom-element registry, when the application brought one.
@@ -721,8 +719,9 @@ impl Runtime {
             menu_keys: crate::desktop::MenuKeys::default(),
             documents: crate::documents::Documents::default(),
             application_id: application_id.clone(),
+            compositor: app.compositor.map(crate::compositor::Shared::new),
             renderer: app.renderer.unwrap_or_else(|| {
-                Box::new(|_, _| Err(AppError::GpuUnavailable(zgui_render::GpuUnavailable::new())))
+                Box::new(|_, _| Err(AppError::GpuUnavailable(iceblink::GpuUnavailable::default())))
             }),
             text: app
                 .text
@@ -730,9 +729,6 @@ impl Runtime {
             metrics: app
                 .metrics
                 .unwrap_or_else(|| Box::new(|| Arc::new(zgui_text::FixedMetrics::new()))),
-            raster: app
-                .raster
-                .unwrap_or_else(|| Box::new(|| Arc::new(zgui_text::NoRaster))),
             embed: app.embed,
             custom: app.custom,
             windows: Vec::new(),
@@ -871,16 +867,17 @@ impl Runtime {
         let scale = surface.scale_factor();
         let size = first_extent(surface.size(), self.live[index].spec.attributes.size, scale);
         let translucent = self.live[index].spec.attributes.transparent;
-        let target = RenderTarget::new(size, zgui_geom::Scale::new(scale as f32));
         // A window asked to be transparent is composed translucent from its first frame: the
         // renderer picks a premultiplied presentation for it, and the paint gives its text ordinary
         // coverage.
-        let target = if translucent {
-            target.translucent()
-        } else {
-            target
+        let target = RenderTarget {
+            size: [size.width.max(0) as u32, size.height.max(0) as u32],
+            scale: scale as f32,
+            opaque: !translucent,
         };
+        let compositor = self.compositor.clone().ok_or(AppError::NoCompositor)?;
         let renderer = (self.renderer)(&surface, target)?;
+        let compositor = crate::compositor::Client::open(compositor, target, renderer);
         // Before the view is built, not after: a view that asks for anything while it is being
         // built asks through a waker that has to already know which surface it belongs to.
         let waker = Arc::clone(
@@ -898,7 +895,6 @@ impl Runtime {
             .app_options
             .layered_with(&self.live[index].spec.options);
         let text = (self.text)();
-        let raster = (self.raster)();
         let metrics = (self.metrics)();
         let timers = Rc::clone(&self.timers);
         let handle = self.live[index].handle.clone();
@@ -920,9 +916,8 @@ impl Runtime {
             Window::open(
                 Arc::clone(&surface),
                 document.take().expect("the document is taken once"),
-                renderer,
+                compositor,
                 text,
-                raster,
                 metrics,
                 clock,
                 timers,
@@ -1220,6 +1215,30 @@ impl Runtime {
     ///
     /// The window stops being one the application wants, which is what tells this apart from a
     /// platform taking every surface away: a window closed here does not come back on resume.
+    /// Closes the windows whose renderer could not be built before they showed a frame.
+    ///
+    /// The window the application launched with failing so is the application failing.
+    fn close_unopened(&mut self, cx: &dyn PlatformCx) {
+        let unopened: Vec<_> = self
+            .windows
+            .iter_mut()
+            .filter_map(|window| Some((window.surface().id(), window.take_unopened()?)))
+            .collect();
+        for (surface, error) in unopened {
+            let error = AppError::GpuUnavailable(error);
+            tracing::error!(target: "zgui::app", %error, "the window could not be opened");
+            let primary = self
+                .live_for_surface(surface)
+                .is_some_and(|index| Some(self.live[index].token) == self.primary);
+            if primary {
+                self.failure.record(error);
+                cx.request_exit();
+                return;
+            }
+            self.close_window(cx, surface, CloseReason::Desktop);
+        }
+    }
+
     fn close_window(&mut self, cx: &dyn PlatformCx, surface: SurfaceId, reason: CloseReason) {
         // The pop-ups placed against the window close first: a desktop takes a parent down only
         // after its pop-ups.
@@ -1399,13 +1418,6 @@ impl AppHandler for Runtime {
                     // back for it.
                     if !window.wants_a_frame(now) {
                         window.declined_a_frame();
-                    } else if window.holds_a_frame(now) {
-                        // Not a refusal. The frame is worth running and is about to be: it is
-                        // being started as late inside this interval as it can be and still
-                        // finish, so that the picture it composes is as current as it can be when
-                        // the display shows it. Everything that arrives in the meantime is queued
-                        // as usual and drawn by that same frame.
-                        window.held_a_frame();
                     } else {
                         window.frame(clock.as_ref());
                         fired = window.take_menu_actions();
@@ -1483,10 +1495,16 @@ impl AppHandler for Runtime {
     }
 
     fn wake(&mut self, cx: &dyn PlatformCx, reason: WakeReason) {
+        counter::bump(Counter::Wakes);
         match reason {
             // Something asked for a window, or for the application to stop. Nothing else here can
             // carry that out: a surface is made from a platform context, and this is one.
             WakeReason::AppWork => {}
+            WakeReason::CompositorAnswered(surface) => {
+                if let Some(window) = self.window_mut(surface) {
+                    window.take_woken_answers();
+                }
+            }
             WakeReason::ReactiveWork { surfaces } => {
                 for id in surfaces.iter() {
                     if let Some(window) = self.window_mut(*id) {
@@ -1591,13 +1609,23 @@ impl AppHandler for Runtime {
     }
 
     fn idle(&mut self, cx: &dyn PlatformCx) -> IdlePolicy {
+        self.close_unopened(cx);
         let now = cx.clock().now();
         let mut policy = IdlePolicy::Block;
         self.parked.clear();
         for window in &mut self.windows {
-            let Some(deadline) = window.scheduled_deadline(now) else {
+            let Some(mut deadline) = window.scheduled_deadline(now) else {
                 continue;
             };
+            // A driver on a thread of its own may have published a later frame since the deadline
+            // was set.
+            if deadline.at <= now && deadline.kind == crate::window::frame::DeadlineKind::Compose {
+                window.arm_driver();
+                let Some(rearmed) = window.scheduled_deadline(now) else {
+                    continue;
+                };
+                deadline = rearmed;
+            }
             if deadline.at > now {
                 self.parked
                     .push((window.surface().id(), deadline.at, deadline.kind));
@@ -1609,6 +1637,9 @@ impl AppHandler for Runtime {
                 // it was asking for, now, and a park on nothing.
                 match deadline.kind {
                     crate::window::frame::DeadlineKind::Render => window.request_frame(),
+                    crate::window::frame::DeadlineKind::Compose => {
+                        window.request_compositor_frame()
+                    }
                     crate::window::frame::DeadlineKind::Maintenance => {
                         window.maintain(cx.clock().timestamp())
                     }
@@ -1619,6 +1650,7 @@ impl AppHandler for Runtime {
     }
 
     fn deadline_reached(&mut self, cx: &dyn PlatformCx) {
+        counter::bump(Counter::Wakes);
         // The edge without which a parked deadline produces no frame at all. Reaching a deadline
         // draws nothing by itself: the loop wakes, this runs, and the surfaces whose deadline has
         // passed — and no others — are asked for the frame that services it.
@@ -1643,6 +1675,7 @@ impl AppHandler for Runtime {
             if let Some(window) = self.window_mut(surface) {
                 match kind {
                     crate::window::frame::DeadlineKind::Render => window.request_frame(),
+                    crate::window::frame::DeadlineKind::Compose => window.compositor_due(now),
                     crate::window::frame::DeadlineKind::Maintenance => {
                         window.maintain(cx.clock().timestamp())
                     }

@@ -17,7 +17,7 @@ pub mod scrollbar;
 use zgui_dom::{DocumentStore, NodeKey};
 use zgui_geom::{Device, DevicePx, Point};
 use zgui_layout::{FragKey, HitIndex, LayoutStore};
-use zgui_scene::{ClipTable, SpatialTree};
+use zgui_space::{ClipTable, SpatialTree};
 
 pub use crate::hit::chain::HitChain;
 pub use crate::hit::scrollbar::Press as ScrollbarPress;

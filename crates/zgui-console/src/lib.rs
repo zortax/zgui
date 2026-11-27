@@ -49,9 +49,9 @@ mod run {
         /// # The graphics device
         ///
         /// Opened here, before the displays exist, and by this method rather than by the first
-        /// frame. A display can hand out the buffers it scans out of, so that a frame is composed
-        /// straight into one and nothing is read back or copied, and those buffers are images on
-        /// the graphics device. They have to exist before the renderer that composes into them, so
+        /// frame. A display can hand out the buffers it scans out of, so that a frame is copied
+        /// into one on the graphics device and nothing is read back, and those buffers are images
+        /// on the graphics device. They have to exist before the renderer that draws into them, so
         /// the device has to exist before the displays. One device is made here and given to the
         /// loop and to the renderer factory, the same way one map is.
         ///
@@ -94,13 +94,12 @@ mod run {
             // The extensions are asked for before the device is opened, because a device extension
             // can be enabled only while a device is created. Every device this graphics opens
             // reads the same list, so a device opened after a loss carries them too.
-            let graphics = zgui_render_wgpu::SharedGraphics::with_extensions(
-                zgui_platform_drm::EXTENSIONS.to_vec(),
-            );
+            let graphics = console::graphics();
             // `None` is the copied path. A machine that cannot make these images is an ordinary
             // machine rather than a failure to start.
             let gpu = console::scanout_device(&graphics);
-            self.with_renderer(console::factory(graphics, displays.clone()))
+            self.with_compositor_client(Box::new(console::driver))
+                .with_renderer(console::factory(graphics, displays.clone()))
                 .run_on(
                     move |handler| zgui_platform_drm::run(handler, &displays, gpu.as_deref()),
                     view,

@@ -32,21 +32,19 @@ impl Window {
     /// Computes this frame's caret and selection, and damages whatever that moved.
     pub(crate) fn plan_caret(&mut self, now: Instant) {
         let (plan, drawn) = self.caret_plan(now);
-        // The marks the last frame drew come first in what is owed. They are pixels of the drawn
-        // frame and the rest are this frame's, which tells a scroll that moves composed pixels
-        // which of the two to move.
-        let drawn_before = self.carets.drawn().len();
-        let owed = self.carets.install(plan, drawn);
-        for (index, rect) in owed.into_iter().enumerate() {
-            if rect.is_empty() {
-                continue;
-            }
-            let rect = zgui_layout::fragment::diff::pixels(rect);
-            self.damage.absorb(rect);
-            if index < drawn_before {
-                self.damage_before_layout.absorb(rect);
-            } else {
-                self.damage_after_layout.absorb(rect);
+        // A mark's edges land between pixels at a fractional scale, and the compositor's
+        // antialiased edge reaches one pixel further.
+        let edge = DevicePx(1.0);
+        let reach = zgui_geom::Edges {
+            top: edge,
+            right: edge,
+            bottom: edge,
+            left: edge,
+        };
+        for rect in self.carets.install(plan, drawn) {
+            if !rect.is_empty() {
+                self.damage
+                    .absorb(zgui_layout::fragment::diff::pixels(rect.outset(reach)));
             }
         }
         // Where an input method should put its candidate window is a reading of the plan that was
@@ -202,7 +200,7 @@ impl Window {
     ) -> Option<(usize, zgui_edit::Affinity)> {
         let layout = self.layout.borrow();
         let located = Located::of(&layout, &self.text, node)?;
-        let (shown, affinity) = located.hit(point, &self.scene.spatial)?;
+        let (shown, affinity) = located.hit(point, &self.tables.spatial)?;
         Some((self.editors.to_model(node, shown), affinity))
     }
 

@@ -30,9 +30,9 @@
 //!
 //! Separately from either sweep, at the reference configuration — 100 000 rows, an 800-pixel port —
 //! both gestures are driven once with a renderer that records what every accepted frame damaged.
-//! The damage fraction and `fragments_rebuilt` per drawn frame are dimensionless before anybody
-//! divides them, which makes them the two numbers here that are the same on every machine and need
-//! no baseline at all.
+//! The damage fraction per drawn frame and `fragments_rebuilt` per frame the window ran are
+//! dimensionless before anybody divides them, which makes them the two numbers here that are the
+//! same on every machine and need no baseline at all.
 //!
 //! # And how many layout passes a crossing runs
 //!
@@ -160,9 +160,10 @@ fn main() {
             gesture,
         );
         println!(
-            "TICK {} frames={} full={} damage={:?} fragments_rebuilt={:?}",
+            "TICK {} frames={} ran={} full={} damage={:?} fragments_rebuilt={:?}",
             gesture.name(),
             ticks.frames,
+            ticks.ran,
             ticks.full,
             ticks.damage,
             ticks.fragments_rebuilt,

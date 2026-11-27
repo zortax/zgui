@@ -1,15 +1,14 @@
 //! A graphics device under the application, drawing to a texture instead of to a window.
 //!
-//! It is the production stack minus the compositor: the same builder, the same format rules, and
-//! the same rasteriser selection an opened window goes through. Only the destination differs, and
-//! it differs because a window's surface belongs to the compositor the instant it is presented and
-//! cannot be read back.
+//! It is the production stack minus the window: the compositor the application draws through and
+//! the reference renderer on a real device. Only the destination differs, and it differs because a
+//! window's surface belongs to the display server the instant it is presented and cannot be read
+//! back.
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use zgui::platform::Surface;
-use zgui::render::{RenderTarget, Renderer};
-use zgui_render_wgpu::{Builder, WgpuRenderer, wgpu};
+use iceblink::{BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities};
+use zgui_testkit_compositor::{Composed, Device, Shown};
 
 use crate::raster::script::{self, Recorded};
 
@@ -27,107 +26,77 @@ pub fn device_lock() -> MutexGuard<'static, ()> {
 /// Every frame of one run, in the order they were drawn.
 pub type Log = Arc<Mutex<Vec<Recorded>>>;
 
-/// The real renderer, with each frame's readbacks recorded beside it.
+/// The device the compositor draws with, with each frame's readback recorded beside it.
 struct Recording {
-    /// The renderer the application draws through.
-    renderer: WgpuRenderer,
+    /// The device.
+    device: Device,
+    /// What the device's last frame drew.
+    shown: Shown,
+    /// The device's target.
+    composed: Composed,
     /// What each frame produced.
     log: Log,
-    /// The page's own background, which a scissored repaint is replayed over.
-    background: [u8; 4],
 }
 
-impl Renderer for Recording {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        self.renderer.capabilities()
+impl iceblink::Renderer for Recording {
+    fn capabilities(&self) -> RenderCapabilities {
+        self.device.capabilities()
     }
 
-    fn configure(&mut self, target: RenderTarget) {
-        Renderer::configure(&mut self.renderer, target);
+    fn configure(&mut self, target: iceblink::RenderTarget) {
+        self.device.configure(target);
     }
 
-    fn target(&self) -> Option<RenderTarget> {
-        self.renderer.target()
+    fn target(&self) -> Option<iceblink::RenderTarget> {
+        self.device.target()
     }
 
-    fn draw(
-        &mut self,
-        scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        let recorded = script::record(&mut self.renderer, scene, self.background);
-        let outcome = zgui::render::FrameOutcome::Presented(zgui::render::FrameStats {
-            vector_passes: recorded.vector_passes,
-            ..Default::default()
-        });
+    fn target_age(&self) -> BufferAge {
+        self.device.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
+        let outcome = self.device.draw(frame);
+        let drawing = self.shown.drawing().expect("the device recorded the frame");
+        let pixels = self
+            .composed
+            .pixels()
+            .expect("the device read its target back");
         self.log
             .lock()
             .unwrap_or_else(|held| held.into_inner())
-            .push(recorded);
+            .push(script::record(&drawing, pixels));
         outcome
     }
 
-    fn register_external(
-        &mut self,
-        texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        self.renderer.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: zgui::render::TextureHandle) {
-        self.renderer.release_external(handle);
-    }
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        self.renderer.memory()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        self.renderer.texture_sink()
+    fn memory(&self) -> MemoryReport {
+        self.device.memory()
     }
 }
 
-/// Builds the renderer an application under test draws through, writing every frame into `log`.
-///
-/// Answers `None` from the factory's own error channel when this machine has no adapter that can
-/// run either rasteriser, and says so out loud: a fixture that silently passed on a machine with no
-/// device would be the one thing these assertions exist to rule out.
-pub fn factory(
-    log: &Log,
-    background: [u8; 4],
-) -> impl FnMut(&Arc<dyn Surface>, RenderTarget) -> Result<Box<dyn Renderer>, zgui::runtime::AppError>
-+ use<> {
+/// Builds the renderer an application under test draws its compositor's frames with, writing
+/// every frame into `log`.
+pub fn factory(log: &Log) -> zgui::CompositorRendererMaker {
     let log = Arc::clone(log);
-    move |_surface, target| {
-        let mut renderer = Builder::new()
-            .offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false)
-            .map_err(zgui::runtime::AppError::GpuUnavailable)?;
-        // The same call a window makes, rather than a second copy of it: a fixture that wired
-        // its own rasteriser up would stay green through the wiring being deleted.
-        zgui_render_vector_vello::attach(&mut renderer, target.size);
-        assert!(
-            renderer.has_vector_raster(),
-            "the selection handed back no rasteriser, so nothing below would draw a path"
-        );
-        Ok(Box::new(Recording {
-            renderer,
+    Box::new(move |size: [u32; 2]| {
+        let device = Device::open(size).expect("the device opened a moment ago");
+        Box::new(Recording {
+            shown: device.shown(),
+            composed: device.composed(),
+            device,
             log: Arc::clone(&log),
-            background,
-        }) as Box<dyn Renderer>)
-    }
+        }) as Box<dyn iceblink::Renderer>
+    })
 }
 
 /// Whether this machine has a graphics device these fixtures can run on at all.
 pub fn available() -> bool {
     static ANSWER: OnceLock<bool> = OnceLock::new();
-    *ANSWER.get_or_init(|| {
-        let target = RenderTarget::new(zgui::geom::Size::new(64, 64), zgui::geom::Scale::new(1.0));
-        match Builder::new().offscreen(target, wgpu::TextureFormat::Bgra8Unorm, false) {
-            Ok(_) => true,
-            Err(failure) => {
-                eprintln!("skipped: no usable graphics device ({failure})");
-                false
-            }
+    *ANSWER.get_or_init(|| match Device::open([64, 64]) {
+        Ok(_) => true,
+        Err(failure) => {
+            eprintln!("skipped: no usable graphics device ({failure})");
+            false
         }
     })
 }

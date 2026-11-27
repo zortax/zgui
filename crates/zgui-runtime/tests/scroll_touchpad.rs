@@ -61,7 +61,7 @@ impl Pad {
     }
 
     fn build(css: &str, rows: usize, tall: bool) -> Self {
-        let mut harness = support::app_with_text_on(
+        let mut harness = support::app_scrolling_itself_on(
             Headless::new(),
             css,
             move |cx: &mut zgui_view::BuildCx<'_>| {

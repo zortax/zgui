@@ -42,7 +42,7 @@ pub(crate) fn device_box(
     let fragment = own_fragment(store, key);
     fragment.on_device(
         fragment.border_box,
-        &zgui_scene::Placements::of(&frame.spatial),
+        &zgui_space::Placements::of(&frame.spatial),
     )
 }
 
@@ -52,9 +52,9 @@ pub(crate) fn device_box(
 /// matrix itself.
 pub(crate) fn drawn_matrix(
     frame: &crate::support::Frame,
-    space: zgui_scene::SpatialId,
+    space: zgui_space::SpatialId,
 ) -> zgui_geom::Matrix4 {
-    let poison = zgui_scene::spatial::poison::origin();
+    let poison = zgui_space::spatial::poison::origin();
     let resolved = frame
         .spatial
         .resolve(space)

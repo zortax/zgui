@@ -13,17 +13,17 @@ include.workspace = true
 
 # L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
 #
-# The shader companion: what an application links to draw an element with a shader of its own. Like
-# zgui-wgpu it names the concrete wgpu backend, because what a shader *is* is that backend's
-# knowledge and no contract above the render seam can say it.
+# The shader companion: what an application links to draw an element with a shader of its own. A
+# shader reaches the compositor as a `ShaderDesc`, which any renderer that runs application shaders
+# builds.
 [dependencies]
+iceblink.workspace = true
+# Why an effect draws nothing, when its parameters disagree between its shader and Rust.
+tracing.workspace = true
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 zgui-shader-macro = { path = "../zgui-shader-macro", version = "0.1.0" }
 zgui-view = { path = "../zgui-view", version = "0.1.0" }
-zgui-wgsl = { path = "../zgui-wgsl", version = "0.1.0" }
 
 [lints]
 workspace = true
@@ -36,6 +36,8 @@ zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
 zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
+# How many chunks a frame recorded again, which a changed shader handle must not cost.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }

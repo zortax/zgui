@@ -3,6 +3,7 @@
 pub(crate) mod attribution;
 pub(crate) mod browser_clock;
 pub(crate) mod clock;
+pub(crate) mod compositor;
 pub(crate) mod counters;
 pub(crate) mod engines;
 pub(crate) mod ignored;
@@ -34,6 +35,11 @@ pub(crate) const CHECKS: &[Check] = &[
         name: "engines",
         description: "each external engine is named only by the crates permitted to name it",
         run: engines::check,
+    },
+    Check {
+        name: "compositor",
+        description: "only the app wiring, the wgpu crates, the bench and the test factory name a compositor implementation",
+        run: compositor::check,
     },
     Check {
         name: "unsafe",

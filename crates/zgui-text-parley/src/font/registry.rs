@@ -62,6 +62,11 @@ impl FaceTable {
         id
     }
 
+    /// How many handles have been issued.
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
+    }
+
     /// The entry behind a handle.
     pub(crate) fn get(&self, id: FaceId) -> Option<&FaceEntry> {
         self.entries.get(id.0 as usize)

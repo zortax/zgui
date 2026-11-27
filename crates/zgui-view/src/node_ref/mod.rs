@@ -223,6 +223,18 @@ impl NodeRef {
         }
     }
 
+    /// Asks for a frame of the window once this scroll container's vertical offset, or that offset
+    /// one step of the compositor's motion ahead, leaves `held`, `[low, high)` in CSS pixels, while
+    /// the compositor scrolls it, or stops asking for `None`.
+    ///
+    /// See [`ViewHost::wake_outside`](crate::ViewHost::wake_outside). Nothing happens while the
+    /// handle is not bound.
+    pub fn wake_outside(&self, held: Option<[f32; 2]>) {
+        if let Some(bound) = self.bound() {
+            bound.host.wake_outside(bound.node, held);
+        }
+    }
+
     /// Moves focus to this node.
     pub fn focus(&self) {
         if let Some(bound) = self.bound() {
@@ -841,6 +853,7 @@ mod tests {
                 offset: Point::new(DevicePx(0.0), DevicePx(240.0)),
                 content_size: Size::new(DevicePx(400.0), DevicePx(10_000.0)),
                 scrollport: Size::new(DevicePx(400.0), DevicePx(600.0)),
+                ..ScrollPosition::default()
             }),
         );
         assert_eq!(offsets.get().offset.y, DevicePx(240.0));

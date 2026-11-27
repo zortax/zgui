@@ -17,37 +17,38 @@
 
 mod cache;
 mod cpu;
+mod id;
 mod layer;
-mod mask;
 pub(crate) mod path_glyphs;
 pub(crate) mod payloads;
 mod recognitions;
+mod routes;
 
 pub use crate::content::vectors::cache::{VectorCache, Vectors};
+pub use crate::content::vectors::id::VectorId;
 #[doc(hidden)]
 pub use crate::content::vectors::layer::{
-    LayerAnswer, LayerFallback, LayerRequest, Tiles, VectorLayerSource,
+    LayerAnswer, LayerFallback, LayerPixels, LayerRequest, Tile, Tiles, VectorLayerSource,
 };
 pub(crate) use crate::content::vectors::layer::{VectorLayerCache, phase_of};
 #[doc(hidden)]
-pub use crate::content::vectors::mask::CachedMarks;
-pub(crate) use crate::content::vectors::mask::VectorMaskCache;
-pub use crate::content::vectors::mask::{
-    AnalyticOnly, MarksOnly, NoVectorMasks, VectorMask, VectorMaskRequest, VectorMaskSource,
-    VectorMaskStyle,
-};
-#[doc(hidden)]
-pub use crate::content::vectors::path_glyphs::{GlyphRequest, GlyphSheets, Splits};
+pub use crate::content::vectors::path_glyphs::Splits;
 #[doc(hidden)]
 pub use crate::content::vectors::payloads::MarkPayloads;
 pub(crate) use crate::content::vectors::recognitions::PartKey;
 #[doc(hidden)]
 pub use crate::content::vectors::recognitions::Recognitions;
+#[doc(hidden)]
+pub use crate::content::vectors::routes::CachedMarks;
+pub(crate) use crate::content::vectors::routes::VectorRouteCache;
+pub use crate::content::vectors::routes::{
+    AnalyticOnly, MarksOnly, NoVectorMasks, VectorMaskSource,
+};
 
 use std::sync::{Arc, OnceLock};
 
+use kurbo::{Affine, BezPath};
 use zgui_dom::NodeKey;
-use zgui_scene::kurbo::{Affine, BezPath};
 
 /// The outlines one element draws, and the matrix that places them in its fragment's own space.
 #[derive(Clone, Debug, Default)]
@@ -213,7 +214,7 @@ pub fn outlines(paths: &[BezPath], placed: Affine) -> Vec<zgui_svg::Shape> {
             path: Arc::new(placed * path.clone()),
             fill: Some(zgui_svg::Fill {
                 paint: zgui_svg::Paint::Solid(zgui_svg::Ink::Inherited { alpha: 1.0 }),
-                rule: zgui_scene::peniko::Fill::NonZero,
+                rule: peniko::Fill::NonZero,
             }),
             stroke: None,
             clips: Vec::new(),
@@ -223,7 +224,7 @@ pub fn outlines(paths: &[BezPath], placed: Affine) -> Vec<zgui_svg::Shape> {
 
 #[cfg(test)]
 mod tests {
-    use zgui_scene::kurbo::Shape;
+    use kurbo::Shape;
 
     use super::parse;
 

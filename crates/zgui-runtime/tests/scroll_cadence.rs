@@ -46,7 +46,7 @@ fn listing_on(
     platform: Headless,
 ) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
     let mut harness =
-        support::app_with_text_on(platform, CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
+        support::app_scrolling_itself_on(platform, CSS, move |cx: &mut zgui_view::BuildCx<'_>| {
             use zgui_view::{IntoView, View};
             let mut port = zgui_elements::column().class("port");
             for index in 0..200 {
@@ -306,7 +306,7 @@ fn a_spring_that_has_come_back_leaves_the_content_on_the_device_grid() {
     }
     let arrived = topmost_row(&harness);
     // Exact at the origin. At the poison offset an f32 holds a row's edge only to a few ulp.
-    let slack = zgui_scene::spatial::poison::origin() * f32::EPSILON * 4.0;
+    let slack = zgui_space::spatial::poison::origin() * f32::EPSILON * 4.0;
     assert!(
         (arrived - settled).abs() <= slack,
         "the return left the topmost row at {arrived} where a list that was never pulled has it \

@@ -11,7 +11,7 @@ publish = false
 # L8 — the measurement harness. Every dependency is inherited from the paths below.
 #
 # The shipped component gallery, driven in process against the headless platform with the real
-# cascade, the real layout, the real font engine and the real glyph rasteriser. Two things run on
+# cascade, the real layout and the real font engine. Two things run on
 # top of that: the *scenarios*, seven end-to-end interactions each with a band around every number
 # it reports, which is what a gate compares one run against the recorded ones; and the *phases*,
 # the exploratory measurements and differentials a person reaches for once a band has gone red.
@@ -25,9 +25,8 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # The counters have to be compiled in, or every band stays green while measuring nothing.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-platform-winit = { path = "../zgui-platform-winit", version = "0.1.0" }
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
@@ -36,6 +35,18 @@ zgui-a11y = { path = "../zgui-a11y", version = "0.1.0" }
 zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-paint = { path = "../zgui-paint", version = "0.1.0" }
 zgui-text-parley = { path = "../zgui-text-parley", version = "0.1.0" }
+# The window renderer's contract, and the device renderer a measurement may draw through.
+iceblink.workspace = true
+iceblink-core.workspace = true
+iceblink-testing.workspace = true
+iceblink-text.workspace = true
+iceblink-vello.workspace = true
+iceblink-wgpu.workspace = true
+
+# The CPU clocks of the process and of the window's thread, which split a frame's cost between the
+# window and a compositor thread.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
 
 [features]
 # The allocation tags `mem-probe` charges each allocation to. A feature of its own, so the timed

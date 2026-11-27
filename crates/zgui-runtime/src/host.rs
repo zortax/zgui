@@ -196,6 +196,9 @@ pub struct RuntimeHost {
     frame_callbacks: RefCell<FrameCallbacks>,
     /// What the next frame has been asked to do.
     commands: RefCell<Vec<Command>>,
+    /// The vertical offsets, `[low, high)` in CSS pixels, outside which each scroll container
+    /// asks for a frame while the compositor scrolls it.
+    held_offsets: RefCell<rustc_hash::FxHashMap<NodeKey, [f32; 2]>>,
     /// Which node holds focus, as a reactive value.
     ///
     /// Created once, with the window, under the window's own scope. Minting it inside whichever
@@ -216,7 +219,7 @@ pub struct RuntimeHost {
     /// Held beside the fragments they belong to for the same reason: a fragment records its
     /// rectangle in its own untransformed space and names its matrix by an index, so where a box
     /// *is* is only answerable from the two together.
-    placements: RefCell<zgui_scene::Placements>,
+    placements: RefCell<zgui_space::Placements>,
     /// The text of every style sheet a view has installed, by name.
     ///
     /// Kept here so that installing a sheet that is already installed with the same text issues no
@@ -290,9 +293,10 @@ impl RuntimeHost {
             scroll,
             timers,
             frame_callbacks: RefCell::new(FrameCallbacks::new()),
+            held_offsets: RefCell::default(),
             commands: RefCell::new(Vec::new()),
             animations: RefCell::default(),
-            placements: RefCell::new(zgui_scene::Placements::new()),
+            placements: RefCell::new(zgui_space::Placements::new()),
             sheets: RefCell::default(),
             selections: crate::selection::Selections::new(),
             focused: focused_writer.into(),
@@ -403,8 +407,8 @@ impl RuntimeHost {
     /// frame has sent one there is nothing to correct.
     pub fn publish_placements(
         &self,
-        spatial: &zgui_scene::SpatialTree,
-        moved: Option<&mut Vec<zgui_scene::SpatialId>>,
+        spatial: &zgui_space::SpatialTree,
+        moved: Option<&mut Vec<zgui_space::SpatialId>>,
     ) {
         let mut placements = self.placements.borrow_mut();
         match moved {
@@ -413,12 +417,18 @@ impl RuntimeHost {
         }
     }
 
+    /// The vertical offsets, `[low, high)` in CSS pixels, outside which the scroll container `key`
+    /// asks for a frame while the compositor scrolls it.
+    pub(crate) fn held_offsets(&self, key: NodeKey) -> Option<[f32; 2]> {
+        self.held_offsets.borrow().get(&key).copied()
+    }
+
     /// Where the coordinate systems the last composed frame's fragments name ended up.
     ///
     /// The frame's own path to them, for the geometry it delivers to whoever is watching a node: it
     /// must be answered from the same matrices a view asking later is answered from, or an observer
     /// and a direct reader would disagree about where the same box is.
-    pub(crate) fn placements(&self) -> std::cell::Ref<'_, zgui_scene::Placements> {
+    pub(crate) fn placements(&self) -> std::cell::Ref<'_, zgui_space::Placements> {
         self.placements.borrow()
     }
 
@@ -626,6 +636,7 @@ impl ViewHost for RuntimeHost {
             offset,
             content_size: region.content,
             scrollport: region.scrollport.size,
+            ..ScrollPosition::default()
         }
     }
 
@@ -639,6 +650,21 @@ impl ViewHost for RuntimeHost {
 
     fn freeze_scrolling(&self, frozen: bool) {
         self.issue(Command::FreezeScrolling(frozen));
+    }
+
+    fn wake_outside(&self, node: NodeId, held: Option<[f32; 2]>) {
+        let Some(key) = zgui_view_dom::id::to_document(node) else {
+            return;
+        };
+        let mut offsets = self.held_offsets.borrow_mut();
+        match held {
+            Some(held) => {
+                offsets.insert(key, held);
+            }
+            None => {
+                offsets.remove(&key);
+            }
+        }
     }
 
     fn focus(&self, node: NodeId) {

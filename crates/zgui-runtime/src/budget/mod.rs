@@ -12,7 +12,7 @@
 //! | [`epoch`] | [`SceneEpoch`], the frame stamp a cache's last use is recorded against |
 //! | [`report`] | [`CacheReport`] and [`BudgetReport`]: what is held, in what unit, and how far over |
 //! | [`manager`] | [`Budgeted`], the registry, and the order eviction takes |
-//! | [`limits`] | the levels the entry-counted caches are held to, and where the numbers come from |
+//! | [`limits`] | the levels the caches and the compositor's atlas are held to, and where the numbers come from |
 //! | [`caches`] | the five adapters a window registers |
 //!
 //! # Why membership is not optional

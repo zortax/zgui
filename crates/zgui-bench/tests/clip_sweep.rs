@@ -11,11 +11,11 @@
 
 use std::time::Duration;
 
+use iceblink::{RenderTarget, Renderer};
 use zgui::app::Fonts;
 use zgui::geom::{Css, CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError, Runtime};
 use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::vocab::{
@@ -104,25 +104,29 @@ fn opened(beat: zgui::reactive::RwSignal<usize, zgui::reactive::LocalStorage>) -
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let handler = App::new()
         .with_title("clip-sweep")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(SHEET)
+        .with_compositor(zgui_testkit_compositor::driver(zgui::app::compositor(
+            &fonts,
+        )))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = zgui_testkit_scene::CaptureRenderer::new();
-                inner.configure(target);
-                Ok(Box::new(inner))
+             -> Result<iceblink::RendererFactory, AppError> {
+                let factory: iceblink::RendererFactory = Box::new(move || {
+                    let mut inner = zgui_bench::renderers::NullRenderer::default();
+                    inner.configure(target);
+                    Ok(Box::new(inner) as Box<dyn Renderer>)
+                });
+                Ok(factory)
             },
         ))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(view! { Fixture(beat = beat) }.into_view().build(cx))
         })

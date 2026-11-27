@@ -22,12 +22,18 @@
 
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Edges, Point, Rect, Size};
-use zgui_scene::{
+use zgui_space::{
     ClipId, ClipTable, OwnSpace, PropertyOwner, ScrollFrameId, SpatialId, SpatialTree,
     StackingContextId,
 };
 
 use crate::fragment::{FragmentFlags, anchored, clip, filter, ink, sticky, transform};
+
+/// A rectangle that contains every rectangle a document lays out.
+const UNBOUNDED: Rect<DevicePx, Device> = Rect::new(
+    Point::new(DevicePx(-1.0e9), DevicePx(-1.0e9)),
+    Size::new(DevicePx(2.0e9), DevicePx(2.0e9)),
+);
 use crate::round::snap;
 use crate::style::DeviceStyle;
 use crate::tree::store::LayoutStore;
@@ -43,6 +49,9 @@ pub(crate) struct Descent {
     pub(crate) shift: (f32, f32),
     /// The clip chain this box is drawn under.
     pub(crate) clip: ClipId,
+    /// The clip chain a `position: fixed` box below is drawn under, which leaves out the scrollbar
+    /// room of the scroll containers above.
+    pub(crate) fixed_clip: ClipId,
     /// The accumulated matrix mapping this box's local space into [`Descent::anchor`], if it is
     /// not the identity. Carried as the matrix rather than as its name so a child composes onto
     /// it without walking the tree.
@@ -59,6 +68,9 @@ pub(crate) struct Descent {
     pub(crate) scrollport: Rect<DevicePx, Device>,
     /// The containing block's content box, in local space, which a sticky shift is clamped to.
     pub(crate) containing: Rect<DevicePx, Device>,
+    /// Whether the containing block is a scroll container whose content this box is drawn in, so
+    /// that it moves with the scroll offset and never holds a sticky box back.
+    pub(crate) containing_scrolls: bool,
     /// Whether [`Descent::layout`] and [`Descent::rounded`] are what this box's descendants were
     /// last composed against.
     ///
@@ -102,15 +114,16 @@ impl Descent {
     /// The state a document's root box is composed against.
     ///
     /// `spatial` is the document's root space. The viewport rectangle starts at the poison offset,
-    /// which is zero outside the poison test mode — see [`zgui_scene::spatial::poison`].
+    /// which is zero outside the poison test mode — see [`zgui_space::spatial::poison`].
     pub(crate) fn root(viewport: Size<DevicePx, Device>, spatial: SpatialId) -> Self {
-        let poison = DevicePx(zgui_scene::spatial::poison::origin());
+        let poison = DevicePx(zgui_space::spatial::poison::origin());
         let viewport = Rect::new(Point::new(poison, poison), viewport);
         Self {
             layout: (0.0, 0.0),
             rounded: (0.0, 0.0),
             shift: (0.0, 0.0),
             clip: ClipId::ROOT,
+            fixed_clip: ClipId::ROOT,
             matrix: None,
             spatial,
             anchor: spatial,
@@ -118,6 +131,7 @@ impl Descent {
             scroll: None,
             scrollport: viewport,
             containing: viewport,
+            containing_scrolls: false,
             origin_stable: true,
             fixed: FixedParent {
                 spatial,
@@ -188,6 +202,8 @@ pub(crate) struct Placed {
     pub(crate) offset: (f32, f32),
     /// Whether this box is `position: fixed`.
     pub(crate) fixed: bool,
+    /// Whether this box is sticky and its shift moved since it was last composed.
+    pub(crate) sticky_moved: bool,
     /// What this box itself adds to the [`FragmentFlags::BOUND`] flags its subtree folds up.
     pub(crate) bound: FragmentFlags,
     /// What this box's children are composed against.
@@ -223,6 +239,7 @@ impl Placed {
             anchor: content,
             scrollport: self.descent.scrollport.translate(by),
             containing: self.descent.containing.translate(by),
+            containing_scrolls: true,
             fixed,
             ..self.descent
         }
@@ -243,8 +260,8 @@ pub struct Tables<'a> {
     ///
     /// Read where a fragment's old ink is put on the device. A coordinate system these do not
     /// resolve is resolved in [`Tables::spatial`] instead, which is the answer for a caller that has
-    /// published nothing yet: [`Placements::EMPTY`](zgui_scene::Placements::EMPTY).
-    pub drawn: &'a zgui_scene::Placements,
+    /// published nothing yet: [`Placements::EMPTY`](zgui_space::Placements::EMPTY).
+    pub drawn: &'a zgui_space::Placements,
     /// The two numbers no style carries.
     pub device: DeviceStyle,
     /// Where each scroll container is scrolled to.
@@ -316,12 +333,11 @@ pub(crate) fn place(
     );
 
     let is_sticky = node.style.get_box().position == zgui_css::values::size::PositionValue::Sticky;
-    // Sticky is resolved here rather than in layout because nothing around the box moves: the
-    // shift is added to the composed position and to nothing else.
-    let (sticky_x, sticky_y) =
-        sticky::offset(&node.style, flow, from.scrollport, from.containing, scale);
-    let shift = (inherited.0 + sticky_x, inherited.1 + sticky_y);
-    let border_box = flow.translate(Size::new(DevicePx(sticky_x), DevicePx(sticky_y)));
+    // Sticky is resolved here rather than in layout because nothing around the box moves. The box
+    // is composed where the flow puts it, and the shift goes into the coordinate system it
+    // establishes, so a scroll that changes the shift moves no fragment.
+    let shift = inherited;
+    let border_box = flow;
 
     let border = snap::edges(snapped.border);
     let padding = snap::edges(snapped.padding);
@@ -342,7 +358,10 @@ pub(crate) fn place(
         zgui_dom::side::AnimPlacement::group,
     );
     let own_matrix = transform::matrix_of(box_, border_box, scale);
+    // A sticky box measures its ink, and its children theirs, in the coordinate system it
+    // establishes, which applies its shift. Every matrix above it is in that system's chain.
     let matrix = match (parent_matrix, own_matrix) {
+        _ if is_sticky => None,
         (None, None) => None,
         (Some(outer), None) => Some(outer),
         (None, Some(own)) => Some(own),
@@ -356,14 +375,35 @@ pub(crate) fn place(
     // A sticky box with nothing scrollable above it is held still against the window, which is a
     // scrollable region without being a box; without that, a box whose stickiness has no named port
     // would answer that it moves with everything around it, which is the one thing sticky is not.
-    let sticky_port = is_sticky.then(|| from.scroll.unwrap_or(zgui_scene::ScrollFrameId::VIEWPORT));
+    let sticky_port = is_sticky.then(|| zgui_space::StickyPort {
+        port: from.scroll.unwrap_or(zgui_space::ScrollFrameId::VIEWPORT),
+        rect: flow,
+        // A containing block that scrolls with the content holds nothing back at any offset.
+        limit: if from.containing_scrolls {
+            UNBOUNDED
+        } else {
+            from.containing
+        },
+        inset: sticky::insets(&node.style, from.scrollport, scale),
+        shift: sticky::offset(&node.style, flow, from.scrollport, from.containing, scale),
+    });
     let own_space = OwnSpace::of(own_matrix, sticky_port, fixed);
+    let sticky_moved = is_sticky && {
+        let owner = PropertyOwner::of(key);
+        let before = tables
+            .spatial
+            .of(owner)
+            .and_then(|id| tables.spatial.get(id))
+            .map(|node| node.local);
+        before != own_space.map(|own| own.local)
+    };
     let space = tables
         .spatial
         .space_of(parent_spatial, PropertyOwner::of(key), own_space);
     let transform = Some(space);
+    let anchor = if is_sticky { space } else { parent_anchor };
     let transform_hash = {
-        use zgui_scene::Content;
+        use zgui_space::Content;
         matrix
             .unwrap_or(zgui_geom::Matrix4::IDENTITY)
             .content_hash()
@@ -391,12 +431,14 @@ pub(crate) fn place(
     } else {
         Some(from.spatial)
     };
+    let clip = if fixed { from.fixed_clip } else { from.clip };
     let child_clip = clip::chain_for_children(
         tables.clips,
-        from.clip,
+        clip,
         &node.style,
         declared,
         padding_box,
+        scrollbar,
         border,
         scale,
         Size::new(DevicePx(shift.0), DevicePx(shift.1)),
@@ -405,7 +447,27 @@ pub(crate) fn place(
         space,
         PropertyOwner::of(key),
     );
-    let clips_children = child_clip != from.clip;
+    let clips_children = child_clip != clip;
+    // The same chain less the scrollbar cut, which is the padding box link the call above made.
+    let fixed_clip = if clips_children && (scrollbar.width.0 > 0.0 || scrollbar.height.0 > 0.0) {
+        clip::chain_for_children(
+            tables.clips,
+            clip,
+            &node.style,
+            declared,
+            padding_box,
+            Size::new(DevicePx(0.0), DevicePx(0.0)),
+            border,
+            scale,
+            Size::new(DevicePx(shift.0), DevicePx(shift.1)),
+            space,
+            PropertyOwner::of(key),
+        )
+    } else if clips_children {
+        child_clip
+    } else {
+        from.fixed_clip
+    };
 
     let stacking = if crate::fragment::stacking::establishes(store, key) {
         Some(crate::fragment::stacking::id_of(key))
@@ -454,7 +516,7 @@ pub(crate) fn place(
     let fixed_parent = if own_space.is_some() {
         FixedParent {
             spatial: space,
-            anchor: parent_anchor,
+            anchor,
             matrix,
             offset: (0.0, 0.0),
             scrolled: !fixed && from.in_scroll,
@@ -506,10 +568,10 @@ pub(crate) fn place(
         ink: device_ink,
         local_ink,
         flags,
-        clip: from.clip,
+        clip,
         clip_transform,
         transform,
-        anchor: parent_anchor,
+        anchor,
         transform_hash,
         stacking,
         scroll,
@@ -521,19 +583,22 @@ pub(crate) fn place(
         scrolls,
         offset: (offset.x.0, offset.y.0),
         fixed,
+        sticky_moved,
         bound,
         descent: Descent {
             layout,
             rounded,
             shift: (shift.0 - offset.x.0, shift.1 - offset.y.0),
             clip: child_clip,
+            fixed_clip,
             matrix,
             spatial: space,
-            anchor: parent_anchor,
+            anchor,
             stacking,
             scroll,
             scrollport,
             containing: content_box,
+            containing_scrolls: false,
             origin_stable,
             fixed: fixed_parent,
             in_scroll: scrolls || (!fixed && from.in_scroll),

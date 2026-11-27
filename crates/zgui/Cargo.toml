@@ -19,11 +19,19 @@ include.workspace = true
 # decision the layers below deliberately leave open and an application should not have to make
 # before its first line of interface.
 [dependencies]
+# Why a group precision named in the environment was ignored.
+tracing.workspace = true
 web-time.workspace = true
-# The tile store, the display list and the damage set: an application that draws through a device
-# this framework has no backend for implements the renderer contract, and cannot do that without
-# naming what its methods take.
-zgui-atlas = { path = "../zgui-atlas", version = "0.1.0" }
+# The compositor every window draws through, chosen here and nowhere else: the reference
+# compositor, the wgpu renderer and the swash glyph rasteriser, driven on a thread of its own or
+# on the window's.
+iceblink.workspace = true
+iceblink-core.workspace = true
+iceblink-driver.workspace = true
+iceblink-text.workspace = true
+iceblink-vello.workspace = true
+iceblink-wgpu.workspace = true
+# The damage set.
 zgui-bits = { path = "../zgui-bits", version = "0.1.0" }
 zgui-canvas = { path = "../zgui-canvas", version = "0.1.0" }
 zgui-custom = { path = "../zgui-custom", version = "0.1.0" }
@@ -35,15 +43,10 @@ zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 # wrapper lives with the layout algorithms that call it.
 zgui-layout = { path = "../zgui-layout", version = "0.1.0" }
 zgui-platform = { path = "../zgui-platform", version = "0.1.0" }
+# The latency marks a renderer emits, recorded into the traces `ZGUI_LATENCY` asks for.
+zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
 zgui-reactive = { path = "../zgui-reactive", version = "0.1.0" }
-zgui-render = { path = "../zgui-render", version = "0.1.0" }
-zgui-render-wgpu = { path = "../zgui-render-wgpu", version = "0.1.0" }
-# What rasterises the vector parts of a display list. A renderer with none attached plans a
-# drawing's passes and then composites an unwritten scratch, which is an icon that is not there —
-# so this is wiring rather than a choice an application should be asked to make.
-zgui-render-vector-vello = { path = "../zgui-render-vector-vello", version = "0.1.0" }
 zgui-runtime = { path = "../zgui-runtime", version = "0.1.0" }
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
 # The tokio backend for background work, off unless an application asks for it. Optional rather
 # than a dependency of `zgui-reactive` because a multi-threaded runtime is a cost every program
 # would otherwise carry to make one function work in the few that need it.
@@ -62,10 +65,10 @@ zgui-platform-headless = { path = "../zgui-platform-headless", version = "0.1.0"
 # stays green while measuring nothing, so this names the feature rather than relying on whatever
 # another crate happened to turn on.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
-# Reading back what a frame put in the display list, with no device: the corner-shape wiring is
-# asserted on the primitives and the clip chain rather than on pixels, which the renderer's own
-# tests cover.
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+# Reading back what a window draws through its compositor, with no device or on an offscreen one:
+# the corner-shape wiring is asserted on the quads and the clip chain rather than on pixels, which
+# the renderer's own tests cover.
+zgui-testkit-compositor = { path = "../zgui-testkit-compositor", version = "0.1.0" }
 
 [features]
 # Records which component each part of the document came from, so a development tool can show a

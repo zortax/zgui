@@ -54,7 +54,7 @@ pub enum Refusal {
 pub fn port_may_be_shifted(
     store: &LayoutStore,
     container: NodeKey,
-    placements: &zgui_scene::Placements,
+    placements: &zgui_space::Placements,
 ) -> Result<Rect<DevicePx, Device>, Refusal> {
     let Some(&box_key) = store.boxes_of(container).first() else {
         return Err(Refusal::NotAScroller);
@@ -91,7 +91,7 @@ struct OnDevice<'a> {
     /// The boxes and their fragments.
     store: &'a LayoutStore,
     /// The matrices of the drawn frame.
-    placements: &'a zgui_scene::Placements,
+    placements: &'a zgui_space::Placements,
 }
 
 /// Where the pixels `box_key` scrolls stand, in the space the container is laid out in.

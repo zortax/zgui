@@ -1,27 +1,24 @@
 use std::sync::Arc;
 
-use zgui_atlas::{Atlas, AtlasKey, AtlasLimits};
+use crate::VectorId;
+use kurbo::{Affine, BezPath, Rect, Shape as _};
 use zgui_color::Color;
 use zgui_geom::Affine2;
-use zgui_scene::VectorId;
-use zgui_scene::kurbo::{Affine, BezPath, Rect, Shape as _};
-use zgui_scene::peniko;
 
 use super::{LayerAnswer, LayerFallback, LayerRequest, VectorLayerCache};
 use crate::content::vectors::Drawing;
+use crate::emit::record::ImageKey;
 use crate::emit::vector::ShapePaint;
 
-/// A cache and an atlas, one frame at a time.
+/// A cache, one frame at a time.
 struct Fixture {
     cache: VectorLayerCache,
-    atlas: Atlas,
 }
 
 impl Fixture {
     fn new(ready: bool) -> Self {
         let mut fixture = Self {
             cache: VectorLayerCache::default(),
-            atlas: Atlas::new(AtlasLimits::default()),
         };
         fixture.cache.set_raster_ready(ready);
         fixture.frame();
@@ -30,9 +27,16 @@ impl Fixture {
 
     /// Ends the frame and starts the next.
     fn frame(&mut self) {
-        self.cache.end_frame(&mut self.atlas);
-        self.atlas.begin_frame();
+        self.cache.end_frame();
         self.cache.begin_frame();
+    }
+
+    /// Whether the cache holds the raster of `key`.
+    fn holds(&self, key: ImageKey) -> bool {
+        self.cache
+            .entries
+            .values()
+            .any(|entry| entry.pixels.key == key)
     }
 
     fn ask(&mut self, owner: u32, revision: u64, drawing: &Drawing, scale: f32) -> LayerAnswer {
@@ -53,19 +57,13 @@ impl Fixture {
         paint: ShapePaint,
         spatial: Affine2,
     ) -> LayerAnswer {
-        let mut named = Vec::new();
-        self.cache.layer(
-            &mut self.atlas,
-            LayerRequest {
-                owner: VectorId(owner),
-                revision,
-                drawing,
-                paint,
-                spatial: Some(spatial),
-            },
-            &mut named,
-            &mut |_| Vec::new(),
-        )
+        self.cache.layer(LayerRequest {
+            owner: VectorId(owner),
+            revision,
+            drawing,
+            paint,
+            spatial: Some(spatial),
+        })
     }
 }
 
@@ -117,9 +115,9 @@ fn zigzag(segments: usize) -> Drawing {
     drawing(path, zgui_svg::Ink::Solid(Color::WHITE))
 }
 
-fn key(answer: &LayerAnswer) -> AtlasKey {
+fn key(answer: &LayerAnswer) -> ImageKey {
     match answer {
-        LayerAnswer::Sprite { key, .. } => *key,
+        LayerAnswer::Sprite { raster, .. } => raster.key,
         other => panic!("expected a sprite, got {other:?}"),
     }
 }
@@ -425,45 +423,27 @@ fn only_two_scales_are_kept_per_source() {
         fixture.frame();
     }
     fixture.frame();
-    assert!(!fixture.atlas.contains(keys[0]), "the oldest scale goes");
-    assert!(fixture.atlas.contains(keys[1]));
-    assert!(fixture.atlas.contains(keys[2]));
+    assert!(!fixture.holds(keys[0]), "the oldest scale goes");
+    assert!(fixture.holds(keys[1]));
+    assert!(fixture.holds(keys[2]));
     assert_eq!(fixture.cache.len(), 2);
 }
 
 #[test]
-fn evicting_spares_held_layers() {
+fn evicting_spares_the_layers_the_frame_drew() {
     let mut fixture = Fixture::new(false);
     let one = square();
     let two = square();
-    let held = key(&fixture.ask(1, 1, &one, 1.0));
+    let drawn = key(&fixture.ask(1, 1, &one, 1.0));
     let free = key(&fixture.ask(2, 2, &two, 1.0));
-    fixture.atlas.retain(held);
     fixture.frame();
     let bytes = fixture.cache.bytes();
-    assert_eq!(
-        fixture.cache.pinned_bytes(&fixture.atlas),
-        0,
-        "this frame drew neither"
-    );
-    assert_eq!(fixture.cache.held_bytes(&fixture.atlas), bytes / 2);
-    let freed = fixture.cache.evict(&mut fixture.atlas, u64::MAX);
+    assert_eq!(fixture.cache.pinned_bytes(), 0, "this frame drew neither");
+    assert_eq!(key(&fixture.ask(1, 1, &one, 1.0)), drawn);
+    assert_eq!(fixture.cache.pinned_bytes(), bytes / 2);
+    let freed = fixture.cache.evict(u64::MAX);
     assert_eq!(freed, bytes / 2);
-    assert!(fixture.atlas.contains(held));
-    assert!(!fixture.atlas.contains(free));
+    assert!(fixture.holds(drawn));
+    assert!(!fixture.holds(free));
     assert_eq!(fixture.cache.bytes(), bytes / 2);
-}
-
-#[test]
-fn forgotten_tiles_leave_the_metadata() {
-    let mut fixture = Fixture::new(false);
-    let shared = square();
-    let first = key(&fixture.ask(1, 1, &shared, 1.0));
-    assert!(fixture.atlas.remove(first));
-    fixture.cache.forget_tiles(&[first]);
-    assert_eq!(fixture.cache.len(), 0);
-    assert_eq!(fixture.cache.bytes(), 0);
-    fixture.frame();
-    let again = key(&fixture.ask(1, 1, &shared, 1.0));
-    assert!(fixture.atlas.contains(again));
 }

@@ -10,7 +10,7 @@ use zgui::platform::SurfaceEvent;
 use zgui::runtime::Runtime;
 use zgui_platform_headless::Harness;
 
-use crate::gallery::{HEIGHT, Scheme, WIDTH, mounted_scheme, runtime};
+use crate::gallery::{HEIGHT, Scheme, WIDTH, mounted_scheme};
 use crate::input::focus_a_field;
 use crate::inspect::swatch_centres;
 use crate::script::{Driven, Step, run_step};
@@ -38,7 +38,7 @@ impl Twin {
         scheme: Scheme,
         centres: &[Point<CssPx, Css>],
     ) -> Self {
-        let mut cold = Harness::new(runtime(size));
+        let mut cold = crate::gallery::harness(size);
         let cold_scheme = mounted_scheme();
         cold.deliver_to_first(SurfaceEvent::Resized(Size::new(
             DevicePx(WIDTH),

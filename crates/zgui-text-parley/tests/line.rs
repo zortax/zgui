@@ -6,7 +6,6 @@ use std::sync::Arc;
 
 use zgui_geom::CssPx;
 use zgui_interned::Ident;
-use zgui_scene::PaintSlot;
 use zgui_text::{FontSource, ParagraphShaper};
 use zgui_text_parley::{
     Controls, FontFeature, FontSystem, FontSystemOptions, FontVariation, LineRequest, LineSettings,
@@ -193,7 +192,7 @@ fn a_variation_setting_shapes_at_its_own_instance() {
     let plain = shaper.shape_line("hello", &request);
     let varied = shaper.shape_line_with("hello", &request, &settings);
     assert_eq!(plain[0].face, varied[0].face, "one file, one face");
-    assert_ne!(plain[0].instance, varied[0].instance);
+    assert_ne!(plain[0].coords, varied[0].coords);
     let measured = shaper
         .line_metrics_with(&request, &settings)
         .expect("the face resolves");
@@ -312,31 +311,4 @@ fn one_line_shaped_alone_matches_the_same_line_shaped_as_a_paragraph() {
         assert!(fonts.face(*face).is_some());
         assert_eq!(owned.face, *face);
     }
-}
-
-#[test]
-fn a_cached_run_keys_exactly_as_the_run_it_was_shaped_from() {
-    let mut shaper = shaper();
-    let families = [Ident::new(support::LATIN)];
-    let runs = shaper.shape_line("hi", &latin(&families));
-    let run = &runs[0];
-
-    // Drawing the same cached run twice asks the rasteriser for the same entries.
-    let first: Vec<_> = run
-        .glyphs
-        .iter()
-        .map(|glyph| {
-            run.as_run(PaintSlot(0))
-                .key_for(*glyph, 0.0, zgui_text::RasterStyle::Grayscale)
-        })
-        .collect();
-    let second: Vec<_> = run
-        .glyphs
-        .iter()
-        .map(|glyph| {
-            run.as_run(PaintSlot(7))
-                .key_for(*glyph, 0.0, zgui_text::RasterStyle::Grayscale)
-        })
-        .collect();
-    assert_eq!(first, second, "the brush is not part of a glyph's key");
 }

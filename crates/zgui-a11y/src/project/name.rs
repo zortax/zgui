@@ -105,7 +105,7 @@ mod tests {
         let world = World {
             document: &document,
             layout: &layout,
-            placements: &zgui_scene::Placements::EMPTY,
+            placements: &zgui_space::Placements::EMPTY,
             scale: 1.0,
             focus: None,
             scroll: None,
@@ -139,7 +139,7 @@ mod tests {
         let world = World {
             document: &document,
             layout: &layout,
-            placements: &zgui_scene::Placements::EMPTY,
+            placements: &zgui_space::Placements::EMPTY,
             scale: 1.0,
             focus: None,
             scroll: None,
@@ -162,7 +162,7 @@ mod tests {
         let world = World {
             document: &document,
             layout: &layout,
-            placements: &zgui_scene::Placements::EMPTY,
+            placements: &zgui_space::Placements::EMPTY,
             scale: 1.0,
             focus: None,
             scroll: None,

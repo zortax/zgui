@@ -21,6 +21,8 @@ use std::time::Duration;
 
 use zgui_geom::{CssPx, Point};
 use zgui_platform::SurfaceEvent;
+use zgui_reactive::RwSignal;
+use zgui_reactive::prelude::*;
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 
@@ -65,23 +67,20 @@ fn labelled_button() -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
 /// Draws one whole frame the way a window that has just been uncovered does.
 ///
 /// The occlusion pair is the real path to a full redraw: nothing observed what the compositor did
-/// to the surface while it was hidden, so everything is emitted again. That is what makes the
-/// display list afterwards an answer to "what would be on the screen" rather than to "what changed
-/// since the last frame".
+/// to the surface while it was hidden, so everything is emitted again. The drawing afterwards then
+/// shows what the pipeline produces now, rather than what it recorded before the frame.
 fn redraw_whole(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>) {
     harness.deliver_to_first(SurfaceEvent::Occluded(true));
     harness.deliver_to_first(SurfaceEvent::Occluded(false));
     harness.pump();
 }
 
-/// The tints of the glyph sprites in the last frame the window drew.
+/// The colours of the glyph sprites the window shows.
 fn glyphs(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<[f32; 4]> {
-    harness.app().windows()[0]
-        .scene()
-        .primitives
-        .mono_sprites
+    support::drawing(&harness.app().windows()[0])
+        .glyphs()
         .iter()
-        .map(|sprite| sprite.color)
+        .filter_map(|glyph| glyph.color("paint"))
         .collect()
 }
 
@@ -99,8 +98,8 @@ fn drawn_grey(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) 
 }
 
 /// How many cascade results the window's brush table still answers to.
-fn brush_keys(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> usize {
-    harness.app().windows()[0].scene().text_paints.keys()
+fn brush_keys(harness: &mut zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> usize {
+    harness.app_mut().windows_mut()[0].text_brushes_held().1
 }
 
 /// The label's glyphs are drawn in the colour the transition has reached, on every frame of it.
@@ -149,11 +148,75 @@ fn every_frame_of_a_colour_transition_reaches_the_glyphs() {
     // A cascade result is a new object every frame, and the table is asked for one slot per
     // element, not one per frame: an entry per frame is a table that grows for as long as anything
     // on the screen is animating.
-    let keys = brush_keys(&harness);
+    let keys = brush_keys(&mut harness);
     assert!(
         keys <= 8,
         "the brush table answers to {keys} cascade results after 25 frames of one transition"
     );
+}
+
+/// A label whose colour transitions when a theme variable above it flips, beside a child in a
+/// colour of its own. The label's and the child's `display` are appended.
+const THEMED: &str = ".root { display: block; width: 400px; height: 300px; --fg: rgb(16, 16, 16) }
+                      .root.dark { --fg: rgb(240, 240, 240) }
+                      .label { color: var(--fg); transition: color 400ms linear }
+                      .mark { color: rgb(16, 16, 16) }";
+
+/// The greys of the glyphs once the theme flipped and the label's transition ended, in order.
+///
+/// `display` is the sheet's rule for the label and its child.
+fn themed_greys(display: &str) -> Vec<u8> {
+    let dark = RwSignal::new(false);
+    let sheet = format!("{THEMED}\n{display}");
+    let mut harness = support::app_with_text(&sheet, move |cx: &mut BuildCx<'_>| {
+        Box::new(
+            zgui_elements::column()
+                .class("root")
+                .class_toggle(zgui_interned::ClassName::new("dark"), move || dark.get())
+                .child(
+                    zgui_elements::control()
+                        .class("label")
+                        .child("abc")
+                        .child(zgui_elements::text().class("mark").child("def")),
+                )
+                .into_view()
+                .build(cx),
+        )
+    });
+    harness.settle(8);
+    assert_eq!(
+        drawn_grey(&harness),
+        Some(16),
+        "the control: the light theme"
+    );
+
+    dark.set(true);
+    for _ in 0..30 {
+        harness.advance(FRAME);
+        harness.pump();
+    }
+
+    let mut greys: Vec<u8> = glyphs(&harness)
+        .iter()
+        .map(|colour| (colour[0] * 255.0).round() as u8)
+        .collect();
+    greys.sort_unstable();
+    greys
+}
+
+/// The label's own lines take the colour its transition ends at with nothing else damaging them.
+#[test]
+fn a_colour_transition_draws_the_lines_it_recolours_again() {
+    for display in [
+        ".label { display: flex } .mark { display: block }",
+        ".label { display: block } .mark { display: inline }",
+    ] {
+        assert_eq!(
+            themed_greys(display),
+            [16, 16, 16, 240, 240, 240],
+            "{display}: the label's lines keep a colour the transition has moved past"
+        );
+    }
 }
 
 #[test]

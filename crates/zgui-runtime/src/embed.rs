@@ -19,12 +19,12 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
 
+use iceblink::RendererTask;
 use zgui_bits::DamageSet;
 use zgui_dom::Document;
 use zgui_geom::{Device, Size};
 use zgui_layout::tree::store::LayoutStore;
 use zgui_paint::ContentCache;
-use zgui_render::Renderer;
 use zgui_vocab::Timestamp;
 
 use crate::replaced::IntrinsicTable;
@@ -44,15 +44,24 @@ pub struct EmbedSyncCx<'a> {
     /// The laid-out boxes, for the content box a producer's texture is stretched over.
     pub layout: &'a Rc<RefCell<LayoutStore>>,
     /// The drawn frame's matrices, which put a fragment's ink on the device.
-    pub placements: &'a zgui_scene::Placements,
-    /// The renderer, for registering and releasing externals — and, through
-    /// [`Renderer::as_any_mut`], for whatever the backend companion needs that the contract
+    pub placements: &'a zgui_space::Placements,
+    /// Work on the window's renderer, for what a backend companion needs that the contract
     /// cannot name.
-    pub renderer: &'a mut dyn Renderer,
+    pub renderer: RendererQueue<'a>,
     /// Where a surface node's external texture is attached for the emit walk to find.
     pub content: &'a mut ContentCache,
+    /// A transaction of the window's compositor client, committed once the sync step returns.
+    ///
+    /// A host creates the external texture slots surface nodes are drawn from here, and reports
+    /// new content bound to one with `texture_frame`. The client is the transaction's, and it
+    /// changes when the compositor rejected a commit and every slot was removed.
+    pub transaction: &'a mut iceblink::Transaction,
     /// The frame's damage, still open: a host that attached new pixels absorbs their rectangle.
     pub damage: &'a mut DamageSet,
+    /// The pixels the compositor redraws for the texture frames reported through `transaction`.
+    ///
+    /// A host that reports a frame absorbs the device ink of the element drawn from it.
+    pub redrawn: &'a mut DamageSet,
     /// The intrinsics slot surface nodes answer layout from.
     pub intrinsics: &'a Arc<IntrinsicTable>,
     /// How many batches of changes the document has taken, ever.
@@ -75,12 +84,27 @@ pub struct EmbedSyncCx<'a> {
 
 /// The resources a maintenance-only deadline may trim without painting or presenting.
 pub struct EmbedMaintenanceCx<'a> {
-    /// The renderer, for releasing callback-owned external registrations.
-    pub renderer: &'a mut dyn Renderer,
+    /// Work on the window's renderer, for releasing callback-owned textures.
+    pub renderer: RendererQueue<'a>,
     /// Replaced attachments, for detaching released callback textures.
     pub content: &'a mut ContentCache,
     /// The same monotonic clock frames use.
     pub timestamp: Timestamp,
+}
+
+/// Work queued on a window's renderer.
+///
+/// The tasks run between frames on the thread that draws them, after the commits queued before
+/// them, and are dropped when the window's output has no renderer.
+#[derive(Clone, Copy)]
+pub struct RendererQueue<'a>(pub(crate) &'a crate::compositor::Client);
+
+impl RendererQueue<'_> {
+    /// Queues `task` on the renderer, which it reaches through
+    /// [`Renderer::as_any_mut`](iceblink::Renderer::as_any_mut).
+    pub fn queue(&self, task: RendererTask) {
+        self.0.with_renderer(task);
+    }
 }
 
 /// Device texture bytes retained by embeds, split by allocation ownership.

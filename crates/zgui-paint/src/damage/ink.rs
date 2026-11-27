@@ -11,8 +11,8 @@
 
 use zgui_geom::{Device, DevicePx, Rect};
 use zgui_layout::fragment::filter;
+use zgui_layout::fragment::filter::read_extent;
 use zgui_layout::{FragKey, Fragment, LayoutStore};
-use zgui_scene::read_extent;
 
 /// What one composite writes, and what it reads to do it.
 #[derive(Clone, Copy, Debug, PartialEq)]

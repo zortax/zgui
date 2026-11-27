@@ -12,8 +12,11 @@
 
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
+use zgui_layout::Axis;
 use zgui_layout::fragment::ScrollbarPart;
-use zgui_scene::{ClipId, Paint, Quad, Scene, SpatialId};
+use zgui_space::{ClipId, SpatialId};
+
+use crate::emit::record::{self, Recorder};
 
 use crate::lower::scrollbar::{ScrollbarScheme, ScrollbarStyle};
 
@@ -89,18 +92,34 @@ fn slim(bounds: Rect<DevicePx, Device>, thickness: f32) -> Rect<DevicePx, Device
     }
 }
 
-/// Emits one part of one scrollbar, and returns how many primitives were pushed.
+/// Where a thumb sits on its track, for a thumb the compositor moves with the scroll offset.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ThumbTrack {
+    /// The scroll container whose offset moves the thumb.
+    pub owner: zgui_dom::side::BoxKey,
+    /// The axis the thumb moves along.
+    pub axis: Axis,
+    /// How far the thumb's near edge is from the start of its travel.
+    pub along: f32,
+    /// How far the thumb moves over the whole scroll range.
+    pub free: f32,
+}
+
+/// Emits one part of one scrollbar, and returns how many quads were recorded.
 ///
 /// A scrollbar is drawn through the chain of whatever clips the *scroller*, never through the
 /// scrollport's own clip: a bar clipped by the region it scrolls would disappear the moment the
 /// content did.
+///
+/// A thumb with a `track` is recorded at the start of its travel in a node the compositor moves
+/// along the track with the offset it shows, when the compositor scrolls the container's content.
 pub fn emit(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     part: ScrollbarPart,
     bounds: Rect<DevicePx, Device>,
     paint: ScrollbarPaint,
-    clip: ClipId,
-    transform: SpatialId,
+    (clip, transform): (ClipId, SpatialId),
+    track: Option<ThumbTrack>,
 ) -> usize {
     let color = paint.color(part);
     let bounds = match part {
@@ -110,12 +129,48 @@ pub fn emit(
     if bounds.is_empty() || color.alpha() == 0.0 {
         return 0;
     }
-    let fill = scene.paints.add(Paint::Solid(color));
-    let quad = Quad::filled(bounds, fill)
-        .clipped(clip)
-        .transformed(transform)
-        .with_radii(paint.radii(part, bounds));
-    usize::from(scene.push_quad(quad).is_some())
+    let (bounds, space) = match track.and_then(|track| Some((track, moved(rec, transform, track)?)))
+    {
+        Some((track, space)) => (at_start(bounds, track), space),
+        None => (bounds, rec.space(transform)),
+    };
+    let quad = record::filled(
+        bounds,
+        record::flat_radii(paint.radii(part, bounds)),
+        rec.color(color),
+    );
+    let quad = iceblink::Quad {
+        clip: rec.clip(clip),
+        space,
+        ..quad
+    };
+    rec.quad(quad);
+    1
+}
+
+/// Returns the reference of the node that moves a thumb drawn in `transform` along `track`, if
+/// the content of its container is scrolled by a scroll node.
+fn moved(
+    rec: &mut Recorder<'_>,
+    transform: SpatialId,
+    track: ThumbTrack,
+) -> Option<iceblink::SpaceRef> {
+    let owner = zgui_space::PropertyOwner::of(track.owner).content();
+    let content = rec.tables_ref().spatial.of(owner)?;
+    let axis = match track.axis {
+        Axis::Horizontal => 0,
+        Axis::Vertical => 1,
+    };
+    rec.thumb_space(transform, content, axis, track.free)
+}
+
+/// Returns `bounds` moved back along `track` to the start of the thumb's travel.
+fn at_start(bounds: Rect<DevicePx, Device>, track: ThumbTrack) -> Rect<DevicePx, Device> {
+    let back = match track.axis {
+        Axis::Horizontal => Size::new(DevicePx(-track.along), DevicePx(0.0)),
+        Axis::Vertical => Size::new(DevicePx(0.0), DevicePx(-track.along)),
+    };
+    bounds.translate(back)
 }
 
 /// The paint a scrollbar takes when nothing has themed it.
@@ -185,11 +240,13 @@ pub fn hidden_paint() -> ScrollbarPaint {
 
 #[cfg(test)]
 mod tests {
+    use crate::Tables;
     use zgui_geom::{Device, DevicePx, Point, Rect, Size};
     use zgui_layout::fragment::ScrollbarPart;
-    use zgui_scene::{ClipId, Scene, SpatialId};
+    use zgui_space::{ClipId, SpatialId};
 
     use super::{dark_paint, default_paint, emit, hidden_paint, resolve, slim};
+    use crate::emit::record::Recording;
 
     /// A vertical bar twelve pixels wide.
     fn bar() -> Rect<DevicePx, Device> {
@@ -253,65 +310,39 @@ mod tests {
     }
 
     #[test]
-    fn the_thumb_reaches_the_display_list_and_the_transparent_track_does_not() {
-        let mut scene = Scene::new();
-        scene.begin_frame(Size::new(200, 200));
-        let paint = default_paint();
-        assert_eq!(
+    fn the_thumb_is_recorded_and_the_transparent_track_is_not() {
+        let mut tables = Tables::new();
+        let mut recording = Recording::new();
+        let mut rec = recording.recorder(&mut tables, SpatialId::VIEWPORT, ClipId::ROOT);
+        let mut part = |part, paint| {
             emit(
-                &mut scene,
-                ScrollbarPart::Track,
+                &mut rec,
+                part,
                 bar(),
                 paint,
-                ClipId::ROOT,
-                SpatialId::VIEWPORT
-            ),
+                (ClipId::ROOT, SpatialId::VIEWPORT),
+                None,
+            )
+        };
+        let paint = default_paint();
+        assert_eq!(
+            part(ScrollbarPart::Track, paint),
             0,
             "an unpainted groove still pages, from geometry the hit index keeps"
         );
-        assert_eq!(
-            emit(
-                &mut scene,
-                ScrollbarPart::Thumb,
-                bar(),
-                paint,
-                ClipId::ROOT,
-                SpatialId::VIEWPORT
-            ),
-            1
-        );
-        assert_eq!(scene.primitives.quads.len(), 1);
-        let quad = &scene.primitives.quads[0];
+        assert_eq!(part(ScrollbarPart::Thumb, paint), 1);
+        let hidden = hidden_paint();
+        assert_eq!(part(ScrollbarPart::Track, hidden), 0);
+        assert_eq!(part(ScrollbarPart::Thumb, hidden), 0);
+
+        let [quad] = recording.quads() else {
+            panic!("one thumb is recorded: {:?}", recording.quads());
+        };
         assert_eq!(
             quad.bounds,
             [191.0, 0.0, 6.0, 200.0],
             "the quad is the slimmed rectangle, not the reserved one"
         );
-
-        let hidden = hidden_paint();
-        assert_eq!(
-            emit(
-                &mut scene,
-                ScrollbarPart::Track,
-                bar(),
-                hidden,
-                ClipId::ROOT,
-                SpatialId::VIEWPORT
-            ),
-            0
-        );
-        assert_eq!(
-            emit(
-                &mut scene,
-                ScrollbarPart::Thumb,
-                bar(),
-                hidden,
-                ClipId::ROOT,
-                SpatialId::VIEWPORT
-            ),
-            0
-        );
-        assert_eq!(scene.primitives.quads.len(), 1, "nothing more was pushed");
     }
 
     #[test]

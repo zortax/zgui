@@ -1,0 +1,9 @@
+# Fixture workspace for `cargo xtask ledger compositor`.
+[workspace]
+members = ["crates/*"]
+
+[workspace.dependencies]
+iceblink = { git = "https://example.com/iceblink", version = "0.1.0" }
+iceblink-core = { git = "https://example.com/iceblink", version = "0.1.0" }
+renderer = { git = "https://example.com/iceblink", version = "0.1.0", package = "iceblink-wgpu" }
+iceblink-wgsl = { git = "https://example.com/iceblink", version = "0.1.0" }

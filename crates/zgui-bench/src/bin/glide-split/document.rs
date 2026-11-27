@@ -27,15 +27,13 @@
 //! of magnitude larger than the bracket around it, and changes nothing about the walk: the same
 //! boxes are reached, in the same order, doing the same work. Documents have sections anyway.
 
-use std::cell::RefCell;
-use std::rc::Rc;
 use std::time::Duration;
 
+use iceblink::{RenderTarget, Renderer};
 use zgui::app::Fonts;
 use zgui::geom::{Css, CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError, Runtime};
 use zgui::view::{Anchor, BuildCx};
 use zgui::vocab::{
@@ -118,31 +116,34 @@ pub(crate) struct Opened {
 
 /// Opens a document of `rows` rows, every one of them an element, and settles it.
 pub(crate) fn opened(rows: usize, clipping: Clipping) -> Opened {
-    let damage: watch::Log = Rc::new(RefCell::new(Vec::new()));
-    let for_renderer = Rc::clone(&damage);
+    let damage = watch::Log::default();
+    let for_renderer = damage.clone();
     let render = move |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
                        target: RenderTarget|
-          -> Result<Box<dyn Renderer>, AppError> {
-        let mut inner = zgui_testkit_scene::CaptureRenderer::new();
-        inner.configure(target);
-        let mut watching = Watching::new(Box::new(inner), Rc::clone(&for_renderer));
-        watching.configure(target);
-        Ok(Box::new(watching))
+          -> Result<iceblink::RendererFactory, AppError> {
+        let for_renderer = for_renderer.clone();
+        let factory: iceblink::RendererFactory = Box::new(move || {
+            let mut inner = zgui_bench::renderers::NullRenderer::default();
+            inner.configure(target);
+            let mut watching = Watching::new(Box::new(inner), for_renderer);
+            watching.configure(target);
+            Ok(Box::new(watching) as Box<dyn Renderer>)
+        });
+        Ok(factory)
     };
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let handler = App::new()
         .with_title("glide-split")
         .with_size(WIDTH, HEIGHT)
         .with_stylesheet(format!("{SHEET}{}", clipping.rule()))
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(Box::new(render))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             let mut list = zgui::elements::column().class("bench-list").child(
                 zgui::elements::column()

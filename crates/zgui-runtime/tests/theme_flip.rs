@@ -4,13 +4,13 @@
 //! window is least able to check for itself: the cascade settles on the new colours, the elements
 //! all report them, and a test that asks the style system what colour an element is will pass while
 //! the window on the screen is still half light. The colour a glyph is drawn in does not come from
-//! the element — it comes from a slot in the display list's brush table that the glyph named when
-//! it was shaped, and a flip that fails to rewrite the slot leaves the old colour on the screen for
-//! as long as the shaping survives, which is for ever.
+//! the element — it comes from a brush slot that the glyph named when it was shaped, and a flip
+//! that fails to rewrite the slot leaves the old colour on the screen for as long as the shaping
+//! survives, which is for ever.
 //!
-//! So these tests read the colour off **every** sprite in the display list, which is the last thing
-//! before the pixels, and they read it in the order the glyphs are stacked down the window, so that
-//! one string left behind in the old theme is a different answer rather than a set that still
+//! So these tests read the colour off **every** glyph sprite the compositor draws, which is the
+//! last thing before the pixels, and they read it in the order the glyphs are stacked down the
+//! window, so that one string left behind in the old theme is a different answer rather than a set that still
 //! happens to contain the right values.
 //!
 //! Two flips are covered, because a theme reaches a document by two entirely separate routes and
@@ -148,17 +148,16 @@ const DARK: [u8; 8] = [220, 220, 230, 230, 210, 210, 210, 210];
 /// lands, it is the document's own reading order, so a window whose title flipped and whose body
 /// did not cannot produce the same answer as one where both did.
 fn drawn_greys(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<u8> {
-    let mut placed: Vec<_> = harness.app().windows()[0]
-        .scene()
-        .primitives
-        .mono_sprites
-        .iter()
-        .map(|sprite| {
-            (
-                sprite.bounds[1].to_bits(),
-                sprite.bounds[0].to_bits(),
-                (sprite.color[0] * 255.0).round() as u8,
-            )
+    let drawing = support::drawing(&harness.app().windows()[0]);
+    let mut placed: Vec<_> = drawing
+        .glyphs()
+        .into_iter()
+        .map(|glyph| {
+            let [x, y, ..] = support::world(glyph);
+            let [red, ..] = glyph
+                .color("paint")
+                .expect("a glyph is drawn in a solid colour");
+            (y.to_bits(), x.to_bits(), (red * 255.0).round() as u8)
         })
         .collect();
     placed.sort_unstable();
@@ -185,9 +184,8 @@ fn repaint_everything(harness: &mut zgui_platform_headless::Harness<zgui_runtime
     harness.advance(std::time::Duration::from_millis(50));
     harness.settle(8);
 
-    // The repaint has to have happened for anything below to mean anything. A frame that emitted
-    // nothing leaves the display list empty, and an empty list is not the old theme — it is no
-    // theme, and an assertion about colours would then be an assertion about nothing.
+    // A window that shows no text is not the old theme. It is no theme, and an assertion about
+    // colours would then be an assertion about nothing.
     assert_eq!(
         drawn_greys(harness).len(),
         LIGHT.len(),
@@ -351,8 +349,8 @@ fn generated_content_follows_the_flip_its_element_follows() {
     let (dark, mut harness) = themed(PSEUDO_CSS);
     harness.settle(8);
 
-    // The control. Without the generated content actually reaching the display list in a colour of
-    // its own there is nothing here that could be left behind.
+    // The control. Without the generated content actually drawn in a colour of its own there is
+    // nothing here that could be left behind.
     assert!(
         drawn_greys(&harness).contains(&50),
         "the generated content was not drawn in its own colour, so nothing here is being tested: \
@@ -664,9 +662,8 @@ fn a_layer_beside_the_themed_page_is_not_drawn_in_the_page_s_colour() {
     dark.set(true);
     harness.settle(8);
 
-    // A flip damages what it changed, and the layer is exactly what it did not change — so the
-    // display list after one holds the page's strings and not the layer's. The whole surface is
-    // asked for again here so that every string in the window is in the list being read.
+    // A flip damages what it changed, and the layer is exactly what it did not change. The whole
+    // surface is drawn again here so that every string is drawn after the flip.
     repaint_all(&mut harness);
 
     assert_eq!(

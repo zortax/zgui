@@ -8,7 +8,7 @@
 //! device, offscreen, at scale one.
 //!
 //! After the first frame and again after thirty animated steps, the probe prints what
-//! [`Renderer::memory`](zgui::render::Renderer::memory) reports, what the group pool holds and the
+//! [`Renderer::memory`](iceblink::Renderer::memory) reports, what the group pool holds and the
 //! most targets it lent at once, and the totals of the device allocator's report. The animated
 //! steps are printed as the other probes print them, with GPU time under `ZGUI_GPU_TIMING=1`.
 //!
@@ -20,11 +20,11 @@
 
 #![forbid(unsafe_code)]
 
+use iceblink_wgpu::{WgpuRenderer, wgpu};
 use zgui::view;
 use zgui::view::{Anchor, AnyView, BuildCx, IntoView, View};
 use zgui_bench::probe::{self, Device};
 use zgui_platform_headless::Harness;
-use zgui_render_wgpu::{GroupPool, WgpuRenderer};
 
 /// Steps run before the reported ones, past the first paint.
 const WARM: usize = 8;
@@ -118,53 +118,59 @@ fn scene(width: f32, height: f32) -> impl IntoView {
 
 /// Prints one `MEM` line: the renderer's report, the group pool and the device allocator.
 fn memory(stage: &str, harness: &Harness<zgui::runtime::Runtime>, size: (f32, f32)) {
-    let renderer = harness.app().windows()[0].renderer();
-    let memory = renderer.memory();
-    let pool = renderer.target_pool();
-    let Some(device) = renderer
-        .as_any()
-        .and_then(|any| any.downcast_ref::<WgpuRenderer>())
-    else {
-        println!("MEM\t{stage}\tno device renderer");
-        return;
-    };
-    let groups = device.groups();
-    #[expect(
-        clippy::cast_possible_truncation,
-        clippy::cast_sign_loss,
-        reason = "a surface extent in device pixels"
-    )]
-    let full_target = (size.0 as u64) * (size.1 as u64) * bytes_per_texel(GroupPool::FORMAT);
-    let report = device.gpu().device().generate_allocator_report();
-    println!(
-        "MEM\t{stage}\tfixed={}\ttargets={}\tscratch={}\tatlases={}\tbuffers={}\ttotal={}\t\
+    let stage = stage.to_owned();
+    let line = harness.app().windows()[0].inspect_renderer(move |renderer| {
+        let memory = renderer.memory();
+        let pool = renderer.target_pool();
+        let Some(device) = renderer
+            .as_any()
+            .and_then(|any| any.downcast_ref::<WgpuRenderer>())
+        else {
+            return format!("MEM\t{stage}\tno device renderer");
+        };
+        let groups = device.groups();
+        #[expect(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "a surface extent in device pixels"
+        )]
+        // The format a group target is held in at high precision.
+        let full_target =
+            (size.0 as u64) * (size.1 as u64) * bytes_per_texel(wgpu::TextureFormat::Rgba16Float);
+        let report = device.gpu().device().generate_allocator_report();
+        format!(
+            "MEM\t{stage}\tfixed={}\ttargets={}\tscratch={}\tatlases={}\tbuffers={}\ttotal={}\t\
          pool_resident={}\tpool_peak_lent_targets={}\tpool_peak_lent_bytes_full_res={}\t\
          pool_degraded={}\tpool_leases={}\talloc_allocated={}\talloc_reserved={}\t\
          alloc_blocks={}\talloc_allocations={}",
-        memory.fixed,
-        memory.targets,
-        memory.scratch,
-        memory.atlases,
-        memory.buffers,
-        memory.total(),
-        pool.resident,
-        groups.peak(),
-        u64::from(groups.peak()) * full_target,
-        groups.degraded(),
-        pool.leases,
-        or_dash(report.as_ref().map(|report| report.total_allocated_bytes)),
-        or_dash(report.as_ref().map(|report| report.total_reserved_bytes)),
-        or_dash(report.as_ref().map(|report| report.blocks.len() as u64)),
-        or_dash(
-            report
-                .as_ref()
-                .map(|report| report.allocations.len() as u64)
-        ),
-    );
+            memory.fixed,
+            memory.targets,
+            memory.vector,
+            memory.atlas,
+            memory.chunks,
+            memory.total(),
+            pool.resident,
+            groups.peak(),
+            u64::from(groups.peak()) * full_target,
+            groups.degraded(),
+            pool.leases,
+            or_dash(report.as_ref().map(|report| report.total_allocated_bytes)),
+            or_dash(report.as_ref().map(|report| report.total_reserved_bytes)),
+            or_dash(report.as_ref().map(|report| report.blocks.len() as u64)),
+            or_dash(
+                report
+                    .as_ref()
+                    .map(|report| report.allocations.len() as u64)
+            ),
+        )
+    });
+    if let Some(line) = line {
+        println!("{line}");
+    }
 }
 
 /// The bytes one texel of `format` takes.
-fn bytes_per_texel(format: zgui_render_wgpu::wgpu::TextureFormat) -> u64 {
+fn bytes_per_texel(format: wgpu::TextureFormat) -> u64 {
     format.block_copy_size(None).map_or(0, u64::from)
 }
 
@@ -198,10 +204,14 @@ fn main() {
         std::process::exit(2);
     });
     let describe = opened.harness.app().windows()[0]
-        .renderer()
-        .as_any()
-        .and_then(|any| any.downcast_ref::<WgpuRenderer>())
-        .map_or_else(|| "-".to_owned(), |device| device.gpu().describe());
+        .inspect_renderer(|renderer| {
+            renderer
+                .as_any()
+                .and_then(|any| any.downcast_ref::<WgpuRenderer>())
+                .map(|device| device.gpu().describe())
+        })
+        .flatten()
+        .unwrap_or_else(|| "-".to_owned());
     println!("PROBE\t{name}\tdevice={describe}");
     memory("first", &opened.harness, (width, height));
     probe::census(&name, &opened);

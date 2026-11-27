@@ -117,12 +117,12 @@ fn a_cached_range_is_replayed_on_a_repaint_and_never_on_a_first_paint() {
 }
 
 #[test]
-fn primitives_are_culled_when_the_document_reaches_past_the_port_and_never_when_it_fits() {
+fn subtrees_are_culled_when_the_document_reaches_past_the_port_and_never_when_it_fits() {
     // The pair the other two cannot stand in for: culling is decided against what can be seen
     // rather than against what has changed, so the silent half is a *smaller document* and not an
     // earlier frame. A document that fits inside its scrollport has nothing to refuse.
     assert_non_vacuous(
-        Counter::PrimitivesCulled,
+        Counter::PaintSubtreesCulled,
         Scenario::new(
             "a document five times the height of the scrollport holding it",
             opened_then_one_row_changed,
@@ -130,5 +130,90 @@ fn primitives_are_culled_when_the_document_reaches_past_the_port_and_never_when_
         Scenario::new("a document that fits inside its scrollport whole", || {
             opened(6);
         }),
+    );
+}
+
+#[test]
+fn items_are_culled_when_a_frame_redraws_one_row_and_never_when_it_draws_them_all() {
+    // The compositor culls against the frame's damage, so the fired half needs a frame that redraws
+    // less than the output: one row changed under a kept target. The silent half is the first
+    // frame, which draws every row of a document that fits.
+    assert_non_vacuous(
+        Counter::PrimitivesCulled,
+        Scenario::new(
+            "one row restyled in a document drawn onto a kept target",
+            || {
+                let lit = RwSignal::new(false);
+                let mut harness = kept_document(lit);
+                harness.settle(64);
+                lit.set(true);
+                harness.settle(64);
+            },
+        ),
+        Scenario::new(
+            "the first frame of a document that fits, drawn onto a kept target",
+            || {
+                let lit = RwSignal::new(false);
+                let mut harness = kept_document(lit);
+                harness.settle(64);
+            },
+        ),
+    );
+}
+
+/// A document of six rows, the fourth of which carries `lit`, drawn onto a kept target.
+///
+/// Each frame after the first then draws only its damage.
+fn kept_document(lit: RwSignal<bool>) -> zgui_platform_headless::Harness<zgui_runtime::Runtime> {
+    let handler = zgui_runtime::App::new()
+        .with_title("culling")
+        .with_size(400.0, 300.0)
+        .with_stylesheet(CSS)
+        .with_compositor(support::client())
+        .with_renderer(Box::new(
+            |_surface: &std::sync::Arc<dyn zgui_platform::Surface>,
+             target: iceblink::RenderTarget| {
+                let mut renderer =
+                    zgui_testkit_compositor::Kept::new(iceblink::RenderCapabilities::MINIMAL);
+                iceblink::Renderer::configure(&mut renderer, target);
+                support::hand(renderer)
+            },
+        ))
+        .with_text_engine(Box::new(|| {
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
+        }))
+        .into_handler(move |cx: &mut BuildCx<'_>| {
+            let mut root = zgui_elements::column().class("root");
+            for index in 0..6 {
+                let mut row = zgui_elements::column().class("row");
+                if index == LIT_ROW {
+                    row = row.class_toggle(ClassName::new("lit"), move || lit.get());
+                }
+                root = root.child(row.child(zgui_elements::text().child(format!("row {index}"))));
+            }
+            Box::new(root.into_view().build(cx))
+        })
+        .expect("the reactive runtime installs");
+    zgui_platform_headless::Harness::new(handler)
+}
+
+#[test]
+fn a_recording_that_draws_what_it_replaced_is_identical_and_one_that_recolours_is_not() {
+    assert_non_vacuous(
+        Counter::ChunksIdentical,
+        Scenario::new(
+            "a document painted again after its paint records were forgotten",
+            || {
+                let lit = RwSignal::new(false);
+                let mut harness = document(OVERFLOWING, lit);
+                harness.settle(64);
+                harness.app_mut().windows_mut()[0].forget_caches();
+                harness.settle(64);
+            },
+        ),
+        Scenario::new(
+            "a row restyled with a background colour it shows",
+            opened_then_one_row_changed,
+        ),
     );
 }

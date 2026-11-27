@@ -9,8 +9,8 @@ mod support;
 use std::path::PathBuf;
 
 use support::{Element, Fixture, Frame, lay_out, measurer};
-use zgui_testkit_scene::dump::{TreeDump, golden};
-use zgui_testkit_scene::text::Writer;
+use zgui_testkit::dump::{TreeDump, golden};
+use zgui_testkit::text::Writer;
 
 /// A box tree and its resolved layout, as the shared tree-dump seam wants it.
 ///
@@ -237,7 +237,7 @@ impl TreeDump for InlineLines {
 
 /// Renders every inline formatting context in `store`, line by line.
 fn inline_text(store: &zgui_layout::tree::store::LayoutStore, frame: &Frame) -> String {
-    let placements = zgui_scene::Placements::of(&frame.spatial);
+    let placements = zgui_space::Placements::of(&frame.spatial);
     let mut out = String::new();
     let mut stack = vec![store.root().expect("a root")];
     let mut contexts = Vec::new();

@@ -1,0 +1,8 @@
+[package]
+name = "zgui-shader-macro"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+iceblink.workspace = true
+iceblink-wgsl.workspace = true

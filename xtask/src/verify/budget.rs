@@ -58,30 +58,7 @@ pub(crate) struct Known {
 /// Nothing is known to disagree, which is what most of the documents say.
 const AGREED: &str = "no step of the script draws a different picture in the two windows";
 
-/// The colour-scheme flip that does not always land, and everything measured about it.
-///
-/// **An open defect, recorded here because it is intermittent and therefore cannot be pinned as a
-/// fault or as agreement.** At `s1`, and only at `s1`, a `Theme` step sometimes leaves one element's
-/// border drawn in the *other* scheme's token — 0.2118, 0.2275, 0.2471 against 0.851, 0.851, 0.8784
-/// on an 82x36 box — while every other one of the three hundred lines of the display list agrees.
-/// It is one element and one paint, so it is not the scheme failing to reach the document; it is one
-/// element keeping the colour it had.
-///
-/// Measured: **4 runs of 40** disagreed, at one of the `Theme` steps (37, 39 and 70 each seen). The
-/// disagreement then survives every following step until something repaints that element — one run
-/// carried it from step 39 to step 61 — which is why the entry is a span rather than three steps,
-/// and why an earlier reading of this gate saw "0, 2 and 20 faults across runs of one binary".
-///
-/// What it is not: address-space layout (20 runs with randomisation disabled flake at the same
-/// rate), a worker race (the window restyles with no pool), or the wall clock (the harness runs on a
-/// virtual one and nothing in the frame path reads a real instant to decide what to do). What it is
-/// remains open.
-const A_THEME_FLIP_THAT_DOES_NOT_ALWAYS_LAND: &str = "steps 37-61 and 70-73: a Theme step sometimes leaves one element's border in the other \
-     scheme's token, in about one run in ten, and the difference then survives until that element \
-     is repainted. One element, one paint, every other line of the display list identical. An open \
-     defect: see the module comment in xtask/src/verify/budget.rs for everything measured about it";
-
-/// Nothing about this size is intermittent, which is what five of the seven documents say.
+/// Nothing about this size is intermittent, which is what six of the seven documents say.
 const NOTHING_UNSTABLE: &str = "nothing here is intermittent";
 
 /// The picked swatch that does not always have its border yet, and everything measured about it.
@@ -101,10 +78,10 @@ const NOTHING_UNSTABLE: &str = "nothing here is intermittent";
 ///
 /// Measured: **7 runs of 37** disagreed, every one of them at step 3 and at no other step, and
 /// every one of them on that single line. It does not spread: the following steps agree in every
-/// run, so unlike the `s1` flip this one is repainted immediately rather than carried forwards. The
-/// rate is not steady — one sample of twelve gave six and a later sample of twenty-five gave one —
-/// so it is sensitive to something outside the run, which is a further thing known about it and not
-/// a reason to call it either rate.
+/// run, so it is repainted immediately rather than carried forwards. The rate is not steady — one
+/// sample of twelve gave six and a later sample of twenty-five gave one — so it is sensitive to
+/// something outside the run, which is a further thing known about it and not a reason to call it
+/// either rate.
 const A_PICKED_SWATCH_THAT_IS_NOT_ALWAYS_BORDERED_YET: &str = "step 3: the Click(1) sometimes leaves the picked swatch's 2px border drawn in the running \
      window and not in the rebuilt one, in about one run in five. One element, one paint, every \
      other line of the display list identical, and the next step agrees again. The element is the \
@@ -127,23 +104,18 @@ pub(crate) const KNOWN: &[Known] = &[
         steps: 108,
         faults: &[],
         roundings: &[],
-        // The span the colour-scheme flip can reach, which is from the first `Theme` step to the
-        // step that repaints the element it leaves behind, and again from the second. Every step of
-        // `s1` outside it is held exactly.
-        unstable: &[
-            37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58,
-            59, 60, 61, 70, 71, 72, 73,
-        ],
+        unstable: &[],
         because: AGREED,
-        unstable_because: A_THEME_FLIP_THAT_DOES_NOT_ALWAYS_LAND,
+        unstable_because: NOTHING_UNSTABLE,
     },
     Known {
         size: "s2",
         steps: 108,
         faults: &[],
-        // Nothing rounds here any more. Every step of this document used to land the two windows a
-        // fraction of a device pixel apart at nineteen of the ninety-five; they now agree exactly.
-        roundings: &[],
+        // The notch at step 67 is scrolled by the compositor in the window that keeps running and
+        // written by the window rebuilt from nothing, and the rotated path drawn there ends 0.0001
+        // device pixels apart in the two windows.
+        roundings: &[67],
         // The one step whose disagreement cannot be asserted either way. See
         // [`A_PICKED_SWATCH_THAT_IS_NOT_ALWAYS_BORDERED_YET`]; every other step is held exactly.
         unstable: &[3],
@@ -171,10 +143,6 @@ pub(crate) const KNOWN: &[Known] = &[
     Known {
         size: "s13",
         steps: 108,
-        // The fling-into-a-ratio-change is gone. Step 61 used to leave the two windows' scroll
-        // offsets 0.43 device pixels apart inside the elastic displacement, which `Scale(1.5)` then
-        // multiplied into a whole pixel across the whole document for nine steps. Both windows now
-        // come to rest at the same place: five runs, no fault at any step.
         faults: &[],
         roundings: &[],
         unstable: &[],

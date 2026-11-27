@@ -10,13 +10,13 @@
 //! same function that decides what a box clips its children to — so a background painted to a curve
 //! and a child clipped to it cannot round differently.
 
+use iceblink::BorderStyle;
 use zgui_color::Color;
 use zgui_css::parity::Support;
 use zgui_css::values::border::BorderStyleValue;
 use zgui_css::values::color::{ColorValue, current, resolve};
 use zgui_css::{ComputedStyle, register_properties};
 use zgui_geom::{Corners, Device, DevicePx, Rect, Vec2};
-use zgui_scene::prim::quad::BorderStyle;
 
 register_properties! {
     border_top_color           => Support::Implemented("zgui-paint::lower::border"),
@@ -82,12 +82,12 @@ pub enum LineStyle {
 }
 
 impl LineStyle {
-    /// The scene's own spelling of this style.
-    pub fn to_scene(self) -> BorderStyle {
+    /// Returns the compositor's border style for this style.
+    pub fn to_compositor(self) -> BorderStyle {
         match self {
-            Self::Solid => BorderStyle::Solid,
-            Self::Dashed => BorderStyle::Dashed,
-            Self::Dotted => BorderStyle::Dotted,
+            Self::Solid => BorderStyle::SOLID,
+            Self::Dashed => BorderStyle::DASHED,
+            Self::Dotted => BorderStyle::DOTTED,
         }
     }
 }

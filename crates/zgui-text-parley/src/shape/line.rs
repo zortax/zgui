@@ -12,9 +12,7 @@
 
 use zgui_geom::CssPx;
 use zgui_interned::Ident;
-use zgui_text::{
-    FaceId, FaceMetrics, FontSource, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedRunOwned,
-};
+use zgui_text::{FaceId, FaceMetrics, SYNTHETIC_BOLD_RATIO, ShapedGlyph, ShapedRunOwned};
 use zgui_text_style::variant::FontVariantLigatures;
 use zgui_text_style::{
     FamilyName, FontFamilyList, FontFeature, FontSlant, FontVariant, FontVariation, LengthPercent,
@@ -143,7 +141,7 @@ pub(crate) fn shape(
     // slot from whoever draws it.
     let lowered = LoweredStyle::of(
         &text_style(request, settings),
-        zgui_scene::PaintSlot(0),
+        zgui_space::PaintSlot(0),
         CssPx::ZERO,
     );
     // A scale of one, because the size is already in device pixels.
@@ -186,14 +184,13 @@ pub(crate) fn shape(
         runs.push(ShapedRunOwned {
             face,
             size: text_run.font_size(),
-            instance: fonts.variation_instance(text_run.normalized_coords()),
+            coords: crate::shape::glyphs::instance(text_run.normalized_coords()).to_vec(),
             synthetic_bold: if synthesis.embolden() {
                 SYNTHETIC_BOLD_RATIO
             } else {
                 0.0
             },
             synthetic_slant: synthesis.skew().unwrap_or(0.0),
-            has_color: fonts.face(face).is_some_and(|record| record.has_color),
             glyphs,
             clusters,
         });

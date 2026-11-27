@@ -6,7 +6,7 @@
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::ClipId;
+use zgui_space::ClipId;
 
 use crate::fragment::build::Tables;
 use crate::fragment::diff::dirty::FrameDirty;
@@ -167,6 +167,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             return clip;
         }
         let by = self.by;
+        self.store.note_moved(frag);
         let Some(fragment) = self.store.fragment_mut(frag) else {
             return clip;
         };
@@ -177,12 +178,13 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
         fragment.clip = clip;
         let clips = fragment.flags.contains(FragmentFlags::CLIPS_CHILDREN);
         let padding_box = fragment.padding_box();
+        let scrollbar = fragment.scrollbar;
         let border = fragment.border;
         // The space this box's fragments draw under, which is the space its padding box —
         // and therefore the clip it imposes below — is measured in.
         let space = fragment
             .transform
-            .unwrap_or(zgui_scene::SpatialId::VIEWPORT);
+            .unwrap_or(zgui_space::SpatialId::VIEWPORT);
         if T::INDEXES {
             self.reindex(frag, clip);
         }
@@ -197,11 +199,12 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
             style,
             self.store.custom_properties(key, style),
             padding_box,
+            scrollbar,
             border,
             scale,
             shift,
             space,
-            zgui_scene::PropertyOwner::of(key),
+            zgui_space::PropertyOwner::of(key),
         )
     }
 
@@ -225,6 +228,7 @@ impl<'a, 'b, D: FrameDirty> Walk<'a, 'b, D> {
                 }
                 continue;
             }
+            self.store.note_moved(frag);
             let Some(fragment) = self.store.fragment_mut(frag) else {
                 continue;
             };

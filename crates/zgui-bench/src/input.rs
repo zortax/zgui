@@ -114,7 +114,12 @@ pub(crate) fn typing(harness: &Harness<Runtime>) -> bool {
         .is_some()
 }
 
-/// Whether a smooth scroll is still on its way.
+/// Whether a smooth scroll the window runs itself is still on its way.
 pub(crate) fn gliding(harness: &Harness<Runtime>) -> bool {
     harness.app().windows()[0].scroll().borrow().is_animating()
+}
+
+/// Whether a glide is still on its way, the window's own or one the compositor carries.
+pub(crate) fn any_glide(harness: &Harness<Runtime>) -> bool {
+    gliding(harness) || harness.app().windows()[0].compositor_scrolling()
 }

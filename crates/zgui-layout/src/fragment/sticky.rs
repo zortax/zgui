@@ -54,6 +54,24 @@ pub fn offset(
     (x, y)
 }
 
+/// The insets a sticky box keeps from the edges of `scrollport`, as `[top, right, bottom, left]`
+/// device pixels, `None` for an edge left free.
+pub fn insets(
+    style: &ComputedStyle,
+    scrollport: Rect<DevicePx, Device>,
+    scale: f32,
+) -> [Option<f32>; 4] {
+    let position = style.get_position();
+    let horizontal = scrollport.size.width.0;
+    let vertical = scrollport.size.height.0;
+    [
+        inset(&position.top, vertical, scale),
+        inset(&position.right, horizontal, scale),
+        inset(&position.bottom, vertical, scale),
+        inset(&position.left, horizontal, scale),
+    ]
+}
+
 /// The shift on one axis.
 ///
 /// Both insets can be given at once, and CSS resolves that by applying the start inset first: a box

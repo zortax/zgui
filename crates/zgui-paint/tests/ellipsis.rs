@@ -1,54 +1,56 @@
-//! What a line cut short by `text-overflow` puts into the scene.
+//! What a line cut short by `text-overflow` draws.
+
+mod support;
 
 use std::cell::RefCell;
 
-use zgui_atlas::{AtlasTile, TextureId, TextureKind, TileId};
 use zgui_css::StyleDraft;
 use zgui_geom::{Device, DevicePx, Matrix4, Point, Rect, Size};
 use zgui_layout::fragment::ParagraphId;
+use zgui_paint::GlyphSource;
+use zgui_paint::Tables;
 use zgui_paint::emit::text::{self, EllipsisPaint, TextPlacement};
-use zgui_paint::{GlyphRun, GlyphSource, PlacedGlyph};
-use zgui_scene::{ClipId, OwnSpace, PropertyOwner, Scene, SpatialId};
-use zgui_text::GlyphFormat;
+use zgui_space::{ClipId, OwnSpace, PropertyOwner, SpatialId};
+use zgui_testkit_compositor::{Drawing, Instance};
+
+use support::chunk::Lone;
+
+/// The one glyph every line holds: at the line's start, twelve pixels down to the baseline.
+const GLYPHS: [zgui_text::ShapedGlyph; 1] = [zgui_text::ShapedGlyph {
+    glyph: 5,
+    x: 0.0,
+    y: 12.0,
+}];
 
 /// A source that draws one glyph for whatever it is asked about, and records what that was.
 #[derive(Default)]
-struct Recorder {
+struct Asked {
     /// Every `(paragraph, line)` the emitter asked for, in order.
     asked: RefCell<Vec<(u32, u16)>>,
 }
 
-impl GlyphSource for Recorder {
+impl GlyphSource for Asked {
     fn visit_line(
         &self,
         paragraph: ParagraphId,
         line: u16,
-        _request: zgui_paint::GlyphRequest,
-        visit: &mut dyn FnMut(GlyphRun<'_>),
+        visit: &mut dyn FnMut(zgui_text::ShapedRun<'_>),
     ) {
         self.asked.borrow_mut().push((paragraph.0, line));
-        let glyph = PlacedGlyph {
-            resource: AtlasTile {
-                texture: TextureId {
-                    kind: TextureKind::Mono,
-                    index: 0,
-                },
-                tile: TileId(0),
-                bounds: Rect::new(Point::new(0, 0), Size::new(8, 16)),
-            }
-            .into(),
-            bounds: Rect::new(
-                Point::new(DevicePx(0.0), DevicePx(0.0)),
-                Size::new(DevicePx(8.0), DevicePx(16.0)),
-            ),
-        };
-        visit(GlyphRun {
-            content: zgui_paint::RunContent::Tiles(core::slice::from_ref(&glyph)),
-            format: GlyphFormat::Mono,
-            paint: zgui_scene::PaintSlot(0),
+        visit(zgui_text::ShapedRun {
+            face: zgui_text::FaceId(0),
+            size: 16.0,
+            coords: &[],
             synthetic_bold: 0.0,
+            synthetic_slant: 0.0,
+            brush: zgui_space::PaintSlot(0),
+            glyphs: &GLYPHS,
             text_start: 0,
         });
+    }
+
+    fn brush(&self, _brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        None
     }
 }
 
@@ -83,28 +85,39 @@ fn cut() -> EllipsisPaint {
     }
 }
 
-/// Emits one line into `scene`, and reports what the source was asked for.
-fn emit_into(scene: &mut Scene, placement: TextPlacement) -> Vec<(u32, u16)> {
+/// Records one line drawn through `placement` into a compositor, and reports what the source was
+/// asked for.
+fn record(scene: &mut Tables, placement: TextPlacement) -> (Lone, Vec<(u32, u16)>) {
     let style = zgui_paint::lower(&StyleDraft::initial().build(), 1.0);
-    let source = Recorder::default();
-    text::emit(
-        scene,
-        &source,
-        ParagraphId(3),
-        0,
-        &style,
-        text::Inherited::default(),
-        placement,
-    );
-    source.asked.borrow().clone()
+    let source = Asked::default();
+    let lone = Lone::record(scene, (placement.transform, ClipId::ROOT), |rec| {
+        text::emit(
+            rec,
+            &source,
+            ParagraphId(3),
+            0,
+            &style,
+            text::Inherited::default(),
+            placement,
+        );
+    });
+    let asked = source.asked.borrow().clone();
+    (lone, asked)
 }
 
-/// The scene a line is emitted into, and what the source was asked for.
-fn emit(ellipsis: Option<EllipsisPaint>) -> (Scene, Vec<(u32, u16)>) {
-    let mut scene = Scene::new();
-    scene.begin_frame(Size::new(256, 64));
-    let asked = emit_into(&mut scene, placement(ellipsis));
-    (scene, asked)
+/// What a line drawn under `ellipsis` draws, and what the source was asked for.
+fn draw(ellipsis: Option<EllipsisPaint>) -> (Drawing, Vec<(u32, u16)>) {
+    let mut scene = Tables::new();
+    let (mut lone, asked) = record(&mut scene, placement(ellipsis));
+    (lone.redraw(), asked)
+}
+
+/// The glyph sprites drawn through a clip, and the ones drawn through none.
+fn split(drawing: &Drawing) -> (Vec<&Instance>, Vec<&Instance>) {
+    drawing
+        .glyphs()
+        .into_iter()
+        .partition(|glyph| glyph.field("clip").is_some())
 }
 
 /// A line that was not cut draws its own glyphs and nothing else, under its own clip.
@@ -113,48 +126,23 @@ fn emit(ellipsis: Option<EllipsisPaint>) -> (Scene, Vec<(u32, u16)>) {
 /// drew an ellipsis over every line in the document.
 #[test]
 fn an_uncut_line_draws_only_itself() {
-    let (scene, asked) = emit(None);
+    let (drawing, asked) = draw(None);
     assert_eq!(asked, [(3, 0)]);
-    assert_eq!(scene.primitives.mono_sprites.len(), 1);
-    assert_eq!(scene.primitives.mono_sprites[0].clip, ClipId::ROOT.0);
+    let (clipped, free) = split(&drawing);
+    assert!(clipped.is_empty(), "{drawing}");
+    assert_eq!(free.len(), 1, "{drawing}");
 }
 
 /// A cut line draws its own glyphs *and* the mark, and the mark is a different paragraph.
 #[test]
 fn a_cut_line_draws_the_mark_beside_its_own_glyphs() {
-    let (scene, asked) = emit(Some(cut()));
+    let (drawing, asked) = draw(Some(cut()));
     assert_eq!(
         asked,
         [(3, 0), (7, 0)],
         "the line's own paragraph, then the mark's",
     );
-    assert_eq!(scene.primitives.mono_sprites.len(), 2);
-}
-
-/// The window the line's own glyphs were cut to, and the assertion that the mark was not cut.
-///
-/// Read by clip rather than by position in the primitive list: two sprites drawn over one another
-/// are ordered by the scene, not by the order they were pushed, and a test that assumed otherwise
-/// would be asserting about whichever one it happened to pick.
-fn window(scene: &Scene) -> (f32, f32) {
-    let clips: Vec<u32> = scene
-        .primitives
-        .mono_sprites
-        .iter()
-        .map(|sprite| sprite.clip)
-        .collect();
-    assert_eq!(clips.len(), 2);
-    assert_eq!(
-        clips.iter().filter(|clip| **clip == ClipId::ROOT.0).count(),
-        1,
-        "the mark is drawn uncut and the line's own glyphs are not",
-    );
-    let cut = clips
-        .into_iter()
-        .find(|clip| *clip != ClipId::ROOT.0)
-        .expect("one sprite is cut short");
-    let resolved = scene.clips.resolve(zgui_scene::ClipId(cut));
-    (resolved.left(), resolved.right())
+    assert_eq!(drawing.glyphs().len(), 2, "{drawing}");
 }
 
 /// The line's own glyphs are clipped to what survived the cut; the mark is not.
@@ -164,10 +152,15 @@ fn window(scene: &Scene) -> (f32, f32) {
 /// was hidden would be hidden too.
 #[test]
 fn the_cut_clips_the_line_and_not_the_mark() {
-    let (scene, _) = emit(Some(cut()));
+    let (drawing, _) = draw(Some(cut()));
+    let (clipped, free) = split(&drawing);
+    assert_eq!(free.len(), 1, "the mark is drawn uncut: {drawing}");
+    let [line] = clipped.as_slice() else {
+        panic!("the line's own glyph is cut short: {drawing}");
+    };
     assert_eq!(
-        window(&scene),
-        (0.0, 40.0),
+        line.field("clip"),
+        Some("[rect(0, 0, 40, 16)]"),
         "the cut is where the clip ends"
     );
 }
@@ -176,7 +169,7 @@ fn the_cut_clips_the_line_and_not_the_mark() {
 ///
 /// What a dialog is: laid out in one place and drawn in another, so everything inside it measures
 /// its rectangles in the panel's own system while the device sees them through the panel's matrix.
-fn panel(scene: &mut Scene, by: f32) -> SpatialId {
+fn panel(scene: &mut Tables, by: f32) -> SpatialId {
     let viewport = scene.spatial.viewport();
     let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
     scene.spatial.space_of(
@@ -186,37 +179,17 @@ fn panel(scene: &mut Scene, by: f32) -> SpatialId {
     )
 }
 
-/// The clip a cut line's own glyphs are drawn through, placed on the device.
-///
-/// Each link put where the frame's matrices say its coordinate system now is, which is what the
-/// shader does to it. A link that names the wrong system resolves somewhere the glyphs are not.
-fn placed_window(scene: &Scene) -> (f32, f32) {
-    let cut = scene
-        .primitives
-        .mono_sprites
-        .iter()
-        .map(|sprite| sprite.clip)
-        .find(|clip| *clip != ClipId::ROOT.0)
-        .expect("one sprite is cut short");
-    let placed = scene
-        .clips
-        .bounds_placed(zgui_scene::ClipId(cut), &|id| scene.spatial.resolve(id));
-    (placed.left().0, placed.right().0)
-}
-
 /// A line cut short inside a transformed panel is cut where the line is *drawn*.
 ///
 /// The report this stands against: a revealed secret too long for its cell is drawn as a slice of
 /// its middle, pushed against the right-hand edge of the cell, with the rest of the cell empty —
 /// and only inside a dialog. The cut states its window in the coordinates the line was laid out
-/// in; naming the viewport as the system those coordinates belong to puts the window wherever the
-/// panel is *not*, and what is left is whatever the two rectangles happen to overlap in.
+/// in, and the window is drawn through the panel's matrix like the glyphs.
 #[test]
 fn a_cut_line_in_a_transformed_panel_is_cut_where_it_is_drawn() {
-    let mut scene = Scene::new();
-    scene.begin_frame(Size::new(256, 64));
+    let mut scene = Tables::new();
     let panel = panel(&mut scene, 120.0);
-    emit_into(
+    let (mut lone, _) = record(
         &mut scene,
         TextPlacement {
             transform: panel,
@@ -224,103 +197,64 @@ fn a_cut_line_in_a_transformed_panel_is_cut_where_it_is_drawn() {
         },
     );
 
+    let drawing = lone.redraw();
+    let (clipped, _) = split(&drawing);
     assert_eq!(
-        placed_window(&scene),
-        (120.0, 160.0),
-        "the cut window landed where the line was laid out rather than where it is drawn",
+        clipped[0].field("clip"),
+        Some("[rect(0, 0, 40, 16) in=translate[120, 0]]"),
+        "the cut window is placed through the panel's matrix: {drawing}",
     );
 }
 
-/// The cut window travels with a replayed line.
+/// The cut window travels with a moved line.
 ///
-/// The window is minted where the line is drawn on the frame that encodes it, and a scrolled
-/// line replays its chunk with an offset for as long as nothing else about it changes. The
-/// window has to arrive at the same place the glyphs do: left behind, it cuts the line against
-/// the position of the encode frame — the glyphs shrink away as the scroll runs, and past one
-/// line height only the mark is left.
+/// A scrolled line keeps its chunk and moves it by an offset for as long as nothing else about it
+/// changes. The window has to arrive at the same place the glyphs do: left behind, it cuts the
+/// line against the position it was recorded at — the glyphs shrink away as the scroll runs, and
+/// past one line height only the mark is left.
 #[test]
-fn the_cut_window_travels_with_a_replayed_line() {
-    let mut scene = Scene::new();
-    scene.begin_frame(Size::new(256, 64));
-    scene.begin_chunk_capture(zgui_scene::ChunkPrims::default());
-    emit_into(&mut scene, placement(Some(cut())));
-    let chunk = scene.take_chunk_capture();
-    assert_eq!(window(&scene), (0.0, 40.0), "the control: cut where drawn");
+fn the_cut_window_travels_with_a_moved_line() {
+    let mut scene = Tables::new();
+    let (mut lone, _) = record(&mut scene, placement(Some(cut())));
+    lone.offset([0.0, 24.0]);
 
-    // Replayed past the line's own height, which is where a left-behind window empties out.
-    scene.begin_frame(Size::new(256, 64));
-    let range = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(24.0)), 0);
-    assert_eq!(range.len(), 2, "the line's glyph and the mark both survive");
-    let cut_clip = scene
-        .primitives
-        .mono_sprites
-        .iter()
-        .map(|sprite| sprite.clip)
-        .find(|clip| *clip != ClipId::ROOT.0)
-        .expect("one sprite is cut short");
-    let resolved = scene.clips.resolve(zgui_scene::ClipId(cut_clip));
+    let drawing = lone.redraw();
+    let (clipped, free) = split(&drawing);
+    assert_eq!(free.len(), 1, "the mark survives: {drawing}");
+    let [line] = clipped.as_slice() else {
+        panic!("the line's glyph survives: {drawing}");
+    };
     assert_eq!(
-        (resolved.left(), resolved.right()),
-        (0.0, 40.0),
-        "the cut still ends where the cut is"
+        line.field("clip"),
+        Some("[rect(0, 24, 40, 16)]"),
+        "the cut moved with the line"
     );
     assert_eq!(
-        scene.primitives.mono_sprites[0].bounds[1], 24.0,
-        "and the glyphs are drawn where the line is now"
-    );
-}
-
-/// The window of a line inside a transformed panel travels with a replay too.
-///
-/// The `1b0fff5` property under replay: the window names the panel's own coordinate system, and
-/// the replay's offset moves it in that system, so the placed window keeps covering the glyphs
-/// however the panel's matrix places them on the device.
-#[test]
-fn the_cut_window_of_a_panelled_line_travels_with_a_replayed_line() {
-    let mut scene = Scene::new();
-    scene.begin_frame(Size::new(256, 64));
-    let panel = panel(&mut scene, 120.0);
-    scene.begin_chunk_capture(zgui_scene::ChunkPrims::default());
-    emit_into(
-        &mut scene,
-        TextPlacement {
-            transform: panel,
-            ..placement(Some(cut()))
-        },
-    );
-    let chunk = scene.take_chunk_capture();
-
-    scene.begin_frame(Size::new(256, 64));
-    let range = scene.replay_chunk(&chunk, Size::new(DevicePx(0.0), DevicePx(24.0)), 0);
-    assert_eq!(range.len(), 2, "the line's glyph and the mark both survive");
-    assert_eq!(
-        placed_window(&scene),
-        (120.0, 160.0),
-        "the window is still placed through the panel's matrix"
+        line.bounds()[1] + line.bounds()[3],
+        36.0,
+        "and the glyph is drawn where the line is now, on the baseline 12 below its top"
     );
 }
 
 /// A cut at the line's start hides everything before it, and the mark survives.
 ///
 /// The fixture's one glyph sits at the line's own origin, which is on the hidden side of a cut
-/// forty pixels along — so it is not drawn at all, and what is left is the mark saying so. That is
-/// the property this side of the cut has, stated as what reaches the scene rather than as a
-/// rectangle: a clip that hid nothing would leave two sprites here.
+/// forty pixels along. The glyph is drawn only through a window that starts at the cut, and the
+/// mark is drawn uncut.
 #[test]
 fn a_cut_at_the_start_hides_the_beginning_of_the_line() {
-    let (scene, asked) = emit(Some(EllipsisPaint {
+    let (drawing, asked) = draw(Some(EllipsisPaint {
         at_start: true,
         ..cut()
     }));
     assert_eq!(asked, [(3, 0), (7, 0)], "both were visited");
-    assert_eq!(
-        scene.primitives.mono_sprites.len(),
-        1,
-        "the glyph before the cut was not drawn",
-    );
-    assert_eq!(
-        scene.primitives.mono_sprites[0].clip,
-        ClipId::ROOT.0,
-        "and what survived is the mark, which is never cut",
-    );
+    let (clipped, free) = split(&drawing);
+    assert_eq!(free.len(), 1, "the mark is never cut: {drawing}");
+    for glyph in clipped {
+        assert_eq!(
+            glyph.field("clip"),
+            Some("[rect(40, 0, 24, 16)]"),
+            "the glyph before the cut is drawn only past the cut"
+        );
+    }
 }

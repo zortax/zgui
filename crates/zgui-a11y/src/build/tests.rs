@@ -38,7 +38,7 @@ macro_rules! world {
         World {
             document: &$document,
             layout: &$layout,
-            placements: &zgui_scene::Placements::EMPTY,
+            placements: &zgui_space::Placements::EMPTY,
             scale: 1.0,
             focus: None,
             scroll: None,
@@ -284,7 +284,7 @@ fn focus_is_reported_on_every_update_and_never_dangles() {
     let world = World {
         document: &document,
         layout: &layout,
-        placements: &zgui_scene::Placements::EMPTY,
+        placements: &zgui_space::Placements::EMPTY,
         scale: 1.0,
         focus: Some(focused),
         scroll: None,
@@ -297,7 +297,7 @@ fn focus_is_reported_on_every_update_and_never_dangles() {
     let stale = World {
         document: &document,
         layout: &layout,
-        placements: &zgui_scene::Placements::EMPTY,
+        placements: &zgui_space::Placements::EMPTY,
         scale: 1.0,
         focus: zgui_dom::NodeKey::from_u64(0xdead_beef),
         scroll: None,
@@ -337,11 +337,11 @@ fn a_coordinate_system_that_moved_owes_a_rectangle_for_what_was_measured_through
     builder.build(&world!(document, layout));
     assert!(!builder.is_owed(), "the tree has just been published");
 
-    let mut tree = zgui_scene::SpatialTree::with_viewport();
+    let mut tree = zgui_space::SpatialTree::with_viewport();
     let owner =
-        |raw| zgui_scene::PropertyOwner::new(raw).expect("a handle is never the empty word");
+        |raw| zgui_space::PropertyOwner::new(raw).expect("a handle is never the empty word");
     let slid = |x| {
-        zgui_scene::OwnSpace::of(
+        zgui_space::OwnSpace::of(
             Some(zgui_geom::Matrix4::translation(x, 0.0, 0.0)),
             None,
             false,
@@ -382,10 +382,10 @@ fn a_node_filed_under_a_space_it_has_left_is_not_answered_for_it() {
     builder.collect(&mut document);
     builder.build(&world!(document, layout));
 
-    let mut tree = zgui_scene::SpatialTree::with_viewport();
+    let mut tree = zgui_space::SpatialTree::with_viewport();
     let owner =
-        |raw| zgui_scene::PropertyOwner::new(raw).expect("a handle is never the empty word");
-    let own = zgui_scene::OwnSpace::of(
+        |raw| zgui_space::PropertyOwner::new(raw).expect("a handle is never the empty word");
+    let own = zgui_space::OwnSpace::of(
         Some(zgui_geom::Matrix4::translation(4.0, 0.0, 0.0)),
         None,
         false,
@@ -416,9 +416,9 @@ fn nothing_is_filed_for_a_consumer_that_is_holding_nothing() {
     let mut builder = A11yBuilder::new();
     builder.collect(&mut document);
 
-    let mut tree = zgui_scene::SpatialTree::with_viewport();
-    let owner = zgui_scene::PropertyOwner::new(2).expect("a handle is never the empty word");
-    let own = zgui_scene::OwnSpace::of(
+    let mut tree = zgui_space::SpatialTree::with_viewport();
+    let owner = zgui_space::PropertyOwner::new(2).expect("a handle is never the empty word");
+    let own = zgui_space::OwnSpace::of(
         Some(zgui_geom::Matrix4::translation(4.0, 0.0, 0.0)),
         None,
         false,

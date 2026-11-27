@@ -1,4 +1,4 @@
-//! Canvas series and the canvas view reaching the display list through the emit walk.
+//! Canvas series and the canvas view reaching the compositor through the emit walk.
 //!
 //! Every fixture paints through one content cache across frames, as a window does, so the mark
 //! payloads a frame builds are the ones the next frame finds.
@@ -7,16 +7,15 @@ mod support;
 
 use std::sync::Arc;
 
-use zgui_atlas::AtlasLimits;
+use kurbo::{self, Affine, BezPath, Circle, Shape as _};
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
-use zgui_scene::kurbo::{self, Affine, BezPath, Circle, Shape as _};
-use zgui_scene::{MarkFlags, MarkItem, Scene};
-use zgui_testkit_scene::MonoRaster;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
+use zgui_testkit_compositor::{Drawing, Instance};
 
+use support::drawn::{number, numbers};
 use support::{Element, Harness};
 
 /// A root with one canvas in it, at the origin.
@@ -33,8 +32,6 @@ struct Fixture {
     vectors: VectorCache,
     /// The atlas, the recognitions and the payloads.
     content: ContentCache,
-    /// The glyph raster.
-    raster: MonoRaster,
     /// Held so no other test of this binary moves the counters while this one paints.
     recording: Recording,
 }
@@ -54,20 +51,15 @@ impl Fixture {
             harness: Harness::new(tree, css),
             handle,
             vectors: VectorCache::new(),
-            content: ContentCache::new(AtlasLimits::default()),
-            raster: MonoRaster::new(),
+            content: ContentCache::new(),
             recording: Recording::begin(),
         }
     }
 
     /// Paints one frame.
     fn paint(&mut self) -> PaintReport {
-        self.harness.paint_cached_vectors_ready(
-            &self.vectors,
-            &mut self.content,
-            &self.raster,
-            true,
-        )
+        self.harness
+            .paint_cached_vectors_ready(&self.vectors, &mut self.content, true)
     }
 
     /// Sets the view transform and writes the view, as the binding would.
@@ -76,9 +68,9 @@ impl Fixture {
         self.harness.write_canvas_view("mark", &self.handle);
     }
 
-    /// The scene.
-    fn scene(&self) -> &Scene {
-        self.harness.scene()
+    /// What the whole output draws.
+    fn drawn(&mut self) -> Drawing {
+        self.harness.redraw()
     }
 }
 
@@ -113,9 +105,22 @@ fn dots(marker: Marker) -> Series {
     }
 }
 
-/// The marks of a scene.
-fn marks(scene: &Scene) -> &[MarkItem] {
-    &scene.primitives.marks
+/// The marks items of a drawing.
+fn marks(drawing: &Drawing) -> Vec<&Instance> {
+    drawing.of_kind("marks").collect()
+}
+
+/// The flags a marks item is drawn with, in the order the transcript names them.
+fn flags(mark: &Instance) -> Vec<&'static str> {
+    ["union", "screen", "square_discs"]
+        .into_iter()
+        .filter(|flag| mark.has(flag))
+        .collect()
+}
+
+/// The value of the count `name` of a marks item.
+fn count(mark: &Instance, name: &str) -> f32 {
+    number(mark, name).expect("a count")
 }
 
 /// A triangle over the whole canvas.
@@ -139,23 +144,21 @@ fn a_series_is_one_union_mark_between_its_shapes() {
     });
     let report = fixture.paint();
     assert!(report.vector_routes[0].routes.contains(VectorRoute::Marks));
-    let scene = fixture.scene();
-    let [mark] = marks(scene) else {
-        panic!("{} marks", marks(scene).len());
+    let drawing = fixture.drawn();
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert_eq!(mark.flags, MarkFlags::UNION | MarkFlags::SCREEN);
-    assert_eq!(mark.discs, 20);
-    // The two triangles take whatever route they take; the mark sorts between them.
-    let mut orders: Vec<u32> = scene
-        .primitives
-        .mono_sprites
+    assert_eq!(flags(mark), ["union", "screen"]);
+    assert_eq!(count(mark, "discs"), 20.0);
+    // The two triangles take whatever route they take; the mark draws between them.
+    let kinds: Vec<&str> = drawing
+        .instances()
         .iter()
-        .map(|sprite| sprite.order)
-        .chain(scene.primitives.vectors.iter().map(|item| item.order))
+        .map(Instance::kind)
+        .filter(|kind| matches!(*kind, "mono" | "path" | "marks"))
         .collect();
-    orders.sort_unstable();
-    assert_eq!(orders.len(), 2, "two triangles");
-    assert!(orders[0] < mark.order && mark.order < orders[1]);
+    assert_eq!(kinds.len(), 3, "two triangles and the mark: {drawing}");
+    assert_eq!(kinds[1], "marks", "{drawing}");
 }
 
 #[test]
@@ -170,29 +173,28 @@ fn a_stroked_points_series_is_a_fill_mark_and_a_ring_mark() {
         });
     });
     fixture.paint();
-    let scene = fixture.scene();
-    let [fill, ring] = marks(scene) else {
-        panic!("{} marks", marks(scene).len());
+    let drawing = fixture.drawn();
+    let [fill, ring] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert!(fill.order < ring.order, "the fill first");
-    let payloads = &scene.primitives.mark_payloads;
-    assert_eq!(payloads[0].discs[0][2..], [4.0, 0.0]);
-    assert_eq!(payloads[1].discs[0][2..], [5.0, 3.0]);
-    assert_eq!(ring.flags, MarkFlags::UNION | MarkFlags::SCREEN);
+    assert_eq!(
+        fill.color("paint"),
+        Some([1.0, 0.0, 0.0, 1.0]),
+        "the fill first"
+    );
+    assert_eq!(ring.color("paint"), Some([0.0, 0.0, 1.0, 1.0]));
+    assert_eq!(flags(ring), ["union", "screen"]);
 }
 
 #[test]
 fn a_square_marker_sets_square_discs() {
     let mut fixture = Fixture::new(|scene| scene.push_series(dots(Marker::Square { half: 2.5 })));
     fixture.paint();
-    let [mark] = marks(fixture.scene()) else {
-        panic!("one mark");
+    let drawing = fixture.drawn();
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert_eq!(
-        mark.flags,
-        MarkFlags::UNION | MarkFlags::SCREEN | MarkFlags::SQUARE_DISCS
-    );
-    assert_eq!(fixture.scene().primitives.mark_payloads[0].discs[0][2], 2.5);
+    assert_eq!(flags(mark), ["union", "screen", "square_discs"]);
 }
 
 #[test]
@@ -208,17 +210,16 @@ fn a_line_series_is_one_polyline_mark_with_its_caps() {
         });
     });
     fixture.paint();
-    let [mark] = marks(fixture.scene()) else {
-        panic!("one mark");
+    let drawing = fixture.drawn();
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
+    assert_eq!(flags(mark), ["union", "screen"]);
+    assert_eq!(mark.field("caps"), Some("round/butt"));
+    assert_eq!(number(mark, "half_width"), Some(1.5));
     assert_eq!(
-        mark.flags,
-        MarkFlags::UNION | MarkFlags::SCREEN | MarkFlags::caps(MarkFlags::ROUND, MarkFlags::BUTT)
-    );
-    assert_eq!(mark.half_width, 1.5);
-    assert_eq!(
-        (mark.discs, mark.vertices),
-        (0, 22),
+        (count(mark, "discs"), count(mark, "vertices")),
+        (0.0, 22.0),
         "one run and two separators"
     );
 }
@@ -243,27 +244,29 @@ fn the_lod_property_reduces_a_line_series_per_column() {
                               --zgui-vector-lod: columns }";
     let mut whole = Fixture::new(|scene| scene.push_series(line()));
     whole.paint();
-    let [mark] = marks(whole.scene()) else {
-        panic!("one mark");
+    let drawing = whole.drawn();
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
-    assert_eq!(mark.vertices, 20_002, "every point");
+    assert_eq!(count(mark, "vertices"), 20_002.0, "every point");
     drop(whole);
     let mut reduced = Fixture::styled(reduced_css, |scene| scene.push_series(line()));
     reduced.paint();
-    let [mark] = marks(reduced.scene()) else {
-        panic!("one mark");
+    let drawing = reduced.drawn();
+    let [mark] = marks(&drawing)[..] else {
+        panic!("{drawing}");
     };
     // 200 device columns a unit is a bucket of 512 columns, two a device column at least: at
     // most four points in each.
-    assert!(mark.vertices <= 4 * 513 + 2, "{} vertices", mark.vertices);
+    let vertices = count(mark, "vertices");
+    assert!(vertices <= (4 * 513 + 2) as f32, "{vertices} vertices");
 }
 
 #[test]
 fn a_view_pan_keeps_the_series_payload() {
     let mut fixture = Fixture::new(|scene| scene.push_series(dots(Marker::Circle { radius: 3.0 })));
     fixture.paint();
-    let before = marks(fixture.scene())[0];
-    let payload = Arc::clone(&fixture.scene().primitives.mark_payloads[0]);
+    let before = placed(&fixture.drawn());
 
     fixture.view(Affine::translate((13.0, -4.0)));
     fixture.recording.reset();
@@ -274,22 +277,22 @@ fn a_view_pan_keeps_the_series_payload() {
         report.vector_routes[0].routes.contains(VectorRoute::Marks),
         "the panned canvas encoded again"
     );
-    let after = marks(fixture.scene())[0];
-    assert!(Arc::ptr_eq(
-        &fixture.scene().primitives.mark_payloads[0],
-        &payload
-    ));
+    let after = placed(&fixture.drawn());
     assert_eq!(
-        [
-            after.origin[0] - before.origin[0],
-            after.origin[1] - before.origin[1]
-        ],
+        [after.0[0] - before.0[0], after.0[1] - before.0[1]],
         [13.0, -4.0],
         "the pan moved the origin"
     );
-    assert_eq!(after.axes, before.axes);
+    assert_eq!(after.1, before.1);
     assert_eq!(built, 0, "the pan built no payload");
     assert_eq!(routed, 1);
+}
+
+/// The origin and the axes of the first marks item of `drawing`.
+fn placed(drawing: &Drawing) -> ([f32; 2], Option<Vec<f32>>) {
+    let mark = marks(drawing)[0];
+    let origin = numbers(mark, "origin").unwrap_or_else(|| vec![0.0; 2]);
+    ([origin[0], origin[1]], numbers(mark, "axes"))
 }
 
 /// `count` circles of radius 3.5 at random over 200 by 100.
@@ -319,22 +322,16 @@ fn a_view_pan_keeps_a_shape_mark_payload() {
         );
     });
     fixture.paint();
-    let before = marks(fixture.scene())[0];
-    assert!(before.is_union());
-    let payload = Arc::clone(&fixture.scene().primitives.mark_payloads[0]);
+    let drawing = fixture.drawn();
+    assert!(marks(&drawing)[0].has("union"));
+    let before = placed(&drawing);
 
     fixture.view(Affine::translate((-21.0, 6.0)));
+    fixture.recording.reset();
     fixture.paint();
-    let after = marks(fixture.scene())[0];
-    assert!(
-        Arc::ptr_eq(&fixture.scene().primitives.mark_payloads[0], &payload),
-        "the payload is the one the recognition was lowered to"
-    );
+    let after = placed(&fixture.drawn());
     assert_eq!(
-        [
-            after.origin[0] - before.origin[0],
-            after.origin[1] - before.origin[1]
-        ],
+        [after.0[0] - before.0[0], after.0[1] - before.0[1]],
         [-21.0, 6.0]
     );
 }
@@ -343,20 +340,23 @@ fn a_view_pan_keeps_a_shape_mark_payload() {
 fn a_turned_view_keeps_the_marker_size() {
     let mut fixture = Fixture::new(|scene| scene.push_series(dots(Marker::Circle { radius: 3.0 })));
     fixture.paint();
-    let before = marks(fixture.scene())[0];
-    let payload = Arc::clone(&fixture.scene().primitives.mark_payloads[0]);
+    let before = placed(&fixture.drawn()).1.expect("axes");
 
     fixture.view(Affine::rotate(30.0_f64.to_radians()));
+    fixture.recording.reset();
     fixture.paint();
-    let after = marks(fixture.scene())[0];
-    let held = &fixture.scene().primitives.mark_payloads[0];
-    assert!(Arc::ptr_eq(held, &payload));
-    assert_eq!(held.discs[0][2], 3.0, "the radius is r times the scale");
-    assert_ne!(after.axes, before.axes, "the axes turned");
-    let [a, b, ..] = after.axes;
-    let [a0, b0, ..] = before.axes;
+    let built = zgui_profile::counter::get(Counter::SeriesPayloadsBuilt);
+    let drawing = fixture.drawn();
+    let after = placed(&drawing).1.expect("axes");
     assert!(
-        ((a * a + b * b).sqrt() - (a0 * a0 + b0 * b0).sqrt()).abs() < 1e-3,
+        marks(&drawing)[0].has("screen"),
+        "the radius is in local units"
+    );
+    assert_eq!(built, 0, "the turn built no payload");
+    assert_ne!(after, before, "the axes turned");
+    let length = |axes: &[f32]| (axes[0] * axes[0] + axes[1] * axes[1]).sqrt();
+    assert!(
+        (length(&after) - length(&before)).abs() < 1e-3,
         "a turn keeps the length of an axis"
     );
 }
@@ -377,16 +377,17 @@ fn a_far_pan_draws_the_held_payload_and_owes_a_frame_until_its_build_ends() {
     let mut fixture = Fixture::new(|scene| scene.push_series(series));
     let first = fixture.paint();
     assert!(first.layers_owed.is_empty());
-    let payload = Arc::clone(&fixture.scene().primitives.mark_payloads[0]);
 
     // The payload centre lands 200 000 pixels away, while points still cover the canvas.
     fixture.view(Affine::translate((-200_000.0, 0.0)));
     fixture.recording.reset();
     let report = fixture.paint();
-    assert!(Arc::ptr_eq(
-        &fixture.scene().primitives.mark_payloads[0],
-        &payload
-    ));
+    let drawing = fixture.drawn();
+    let stand_in = placed(&drawing).0;
+    assert!(
+        stand_in[0].abs() > 1.0,
+        "the held payload, measured from its old centre, stands in: {drawing}"
+    );
     assert!(!report.layers_owed.is_empty(), "the frame owes a frame");
     if zgui_profile::COUNTERS_ENABLED {
         assert_eq!(
@@ -406,12 +407,9 @@ fn a_far_pan_draws_the_held_payload_and_owes_a_frame_until_its_build_ends() {
         owed = fixture.paint().layers_owed;
     }
     assert!(owed.is_empty(), "the build ends and nothing more is owed");
-    let built = &fixture.scene().primitives.mark_payloads[0];
-    assert!(!Arc::ptr_eq(built, &payload));
-    let mark = marks(fixture.scene())[0];
+    let origin = placed(&fixture.drawn()).0;
     assert!(
-        mark.origin[0].abs() <= 1.0,
-        "the payload is measured from the view: {:?}",
-        mark.origin
+        origin[0].abs() <= 1.0,
+        "the built payload is measured from the view: {origin:?}"
     );
 }

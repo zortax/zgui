@@ -53,9 +53,9 @@ with no layout engine. Layout is exercised with a fixed-metrics text source and 
 exercised with no graphics device. The frame loop is exercised with no display server. None of that
 is a special test mode; it is what the layering already made possible.
 
-**A second implementation is an implementation, not a fork.** There are two platform backends, two
-vector rasterisers, two text metric sources, and a capture renderer beside the GPU renderer. Each
-of those exists because the boundary above it names no library.
+**A second implementation is an implementation, not a fork.** There are several platform backends,
+two text metric sources, and a capture renderer beside the GPU renderer. Each of those exists
+because the boundary above it names no library.
 
 ## The five checks that enforce it
 
@@ -82,8 +82,8 @@ The header is committed, so a fork gets the same answer as this tree.
 Every external engine is reachable from a bounded, enumerable set of crates, and the table is the
 architecture. `stylo` and its satellites are named by `zgui-css`, `zgui-dom` and `zgui-style` and by
 nothing else. `cephal` is named by `zgui-layout`. `parley` and its satellites by `zgui-text-parley`.
-`vello` by `zgui-render-vector-vello`. `wgpu` by the three graphics crates and the windowing
-backend. `winit` by `zgui-platform-winit`. The Wayland protocol, its toolkit and the loop it is
+`vello` by no zgui crate, because the path rasteriser is the compositor's. `wgpu` by the winit
+backend and the DRM platform. `winit` by `zgui-platform-winit`. The Wayland protocol, its toolkit and the loop it is
 read on by `zgui-platform-wayland`. The browser's interfaces by `zgui-platform-web`.
 `reactive_graph` by `zgui-reactive`.
 
@@ -121,7 +121,7 @@ whole graph, and it would do so in a single line that reviews easily.
 
 Every crate in the workspace inherits one version from the workspace manifest and is released with
 the others. There is no "this crate is at 0.3 and that one at 0.1". A consumer who has `zgui 0.1.0`
-knows exactly which `zgui-render` is underneath it, and a compatibility matrix between our own
+knows exactly which `zgui-paint` is underneath it, and a compatibility matrix between our own
 crates never comes into existence.
 
 Two things have to hold for that, and neither is visible until a release is attempted, so both are

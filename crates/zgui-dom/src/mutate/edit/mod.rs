@@ -83,6 +83,12 @@ impl<'doc> Edit<'doc> {
     /// Re-derived per call and never held across anything that could open a nested batch, which is
     /// what keeps a nested change from invalidating an outer one's borrow.
     fn store(&mut self) -> &mut DocumentStore {
+        self.parts().0
+    }
+
+    /// The store, exclusively, for an answer kept beside the elements, which changes nothing a
+    /// frame draws.
+    fn cache_store(&mut self) -> &mut DocumentStore {
         let document = self.document;
         // SAFETY: the batch guard holds the document's write token, so no other thread is inside a
         // batch; no reference into the store outlives the call that derives it; and the style
@@ -93,15 +99,30 @@ impl<'doc> Edit<'doc> {
     /// The store and the batch scratch together, for the steps that need both.
     fn parts(&mut self) -> (&mut DocumentStore, &mut Batch) {
         let document = self.document;
-        // SAFETY: as `store` and `batch`, and the two references are into separate allocations —
-        // the store is owned through a pointer of its own and the scratch lives on the document.
-        unsafe { (document.store_exclusive(), document.edit_state().batch()) }
+        // SAFETY: as `cache_store` and `batch`, and the two references are into separate
+        // allocations: the store is owned through a pointer of its own and the scratch lives on
+        // the document.
+        let (store, batch) = unsafe { (document.store_exclusive(), document.edit_state().batch()) };
+        batch.changed = true;
+        (store, batch)
+    }
+
+    /// Reports whether any active selector could match `node` on one of the bits of `state`.
+    ///
+    /// The answer is kept on the element, as [`DocumentStore::states_for`] keeps it.
+    pub fn watches(
+        &mut self,
+        node: crate::id::node_key::NodeIndex,
+        state: zgui_vocab::UiState,
+    ) -> bool {
+        self.watched_states(node)
+            .intersects(crate::node::element::state::to_engine(state))
     }
 
     /// Which interaction-state bits any active selector could match `node` on.
     fn watched_states(&mut self, node: crate::id::node_key::NodeIndex) -> stylo_dom::ElementState {
         let filter = self.filter;
-        self.store().states_for(node, filter)
+        self.cache_store().states_for(node, filter)
     }
 }
 
@@ -336,6 +357,9 @@ impl Document {
             let (store, batch) = unsafe { (self.store_exclusive(), self.edit_state().batch()) };
             batch.structure.close(store, &mut batch.hints);
             batch.hints.apply(store);
+            if !std::mem::take(&mut batch.changed) {
+                return;
+            }
         }
         self.edit_state().request_redraw();
     }
@@ -352,7 +376,7 @@ mod tests {
     #[test]
     fn a_nested_batch_joins_the_open_one_and_the_close_happens_once() {
         let mut document = Document::new();
-        document.append(
+        let root = document.append(
             document.document_index(),
             NodeKind::Element,
             ElementName::new("root"),
@@ -363,7 +387,8 @@ mod tests {
             .edit(&EverythingMatters, |outer| {
                 let document = outer.document();
                 document
-                    .edit(&EverythingMatters, |_| {
+                    .edit(&EverythingMatters, |inner| {
+                        inner.set_classes(root, &[zgui_interned::ClassName::new("changed")]);
                         assert!(
                             !document.redraw_requested(),
                             "a nested batch closing would have asked for a frame of its own"

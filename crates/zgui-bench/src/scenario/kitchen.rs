@@ -13,7 +13,8 @@
 //!   per-box slope was fitted from.
 //! - **Keystroke.** One character into a real text field: an edit, a reshape of one paragraph, a
 //!   caret moved and a repaint of one box.
-//! - **Glide tick.** One frame of the scroll animation the framework runs after a wheel notch.
+//! - **Glide tick.** One frame of the glide that follows a wheel notch, which the compositor
+//!   carries.
 
 use zgui::geom::{CssPx, DevicePx, Point, Size};
 use zgui::platform::SurfaceEvent;
@@ -60,9 +61,11 @@ pub(crate) fn run() -> Outcome {
         let letter = letters[step % letters.len()];
         let gpu = crate::gpu_time::phase("kitchen.keystroke");
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         harness.deliver_to_first(crate::input::key(KeyEvent::character(letter)));
         harness.settle(64);
         keys.push(started.elapsed().as_secs_f64() * 1e6);
+        crate::cpu::record("kitchen.keystroke", cpu);
         drop(gpu);
         harness.deliver_to_first(crate::input::key_up(KeyEvent::character(letter)));
         harness.settle(64);
@@ -91,9 +94,11 @@ pub(crate) fn run() -> Outcome {
         harness.settle(64);
         let gpu = crate::gpu_time::phase("kitchen.click");
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         harness.deliver_to_first(crate::input::pointer(PointerAction::Pressed, at));
         harness.settle(64);
         clicks.push(started.elapsed().as_secs_f64() * 1e6);
+        crate::cpu::record("kitchen.click", cpu);
         drop(gpu);
         harness.deliver_to_first(crate::input::pointer(PointerAction::Released, at));
         harness.settle(64);
@@ -108,13 +113,21 @@ pub(crate) fn run() -> Outcome {
         harness.deliver_to_first(crate::input::wheel(middle, lines));
         harness.settle(64);
         let mut carried = 0;
-        while crate::input::gliding(&harness) && carried < 60 {
+        loop {
+            // Outside the measured span, as a refresh interval of real time would let the driver
+            // finish the tick before.
+            crate::draw::wait_for_driver();
+            if !crate::input::any_glide(&harness) || carried == 60 {
+                break;
+            }
             let gpu = crate::gpu_time::phase("kitchen.glide_tick");
             let started = std::time::Instant::now();
+            let cpu = crate::cpu::Cpu::now();
             harness.advance(std::time::Duration::from_micros(16_667));
             let ran = harness.pump();
             if ran > 0 {
                 ticks.push(started.elapsed().as_secs_f64() * 1e6);
+                crate::cpu::record("kitchen.glide_tick", cpu);
             }
             drop(gpu);
             carried += 1;
@@ -130,12 +143,14 @@ pub(crate) fn run() -> Outcome {
         let width = crate::gallery::WIDTH + (step % 24) as f32 * 8.0;
         let gpu = crate::gpu_time::phase("kitchen.resize");
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         harness.deliver_to_first(SurfaceEvent::Resized(Size::new(
             DevicePx(width),
             DevicePx(crate::gallery::HEIGHT),
         )));
         harness.settle(64);
         resizes.push(started.elapsed().as_secs_f64() * 1e3);
+        crate::cpu::record("kitchen.resize", cpu);
         drop(gpu);
     }
 
@@ -147,9 +162,11 @@ pub(crate) fn run() -> Outcome {
     let gpu = crate::gpu_time::phase("kitchen.untouched_turn");
     for _ in 0..UNTOUCHED_TURNS {
         let started = std::time::Instant::now();
+        let cpu = crate::cpu::Cpu::now();
         harness.advance(std::time::Duration::from_micros(16_667));
         harness.pump();
         untouched.push(started.elapsed().as_secs_f64() * 1e6);
+        crate::cpu::record("kitchen.untouched_turn", cpu);
     }
     drop(gpu);
 

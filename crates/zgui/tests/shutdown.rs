@@ -22,52 +22,7 @@ static SAW_SHARED: AtomicUsize = AtomicUsize::new(0);
 struct Shared(RwSignal<u32, LocalStorage>);
 
 /// A renderer that draws nowhere.
-#[derive(Debug, Default)]
-struct Nowhere {
-    /// Where the glyph tiles go.
-    atlas: zgui::atlas::MemorySink,
-    /// What it was pointed at.
-    target: Option<zgui::render::RenderTarget>,
-}
-
-impl zgui::render::Renderer for Nowhere {
-    fn capabilities(&self) -> zgui::render::RenderCapabilities {
-        zgui::render::RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: zgui::render::RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<zgui::render::RenderTarget> {
-        self.target
-    }
-
-    fn register_external(
-        &mut self,
-        _texture: zgui::render::ExternalTexture,
-    ) -> zgui::render::TextureHandle {
-        zgui::render::TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: zgui::render::TextureHandle) {}
-
-    fn memory(&self) -> zgui::render::MemoryReport {
-        zgui::render::MemoryReport::default()
-    }
-
-    fn draw(
-        &mut self,
-        _scene: &zgui::scene::Scene,
-        _damage: &zgui::bits::DamageSet,
-    ) -> zgui::render::FrameOutcome {
-        zgui::render::FrameOutcome::Presented(zgui::render::FrameStats::default())
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui::atlas::TextureSink {
-        &mut self.atlas
-    }
-}
+type Nowhere = zgui_testkit_compositor::NullRenderer;
 
 /// The innermost component. Its cleanup reads the application's signal.
 #[component]
@@ -111,10 +66,13 @@ fn every_scope_is_disposed_of_before_the_run_returns() {
         .with_title("shutdown")
         .with_size(320.0, 200.0)
         .with_context(|| provide_context(Shared(RwSignal::new_local(7))))
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_renderer(Box::new(|_surface: &Arc<dyn Surface>, target| {
-            let mut renderer = Nowhere::default();
-            zgui::render::Renderer::configure(&mut renderer, target);
-            Ok::<_, AppError>(Box::new(renderer) as Box<dyn zgui::render::Renderer>)
+            Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
+                let mut renderer = Nowhere::default();
+                iceblink::Renderer::configure(&mut renderer, target);
+                renderer
+            }))
         }))
         .run_on(buffers, || view! { Root() })
         .expect("the application ran");

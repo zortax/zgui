@@ -137,11 +137,12 @@ fn run() -> Option<&'static Opened> {
             grab::forget();
             let log: Log = Arc::new(Mutex::new(Vec::new()));
             let found = Mutex::new(Found::default());
-            zgui::app()
+            let app = zgui::app()
+                .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
                 .with_title("gallery")
                 .with_size(crate::app::WIDTH, crate::app::HEIGHT)
-                .with_stylesheet(crate::shell::SHEET)
-                .with_renderer(Box::new(device::factory(&log)))
+                .with_stylesheet(crate::shell::SHEET);
+            device::drawn_on(app, &log)
                 .run_on(buffers(&found), || (Grab, view! { Gallery() }.into_view()))
                 .expect("the gallery ran");
             let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
@@ -156,22 +157,22 @@ fn run() -> Option<&'static Opened> {
         .as_ref()
 }
 
-/// The last frame that held any vector content at all.
+/// The last frame that drew anything at all.
 ///
 /// Not simply the last frame. Once the page has settled the application draws frames that damage
-/// nothing, and their display lists are empty — so "the last one" is a frame with no drawings in
-/// it, and every question asked of it comes back the same way whether the gallery draws or not.
+/// nothing, and their display lists are empty — so "the last one" is a frame with nothing in it,
+/// and every question asked of it comes back the same way whether the gallery draws or not.
 ///
 /// # Panics
 ///
-/// Panics when no frame held one, which is the answer this measurement exists to notice.
+/// Panics when no frame drew, which is the answer this measurement exists to notice.
 fn settled(opened: &Opened) -> &Frame {
     opened
         .frames
         .iter()
         .rev()
-        .find(|frame| !frame.drawings.is_empty())
-        .expect("some frame of the gallery held a drawing")
+        .find(|frame| !frame.blank)
+        .expect("some frame of the gallery drew something")
 }
 
 /// Where the panel headed `title` ended up.
@@ -215,32 +216,16 @@ fn rimmed(rect: Rect<DevicePx, Device>) -> Rect<DevicePx, Device> {
 }
 
 #[test]
-fn the_gallery_puts_its_drawings_in_the_display_list() {
+fn the_gallery_puts_its_drawings_in_the_frame() {
     let opened = opened!();
     let frame = settled(opened);
-    // The first frame redraws the whole surface and emits only what is on it: the icons further
-    // down the gallery reach the display list when a scroll brings them into view.
+    // The first frame redraws the whole surface and records only what is on it: the icons further
+    // down the gallery are recorded when a scroll brings them into view.
     assert!(
         frame.drawings.len() >= 15,
-        "the gallery's visible icons produced only {} vector items, so this is measuring the \
-         wrong document rather than the wrong pixels",
+        "the gallery's visible icons produced only {} paths, images and marks, so this is \
+         measuring the wrong document rather than the wrong pixels",
         frame.drawings.len()
-    );
-    assert_eq!(
-        frame.culled, 0,
-        "the frame redraws the whole surface, so nothing may be culled out of it"
-    );
-}
-
-#[test]
-fn every_pass_the_gallery_planned_was_rasterised() {
-    let opened = opened!();
-    let frame = settled(opened);
-    assert_eq!(
-        frame.rasterised as usize, frame.passes,
-        "the display list planned {} passes and the device rasterised {}; the difference is \
-         vector content composited from a scratch nothing wrote",
-        frame.passes, frame.rasterised
     );
 }
 

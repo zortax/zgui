@@ -22,7 +22,8 @@ fn bar() -> (Harness<Runtime>, WindowHandle) {
                 .with_anchors(Edges::new(true, true, false, true))
                 .with_size(0.0, 34.0),
         )
-        .with_renderer(Box::new(support::capture))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .into_handler(|cx: &mut BuildCx<'_>| {
             Box::new(zgui_elements::column().into_view().build(cx))
         })

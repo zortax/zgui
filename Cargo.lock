@@ -804,6 +804,9 @@ name = "color"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2ec7c5eb7a16992b1904d76c517d170ab353b0e0b3d5a0c81a8a0cd1037893cf"
+dependencies = [
+ "bytemuck",
+]
 
 [[package]]
 name = "color_quant"
@@ -1255,6 +1258,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fearless_simd"
+version = "0.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f4beca3cb2444e3304ac30843cc091f44ed58932353cd492ce740067bfce6b12"
+
+[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1535,6 +1544,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "glifo"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f1218dedd5348c1b166ec3b8b3cbca49d2f527bd43b3fa072ea5123c523ed3f"
+dependencies = [
+ "bytemuck",
+ "foldhash",
+ "hashbrown 0.17.1",
+ "log",
+ "peniko",
+ "skrifa",
+ "smallvec",
+ "vello_common",
+]
+
+[[package]]
 name = "glob"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1655,6 +1680,136 @@ name = "hex"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
+
+[[package]]
+name = "iceblink"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "bytemuck",
+ "kurbo",
+ "smallvec",
+ "web-time",
+]
+
+[[package]]
+name = "iceblink-alloc"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "etagere",
+ "iceblink",
+ "rustc-hash 2.1.3",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "iceblink-core"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "bytemuck",
+ "iceblink",
+ "iceblink-alloc",
+ "kurbo",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "tracing",
+ "web-time",
+ "zeno",
+]
+
+[[package]]
+name = "iceblink-cpu"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "bytemuck",
+ "iceblink",
+ "kurbo",
+ "smallvec",
+ "vello_cpu",
+]
+
+[[package]]
+name = "iceblink-driver"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "iceblink",
+]
+
+[[package]]
+name = "iceblink-testing"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "iceblink",
+ "iceblink-wgpu",
+ "png 0.17.16",
+ "pollster",
+ "smallvec",
+ "wgpu",
+ "zeno",
+]
+
+[[package]]
+name = "iceblink-text"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "iceblink",
+ "rustc-hash 2.1.3",
+ "skrifa",
+ "swash",
+]
+
+[[package]]
+name = "iceblink-vello"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "iceblink",
+ "iceblink-wgpu",
+ "kurbo",
+ "peniko",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "tracing",
+ "vello",
+ "wgpu",
+]
+
+[[package]]
+name = "iceblink-wgpu"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "ash",
+ "bincode",
+ "bytemuck",
+ "futures",
+ "iceblink",
+ "iceblink-wgsl",
+ "kurbo",
+ "naga",
+ "raw-window-handle",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "thiserror 2.0.19",
+ "tracing",
+ "web-time",
+ "wgpu",
+ "windows",
+]
+
+[[package]]
+name = "iceblink-wgsl"
+version = "0.1.0"
+source = "git+https://github.com/zortax/iceblink#628a1264b3b73cd88ee865c7f6d20d219958bc98"
+dependencies = [
+ "iceblink",
+]
 
 [[package]]
 name = "icu_collections"
@@ -1824,7 +1979,7 @@ dependencies = [
  "image-webp",
  "moxcms",
  "num-traits",
- "png",
+ "png 0.18.1",
  "zune-core",
  "zune-jpeg",
 ]
@@ -2198,7 +2353,7 @@ dependencies = [
  "objc2-core-foundation",
  "objc2-foundation 0.3.2",
  "once_cell",
- "png",
+ "png 0.18.1",
  "thiserror 2.0.19",
  "windows-sys 0.61.2",
 ]
@@ -2809,6 +2964,7 @@ version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "839c8299360d2e998bdb106dc0a6cd71dcc5f4df51df1b620361bf50e283cca6"
 dependencies = [
+ "bytemuck",
  "color",
  "kurbo",
  "linebender_resource_handle",
@@ -2959,6 +3115,19 @@ dependencies = [
 
 [[package]]
 name = "png"
+version = "0.17.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "82151a2fc869e011c153adc57cf2789ccb8d9906ce52c0b39a6b5697749d7526"
+dependencies = [
+ "bitflags 1.3.2",
+ "crc32fast",
+ "fdeflate",
+ "flate2",
+ "miniz_oxide",
+]
+
+[[package]]
+name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "60769b8b31b2a9f263dae2776c37b1b28ae246943cf719eb6946a1db05128a61"
@@ -2983,6 +3152,12 @@ dependencies = [
  "rustix 1.1.4",
  "windows-sys 0.61.2",
 ]
+
+[[package]]
+name = "pollster"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f3a9f18d041e6d0e102a0a46750538147e5e8992d3b4873aaafee2520b00ce3"
 
 [[package]]
 name = "polycool"
@@ -4482,13 +4657,40 @@ dependencies = [
  "futures-intrusive",
  "log",
  "peniko",
- "png",
+ "png 0.18.1",
  "skrifa",
  "static_assertions",
  "thiserror 2.0.19",
  "vello_encoding",
  "vello_shaders",
  "wgpu",
+]
+
+[[package]]
+name = "vello_common"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "73c2fbe53548bcd25c8ff42f75a93770a8611a16b37bee56d7ef7b44e36027f1"
+dependencies = [
+ "bytemuck",
+ "fearless_simd",
+ "guillotiere",
+ "log",
+ "peniko",
+ "smallvec",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "vello_cpu"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ed1fec424fbba6acf6cbc78bb526447eb77590d95f40419d598870fe37535212"
+dependencies = [
+ "bytemuck",
+ "glifo",
+ "hashbrown 0.17.1",
+ "vello_common",
 ]
 
 [[package]]
@@ -5593,8 +5795,14 @@ dependencies = [
 name = "zgui"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
+ "iceblink-core",
+ "iceblink-driver",
+ "iceblink-text",
+ "iceblink-vello",
+ "iceblink-wgpu",
+ "tracing",
  "web-time",
- "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
  "zgui-custom",
@@ -5608,13 +5816,9 @@ dependencies = [
  "zgui-platform-winit",
  "zgui-profile",
  "zgui-reactive",
- "zgui-render",
- "zgui-render-vector-vello",
- "zgui-render-wgpu",
  "zgui-runtime",
- "zgui-scene",
  "zgui-shader",
- "zgui-testkit-scene",
+ "zgui-testkit-compositor",
  "zgui-text",
  "zgui-text-parley",
  "zgui-tokio",
@@ -5636,7 +5840,7 @@ dependencies = [
  "zgui-interned",
  "zgui-layout",
  "zgui-profile",
- "zgui-scene",
+ "zgui-space",
  "zgui-vocab",
 ]
 
@@ -5661,21 +5865,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "zgui-atlas"
-version = "0.1.0"
-dependencies = [
- "etagere",
- "proptest",
- "rustc-hash 2.1.3",
- "thiserror 2.0.19",
- "zgui-bits",
- "zgui-geom",
-]
-
-[[package]]
 name = "zgui-bench"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
+ "iceblink-core",
+ "iceblink-testing",
+ "iceblink-text",
+ "iceblink-vello",
+ "iceblink-wgpu",
+ "rustix 1.1.4",
  "zgui",
  "zgui-a11y",
  "zgui-dom",
@@ -5685,9 +5884,8 @@ dependencies = [
  "zgui-platform-headless",
  "zgui-platform-winit",
  "zgui-profile",
- "zgui-render-vector-vello",
- "zgui-render-wgpu",
- "zgui-testkit-scene",
+ "zgui-space",
+ "zgui-testkit-compositor",
  "zgui-text-parley",
  "zgui-ui",
  "zgui-ui-icons",
@@ -5722,7 +5920,7 @@ dependencies = [
 name = "zgui-color"
 version = "0.1.0"
 dependencies = [
- "proptest",
+ "iceblink",
 ]
 
 [[package]]
@@ -5738,9 +5936,9 @@ dependencies = [
  "zgui-layout",
  "zgui-paint",
  "zgui-runtime",
- "zgui-scene",
+ "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-style",
 ]
@@ -5749,19 +5947,17 @@ dependencies = [
 name = "zgui-console"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
+ "iceblink-driver",
+ "iceblink-vello",
+ "iceblink-wgpu",
  "tracing",
  "zgui",
- "zgui-atlas",
- "zgui-bits",
  "zgui-geom",
  "zgui-platform",
  "zgui-platform-drm",
  "zgui-platform-headless",
- "zgui-render",
- "zgui-render-vector-vello",
- "zgui-render-wgpu",
  "zgui-runtime",
- "zgui-scene",
  "zgui-view",
 ]
 
@@ -5785,6 +5981,7 @@ dependencies = [
 name = "zgui-custom"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
  "rustc-hash 2.1.3",
  "zgui-color",
  "zgui-css",
@@ -5798,9 +5995,9 @@ dependencies = [
  "zgui-platform-headless",
  "zgui-profile",
  "zgui-reactive",
- "zgui-render",
  "zgui-runtime",
- "zgui-testkit-scene",
+ "zgui-testkit",
+ "zgui-testkit-compositor",
  "zgui-view",
  "zgui-vocab",
 ]
@@ -5809,6 +6006,7 @@ dependencies = [
 name = "zgui-devtools"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
  "zgui",
  "zgui-css",
  "zgui-dom",
@@ -5818,6 +6016,7 @@ dependencies = [
  "zgui-profile",
  "zgui-runtime",
  "zgui-style",
+ "zgui-testkit-compositor",
  "zgui-text-style",
  "zgui-view-dom",
 ]
@@ -5867,8 +6066,8 @@ dependencies = [
  "zgui-geom",
  "zgui-interned",
  "zgui-profile",
- "zgui-scene",
- "zgui-testkit-scene",
+ "zgui-space",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-parley",
  "zgui-text-style",
@@ -5943,9 +6142,9 @@ dependencies = [
  "zgui-layout",
  "zgui-platform",
  "zgui-profile",
- "zgui-scene",
+ "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-style",
  "zgui-vocab",
@@ -5976,9 +6175,9 @@ dependencies = [
  "zgui-geom",
  "zgui-interned",
  "zgui-profile",
- "zgui-scene",
+ "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-text",
  "zgui-text-style",
  "zgui-vocab",
@@ -5995,6 +6194,9 @@ dependencies = [
 name = "zgui-paint"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
+ "kurbo",
+ "peniko",
  "rustc-hash 2.1.3",
  "smallvec",
  "thiserror 2.0.19",
@@ -6002,7 +6204,6 @@ dependencies = [
  "web-time",
  "zeno",
  "zgui-arena",
- "zgui-atlas",
  "zgui-bits",
  "zgui-canvas",
  "zgui-color",
@@ -6012,11 +6213,11 @@ dependencies = [
  "zgui-interned",
  "zgui-layout",
  "zgui-profile",
- "zgui-render",
- "zgui-scene",
+ "zgui-space",
  "zgui-style",
  "zgui-svg",
- "zgui-testkit-scene",
+ "zgui-testkit",
+ "zgui-testkit-compositor",
  "zgui-text",
  "zgui-text-style",
  "zgui-vocab",
@@ -6040,20 +6241,18 @@ version = "0.1.0"
 dependencies = [
  "accesskit",
  "ash",
+ "iceblink",
+ "iceblink-core",
+ "iceblink-wgpu",
  "raw-window-handle",
  "rustix 1.1.4",
  "tracing",
- "zgui-bits",
- "zgui-color",
  "zgui-drm",
  "zgui-evdev",
  "zgui-geom",
  "zgui-libinput",
  "zgui-platform",
  "zgui-platform-headless",
- "zgui-render",
- "zgui-render-wgpu",
- "zgui-scene",
  "zgui-seat",
  "zgui-vocab",
  "zgui-xkb",
@@ -6079,6 +6278,7 @@ dependencies = [
  "calloop 0.14.4",
  "calloop-wayland-source 0.4.1",
  "futures",
+ "iceblink",
  "raw-window-handle",
  "rustix 1.1.4",
  "smithay-client-toolkit 0.20.0",
@@ -6096,10 +6296,8 @@ dependencies = [
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-profile",
- "zgui-render",
- "zgui-render-wgpu",
  "zgui-runtime",
- "zgui-testkit-scene",
+ "zgui-testkit-compositor",
  "zgui-view",
  "zgui-vocab",
 ]
@@ -6129,6 +6327,7 @@ dependencies = [
  "accesskit_winit",
  "arboard",
  "block2 0.6.2",
+ "iceblink",
  "muda",
  "objc2 0.6.4",
  "objc2-app-kit 0.3.2",
@@ -6143,10 +6342,8 @@ dependencies = [
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-profile",
- "zgui-render",
- "zgui-render-wgpu",
  "zgui-runtime",
- "zgui-testkit-scene",
+ "zgui-testkit-compositor",
  "zgui-view",
  "zgui-vocab",
 ]
@@ -6177,98 +6374,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "zgui-render"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.19",
- "web-time",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
- "zgui-geom",
- "zgui-scene",
-]
-
-[[package]]
-name = "zgui-render-vector-coverage"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "kurbo",
- "peniko",
- "rustc-hash 2.1.3",
- "tracing",
- "wgpu",
- "zgui-color",
- "zgui-geom",
- "zgui-profile",
- "zgui-render",
- "zgui-render-wgpu",
- "zgui-scene",
-]
-
-[[package]]
-name = "zgui-render-vector-vello"
-version = "0.1.0"
-dependencies = [
- "kurbo",
- "peniko",
- "rustc-hash 2.1.3",
- "tracing",
- "vello",
- "wgpu",
- "zgui-arena",
- "zgui-atlas",
- "zgui-bits",
- "zgui-canvas",
- "zgui-color",
- "zgui-css",
- "zgui-dom",
- "zgui-geom",
- "zgui-interned",
- "zgui-layout",
- "zgui-paint",
- "zgui-profile",
- "zgui-render",
- "zgui-render-vector-coverage",
- "zgui-render-wgpu",
- "zgui-scene",
- "zgui-svg",
- "zgui-text",
- "zgui-text-parley",
- "zgui-text-style",
- "zgui-vocab",
-]
-
-[[package]]
-name = "zgui-render-wgpu"
-version = "0.1.0"
-dependencies = [
- "ash",
- "bincode",
- "bytemuck",
- "futures",
- "naga",
- "rustc-hash 2.1.3",
- "tracing",
- "web-time",
- "wgpu",
- "windows",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
- "zgui-geom",
- "zgui-profile",
- "zgui-render",
- "zgui-scene",
- "zgui-wgsl",
-]
-
-[[package]]
 name = "zgui-runtime"
 version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
+ "iceblink",
+ "kurbo",
  "rustc-hash 2.1.3",
  "thiserror 2.0.19",
  "tracing",
@@ -6276,7 +6387,6 @@ dependencies = [
  "zgui-a11y",
  "zgui-anim",
  "zgui-arena",
- "zgui-atlas",
  "zgui-bits",
  "zgui-color",
  "zgui-css",
@@ -6293,35 +6403,16 @@ dependencies = [
  "zgui-platform-headless",
  "zgui-profile",
  "zgui-reactive",
- "zgui-render",
- "zgui-scene",
  "zgui-scroll",
+ "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-testkit",
+ "zgui-testkit-compositor",
  "zgui-text",
  "zgui-text-style",
  "zgui-view",
  "zgui-view-dom",
  "zgui-vocab",
-]
-
-[[package]]
-name = "zgui-scene"
-version = "0.1.0"
-dependencies = [
- "bytemuck",
- "kurbo",
- "peniko",
- "proptest",
- "rustc-hash 2.1.3",
- "smallvec",
- "web-time",
- "zgui-arena",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
- "zgui-geom",
- "zgui-profile",
 ]
 
 [[package]]
@@ -6351,6 +6442,8 @@ dependencies = [
 name = "zgui-shader"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
+ "tracing",
  "trybuild",
  "zgui-custom",
  "zgui-elements",
@@ -6359,14 +6452,12 @@ dependencies = [
  "zgui-paint",
  "zgui-platform",
  "zgui-platform-headless",
- "zgui-render",
- "zgui-render-wgpu",
+ "zgui-profile",
  "zgui-runtime",
- "zgui-scene",
  "zgui-shader-macro",
- "zgui-testkit-scene",
+ "zgui-testkit",
+ "zgui-testkit-compositor",
  "zgui-view",
- "zgui-wgsl",
 ]
 
 [[package]]
@@ -6374,11 +6465,26 @@ name = "zgui-shader-macro"
 version = "0.1.0"
 dependencies = [
  "bincode",
+ "iceblink",
+ "iceblink-wgsl",
  "naga",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
- "zgui-wgsl",
+]
+
+[[package]]
+name = "zgui-space"
+version = "0.1.0"
+dependencies = [
+ "bytemuck",
+ "proptest",
+ "rustc-hash 2.1.3",
+ "smallvec",
+ "zgui-arena",
+ "zgui-bits",
+ "zgui-geom",
+ "zgui-profile",
 ]
 
 [[package]]
@@ -6422,21 +6528,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "zgui-testkit-scene"
+name = "zgui-testkit"
 version = "0.1.0"
 dependencies = [
  "smallvec",
- "web-time",
- "zgui-atlas",
- "zgui-bits",
- "zgui-color",
  "zgui-geom",
- "zgui-platform",
  "zgui-profile",
- "zgui-render",
- "zgui-scene",
+ "zgui-space",
  "zgui-text",
  "zgui-text-style",
+]
+
+[[package]]
+name = "zgui-testkit-compositor"
+version = "0.1.0"
+dependencies = [
+ "iceblink",
+ "iceblink-core",
+ "iceblink-cpu",
+ "iceblink-driver",
+ "iceblink-testing",
+ "iceblink-text",
+ "iceblink-vello",
+ "iceblink-wgpu",
 ]
 
 [[package]]
@@ -6448,7 +6562,7 @@ dependencies = [
  "zgui-geom",
  "zgui-interned",
  "zgui-reactive",
- "zgui-testkit-scene",
+ "zgui-testkit",
  "zgui-view",
  "zgui-vocab",
 ]
@@ -6458,14 +6572,13 @@ name = "zgui-text"
 version = "0.1.0"
 dependencies = [
  "accesskit",
- "kurbo",
  "rustc-hash 2.1.3",
  "smallvec",
- "zgui-atlas",
+ "zgui-color",
  "zgui-geom",
  "zgui-interned",
  "zgui-profile",
- "zgui-scene",
+ "zgui-space",
  "zgui-text-style",
 ]
 
@@ -6474,18 +6587,17 @@ name = "zgui-text-parley"
 version = "0.1.0"
 dependencies = [
  "fontique",
- "kurbo",
+ "iceblink",
  "parley",
  "proptest",
  "rustc-hash 2.1.3",
  "skrifa",
  "smallvec",
  "swash",
- "zgui-atlas",
  "zgui-geom",
  "zgui-interned",
  "zgui-profile",
- "zgui-scene",
+ "zgui-space",
  "zgui-text",
  "zgui-text-style",
 ]
@@ -6518,13 +6630,14 @@ name = "zgui-ui"
 version = "0.1.0"
 dependencies = [
  "accesskit_consumer",
+ "iceblink",
  "image",
  "rustc-hash 2.1.3",
  "zgui",
  "zgui-layout",
  "zgui-platform-headless",
- "zgui-render-vector-vello",
- "zgui-render-wgpu",
+ "zgui-profile",
+ "zgui-testkit-compositor",
  "zgui-testkit-view",
  "zgui-ui-icons",
  "zgui-ui-primitives",
@@ -6535,11 +6648,10 @@ dependencies = [
 name = "zgui-ui-icons"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
  "zgui",
- "zgui-color",
  "zgui-platform-headless",
- "zgui-render-vector-vello",
- "zgui-render-wgpu",
+ "zgui-testkit-compositor",
  "zgui-testkit-view",
 ]
 
@@ -6575,9 +6687,9 @@ dependencies = [
 name = "zgui-view-dom"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
  "rustc-hash 2.1.3",
  "tracing",
- "zgui-bits",
  "zgui-color",
  "zgui-css",
  "zgui-dom",
@@ -6586,10 +6698,10 @@ dependencies = [
  "zgui-interned",
  "zgui-paint",
  "zgui-reactive",
- "zgui-render",
- "zgui-scene",
+ "zgui-space",
  "zgui-style",
- "zgui-testkit-scene",
+ "zgui-svg",
+ "zgui-testkit-compositor",
  "zgui-text",
  "zgui-view",
  "zgui-vocab",
@@ -6622,6 +6734,8 @@ dependencies = [
 name = "zgui-wgpu"
 version = "0.1.0"
 dependencies = [
+ "iceblink",
+ "iceblink-wgpu",
  "rustc-hash 2.1.3",
  "tracing",
  "zgui-dom",
@@ -6632,20 +6746,11 @@ dependencies = [
  "zgui-platform",
  "zgui-platform-headless",
  "zgui-reactive",
- "zgui-render",
- "zgui-render-wgpu",
  "zgui-runtime",
- "zgui-scene",
- "zgui-testkit-scene",
+ "zgui-testkit",
+ "zgui-testkit-compositor",
  "zgui-view",
  "zgui-vocab",
-]
-
-[[package]]
-name = "zgui-wgsl"
-version = "0.1.0"
-dependencies = [
- "zgui-scene",
 ]
 
 [[package]]

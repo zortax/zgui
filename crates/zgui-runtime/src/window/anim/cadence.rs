@@ -106,6 +106,18 @@ impl AnimationCadence {
         });
     }
 
+    /// Moves the phase onto `start`, the moment a frame has to start to reach a driver's latch, for
+    /// an animation that is running.
+    ///
+    /// The next frame is then owed one interval after `start`, so it reaches the latch after the
+    /// one the frame that ran at `now` reaches. A `start` of `None` leaves the phase alone.
+    pub fn align(&mut self, start: Option<Instant>, now: Instant, interval: Duration) {
+        let (Some(_), Some(start)) = (self.due, start) else {
+            return;
+        };
+        self.due = Some(Self::caught_up(start, now, interval).max(start + interval));
+    }
+
     /// The next moment on `due`'s own phase that is still in the future at `now`.
     ///
     /// A phase that is more than [`MAX_CATCH_UP`] intervals behind is abandoned rather than
@@ -138,6 +150,34 @@ mod tests {
 
     /// One frame of a sixty hertz output.
     const SLOW: Duration = Duration::from_micros(16_667);
+
+    #[test]
+    fn a_running_animation_follows_the_moment_a_latch_is_reached_from() {
+        let start = Instant::now();
+        let mut cadence = AnimationCadence::parked();
+        cadence.align(Some(start), start, SLOW);
+        assert_eq!(cadence.due(), None, "a parked cadence was given a phase");
+
+        cadence.advance(start, SLOW);
+        let latch_start = start + SLOW / 3;
+        cadence.align(Some(latch_start), start, SLOW);
+        assert_eq!(
+            cadence.due(),
+            Some(latch_start + SLOW),
+            "the next frame is not owed for the next latch"
+        );
+
+        let late = latch_start + SLOW + SLOW / 2;
+        cadence.align(Some(latch_start), late, SLOW);
+        assert_eq!(
+            cadence.due(),
+            Some(latch_start + 2 * SLOW),
+            "a late frame bursts"
+        );
+
+        cadence.align(None, late, SLOW);
+        assert_eq!(cadence.due(), Some(latch_start + 2 * SLOW));
+    }
 
     #[test]
     fn unrelated_frames_between_two_ticks_do_not_move_the_moment_that_is_owed() {

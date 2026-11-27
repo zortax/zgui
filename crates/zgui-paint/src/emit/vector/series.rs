@@ -1,12 +1,12 @@
 //! Canvas series drawn as marks: data in data space, markers and lines in CSS pixels.
 //!
-//! A part of a series is one union mark over a payload built once per data allocation. The item
-//! maps the payload to the fragment's space by the matrix of the drawing, and the payload's
+//! A part of a series is one union marks item over a payload built once per data allocation. The
+//! item maps the payload to the fragment's space by the matrix of the drawing, and the payload's
 //! lengths are local units, so a change of the canvas view changes the item and keeps the payload.
 //!
-//! A path marker is drawn as glyphs: its outline is rasterised once per device scale into the cells
-//! of one sheet, and the payload holds the sheet's table and one anchor per point. A marker the
-//! glyph route cannot take draws through the general route, placed at every point.
+//! A path marker is drawn as placements: the payload holds its outline once, in device pixels, and
+//! one placement per point. A marker the placements cannot take draws as one path item, placed at
+//! every point.
 //!
 //! A part drawn from a provisional payload owes the frame its ink on the device, so a later frame
 //! draws it again from the payload its build makes.
@@ -18,22 +18,25 @@
 
 use std::sync::Arc;
 
+use crate::{Tables, VectorId};
+use iceblink::{
+    ClipRef, MarkFlags, MarkPayload, Marks, PaintRef, PathFill, PathItem, PathStroke, SpaceRef,
+};
+use kurbo::{self, Affine, BezPath};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::kurbo::{self, Affine, BezPath};
-use zgui_scene::{
-    ClipId, MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, SpatialId, VectorId, VectorItem,
-    VectorStroke,
-};
+use zgui_space::{ClipId, SpatialId};
 
 use super::document::{density_of, reference};
 use super::marks::MAX_MARK_PRIMS;
 use super::split::geometry_of;
 use super::{ShapeEmission, ShapePaint, VectorPlacement, VectorRoute, under};
+use crate::content::vectors::VectorMaskSource;
+use crate::content::vectors::path_glyphs::{Outlines, PartStyle, outlines};
 use crate::content::vectors::payloads::{
     Lane, SeriesLookup, SeriesPart, chunks_meeting, lod_bucket, part_of, series_payload,
 };
-use crate::content::vectors::{GlyphRequest, GlyphSheets, VectorMaskSource, VectorMaskStyle};
+use crate::emit::record::Recorder;
 
 /// One part of a series before its payload is found.
 struct Part<'a> {
@@ -43,8 +46,8 @@ struct Part<'a> {
     reach: f64,
     /// Half the line width in local units, or zero.
     half_width: f32,
-    /// [`MarkFlags`] bits besides the union and the screen bits.
-    flags: u32,
+    /// The flags besides the union and the screen bits.
+    flags: MarkFlags,
     /// What paints the part.
     brush: &'a zgui_canvas::Brush,
     /// The colour an inherited brush takes.
@@ -70,17 +73,17 @@ pub(super) struct SeriesOutcome {
 
 /// The part of local space under `transform` that `clip` and the viewport show, or `None` when
 /// they show nothing or the transform has no inverse on the plane.
-pub(crate) fn shown(scene: &Scene, clip: ClipId, transform: SpatialId) -> Option<kurbo::Rect> {
-    shown_through(scene, clip, transform).map(|(shown, _)| shown)
+pub(crate) fn shown(tables: &Tables, clip: ClipId, transform: SpatialId) -> Option<kurbo::Rect> {
+    shown_through(tables, clip, transform).map(|(shown, _)| shown)
 }
 
 /// What [`shown`] finds, and the to-device map it inverted.
 fn shown_through(
-    scene: &Scene,
+    tables: &Tables,
     clip: ClipId,
     transform: SpatialId,
 ) -> Option<(kurbo::Rect, Affine)> {
-    let affine = scene
+    let affine = tables
         .spatial
         .resolve(transform)
         .as_ref()
@@ -91,10 +94,10 @@ fn shown_through(
     if !determinant.is_finite() || determinant.abs() <= 1e-12 {
         return None;
     }
-    let admitted = scene
+    let admitted = tables
         .clips
-        .bounds_placed(clip, &|space| scene.spatial.resolve(space));
-    let viewport = scene.viewport();
+        .bounds_placed(clip, &|space| tables.spatial.resolve(space));
+    let viewport = tables.viewport();
     let device = kurbo::Rect::new(
         f64::from(admitted.left().0),
         f64::from(admitted.top().0),
@@ -125,11 +128,15 @@ struct Cut {
 
 /// Where the items of a series under `placement` draw, or `None` when they draw whole: nothing is
 /// shown, the transform has no inverse on the plane, or `masks` asks for whole payloads.
-fn cut_of(scene: &Scene, placement: VectorPlacement, masks: &dyn VectorMaskSource) -> Option<Cut> {
+fn cut_of(
+    tables: &Tables,
+    placement: VectorPlacement,
+    masks: &dyn VectorMaskSource,
+) -> Option<Cut> {
     if masks.series_whole() {
         return None;
     }
-    let (shown, to_device) = shown_through(scene, placement.clip, placement.transform)?;
+    let (shown, to_device) = shown_through(tables, placement.clip, placement.transform)?;
     // One over the smallest singular value of the linear part.
     let [a, b, c, d, _, _] = to_device.as_coeffs();
     let (p, q, r) = (a * a + b * b, c * c + d * d, a * c + b * d);
@@ -204,7 +211,7 @@ fn drawn(
     let len = match lane {
         Lane::Disc => payload.discs.len(),
         Lane::Polyline => payload.vertices.len(),
-        Lane::Glyph(_) => payload.glyphs.len(),
+        Lane::Placement => payload.placements.len(),
     };
     let (first, count) = part_of(lane, range.clone(), len);
     if count == 0 {
@@ -234,10 +241,16 @@ fn item_over(
     drawn: Drawn,
     ink: kurbo::Rect,
     paint: PaintRef,
-) -> Option<MarkItem> {
-    let (first, counts, ink) = match drawn {
-        Drawn::Whole => (0, payload.counts(), ink),
-        Drawn::Nothing => return None,
+    (clip, space): (ClipRef, SpaceRef),
+) -> Option<Marks> {
+    match drawn {
+        Drawn::Whole => Some(super::marks::item(
+            rect_of(ink),
+            paint,
+            payload,
+            (clip, space),
+        )),
+        Drawn::Nothing => None,
         Drawn::Part {
             first,
             count,
@@ -246,15 +259,22 @@ fn item_over(
             // A series payload holds one kind, so the count is that kind's. The part's ink stays
             // within the whole ink, so a bin of the part holds no pixel a bin of the whole would
             // not.
-            let counts = payload
-                .counts()
-                .map(|held| if held > 0 { count } else { 0 });
-            (first, counts, part.intersect(ink))
+            let mut item =
+                super::marks::item(rect_of(part.intersect(ink)), paint, payload, (clip, space));
+            for held in [
+                &mut item.discs,
+                &mut item.boxes,
+                &mut item.vertices,
+                &mut item.placements,
+            ] {
+                if *held > 0 {
+                    *held = count;
+                }
+            }
+            item.first = first;
+            Some(item)
         }
-    };
-    let mut item = MarkItem::new(rect_of(ink), paint, counts);
-    item.first = first;
-    Some(item)
+    }
 }
 
 /// Emits one series as one union mark per part, and reports the marks route, or the path glyph
@@ -272,7 +292,7 @@ fn item_over(
     reason = "the series, where it goes, and its level of detail"
 )]
 pub(super) fn emit_series(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     id: VectorId,
     series: &zgui_canvas::Series,
     fit: Affine,
@@ -331,10 +351,10 @@ pub(super) fn emit_series(
                         fit,
                         parts: &parts,
                     };
-                    return match emit_path_markers(scene, id, &markers, masks, placement) {
+                    return match emit_path_markers(rec, id, &markers, masks, placement) {
                         Some(emitted) => emitted,
                         None => (
-                            emit_placed_markers(scene, id, &markers, placement),
+                            emit_placed_markers(rec, &markers, placement),
                             SeriesOutcome::default(),
                         ),
                     };
@@ -342,7 +362,11 @@ pub(super) fn emit_series(
                 // A marker this lowering does not know draws nothing.
                 _ => return (ShapeEmission::default(), SeriesOutcome::default()),
             };
-            let flags = if square { MarkFlags::SQUARE_DISCS } else { 0 };
+            let flags = if square {
+                MarkFlags::SQUARE_DISCS
+            } else {
+                MarkFlags::default()
+            };
             let disc = |outer: f64, inner: f64| SeriesPart::Disc {
                 outer: (outer as f32).to_bits(),
                 inner: (inner as f32).to_bits(),
@@ -375,7 +399,7 @@ pub(super) fn emit_series(
         zgui_canvas::Series::Line { stroke, brush, .. } => {
             let half = stroke.width / 2.0 * scale;
             let part = if lod {
-                columns(scene, data, to_local, placement, masks)
+                columns(rec.tables_ref(), data, to_local, placement, masks)
                     .map_or(SeriesPart::Line, |bucket| SeriesPart::Columns { bucket })
             } else {
                 SeriesPart::Line
@@ -392,8 +416,9 @@ pub(super) fn emit_series(
     }
 
     let [a, b, c, d, _, _] = coefficients;
-    let device = device_scale(scene, placement);
-    let cut = cut_of(scene, placement, masks);
+    let device = device_scale(rec.tables_ref(), placement);
+    let cut = cut_of(rec.tables_ref(), placement, masks);
+    let refs = (rec.clip(placement.clip), rec.space(placement.transform));
     let mut pushed = 0;
     let mut drew = false;
     let mut outcome = SeriesOutcome::default();
@@ -425,7 +450,7 @@ pub(super) fn emit_series(
         if provisional {
             outcome.owed = Some(union(
                 outcome.owed.flatten(),
-                owed_of(scene, placement, ink),
+                owed_of(rec.tables_ref(), placement, ink),
             ));
         }
         let lane = match part.part {
@@ -433,23 +458,22 @@ pub(super) fn emit_series(
             _ => Lane::Polyline,
         };
         let map = Affine::new([a, b, c, d, origin.x, origin.y]);
-        let paint_ref = brush_paint(scene, part.brush, fit, part.inherited);
+        let paint_ref = brush_paint(rec, part.brush, fit, part.inherited);
         for (payload, index) in built.payloads.iter().zip(&built.chunks) {
             drew = true;
             let part_drawn = drawn(payload, index, lane, map, cut, part.reach);
             if !matches!(part_drawn, Drawn::Whole) {
                 outcome.window = meet(outcome.window, cut.map(|cut| cut.window));
             }
-            let Some(mut item) = item_over(payload, part_drawn, ink, paint_ref) else {
+            let Some(mut item) = item_over(payload, part_drawn, ink, paint_ref, refs) else {
                 continue;
             };
             item.flags = MarkFlags::UNION | MarkFlags::SCREEN | part.flags;
-            item.clip = placement.clip.0;
-            item.transform = placement.transform.index();
             item.half_width = part.half_width;
             item.axes = [a as f32, b as f32, c as f32, d as f32];
             item.origin = [origin.x as f32, origin.y as f32];
-            pushed += usize::from(scene.push_marks(item, Arc::clone(payload)).is_some());
+            rec.marks(item, Arc::clone(payload));
+            pushed += 1;
         }
     }
     if !drew {
@@ -465,8 +489,8 @@ pub(super) fn emit_series(
 
 /// How many device pixels one local unit spans at most under the placement's transform, or one
 /// when the transform does not resolve to a plane.
-fn device_scale(scene: &Scene, placement: VectorPlacement) -> f64 {
-    scene
+fn device_scale(tables: &Tables, placement: VectorPlacement) -> f64 {
+    tables
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -483,8 +507,8 @@ fn device_scale(scene: &Scene, placement: VectorPlacement) -> f64 {
 }
 
 /// The device pixels of `ink`, in local units, that the viewport shows, rounded out.
-fn owed_of(scene: &Scene, placement: VectorPlacement, ink: kurbo::Rect) -> Owed {
-    let ink = under(scene, placement.transform, rect_of(ink));
+fn owed_of(tables: &Tables, placement: VectorPlacement, ink: kurbo::Rect) -> Owed {
+    let ink = under(tables, placement.transform, rect_of(ink));
     let edges = [
         ink.left().0.floor(),
         ink.top().0.floor(),
@@ -494,7 +518,7 @@ fn owed_of(scene: &Scene, placement: VectorPlacement, ink: kurbo::Rect) -> Owed 
     if !edges.iter().all(|edge| edge.is_finite()) {
         return None;
     }
-    let viewport = scene.viewport();
+    let viewport = tables.viewport();
     let [left, top, right, bottom] = edges.map(|edge| edge.clamp(-1.0, f32::from(i16::MAX)) as i32);
     let rect = Rect::new(Point::new(left, top), Size::new(right - left, bottom - top));
     rect.intersection(Rect::new(Point::new(0, 0), viewport))
@@ -513,7 +537,7 @@ pub(super) fn union(held: Owed, more: Owed) -> Owed {
 /// The data must run left to right, and the line must map data x to device x alone, under an
 /// upright transform. `None` when a device column holds four points or fewer.
 fn columns(
-    scene: &Scene,
+    tables: &Tables,
     data: &Arc<[[f32; 2]]>,
     to_local: Affine,
     placement: VectorPlacement,
@@ -524,7 +548,7 @@ fn columns(
     if !upright(b, c, a.abs().max(d.abs())) {
         return None;
     }
-    let spatial = scene
+    let spatial = tables
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -567,11 +591,11 @@ struct Markers<'a> {
     parts: &'a [MarkerPart<'a>],
 }
 
-/// Emits a path marker series as one union glyph mark per part, or `None` when the glyph route
-/// cannot take it: a transform that turns or shears, a marker over 64 device pixels across, a
-/// filled marker that winds both ways, or no sheet.
+/// Records a path marker series as one union marks item of placements per part, or `None` when
+/// the placements cannot take it: a transform that turns or shears, a marker over 64 device pixels
+/// across, or a filled marker that winds both ways.
 fn emit_path_markers(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     id: VectorId,
     markers: &Markers<'_>,
     masks: &dyn VectorMaskSource,
@@ -580,7 +604,8 @@ fn emit_path_markers(
     if !masks.path_glyphs(id) {
         return None;
     }
-    let affine = scene
+    let affine = rec
+        .tables_ref()
         .spatial
         .resolve(placement.transform)
         .as_ref()
@@ -598,41 +623,40 @@ fn emit_path_markers(
     if geometry.winding.mixed() && markers.parts.iter().any(|part| part.width.is_none()) {
         return None;
     }
-    let mut drawn_parts: smallvec::SmallVec<[(GlyphSheets, &MarkerPart<'_>); 2]> =
+    let mut drawn_parts: smallvec::SmallVec<[(Outlines, u64, &MarkerPart<'_>); 2]> =
         smallvec::SmallVec::new();
     for part in markers.parts {
         let stroke = part.width.map(kurbo::Stroke::new);
         let style = match &stroke {
-            Some(stroke) => VectorMaskStyle::Stroke(stroke),
-            None => VectorMaskStyle::Fill(zgui_scene::peniko::Fill::NonZero),
+            Some(stroke) => PartStyle::Stroke {
+                style: stroke,
+                scale: f64::from(density[0]),
+            },
+            None => PartStyle::Fill,
         };
-        let sheets = masks.glyph_sheets(GlyphRequest {
-            geometries: core::slice::from_ref(&geometry),
-            style,
-            scale: f64::from(density[0]),
-        })?;
-        drawn_parts.push((sheets, part));
+        let outlines = outlines(core::slice::from_ref(&geometry), style)?;
+        let key = outline_key(&geometry.commands, style.key());
+        drawn_parts.push((outlines, key, part));
     }
 
     let [a, b, c, d, _, _] = markers.to_local.as_coeffs();
-    let device = device_scale(scene, placement);
-    let cut = cut_of(scene, placement, masks);
+    let device = device_scale(rec.tables_ref(), placement);
+    let cut = cut_of(rec.tables_ref(), placement, masks);
+    let refs = (rec.clip(placement.clip), rec.space(placement.transform));
     let mut pushed = 0;
     let mut drew = false;
     let mut outcome = SeriesOutcome::default();
-    for (sheets, part) in drawn_parts {
-        let reach = sheets.reach[0];
-        let sheet = sheets.keys[0].handle();
+    for (outlines, key, part) in drawn_parts {
         let built = {
             let mut cache = masks.payloads();
             series_payload(
                 cache.as_deref_mut(),
                 markers.data,
-                SeriesPart::Glyph { sheet },
+                SeriesPart::Glyph { outline: key },
                 markers.to_local,
                 device,
                 MAX_MARK_PRIMS,
-                &sheets.table,
+                &outlines.shapes,
             )
         };
         let Some(SeriesLookup {
@@ -642,13 +666,13 @@ fn emit_path_markers(
         else {
             continue;
         };
-        // Every copy lies within its cells from the pixel of its anchor, and that pixel within a
-        // pixel of the anchor.
-        let farthest = reach
-            .iter()
-            .map(|edge| edge.unsigned_abs())
-            .max()
-            .unwrap_or(0) as f32;
+        // Every copy lies within its outline from its anchor, and a pixel past it for the
+        // quantised anchor and the whole-pixel raster.
+        let [x0, y0, x1, y1] = outlines.reach[0];
+        let farthest = [x0, y0, x1, y1]
+            .into_iter()
+            .map(f64::abs)
+            .fold(0.0, f64::max) as f32;
         let margin = f64::from((farthest + 1.0) / spatial[0].min(spatial[1]));
         let origin = markers.to_local * kurbo::Point::new(built.centre[0], built.centre[1]);
         let [x0, y0, x1, y1] = built.bounds;
@@ -659,29 +683,25 @@ fn emit_path_markers(
         if provisional {
             outcome.owed = Some(union(
                 outcome.owed.flatten(),
-                owed_of(scene, placement, ink),
+                owed_of(rec.tables_ref(), placement, ink),
             ));
         }
         let map = Affine::new([a, b, c, d, origin.x, origin.y]);
-        let lane = Lane::Glyph(sheets.table.len());
-        let paint_ref = brush_paint(scene, part.brush, markers.fit, part.inherited);
+        let paint_ref = brush_paint(rec, part.brush, markers.fit, part.inherited);
         for (payload, index) in built.payloads.iter().zip(&built.chunks) {
             drew = true;
-            let part_drawn = drawn(payload, index, lane, map, cut, margin);
+            let part_drawn = drawn(payload, index, Lane::Placement, map, cut, margin);
             if !matches!(part_drawn, Drawn::Whole) {
                 outcome.window = meet(outcome.window, cut.map(|cut| cut.window));
             }
-            let Some(mut item) = item_over(payload, part_drawn, ink, paint_ref) else {
+            let Some(mut item) = item_over(payload, part_drawn, ink, paint_ref, refs) else {
                 continue;
             };
             item.flags = MarkFlags::UNION | MarkFlags::SCREEN;
-            item.clip = placement.clip.0;
-            item.transform = placement.transform.index();
             item.axes = [a as f32, b as f32, c as f32, d as f32];
             item.origin = [origin.x as f32, origin.y as f32];
-            item.tiles = sheets.table.len() as u32;
-            item.texture = sheets.texture;
-            pushed += usize::from(scene.push_marks(item, Arc::clone(payload)).is_some());
+            rec.marks(item, Arc::clone(payload));
+            pushed += 1;
         }
     }
     if !drew {
@@ -695,11 +715,20 @@ fn emit_path_markers(
     Some((emitted, outcome))
 }
 
-/// Emits a path marker series through the general route: one item per part, the marker placed
-/// at every finite point in the fragment's space.
+/// Returns a number equal outlines drawn in equal styles share.
+fn outline_key(commands: &[i32], style: u64) -> u64 {
+    use core::hash::{Hash, Hasher};
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    commands.hash(&mut hasher);
+    style.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Records a path marker series as one path item, the marker placed at every finite point in the
+/// fragment's space, filled and stroked as its parts say.
 fn emit_placed_markers(
-    scene: &mut Scene,
-    id: VectorId,
+    rec: &mut Recorder<'_>,
     markers: &Markers<'_>,
     placement: VectorPlacement,
 ) -> ShapeEmission {
@@ -719,39 +748,44 @@ fn emit_placed_markers(
                 .map(|element| place * *element),
         );
     }
-    if path.is_empty() {
+    if path.is_empty() || markers.parts.is_empty() {
         return ShapeEmission::default();
     }
-    let path = Arc::new(path);
-    let bounds = kurbo::Shape::bounding_box(&*path);
-    let mut pushed = 0;
+    let mut fill = None;
+    let mut stroke = None;
     for part in markers.parts {
-        let paint_ref = brush_paint(scene, part.brush, markers.fit, part.inherited);
-        let mut item = match part.width {
-            None => VectorItem::filled(id, Arc::clone(&path), paint_ref),
-            Some(width) => VectorItem::styled(
-                id,
-                Arc::clone(&path),
-                VectorStroke {
-                    paint: paint_ref,
+        let paint = brush_paint(rec, part.brush, markers.fit, part.inherited);
+        match part.width {
+            None => {
+                fill = Some(PathFill {
+                    paint,
+                    rule: iceblink::FillRule::NON_ZERO,
+                });
+            }
+            Some(width) => {
+                stroke = Some(PathStroke {
+                    paint,
                     style: kurbo::Stroke::new(width * scale),
-                },
-            ),
-        };
-        let reach = item
-            .stroke
-            .as_ref()
-            .map_or(0.0, |stroke| f64::from(stroke.reach()));
-        let local = rect_of(bounds.inflate(reach, reach));
-        item.ink = under(scene, placement.transform, local);
-        item.local_ink = local;
-        item.transform = Some(placement.transform);
-        let item = item.clipped(placement.clip);
-        pushed += usize::from(scene.push_vector(item).is_some());
+                });
+            }
+        }
+    }
+    let item = PathItem {
+        path: Arc::new(path),
+        placement: Affine::IDENTITY,
+        brush: Affine::IDENTITY,
+        fill,
+        stroke,
+        clips: super::document::path_clips(&[]),
+        clip: rec.clip(placement.clip),
+        space: rec.space(placement.transform),
+    };
+    if !rec.path(item) {
+        return ShapeEmission::default();
     }
     counter::bump(Counter::VectorRouteGeneral);
     ShapeEmission {
-        pushed,
+        pushed: 1,
         route: Some(VectorRoute::GeneralRaster),
     }
 }
@@ -767,9 +801,9 @@ fn rect_of(rect: kurbo::Rect) -> Rect<DevicePx, Device> {
     )
 }
 
-/// The interned paint of `brush`, placed by `fit`. A colour does not move; a ramp does.
+/// The paint of `brush`, placed by `fit`. A colour does not move; a ramp does.
 fn brush_paint(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     brush: &zgui_canvas::Brush,
     fit: Affine,
     inherited: zgui_color::Color,
@@ -780,14 +814,15 @@ fn brush_paint(
     } else {
         zgui_svg::document::place::paint(&paint, fit)
     };
-    reference(scene, &paint, inherited)
+    let reference = reference(rec.tables(), &paint, inherited);
+    rec.paint(reference)
 }
 
-/// The [`MarkFlags`] cap of a stroke cap.
+/// The cap a marks item draws for a stroke cap.
 fn cap(cap: kurbo::Cap) -> u32 {
     match cap {
-        kurbo::Cap::Butt => MarkFlags::BUTT,
-        kurbo::Cap::Square => MarkFlags::SQUARE,
-        kurbo::Cap::Round => MarkFlags::ROUND,
+        kurbo::Cap::Butt => MarkFlags::CAP_BUTT,
+        kurbo::Cap::Square => MarkFlags::CAP_SQUARE,
+        kurbo::Cap::Round => MarkFlags::CAP_ROUND,
     }
 }

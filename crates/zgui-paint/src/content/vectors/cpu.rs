@@ -7,9 +7,8 @@
 //! composite source-over in gamma space, the fill before the stroke. Coverage comes from zeno, over
 //! outlines flattened finely with kurbo, and a stroke is filled as the outline kurbo strokes.
 
+use kurbo::{self, Affine, PathEl, Point, Rect};
 use zgui_color::{Color, ColorSpace};
-use zgui_scene::kurbo::{self, Affine, PathEl, Point, Rect};
-use zgui_scene::peniko;
 
 use crate::emit::vector::ShapePaint;
 

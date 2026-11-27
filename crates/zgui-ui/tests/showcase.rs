@@ -297,11 +297,12 @@ fn run(part: Part) -> Option<&'static Opened> {
             grab::forget();
             let log: Log = Arc::new(Mutex::new(Vec::new()));
             let found = Mutex::new(Found::default());
-            zgui::app()
+            let app = zgui::app()
+                .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
                 .with_title("gallery")
                 .with_size(WIDTH, HEIGHT)
-                .with_stylesheet(crate::shell::SHEET)
-                .with_renderer(Box::new(device::factory(&log)))
+                .with_stylesheet(crate::shell::SHEET);
+            device::drawn_on(app, &log)
                 .run_on(buffers(part, &found), move || (Grab, part.view()))
                 .expect("the gallery ran");
             let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));
@@ -797,8 +798,15 @@ fn a_document_with_a_ramp_and_a_clip_draws_the_ramp_and_only_inside_the_clip() {
         "and blue has to rise: {samples:?}"
     );
 
-    // The clip is a diamond inside a square drawing, so the drawing's own corners are the tinted
-    // pane behind it and not the ramp.
+    // The clip is a diamond inside a square drawing, so the drawing's own corners show the pane
+    // behind it and not the ramp. The pane is read between its left edge and the drawing, clear of
+    // its rounded corners.
+    let pane = region(opened, "facet on rose");
+    let [r, g, b, _] = frame.pixels.rgba(
+        ((pane.origin.x.0 + ink.0) / 2.0) as i32,
+        ((ink.1 + ink.3) / 2.0) as i32,
+    );
+    let behind = [r, g, b];
     for (x, y) in [
         (ink.0 + 2.0, ink.1 + 2.0),
         (ink.2 - 3.0, ink.1 + 2.0),
@@ -806,8 +814,8 @@ fn a_document_with_a_ramp_and_a_clip_draws_the_ramp_and_only_inside_the_clip() {
     ] {
         let [r, g, b, _] = frame.pixels.rgba(x as i32, y as i32);
         assert!(
-            apart([r, g, b], [0xff, 0xe4, 0xe6]) <= 24,
-            "the corner of the facet is {:?} rather than the rose pane behind it, so the \
+            apart([r, g, b], behind) <= 24,
+            "the corner of the facet is {:?} rather than the pane behind it, {behind:?}, so the \
              document's clip did not cut its corners off",
             [r, g, b]
         );

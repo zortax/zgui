@@ -1,18 +1,16 @@
 //! A callback surface that stopped asking for frames, invalidated from another thread.
 //!
-//! The renderer draws on a real device, so the window's renderer is an offscreen `WgpuRenderer`.
-//! A machine without a device prints why on standard error and skips.
+//! The window draws on a real device through the compositor's test device. A machine without a
+//! device prints why on standard error and skips.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use zgui_geom::{Scale, Size};
 use zgui_platform::Surface;
 use zgui_platform_headless::Harness;
-use zgui_render::RenderTarget;
-use zgui_render_wgpu::{Builder, wgpu};
 use zgui_runtime::{App, AppError, Runtime};
+use zgui_testkit_compositor::Device;
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_wgpu::{SurfaceElementExt, SurfaceInvalidator, SurfaceRenderCx, SurfaceRenderer};
 
@@ -30,8 +28,7 @@ impl SurfaceRenderer for Counting {
 
 /// Returns `true` where this machine has a device the test can draw on.
 fn available() -> bool {
-    let target = RenderTarget::new(Size::new(8, 8), Scale::new(1.0));
-    match Builder::new().offscreen(target, wgpu::TextureFormat::Rgba8Unorm, false) {
+    match Device::open([8, 8]) {
         Ok(_) => true,
         Err(failure) => {
             eprintln!("skipped: no usable graphics device ({failure})");
@@ -53,20 +50,22 @@ fn app(
         .with_title("invalidate")
         .with_size(400.0, 300.0)
         .with_stylesheet(".pane { width: 40px; height: 30px }")
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
-            |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let renderer = Builder::new()
-                    .offscreen(target, wgpu::TextureFormat::Rgba8Unorm, false)
-                    .map_err(AppError::GpuUnavailable)?;
-                Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
+            |_surface: &Arc<dyn Surface>, target: iceblink::RenderTarget| {
+                Ok::<_, AppError>(zgui_testkit_compositor::factory(move || {
+                    let mut device = Device::open(target.size)
+                        .expect("a device opens, which the test answered beforehand");
+                    iceblink::Renderer::configure(&mut device, target);
+                    device
+                }))
             },
         ))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(move |cx: &mut BuildCx<'_>| {
             let mut root = zgui_elements::r#box();
             for _ in 0..count {

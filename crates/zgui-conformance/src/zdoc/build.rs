@@ -21,7 +21,7 @@ use zgui_layout::text::Paragraphs;
 use zgui_layout::tree::LayoutTree;
 use zgui_layout::tree::store::LayoutStore;
 use zgui_style::{SheetOrigin, SheetSource, StyleEngine, Viewport};
-use zgui_testkit_scene::{FixedMetrics, MonoShaper};
+use zgui_testkit::{FixedMetrics, MonoShaper};
 
 use crate::zdoc::source::{Element, Zdoc};
 
@@ -72,9 +72,9 @@ impl Laid {
 /// The identifier tables one fragment pass filled in.
 pub struct Tables {
     /// Every clip chain the pass recorded.
-    pub clips: zgui_scene::ClipTable,
+    pub clips: zgui_space::ClipTable,
     /// Every coordinate system it named.
-    pub spatial: zgui_scene::SpatialTree,
+    pub spatial: zgui_space::SpatialTree,
     /// What is under a point.
     pub hit: zgui_layout::HitIndex,
     /// What the pass said has to be redrawn.
@@ -85,8 +85,8 @@ impl Tables {
     /// Tables that have recorded nothing yet.
     fn new() -> Self {
         Self {
-            clips: zgui_scene::ClipTable::rooted(),
-            spatial: zgui_scene::SpatialTree::with_viewport(),
+            clips: zgui_space::ClipTable::rooted(),
+            spatial: zgui_space::SpatialTree::with_viewport(),
             hit: zgui_layout::HitIndex::new(),
             damage: zgui_bits::DamageSet::new(),
         }
@@ -160,7 +160,7 @@ fn fragments(store: &mut LayoutStore, tables: &mut Tables) {
     let mut build = zgui_layout::fragment::build::Tables {
         clips: &mut tables.clips,
         spatial: &mut tables.spatial,
-        drawn: &zgui_scene::Placements::EMPTY,
+        drawn: &zgui_space::Placements::EMPTY,
         device: DeviceStyle::default(),
         scroll: &scroll,
         placements: &[],
@@ -305,6 +305,6 @@ impl MeasureContent for Replaced {
     }
 
     fn paint_slot(&mut self, _paint: &zgui_text_style::TextPaint) -> zgui_text::Brush {
-        zgui_scene::PaintSlot(0)
+        zgui_space::PaintSlot(0)
     }
 }

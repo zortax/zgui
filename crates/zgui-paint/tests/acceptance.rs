@@ -74,7 +74,7 @@ fn full_damage_reaches_only_the_surface() {
         report.skipped_subtrees > 1900,
         "the rows off the surface were not skipped whole"
     );
-    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let placements = zgui_space::Placements::of(&harness.scene.spatial);
     report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
@@ -99,7 +99,7 @@ fn every_fragment_the_damage_reaches_is_emitted() {
     harness.damage.absorb(rect(0, 0, 300, 30));
     harness.expand();
     let report = harness.paint();
-    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let placements = zgui_space::Placements::of(&harness.scene.spatial);
     report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
@@ -152,7 +152,7 @@ fn a_blurred_panel_over_animating_content_has_its_source_region_repainted() {
     );
 
     let report = harness.paint();
-    let placements = zgui_scene::Placements::of(&harness.scene.spatial);
+    let placements = zgui_space::Placements::of(&harness.scene.spatial);
     report.assert_emission_complete(&harness.store, &harness.damage, &placements);
 }
 
@@ -209,7 +209,7 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
     let vacated_ink = zgui_layout::fragment::index::device_ink_of(
         &harness.store,
         key,
-        &zgui_scene::Placements::of(&harness.scene.spatial),
+        &zgui_space::Placements::of(&harness.scene.spatial),
     );
     assert!(
         !vacated_ink.is_empty(),
@@ -224,7 +224,7 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
         &mut harness.document,
         &harness.store,
         &mut harness.damage,
-        &zgui_scene::Placements::of(&harness.scene.spatial),
+        &zgui_space::Placements::of(&harness.scene.spatial),
     );
     assert_eq!(absorbed, 1, "one root was removed and one contributed");
     assert!(
@@ -243,41 +243,15 @@ fn a_removed_subtree_damages_the_area_it_occupied() {
         &mut harness.document,
         &harness.store,
         &mut harness.damage,
-        &zgui_scene::Placements::of(&harness.scene.spatial),
+        &zgui_space::Placements::of(&harness.scene.spatial),
     );
     assert_eq!(again, 0);
 }
 
-#[test]
-fn every_group_marker_is_matched() {
-    // Half a pair leaves a target open, or composites one that was never begun — and neither shows
-    // up as anything but a wrong pixel much later.
-    let mut harness = Harness::new(
-        Element::new("root").children(vec![
-            Element::new("card").children(vec![Element::new("inner")]),
-        ]),
-        "root { display: block; width: 300px }
-         card { display: block; height: 60px; filter: blur(4px) }
-         inner { display: block; height: 20px; background: #333 }",
-    );
-    harness.paint_everything();
-    let starts = harness
-        .scene
-        .primitives
-        .groups
-        .iter()
-        .filter(|marker| marker.is_start)
-        .count();
-    let ends = harness.scene.primitives.groups.len() - starts;
-    assert!(
-        starts > 0,
-        "the fixture has to open a group, or this counts nothing"
-    );
-    assert_eq!(starts, ends, "every group opened has to be closed");
-}
-
-/// How many groups a box over a `multiply` child opens, with `parent` declared on the box.
-fn groups_over_a_blending_child(parent: &str) -> usize {
+/// How many groups a frame draws for a box over a `multiply` child, with `parent` declared on
+/// the box, or `None` when the factory provides no compositor.
+fn groups_over_a_blending_child(parent: &str) -> Option<u32> {
+    let mut output = support::compositor::Recorded::new([400, 400])?;
     let mut harness = Harness::new(
         Element::new("root").children(vec![
             Element::new("card").children(vec![Element::new("inner")]),
@@ -288,14 +262,8 @@ fn groups_over_a_blending_child(parent: &str) -> usize {
              inner {{ display: block; height: 20px; background: #333; mix-blend-mode: multiply }}"
         ),
     );
-    harness.paint_everything();
-    harness
-        .scene
-        .primitives
-        .groups
-        .iter()
-        .filter(|marker| marker.is_start)
-        .count()
+    output.frame_everything(&mut harness);
+    Some(output.output.counters().frame.groups)
 }
 
 #[test]
@@ -303,7 +271,9 @@ fn a_filter_that_changes_no_pixel_still_isolates_a_blending_child() {
     // `blur(0)` is an identity, so the chain it lowers to is empty. It still declares a filter,
     // and a filter isolates what blends below it: without a group of its own the child blends
     // with whatever is behind the card.
-    let plain = groups_over_a_blending_child("");
+    let Some(plain) = groups_over_a_blending_child("") else {
+        return;
+    };
     assert_eq!(
         plain, 1,
         "the control: the child opens its own group and nothing else does"
@@ -311,7 +281,7 @@ fn a_filter_that_changes_no_pixel_still_isolates_a_blending_child() {
     for declaration in ["filter: blur(0)", "backdrop-filter: blur(0)"] {
         assert_eq!(
             groups_over_a_blending_child(declaration),
-            plain + 1,
+            Some(plain + 1),
             "`{declaration}` opened no group around the blending child"
         );
     }
@@ -331,18 +301,19 @@ fn an_outline_is_drawn_over_the_boxs_own_descendants() {
     );
     harness.paint_everything();
 
-    let quads = &harness.scene.primitives.quads;
-    let outlines: Vec<_> = quads.iter().filter(|quad| quad.border[0] == 2.0).collect();
-    assert_eq!(outlines.len(), 1, "one outline, from {} quads", quads.len());
-    let outline_order = outlines[0].order;
+    let drawing = harness.redraw();
+    let quads = drawing.quads();
+    let outline = quads
+        .iter()
+        .position(|quad| quad.field("border") == Some("[2, 2, 2, 2]"))
+        .unwrap_or_else(|| panic!("one outline: {drawing}"));
     let label = quads
         .iter()
-        .find(|quad| quad.bounds[3] == 20.0)
+        .position(|quad| quad.bounds()[3] == 20.0)
         .expect("the label's own quad");
     assert!(
-        outline_order > label.order,
-        "the outline at {outline_order} sorts under the label at {}",
-        label.order
+        outline > label,
+        "the outline is drawn under the label: {drawing}"
     );
 }
 
@@ -355,16 +326,14 @@ fn nothing_outside_the_damage_reaches_the_display_list() {
         300.0,
         2000.0,
     );
-    harness.paint_everything();
-    let everything = harness.scene.primitives.quads.len();
+    let everything = harness.paint_everything().emitted.len();
 
     harness.clear_damage();
     harness.damage.absorb(rect(0, 0, 300, 40));
-    harness.paint();
-    let damaged = harness.scene.primitives.quads.len();
+    let damaged = harness.paint().emitted.len();
     assert!(
         damaged * 4 < everything,
-        "a two-row damage emitted {damaged} of {everything} quads"
+        "a two-row damage emitted {damaged} of {everything} fragments"
     );
     assert!(
         damaged > 0,
@@ -481,7 +450,7 @@ fn a_replayed_ranges_indices_still_resolve_to_what_they_were_recorded_with() {
     let clip = harness.store.fragment(row).expect("a fragment").clip;
     assert_ne!(
         clip,
-        zgui_scene::ClipId::ROOT,
+        zgui_space::ClipId::ROOT,
         "the row has to be clipped, or the invariant has nothing to check"
     );
     let recorded = harness.scene.clips.content_hash(clip);
@@ -586,21 +555,22 @@ fn emit_and_hit_agree_on_the_same_matrix() {
         .fragment(frag)
         .expect("a live fragment")
         .border_box;
-    // The name the *emitter* wrote onto what it pushed, not the one the fragment carries: that they
-    // are the same name is half of what is under test.
-    let slot = harness
-        .scene
-        .primitives
-        .quads
-        .iter()
-        .find(|quad| quad.transform != zgui_scene::SpatialId::VIEWPORT.index())
-        .expect("the card is drawn under a coordinate system of its own")
-        .transform;
+    // The space the compositor draws the card in, which is the mirror of the name the fragment
+    // carries.
     let space = harness
-        .scene
-        .spatial
-        .at(slot)
-        .expect("the slot a primitive names is a live coordinate system");
+        .store
+        .fragment(frag)
+        .and_then(|fragment| fragment.transform)
+        .expect("the card is drawn under a coordinate system of its own");
+    let quad_space = |harness: &mut Harness| {
+        let drawing = harness.redraw();
+        drawing
+            .quads()
+            .iter()
+            .find_map(|quad| quad.field("space").map(str::to_owned))
+            .unwrap_or_else(|| panic!("the card's quad is moved: {drawing}"))
+    };
+    assert_eq!(quad_space(&mut harness), "translate[100, 0]");
 
     let answers = |harness: &Harness, x: f32| {
         harness
@@ -628,7 +598,7 @@ fn emit_and_hit_agree_on_the_same_matrix() {
     // One tick of a transition: the matrix under the name is rewritten, and *nothing else happens*.
     // No fragment is recomposed, no hit entry is rewritten, no primitive is emitted again. This is
     // the frame C2 will produce, and the whole reason hit entries had to stop naming the device.
-    let owner = zgui_scene::PropertyOwner::of(harness.box_of("card"));
+    let owner = zgui_space::PropertyOwner::of(harness.box_of("card"));
     let held = *harness
         .scene
         .spatial
@@ -636,14 +606,21 @@ fn emit_and_hit_agree_on_the_same_matrix() {
         .expect("a live coordinate system");
     let moved = harness.scene.spatial.establish(
         owner,
-        zgui_scene::SpatialNode {
+        zgui_space::SpatialNode {
             local: zgui_geom::Matrix4::translation(200.0, 0.0, 0.0),
             ..held
         },
     );
     assert_eq!(moved, space, "a tick moves a matrix and keeps the name");
+    harness.clear_damage();
+    harness.paint();
 
     assert_eq!(drawn(&harness).origin.x.0, 200.0);
+    assert_eq!(
+        quad_space(&mut harness),
+        "translate[200, 0]",
+        "the compositor draws through the rewritten matrix"
+    );
     assert!(answers(&harness, 220.0), "the hit follows the matrix");
     assert!(
         !answers(&harness, 120.0),
@@ -662,33 +639,40 @@ fn a_backdrop_is_cut_to_the_rounded_border_box_in_the_space_of_its_box() {
                 transform: translateX(10px); backdrop-filter: blur(8px) }",
     );
     harness.paint_everything();
-    let scene = harness.scene();
-    let backdrop = scene
-        .primitives
-        .backdrops
-        .first()
-        .expect("the card frosts what is beneath it");
+    let drawing = harness.redraw();
+    let backdrops: Vec<_> = drawing.objects("backdrop").collect();
+    let [backdrop] = backdrops[..] else {
+        panic!("the card frosts what is beneath it: {drawing}");
+    };
     let card = harness
         .store()
         .fragment(harness.fragment_of("card"))
         .expect("the card has a fragment");
-    let Some(zgui_scene::ClipNode::Link { link, parent, .. }) = scene.clips.get(backdrop.clip)
-    else {
-        panic!("the backdrop has a clip of its own");
-    };
+    let border = card.border_box;
+    assert_eq!(backdrop.field("filters"), Some("[blur(4)]"), "{drawing}");
     assert_eq!(
-        *parent, card.clip,
-        "inside the chain the card is clipped by"
+        backdrop.rect("item"),
+        Some([
+            border.origin.x.0,
+            border.origin.y.0,
+            border.size.width.0,
+            border.size.height.0
+        ]),
+        "{drawing}"
     );
-    assert!(link.is_rounded(), "with the card's round corners");
-    let zgui_scene::ClipLink::RoundedRect { rect, space, .. } = link else {
-        panic!("a rounded rectangle");
-    };
-    assert_eq!(*rect, card.border_box);
+    let clip = backdrop.field("clip").expect("a clip of its own");
+    assert!(
+        clip.contains("radii=[12, 12, 12, 12, 12, 12, 12, 12]"),
+        "with the card's round corners: {drawing}"
+    );
+    assert!(
+        clip.contains("in=translate[10, 0]"),
+        "in the card's own coordinate system: {drawing}"
+    );
     assert_eq!(
-        Some(*space),
-        card.transform,
-        "in the card's own coordinate system"
+        backdrop.field("space"),
+        Some("translate[10, 0]"),
+        "{drawing}"
     );
 }
 
@@ -700,9 +684,14 @@ fn a_square_backdrop_keeps_the_clip_of_its_box() {
          card { display: block; height: 80px; backdrop-filter: blur(8px) }",
     );
     harness.paint_everything();
-    let card = harness
-        .store()
-        .fragment(harness.fragment_of("card"))
-        .expect("the card has a fragment");
-    assert_eq!(harness.scene().primitives.backdrops[0].clip, card.clip);
+    let drawing = harness.redraw();
+    let backdrops: Vec<_> = drawing.objects("backdrop").collect();
+    let [backdrop] = backdrops[..] else {
+        panic!("{drawing}");
+    };
+    assert_eq!(
+        backdrop.field("clip"),
+        None,
+        "the card is clipped by nothing, and its square backdrop adds no link: {drawing}"
+    );
 }

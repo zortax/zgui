@@ -8,16 +8,19 @@
 //! do not. So a part of more than one primitive takes this route only while the primitives are at
 //! least two device pixels apart, which leaves no pixel that two of them reach.
 
+use crate::VectorId;
+use iceblink::{BorderStyle, ClipRef, PaintRef, Quad, SpaceRef};
 use smallvec::SmallVec;
 use zgui_color::Color;
 use zgui_geom::{Corners, Device, DevicePx, Point, Rect, Size, Vec2};
-use zgui_scene::{ClipId, ClipLink, CornerShape, PaintRef, Quad, Scene, VectorId};
+use zgui_space::{ClipLink, CornerShape};
 
 use super::document::{density_of, reference, stroke_paint};
 use super::recognise::{self, Decomposition};
 use super::recognised::{Outline, PartOf, placed_paint, recognised};
 use super::{ShapePaint, ShapeSource, VectorPlacement};
 use crate::content::vectors::VectorMaskSource;
+use crate::emit::record::{Recorder, local_rect};
 
 /// The most primitives one part of a shape may become.
 const MAX_PRIMS: usize = 256;
@@ -118,14 +121,20 @@ impl Prim {
     }
 
     /// The quad drawing this with `fill` inside and `stroke` on its border.
-    fn quad(&self, fill: PaintRef, stroke: PaintRef, placement: (ClipId, u32)) -> Quad {
-        let mut quad = Quad::filled(self.bounds(), fill).clipped(placement.0);
-        quad.transform = placement.1;
-        quad.radii = self.radii;
-        quad.shape = self.exponent;
-        quad.border = [self.border; 4];
-        quad.stroke = stroke;
-        quad
+    fn quad(&self, fill: PaintRef, stroke: PaintRef, (clip, space): (ClipRef, SpaceRef)) -> Quad {
+        Quad {
+            bounds: local_rect(self.bounds()),
+            radii: self.radii,
+            shapes: [self.exponent; 4],
+            border: [self.border; 4],
+            fill,
+            stroke,
+            paint_origin: [0.0; 2],
+            clip,
+            space,
+            style: BorderStyle::SOLID,
+            _pad: [0; 3],
+        }
     }
 }
 
@@ -179,14 +188,14 @@ pub(super) fn of_color(color: Color) -> Look {
     }
 }
 
-/// Emits a shape whose parts are recognised analytic shapes as quads, or declines the route.
+/// Records a shape whose parts are recognised analytic shapes as quads, or declines the route.
 ///
-/// Nothing is pushed unless every part and every clip is recognised, and the primitives of each
-/// part are apart. With `decide_only`, nothing is pushed at all, and `Some(0)` says the route
+/// Nothing is recorded unless every part and every clip is recognised, and the primitives of each
+/// part are apart. With `decide_only`, nothing is recorded at all, and `Some(0)` says the route
 /// would take the shape.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_analytic(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     id: VectorId,
     source: &ShapeSource<'_>,
     paint: &ShapePaint,
@@ -320,18 +329,20 @@ pub(super) fn emit_analytic(
     if decide_only {
         return Some(0);
     }
-    let mut clip = placement.clip;
-    for link in links {
-        clip = scene.clips.push(clip, link);
-        scene.note_minted_clip(clip);
-    }
-    let space = (clip, placement.transform.index());
+    let clip = super::clip_through(rec, placement, links);
+    let space = (clip, rec.space(placement.transform));
     let fill_paint = match fill {
-        Some(fill) => reference(scene, &placed_paint(source, &fill.paint), paint.fill),
+        Some(fill) => {
+            let reference = reference(rec.tables(), &placed_paint(source, &fill.paint), paint.fill);
+            rec.paint(reference)
+        }
         None => PaintRef::NONE,
     };
     let stroke_paint = match stroked {
-        Some(_) => stroke_paint(scene, source, paint),
+        Some(_) => {
+            let reference = stroke_paint(rec.tables(), source, paint);
+            rec.paint(reference)
+        }
         None => PaintRef::NONE,
     };
 
@@ -342,8 +353,8 @@ pub(super) fn emit_analytic(
         && border.border > 0.0
         && opaque
     {
-        let quad = border.quad(fill_paint, stroke_paint, space);
-        return Some(usize::from(scene.push_quad(quad).is_some()));
+        rec.quad(border.quad(fill_paint, stroke_paint, space));
+        return Some(1);
     }
 
     let fill_quads = fills.iter().zip(&device_fills).map(|(prim, device)| {
@@ -360,8 +371,8 @@ pub(super) fn emit_analytic(
         };
         (device.left().0, quad)
     });
-    let mut pushed = run(scene, fill_quads.collect(), space);
-    pushed += run(scene, stroke_quads.collect(), space);
+    let mut pushed = run(rec, fill_quads.collect());
+    pushed += run(rec, stroke_quads.collect());
     Some(pushed)
 }
 
@@ -376,7 +387,7 @@ pub(super) fn clip_links(
     affine: &zgui_geom::Affine2,
     tau_local: f64,
     masks: &dyn VectorMaskSource,
-    transform: zgui_scene::SpatialId,
+    transform: zgui_space::SpatialId,
     inks: &[Rect<DevicePx, Device>],
     margin: f32,
 ) -> Option<SmallVec<[ClipLink; 2]>> {
@@ -432,23 +443,11 @@ pub(super) fn clip_links(
     Some(links)
 }
 
-/// Pushes `quads` left to right as one run, and returns how many survived.
-fn run(
-    scene: &mut Scene,
-    mut quads: SmallVec<[(f32, Quad); 4]>,
-    (clip, space): (ClipId, u32),
-) -> usize {
-    if let [(_, quad)] = quads.as_slice() {
-        return usize::from(scene.push_quad(*quad).is_some());
-    }
+/// Records `quads` left to right, and returns how many were recorded.
+fn run(rec: &mut Recorder<'_>, mut quads: SmallVec<[(f32, Quad); 4]>) -> usize {
     quads.sort_by(|one, two| one.0.total_cmp(&two.0));
-    let inks: SmallVec<[Rect<DevicePx, Device>; 4]> =
-        quads.iter().map(|(_, quad)| quad.ink()).collect();
-    scene.begin_run(&inks, clip, space);
-    let mut pushed = 0;
-    for (_, quad) in quads {
-        pushed += usize::from(scene.push_quad(quad).is_some());
+    for (_, quad) in &quads {
+        rec.quad(*quad);
     }
-    scene.end_run();
-    pushed
+    quads.len()
 }

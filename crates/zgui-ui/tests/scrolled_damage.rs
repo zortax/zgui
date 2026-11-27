@@ -7,6 +7,9 @@
 //!
 //! Each fixture reads the composed target with the real damage set after every frame and checks
 //! the boxes against what they can show at that moment.
+//!
+//! The compositor moves the port, so most frames of a gesture are the compositor's own. The boxes
+//! are read where the compositor shows them.
 
 mod desktop;
 mod device;
@@ -42,7 +45,8 @@ const SHEET: &str = ":root { background-color: #ffffff }
             transition: opacity 200ms steps(4, jump-end) }
     .fade.on { opacity: 0.25 }
     .slot { flex: none; padding: 4px 0; pointer-events: none }
-    .still { flex: none; height: 24px; border-radius: 6px; background-color: #2a2a2a }";
+    .still { flex: none; height: 24px; border-radius: 6px; background-color: #2a2a2a }
+    .still.tall { height: 600px }";
 
 /// The sidebar's own colour, which a ghost row shows at rest.
 const SIDE: (u8, u8, u8) = (0x1a, 0x1a, 0x1a);
@@ -94,7 +98,7 @@ fn open(item: Item, on: RwSignal<bool>) -> Option<Opened> {
     // Rows that light up would make a repaint differ by the hover the next frame applies.
     let row = match item {
         Item::EasedRows => "row eased",
-        Item::Progress | Item::Field => "still",
+        Item::Tint | Item::Progress | Item::Field => "still",
         _ => "row",
     };
     let stage = Stage::open(SHEET, move || {
@@ -215,11 +219,27 @@ impl Opened {
 
     /// Puts the pointer over the list.
     fn aim(&mut self) {
+        let at = self.pointer();
+        self.stage.move_to(at);
+    }
+
+    /// Where [`Opened::aim`] puts the pointer.
+    fn pointer(&self) -> Point<DevicePx, Device> {
         let side = self.rect(self.side);
-        self.stage.move_to(Point::new(
+        Point::new(
             DevicePx(side.origin.x.0 + 100.0),
             DevicePx(side.origin.y.0 + 150.0),
-        ));
+        )
+    }
+
+    /// The ghost row under the pointer, where the compositor shows it.
+    fn under_pointer(&self) -> Option<usize> {
+        let at = self.pointer();
+        self.rows.iter().position(|row| {
+            let rect = self.rect(*row);
+            (rect.origin.x.0..rect.origin.x.0 + rect.size.width.0).contains(&at.x.0)
+                && (rect.origin.y.0..rect.origin.y.0 + rect.size.height.0).contains(&at.y.0)
+        })
     }
 }
 
@@ -272,27 +292,38 @@ fn run(
     faults
 }
 
-/// Fails when any frame shows a ghost row in two colours, or more than one row lit.
+/// Fails when any frame shows a ghost row in two colours, or a row lit that was under the pointer
+/// neither in that frame nor in the one before, or leaves a row unlit that was under the pointer
+/// in both.
 #[test]
 fn rows_that_scroll_from_under_the_pointer_lose_their_hover() {
     hover_follows_the_pointer(Item::Rows);
 }
 
-/// The same, for rows whose hover colour eases in and out.
+/// Fails when any frame shows a row whose hover colour eases in and out in two colours, or more
+/// than one row lit.
 #[test]
 fn eased_rows_that_scroll_from_under_the_pointer_lose_their_hover() {
     hover_follows_the_pointer(Item::EasedRows);
 }
 
-/// Fails when any frame shows a row of `item` in two colours, or more than one row lit.
+/// Fails when any frame shows a row of `item` in two colours, or ghost rows whose hover is more
+/// than one frame behind the rows that move under the pointer.
+///
+/// The compositor moves the rows in frames the window does not run, so the hover lands one frame
+/// after the move that brought a row under the pointer. A row that eases its colour stays lit for
+/// a while after the hover left it, so only its colours and the count of lit rows are checked.
 fn hover_follows_the_pointer(item: Item) {
     let on = RwSignal::new(false);
     let Some(mut opened) = open(item, on) else {
         return;
     };
+    opened.aim();
+    let mut before = opened.under_pointer();
     let faults = run(&mut opened, on, |opened| {
         let mut faults = Vec::new();
-        let mut lit = 0;
+        let under = opened.under_pointer();
+        let mut lit = Vec::new();
         for (index, row) in opened.rows.iter().enumerate() {
             let Some(inner) = opened.inside(opened.rect(*row), 3.0) else {
                 continue;
@@ -300,7 +331,7 @@ fn hover_follows_the_pointer(item: Item) {
             let colours = opened.stage.composed_colours_in(inner);
             let (off, common) = spread(&colours);
             if common == HOVER {
-                lit += 1;
+                lit.push(index);
             }
             if off > 0 || (item == Item::Rows && common != SIDE && common != HOVER) {
                 faults.push(format!(
@@ -309,9 +340,29 @@ fn hover_follows_the_pointer(item: Item) {
                 ));
             }
         }
-        if lit > 1 {
-            faults.push(format!("{lit} rows lit"));
+        if item == Item::EasedRows {
+            if lit.len() > 1 {
+                faults.push(format!("{} rows lit", lit.len()));
+            }
+        } else {
+            if let Some(stray) = lit
+                .iter()
+                .find(|index| Some(**index) != under && Some(**index) != before)
+            {
+                faults.push(format!(
+                    "row {stray} is lit, under the pointer {under:?} and {before:?} a frame \
+                     earlier"
+                ));
+            }
+            if let Some(held) = under.filter(|row| Some(*row) == before)
+                && !lit.contains(&held)
+            {
+                faults.push(format!(
+                    "row {held} stayed under the pointer and is not lit"
+                ));
+            }
         }
+        before = under;
         faults
     });
     assert!(faults.is_empty(), "{}", faults.join("\n"));
@@ -414,6 +465,13 @@ fn an_opacity_step_in_a_scrolled_list_shows_one_level() {
     one_level_per_frame(Item::Fade);
 }
 
+/// Fails when any frame of a list whose boxes step their colour, also outside the port, differs
+/// from a full repaint of the same moment.
+#[test]
+fn a_colour_step_in_a_scrolled_list_matches_a_repaint() {
+    matches_a_repaint(Item::Tint);
+}
+
 /// Fails when any frame of the library's indeterminate bar in a scrolled list differs from a full
 /// repaint of the same moment.
 #[test]
@@ -446,34 +504,98 @@ fn matches_a_repaint(item: Item) {
         let side = opened
             .inside(opened.rect(opened.side), 0.0)
             .expect("the side shows");
-        let live = opened.stage.composed_colours_in(side);
-        opened.stage.repaint();
-        let whole = opened.stage.composed_colours_in(side);
-        let width = side.size.width.0 as usize;
-        let mut differing = 0;
-        let mut bounds = (usize::MAX, usize::MAX, 0, 0);
-        for (index, _) in live
-            .iter()
-            .zip(&whole)
-            .enumerate()
-            .filter(|(_, (a, b))| a != b)
-        {
-            differing += 1;
-            let (x, y) = (index % width, index / width);
-            bounds = (
-                bounds.0.min(x),
-                bounds.1.min(y),
-                bounds.2.max(x),
-                bounds.3.max(y),
-            );
-        }
-        if differing > 0 {
-            vec![format!(
-                "{differing} pixels differ in {bounds:?} of the side"
-            )]
-        } else {
-            Vec::new()
-        }
+        repaint_faults(&mut opened.stage, side)
     });
+    assert!(faults.is_empty(), "{}", faults.join("\n"));
+}
+
+/// Describes how the composed pixels inside `side` differ from a full repaint of the same moment.
+fn repaint_faults(stage: &mut Stage, side: Rect<DevicePx, Device>) -> Vec<String> {
+    let live = stage.composed_colours_in(side);
+    stage.redraw_from_nothing();
+    let whole = stage.composed_colours_in(side);
+    let width = side.size.width.0 as usize;
+    let mut differing = 0;
+    let mut bounds = (usize::MAX, usize::MAX, 0, 0);
+    for (index, _) in live
+        .iter()
+        .zip(&whole)
+        .enumerate()
+        .filter(|(_, (a, b))| a != b)
+    {
+        differing += 1;
+        let (x, y) = (index % width, index / width);
+        bounds = (
+            bounds.0.min(x),
+            bounds.1.min(y),
+            bounds.2.max(x),
+            bounds.3.max(y),
+        );
+    }
+    if differing > 0 {
+        vec![format!(
+            "{differing} pixels differ in {bounds:?} of the side"
+        )]
+    } else {
+        Vec::new()
+    }
+}
+
+/// The row [`a_row_moved_far_from_the_margin_matches_a_repaint`] moves, which starts in the margin
+/// below the port.
+const MOVED: usize = 20;
+
+/// Fails when a row that layout moves from the margin below the port to far below it stays drawn
+/// where it was, or is missing where it went.
+///
+/// The row above it grows by more than the margin, which moves the row out of every damaged
+/// rectangle.
+#[test]
+fn a_row_moved_far_from_the_margin_matches_a_repaint() {
+    crate::device::use_real_damage();
+    let grown = RwSignal::new(false);
+    let side = NodeRef::new();
+    let Some(mut stage) = Stage::open(SHEET, move || {
+        view! {
+            column(class = "page") {
+                column(class = "side", node_ref = side) {
+                    ScrollArea(class = "scroll") {
+                        column(class = "rows") {
+                            for index in move || (0..ITEMS).collect::<Vec<_>>(), key = |index: &usize| *index {
+                                box(
+                                    class = if index == MOVED { "tint" } else { "still" },
+                                    class:tall = move || index + 1 == MOVED && grown.get()
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }) else {
+        return;
+    };
+    let side = stage.rect_of(side.get_untracked().expect("the side was built"));
+    stage.move_to(Point::new(
+        DevicePx(side.origin.x.0 + 100.0),
+        DevicePx(side.origin.y.0 + 150.0),
+    ));
+    // The motion records the margin below the port, the moved row with it.
+    for _ in 0..3 {
+        stage.touchpad_step(20.0);
+    }
+    grown.set(true);
+    // The row's old place scrolls into the port, then its new place.
+    let mut faults = Vec::new();
+    for (what, pixels) in [("the old place", 20.0), ("the new place", 60.0)] {
+        for _ in 0..12 {
+            stage.touchpad_step(pixels);
+        }
+        faults.extend(
+            repaint_faults(&mut stage, side)
+                .into_iter()
+                .map(|fault| format!("over {what}: {fault}")),
+        );
+    }
     assert!(faults.is_empty(), "{}", faults.join("\n"));
 }

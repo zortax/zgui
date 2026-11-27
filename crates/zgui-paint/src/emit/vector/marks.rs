@@ -1,7 +1,7 @@
 //! Recognised shapes drawn as marks: the route for many prims, and for prims that overlap.
 //!
 //! Each part of a shape whose subpaths are all circles, axis-aligned ellipses, rectangles, rounded
-//! rectangles or simple strokes becomes one [`MarkItem`] over a shared payload of its prims. Prims
+//! rectangles or simple strokes becomes one [`Marks`] item over a shared payload of its prims. Prims
 //! two device pixels apart are painted one by one. Prims that come closer are summed into one
 //! coverage first and painted through the sum once, which is the union a path paints.
 //!
@@ -13,12 +13,11 @@
 
 use std::sync::Arc;
 
+use crate::VectorId;
+use iceblink::{ClipRef, MarkBox, MarkFlags, MarkPayload, Marks, PaintRef, SpaceRef};
 use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
-use zgui_scene::{
-    MarkBox, MarkFlags, MarkItem, MarkPayload, PaintRef, Scene, VectorId, kurbo, peniko,
-};
 
 use super::analytic::{clip_links, look, of_color};
 use super::document::{reference, stroke_paint};
@@ -26,6 +25,7 @@ use super::recognise::{self, Decomposition, Orientation};
 use super::recognised::{Outline, PartOf, placed_paint, recognised_in_source, straight_on_axes};
 use super::{ShapePaint, ShapeSource, VectorPlacement};
 use crate::content::vectors::VectorMaskSource;
+use crate::emit::record::{Recorder, local_rect};
 
 /// The most prims one part of a shape may become.
 pub(crate) const MAX_MARK_PRIMS: usize = 1 << 22;
@@ -47,21 +47,22 @@ const OVERDRAW: f32 = 8.0;
 struct Lowered {
     /// The prims, in the units they were recognised in.
     payload: Arc<MarkPayload>,
-    /// [`MarkFlags`] bits.
-    flags: u32,
+    /// How the prims are combined and capped.
+    flags: MarkFlags,
     /// What the prims paint together, in the fragment's space.
     ink: [f32; 4],
     /// Half the polyline stroke width, in the units the prims were recognised in.
     half_width: f32,
 }
 
-/// Emits a shape whose parts are recognised prims as one mark per part, or declines the route.
+/// Records a shape whose parts are recognised prims as one marks item per part, or declines the
+/// route.
 ///
-/// Nothing is pushed unless every part and every clip is recognised. With `decide_only`, nothing
-/// is pushed at all, and `Some(0)` says the route would take the shape.
+/// Nothing is recorded unless every part and every clip is recognised. With `decide_only`, nothing
+/// is recorded at all, and `Some(0)` says the route would take the shape.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_marks(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     id: VectorId,
     source: &ShapeSource<'_>,
     paint: &ShapePaint,
@@ -173,42 +174,66 @@ pub(super) fn emit_marks(
     if decide_only {
         return Some(0);
     }
-    let mut clip = placement.clip;
-    for link in links {
-        clip = scene.clips.push(clip, link);
-        scene.note_minted_clip(clip);
-    }
+    let clip = super::clip_through(rec, placement, links);
+    let space = rec.space(placement.transform);
     let mut pushed = 0;
     if let (Some((lowered, place)), Some(fill)) = (fills, fill) {
-        let paint = reference(scene, &placed_paint(source, &fill.paint), paint.fill);
-        pushed += push(scene, lowered, place, paint, clip, placement);
+        let paint = reference(rec.tables(), &placed_paint(source, &fill.paint), paint.fill);
+        let paint = rec.paint(paint);
+        pushed += record(rec, lowered, place, paint, (clip, space));
     }
     if let Some((lowered, place)) = strokes {
-        let paint = stroke_paint(scene, source, paint);
-        pushed += push(scene, lowered, place, paint, clip, placement);
+        let paint = stroke_paint(rec.tables(), source, paint);
+        let paint = rec.paint(paint);
+        pushed += record(rec, lowered, place, paint, (clip, space));
     }
     Some(pushed)
 }
 
-/// Pushes one part as one mark whose payload `place` maps to the fragment's space, and returns
-/// how many survived.
-fn push(
-    scene: &mut Scene,
+/// Records one part as one marks item whose payload `place` maps to the fragment's space, and
+/// returns how many items were recorded.
+fn record(
+    rec: &mut Recorder<'_>,
     lowered: Lowered,
     place: kurbo::Affine,
     paint: PaintRef,
-    clip: zgui_scene::ClipId,
-    placement: VectorPlacement,
+    (clip, space): (ClipRef, SpaceRef),
 ) -> usize {
-    let mut item = MarkItem::new(rect(lowered.ink), paint, lowered.payload.counts());
+    let mut item = item(rect(lowered.ink), paint, &lowered.payload, (clip, space));
     let [a, b, c, d, e, f] = place.as_coeffs();
     item.flags = lowered.flags;
-    item.clip = clip.0;
-    item.transform = placement.transform.index();
     item.half_width = lowered.half_width;
     item.axes = [a as f32, b as f32, c as f32, d as f32];
     item.origin = [e as f32, f as f32];
-    usize::from(scene.push_marks(item, lowered.payload).is_some())
+    rec.marks(item, lowered.payload);
+    1
+}
+
+/// Returns a marks item over `bounds` that fills every prim of `payload` with `paint`, mapping
+/// the payload by the identity.
+pub(super) fn item(
+    bounds: Rect<DevicePx, Device>,
+    paint: PaintRef,
+    payload: &MarkPayload,
+    (clip, space): (ClipRef, SpaceRef),
+) -> Marks {
+    Marks {
+        bounds: local_rect(bounds),
+        paint,
+        paint_origin: [0.0; 2],
+        origin: [0.0; 2],
+        axes: [1.0, 0.0, 0.0, 1.0],
+        half_width: 0.0,
+        discs: payload.discs.len() as u32,
+        boxes: payload.boxes.len() as u32,
+        vertices: payload.vertices.len() as u32,
+        placements: payload.placements.len() as u32,
+        first: 0,
+        payload: 0,
+        clip,
+        space,
+        flags: MarkFlags::default(),
+    }
 }
 
 /// An `[x0, y0, x1, y1]` rectangle in the shape's space.
@@ -307,7 +332,7 @@ fn compose(affine: &zgui_geom::Affine2, place: kurbo::Affine) -> zgui_geom::Affi
 }
 
 /// The payload of `found` and its flags, or `None` for polyline caps no item can draw.
-fn payload_of(found: Arc<Decomposition>, union: bool) -> Option<(MarkPayload, u32)> {
+fn payload_of(found: Arc<Decomposition>, union: bool) -> Option<(MarkPayload, MarkFlags)> {
     let mut vertices = Vec::new();
     let mut flags = runs(&found, &mut vertices)?;
     // A result no cache holds is moved into the payload rather than copied.
@@ -324,7 +349,8 @@ fn payload_of(found: Arc<Decomposition>, union: bool) -> Option<(MarkPayload, u3
             })
             .collect(),
         vertices,
-        glyphs: Vec::new(),
+        shapes: Vec::new(),
+        placements: Vec::new(),
     };
     if union {
         flags |= MarkFlags::UNION;
@@ -338,11 +364,11 @@ fn payload_of(found: Arc<Decomposition>, union: bool) -> Option<(MarkPayload, u3
 /// A capsule continues the run before it when it starts where the run ends and both ends that
 /// meet there are round: the round join. Any other capsule starts a run. Every run has to start
 /// with one cap and end with one cap, which become the item's; `None` otherwise.
-fn runs(found: &Decomposition, vertices: &mut Vec<[f32; 2]>) -> Option<u32> {
+fn runs(found: &Decomposition, vertices: &mut Vec<[f32; 2]>) -> Option<MarkFlags> {
     if found.capsules.is_empty() {
-        return Some(0);
+        return Some(MarkFlags::default());
     }
-    let separator = [f32::NAN, f32::NAN];
+    let separator = [f32::NAN, 0.0];
     vertices.reserve(found.capsules.len() * 2 + 2);
     vertices.push(separator);
     let mut start_cap: Option<u8> = None;

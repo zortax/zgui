@@ -6,10 +6,9 @@
 //! compared against `tau`, one sixteenth of a device pixel in the path's own units, so a shape
 //! drawn from the result lies within a sixteenth of a pixel of the outline it replaces.
 
+use kurbo::{self, BezPath, CubicBez, ParamCurve, PathEl, Point, Vec2};
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
-use zgui_scene::kurbo::{self, BezPath, CubicBez, ParamCurve, PathEl, Point, Vec2};
-use zgui_scene::peniko;
 
 #[cfg(test)]
 mod tests;

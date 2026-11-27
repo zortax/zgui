@@ -18,7 +18,7 @@ const FEATURE: &str = "counters";
 ///
 /// Only test and measurement tools: nothing an application links to run. Only test tooling may
 /// depend on them, because the check does not follow a dependency on a reader.
-const READERS: &[&str] = &["zgui-bench", "zgui-testkit-scene"];
+const READERS: &[&str] = &["zgui-bench", "zgui-testkit"];
 
 /// Records a violation for each normal dependency in `manifest` that turns the counters on.
 pub(crate) fn check(member: &str, manifest: &Manifest, report: &mut Report) {
@@ -91,6 +91,6 @@ mod tests {
     #[test]
     fn a_member_that_exists_to_read_the_counters_is_accepted() {
         assert_eq!(violations("zgui-bench", NORMAL), 0);
-        assert_eq!(violations("zgui-testkit-scene", NORMAL), 0);
+        assert_eq!(violations("zgui-testkit", NORMAL), 0);
     }
 }

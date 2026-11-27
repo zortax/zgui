@@ -18,14 +18,13 @@ const CSS: &str = ":root { display: block; width: 400px; height: 300px }
                    text { display: inline }
                    .c { color: var(--grey) }";
 
-/// The grey of every glyph the window draws.
+/// The grey of every glyph the window shows.
 fn drawn_greys(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<u8> {
-    harness.app().windows()[0]
-        .scene()
-        .primitives
-        .mono_sprites
+    support::drawing(&harness.app().windows()[0])
+        .glyphs()
         .iter()
-        .map(|sprite| (sprite.color[0] * 255.0).round() as u8)
+        .filter_map(|glyph| glyph.color("paint"))
+        .map(|[red, ..]| (red * 255.0).round() as u8)
         .collect()
 }
 

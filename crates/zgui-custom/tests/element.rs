@@ -22,17 +22,16 @@ where
         .with_title("custom")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
+        .with_compositor(zgui_testkit_compositor::driver(
+            zgui_testkit_compositor::fake_text_compositor(),
+        ))
         .with_renderer(Box::new(
             |_surface: &Arc<dyn Surface>, target| -> Result<_, AppError> {
-                let mut renderer = zgui_testkit_scene::CaptureRenderer::new();
-                zgui_render::Renderer::configure(&mut renderer, target);
-                Ok(Box::new(renderer) as Box<dyn zgui_render::Renderer>)
+                Ok(zgui_testkit_compositor::screen(target))
             },
         ))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
         .with_custom(Box::new(|_document| zgui_custom::sources()))
         .into_handler(view)

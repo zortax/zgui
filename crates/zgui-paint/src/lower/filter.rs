@@ -6,11 +6,11 @@
 //! needed before anything is drawn. A second conversion here would let the ink, the registry and the
 //! damage disagree, so this calls that one.
 
+use iceblink::BlendMode;
 use zgui_css::parity::Support;
 use zgui_css::values::effect::{IsolationValue, MixBlendModeValue};
 use zgui_css::{ComputedStyle, register_properties};
 use zgui_layout::fragment::filter::FilterChain;
-use zgui_scene::peniko;
 
 register_properties! {
     opacity         => Support::Implemented("zgui-paint::lower::filter"),
@@ -30,7 +30,7 @@ pub struct GroupPaint {
     /// The filters applied to whatever is drawn beneath the box.
     pub backdrop: FilterChain,
     /// How the box composites onto what is beneath it.
-    pub blend: peniko::BlendMode,
+    pub blend: BlendMode,
     /// Whether the box refuses to blend with anything outside itself.
     pub isolated: bool,
     /// Whether the box declares a `filter` or a `backdrop-filter`.
@@ -49,7 +49,7 @@ impl GroupPaint {
     /// what is beneath the box and composites over it, and needs a boundary only for a descendant
     /// that reads what is behind it too (see [`isolation`](crate::emit::group::isolation)).
     pub fn needs_isolation(&self) -> bool {
-        !self.filters.is_empty() || self.isolated || self.blend != peniko::BlendMode::default()
+        !self.filters.is_empty() || self.isolated || self.blend != BlendMode::NORMAL
     }
 }
 
@@ -70,33 +70,31 @@ pub fn of(style: &ComputedStyle, scale: f32) -> GroupPaint {
 ///
 /// All sixteen of CSS's separable and non-separable modes have an exact counterpart, and
 /// `plus-lighter` is the one that is a Porter-Duff compose rather than a blend.
-pub fn blend_of(mode: MixBlendModeValue) -> peniko::BlendMode {
-    use peniko::{BlendMode, Compose, Mix};
+pub fn blend_of(mode: MixBlendModeValue) -> BlendMode {
     match mode {
-        MixBlendModeValue::Normal => BlendMode::default(),
-        MixBlendModeValue::Multiply => BlendMode::new(Mix::Multiply, Compose::SrcOver),
-        MixBlendModeValue::Screen => BlendMode::new(Mix::Screen, Compose::SrcOver),
-        MixBlendModeValue::Overlay => BlendMode::new(Mix::Overlay, Compose::SrcOver),
-        MixBlendModeValue::Darken => BlendMode::new(Mix::Darken, Compose::SrcOver),
-        MixBlendModeValue::Lighten => BlendMode::new(Mix::Lighten, Compose::SrcOver),
-        MixBlendModeValue::ColorDodge => BlendMode::new(Mix::ColorDodge, Compose::SrcOver),
-        MixBlendModeValue::ColorBurn => BlendMode::new(Mix::ColorBurn, Compose::SrcOver),
-        MixBlendModeValue::HardLight => BlendMode::new(Mix::HardLight, Compose::SrcOver),
-        MixBlendModeValue::SoftLight => BlendMode::new(Mix::SoftLight, Compose::SrcOver),
-        MixBlendModeValue::Difference => BlendMode::new(Mix::Difference, Compose::SrcOver),
-        MixBlendModeValue::Exclusion => BlendMode::new(Mix::Exclusion, Compose::SrcOver),
-        MixBlendModeValue::Hue => BlendMode::new(Mix::Hue, Compose::SrcOver),
-        MixBlendModeValue::Saturation => BlendMode::new(Mix::Saturation, Compose::SrcOver),
-        MixBlendModeValue::Color => BlendMode::new(Mix::Color, Compose::SrcOver),
-        MixBlendModeValue::Luminosity => BlendMode::new(Mix::Luminosity, Compose::SrcOver),
-        MixBlendModeValue::PlusLighter => BlendMode::new(Mix::Normal, Compose::Plus),
+        MixBlendModeValue::Normal => BlendMode::NORMAL,
+        MixBlendModeValue::Multiply => BlendMode::MULTIPLY,
+        MixBlendModeValue::Screen => BlendMode::SCREEN,
+        MixBlendModeValue::Overlay => BlendMode::OVERLAY,
+        MixBlendModeValue::Darken => BlendMode::DARKEN,
+        MixBlendModeValue::Lighten => BlendMode::LIGHTEN,
+        MixBlendModeValue::ColorDodge => BlendMode::COLOR_DODGE,
+        MixBlendModeValue::ColorBurn => BlendMode::COLOR_BURN,
+        MixBlendModeValue::HardLight => BlendMode::HARD_LIGHT,
+        MixBlendModeValue::SoftLight => BlendMode::SOFT_LIGHT,
+        MixBlendModeValue::Difference => BlendMode::DIFFERENCE,
+        MixBlendModeValue::Exclusion => BlendMode::EXCLUSION,
+        MixBlendModeValue::Hue => BlendMode::HUE,
+        MixBlendModeValue::Saturation => BlendMode::SATURATION,
+        MixBlendModeValue::Color => BlendMode::COLOR,
+        MixBlendModeValue::Luminosity => BlendMode::LUMINOSITY,
+        MixBlendModeValue::PlusLighter => BlendMode::PLUS_LIGHTER,
     }
 }
 
 #[cfg(test)]
 mod tests {
     use zgui_css::values::effect::MixBlendModeValue;
-    use zgui_scene::peniko;
 
     use super::blend_of;
 
@@ -104,7 +102,7 @@ mod tests {
     fn normal_is_the_mode_that_needs_no_boundary() {
         assert_eq!(
             blend_of(MixBlendModeValue::Normal),
-            peniko::BlendMode::default()
+            iceblink::BlendMode::NORMAL
         );
     }
 
@@ -128,7 +126,7 @@ mod tests {
             MixBlendModeValue::Luminosity,
             MixBlendModeValue::PlusLighter,
         ];
-        let mut seen: Vec<peniko::BlendMode> = vec![blend_of(MixBlendModeValue::Normal)];
+        let mut seen: Vec<iceblink::BlendMode> = vec![blend_of(MixBlendModeValue::Normal)];
         for mode in modes {
             let blend = blend_of(mode);
             assert!(

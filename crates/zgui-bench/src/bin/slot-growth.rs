@@ -14,11 +14,11 @@
 
 use std::time::{Duration, Instant};
 
+use iceblink::{RenderTarget, Renderer};
 use zgui::app::Fonts;
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
 use zgui::prelude::*;
-use zgui::render::{RenderTarget, Renderer};
 use zgui::runtime::{App, AppError};
 use zgui::view::{Anchor, BuildCx, IntoView, View};
 use zgui::{component, view};
@@ -88,25 +88,27 @@ fn main() {
     let fonts = Fonts::system();
     let metrics = fonts.clone();
     let shaping = fonts.clone();
-    let raster = fonts.clone();
     let handler = App::new()
         .with_title("slot-growth")
         .with_size(1000.0, 800.0)
         .with_stylesheet(SHEET)
+        .with_compositor(zgui_bench::renderers::client(zgui::app::compositor(&fonts)))
         .with_renderer(Box::new(
             |_surface: &std::sync::Arc<dyn zgui::platform::Surface>,
              target: RenderTarget|
-             -> Result<Box<dyn Renderer>, AppError> {
-                let mut inner = zgui_testkit_scene::CaptureRenderer::new();
-                inner.configure(target);
-                Ok(Box::new(inner))
+             -> Result<iceblink::RendererFactory, AppError> {
+                let factory: iceblink::RendererFactory = Box::new(move || {
+                    let mut inner = zgui_bench::renderers::NullRenderer::default();
+                    inner.configure(target);
+                    Ok(Box::new(inner) as Box<dyn Renderer>)
+                });
+                Ok(factory)
             },
         ))
         .with_metrics(Box::new(move || metrics.metrics()))
         .with_text_engine(Box::new(move || {
             Box::new(zgui_layout::Paragraphs::new(shaping.shaper()))
         }))
-        .with_glyph_raster(Box::new(move || raster.raster()))
         .into_handler(move |cx: &mut BuildCx<'_>| -> Box<dyn Anchor> {
             Box::new(
                 view! { Feed(texts = mounted.clone()) }

@@ -23,9 +23,9 @@ zgui-dom = { path = "../zgui-dom", version = "0.1.0" }
 zgui-geom = { path = "../zgui-geom", version = "0.1.0" }
 zgui-interned = { path = "../zgui-interned", version = "0.1.0" }
 zgui-profile = { path = "../zgui-profile", version = "0.1.0" }
-# The clip chain and the transform a fragment carries are the scene's identifiers. A parallel id
-# space here would be the same aliasing hazard one level up.
-zgui-scene = { path = "../zgui-scene", version = "0.1.0" }
+# The clip chain and the transform a fragment carries are these identifiers. A parallel id space
+# here would be the same aliasing hazard one level up.
+zgui-space = { path = "../zgui-space", version = "0.1.0" }
 zgui-text = { path = "../zgui-text", version = "0.1.0" }
 # The run and paragraph properties an inline formatting context is built from, and the two keys a
 # shaped result is cached under. Named directly because they appear in this crate's own signatures:
@@ -46,7 +46,7 @@ tracing.workspace = true
 # counter assertions need the counters compiled in — a build without them would keep every budget
 # green while measuring nothing.
 zgui-profile = { path = "../zgui-profile", version = "0.1.0", features = ["counters"] }
-zgui-testkit-scene = { path = "../zgui-testkit-scene", version = "0.1.0" }
+zgui-testkit = { path = "../zgui-testkit", version = "0.1.0" }
 # The custom-element reference is a packed property; the relayout test writes one.
 zgui-vocab = { path = "../zgui-vocab", version = "0.1.0" }
 # The box tree is built from computed styles, so the acceptance tests run a real cascade over a

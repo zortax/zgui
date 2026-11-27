@@ -12,13 +12,14 @@
 //! Step five is why the outline is a separate function: it belongs after the subtree, and a function
 //! that emitted it beside the background would sort a box's focus ring underneath its own text.
 
+use crate::VectorId;
 use zgui_layout::{Fragment, FragmentKind};
-use zgui_scene::{Scene, VectorId};
 
 use crate::content::vectors::VectorMaskSource;
 use crate::content::vectors::{Placement as DrawingPlacement, VectorSource};
 use crate::emit::box_::{self, BoxPlacement};
 use crate::emit::highlight::{self, HighlightLayer, HighlightRequest, HighlightSource};
+use crate::emit::record::Recorder;
 use crate::emit::replaced::{ReplacedPlacement, Source};
 use crate::emit::scrollbar::{self, ScrollbarPaint};
 use crate::emit::text::{self, GlyphSource, TextPlacement};
@@ -27,9 +28,9 @@ use crate::lower::PaintStyle;
 
 /// Where a replaced box's content comes from.
 ///
-/// A fragment names the content it draws and nothing about it; what that name resolves to — an
-/// atlas tile for a decoded image, a texture handle for a video frame — belongs to whoever decoded
-/// it. Keeping it a seam is what lets the paint stage be exercised with no decoder.
+/// A fragment names the content it draws and nothing about it. What that name resolves to,
+/// decoded texels or a texture handle for a video frame, belongs to whoever decoded it. Keeping
+/// it a seam is what lets the paint stage be exercised with no decoder.
 pub trait ReplacedSource {
     /// Where the content named by `id` lives, or nothing if it has not been decoded yet.
     fn source(&self, id: zgui_dom::host::ReplacedId) -> Option<Source>;
@@ -42,6 +43,10 @@ pub trait ReplacedSource {
     fn revision(&self, _id: zgui_dom::host::ReplacedId) -> u64 {
         0
     }
+
+    /// Reports that the content of `id` was handed back without texels and the compositor holds
+    /// no image of it, so it drew nothing.
+    fn missing(&self, _id: zgui_dom::host::ReplacedId) {}
 }
 
 /// A replaced-content source with nothing in it.
@@ -88,8 +93,6 @@ pub struct Emission<'a> {
     pub nested_inline: bool,
     /// Where glyphs come from.
     pub glyphs: &'a dyn GlyphSource,
-    /// Where a run a custom element shaped itself gets its tiles.
-    pub glyph_placements: &'a dyn crate::emit::text::GlyphPlacementSource,
     /// Where the caret and the selection bands drawn with a line come from.
     pub highlights: &'a dyn HighlightSource,
     /// Where replaced content comes from.
@@ -111,12 +114,14 @@ pub struct Emission<'a> {
     pub scale: f32,
     /// How a scrollbar is painted.
     pub scrollbars: ScrollbarPaint,
+    /// Where a scrollbar thumb sits on its track, for a thumb fragment.
+    pub thumb: Option<scrollbar::ThumbTrack>,
 }
 
 /// What one fragment emitted, including the path selected for vector content.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct FragmentEmission {
-    /// How many primitives reached the scene.
+    /// How many items were recorded.
     pub(crate) pushed: usize,
     /// Every vector path selected by the fragment's own content.
     pub(crate) vector_routes: vector::VectorRoutes,
@@ -124,14 +129,14 @@ pub(crate) struct FragmentEmission {
     pub(crate) layer: vector::LayerOutcome,
 }
 
-/// Emits one fragment's own primitives, and returns how many were pushed.
-pub fn fragment(scene: &mut Scene, fragment: &Fragment, emission: &Emission<'_>) -> usize {
-    fragment_tracked(scene, fragment, emission).pushed
+/// Emits one fragment's own painting, and returns how many items and primitives it drew.
+pub fn fragment(rec: &mut Recorder<'_>, fragment: &Fragment, emission: &Emission<'_>) -> usize {
+    fragment_tracked(rec, fragment, emission).pushed
 }
 
 /// Emits one fragment and records the vector raster paths selected by its own content.
 pub(crate) fn fragment_tracked(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     fragment: &Fragment,
     emission: &Emission<'_>,
 ) -> FragmentEmission {
@@ -149,17 +154,17 @@ pub(crate) fn fragment_tracked(
         _ => !style.paints_nothing(),
     };
     if draws && !emission.nested_inline {
-        pushed += box_::outer_shadows(scene, &style, emission.box_placement);
+        pushed += box_::outer_shadows(rec, &style, emission.box_placement);
         pushed += box_::background_and_border(
-            scene,
+            rec,
             &style,
             emission.box_placement,
             emission.shaders,
             emission.pointer,
         );
-        pushed += box_::inset_shadows(scene, &style, emission.box_placement);
+        pushed += box_::inset_shadows(rec, &style, emission.box_placement);
     }
-    let content = content_tracked(scene, fragment, &style, emission);
+    let content = content_tracked(rec, fragment, &style, emission);
     pushed += content.pushed;
     FragmentEmission {
         pushed,
@@ -169,7 +174,7 @@ pub(crate) fn fragment_tracked(
 }
 
 /// Emits a fragment's outline, which is drawn after its descendants.
-pub fn outline(scene: &mut Scene, emission: &Emission<'_>) -> usize {
+pub fn outline(rec: &mut Recorder<'_>, emission: &Emission<'_>) -> usize {
     if vanished(emission.alpha) || emission.nested_inline {
         return 0;
     }
@@ -177,7 +182,7 @@ pub fn outline(scene: &mut Scene, emission: &Emission<'_>) -> usize {
     if !style.visible {
         return 0;
     }
-    box_::outline(scene, &style, emission.box_placement)
+    box_::outline(rec, &style, emission.box_placement)
 }
 
 /// Whether a folded alpha has taken everything under it to nothing.
@@ -197,7 +202,7 @@ fn vanished(alpha: f32) -> bool {
 }
 
 fn content_tracked(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     fragment: &Fragment,
     style: &PaintStyle,
     emission: &Emission<'_>,
@@ -213,7 +218,7 @@ fn content_tracked(
             // The backgrounds of the nested inline boxes first, under the selection and the
             // glyphs.
             let mut pushed = crate::emit::inline::boxes(
-                scene,
+                rec,
                 emission.inline,
                 emission.shaders,
                 emission.pointer,
@@ -222,7 +227,7 @@ fn content_tracked(
             // a band drawn over opaque text hides the text it is meant to mark, and a caret drawn
             // under it disappears inside whichever letter it is sitting on.
             pushed += marks(
-                scene,
+                rec,
                 emission,
                 fragment.box_,
                 paragraph,
@@ -230,7 +235,7 @@ fn content_tracked(
                 HighlightLayer::Behind,
             );
             pushed += text::emit(
-                scene,
+                rec,
                 emission.glyphs,
                 paragraph,
                 line,
@@ -242,10 +247,10 @@ fn content_tracked(
                 },
                 emission.text_placement,
             );
-            pushed += crate::emit::inline::outlines(scene, emission.inline);
+            pushed += crate::emit::inline::outlines(rec, emission.inline);
             pushed
                 + marks(
-                    scene,
+                    rec,
                     emission,
                     fragment.box_,
                     paragraph,
@@ -257,7 +262,7 @@ fn content_tracked(
         // far is what a rich-text editor needs rather than what a document produces. Until something
         // produces one, a run draws through the same path its line would.
         FragmentKind::TextRun { paragraph, run } => text::emit(
-            scene,
+            rec,
             emission.glyphs,
             paragraph,
             run,
@@ -271,7 +276,7 @@ fn content_tracked(
         ),
         FragmentKind::Replaced { content } => match emission.replaced.source(content) {
             Some(source) => crate::emit::replaced::emit(
-                scene,
+                rec,
                 source,
                 ReplacedPlacement {
                     content_box: fragment.content_box(),
@@ -286,7 +291,11 @@ fn content_tracked(
                     position: style.object_position.clone(),
                     scale: emission.scale,
                 },
-            ),
+            )
+            .unwrap_or_else(|| {
+                emission.replaced.missing(content);
+                0
+            }),
             None => 0,
         },
         // The outlines are drawn inside the box's own decorations and under the same clip and
@@ -307,7 +316,7 @@ fn content_tracked(
             };
             // The layer reads the unfaded paint, and the sprite carries the folded opacity.
             let emitted = vector::draw_drawing_tracked(
-                scene,
+                rec,
                 VectorId(fragment.key.index()),
                 &drawing,
                 style.shape,
@@ -338,9 +347,9 @@ fn content_tracked(
             };
             // The same question the text stage asks of this fragment: per-channel coverage
             // survives an opaque destination on the pixel grid, and nothing else.
-            let text_subpixel = emission.text_placement.keeps_subpixel(scene);
+            let text_subpixel = emission.text_placement.keeps_subpixel(rec.tables_ref());
             let mut painter = crate::content::custom::ScenePainter {
-                scene,
+                rec: rec.reborrow(),
                 content_box: fragment.content_box(),
                 clip: emission.box_placement.clip,
                 transform: emission.box_placement.transform,
@@ -348,7 +357,6 @@ fn content_tracked(
                 scale: emission.scale,
                 shape_paint: style.shape,
                 vector_masks: emission.vector_masks,
-                glyph_placements: emission.glyph_placements,
                 text_subpixel,
                 vector_id: VectorId(fragment.key.index()),
                 shapes_pushed: 0,
@@ -360,12 +368,15 @@ fn content_tracked(
             painter.pushed
         }
         FragmentKind::Scrollbar { part, .. } => scrollbar::emit(
-            scene,
+            rec,
             part,
             fragment.border_box,
             scrollbar::resolve(emission.scrollbars, &style.scrollbar),
-            emission.box_placement.clip,
-            emission.box_placement.transform,
+            (
+                emission.box_placement.clip,
+                emission.box_placement.transform,
+            ),
+            emission.thumb,
         ),
     };
     FragmentEmission {
@@ -377,7 +388,7 @@ fn content_tracked(
 
 /// Emits the caret and selection rectangles of one line that belong on `layer`.
 fn marks(
-    scene: &mut Scene,
+    rec: &mut Recorder<'_>,
     emission: &Emission<'_>,
     owner: zgui_dom::side::BoxKey,
     paragraph: zgui_layout::fragment::ParagraphId,
@@ -385,7 +396,7 @@ fn marks(
     layer: HighlightLayer,
 ) -> usize {
     highlight::emit(
-        scene,
+        rec,
         emission.highlights,
         owner,
         paragraph,

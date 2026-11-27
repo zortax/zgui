@@ -26,7 +26,7 @@ use std::rc::Rc;
 use zgui_geom::{Css, CssPx, Point};
 use zgui_platform::SurfaceEvent;
 use zgui_profile::Counter;
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{
     Modifiers, PointerAction, PointerEvent, ScrollDelta, ScrollPhase, Timestamp, WheelEvent,
@@ -169,6 +169,27 @@ fn row_extents(
     rows
 }
 
+/// The bottom of the port's scrollport in device pixels: the padding box without the room its
+/// horizontal scrollbar takes, where a point stops reaching the rows.
+fn scrollport_bottom(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> f32 {
+    let window = harness.app().windows().first().expect("a window");
+    let layout = window.layout().borrow();
+    layout
+        .keys()
+        .iter()
+        .flat_map(|key| layout.fragments_of_box(*key).to_vec())
+        .filter_map(|frag| layout.fragment(frag))
+        .find(|fragment| {
+            (fragment.border_box.size.height.0 - 120.0).abs() < 0.5
+                && fragment.scrollbar.height.0 > 0.0
+        })
+        .map(|port| {
+            let padding = port.on_device(port.padding_box(), &window.placements());
+            padding.origin.y.0 + padding.size.height.0 - port.scrollbar.height.0
+        })
+        .expect("the document has its port in it")
+}
+
 /// Which row index covers `y`, counting rows from the top of the list.
 ///
 /// The rows are all the same height and are laid out in order, so the row's position in the sorted
@@ -196,9 +217,10 @@ fn a_click_after_a_scroll_lands_where_the_fragment_tree_says_it_should() {
     // the index answered nothing at all would produce an empty log here too.
     let mut expected: Vec<usize> = Vec::new();
     let extents = row_extents(&harness);
+    let bottom = scrollport_bottom(&harness);
     for step in 0..24 {
         let y = 2.0 + step as f32 * 5.0;
-        let Some(row) = row_at(&extents, y) else {
+        let Some(row) = row_at(&extents, y).filter(|_| y < bottom) else {
             continue;
         };
         expected.push(row);
@@ -224,7 +246,7 @@ fn a_click_after_a_scroll_lands_where_the_fragment_tree_says_it_should() {
     let mut after: Vec<usize> = Vec::new();
     for step in 0..24 {
         let y = 2.0 + step as f32 * 5.0;
-        let Some(row) = row_at(&scrolled, y) else {
+        let Some(row) = row_at(&scrolled, y).filter(|_| y < bottom) else {
             continue;
         };
         after.push(row);
@@ -245,7 +267,7 @@ fn built(
     kind: Port,
 ) -> (
     zgui_platform_headless::Harness<zgui_runtime::Runtime>,
-    zgui_testkit_scene::counters::Control,
+    zgui_testkit::counters::Control,
 ) {
     let mut harness = listing_in(clicked, kind);
 

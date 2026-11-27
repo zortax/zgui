@@ -75,8 +75,8 @@ use std::os::fd::OwnedFd;
 use std::time::Duration;
 
 use ash::vk;
+use iceblink_wgpu::Gpu;
 use tracing::{info, warn};
-use zgui_render_wgpu::Gpu;
 
 use crate::import::fence::Signal;
 use crate::import::{Imported, Unsupported, vulkan};

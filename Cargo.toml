@@ -54,6 +54,23 @@ skrifa = "0.44.0"
 swash = "0.2.10"
 zeno = "0.3.3"
 
+# --- the shared compositor ------------------------------------------------------------------
+# The interface: every engine crate names this one and nothing else of the compositor.
+iceblink = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+# The implementations, named only by the crates `cargo xtask ledger compositor` allows.
+iceblink-core = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-wgpu = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-cpu = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-text = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-vello = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+iceblink-testing = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+# The drivers that run a compositor behind the client seam: on the caller's thread, or on one of
+# their own.
+iceblink-driver = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+# The reference renderer's assembly of an application shader, which the `shader!` macro compiles
+# into the prebuilt program. The compositor ledger records the macro's one exception for it.
+iceblink-wgsl = { git = "https://github.com/zortax/iceblink", version = "0.1.0" }
+
 # --- gpu and vector ------------------------------------------------------------------------
 # wgpu is pinned to 30.x workspace-wide because vello 0.11 links wgpu 30 and shares one
 # device, queue and target texture with the renderer.
@@ -77,17 +94,6 @@ bincode = "1.3"
 # would refuse the image. wgpu-hal 30.0.2 asks for `ash = "0.38"`, `Cargo.lock` resolves that to
 # 0.38.0+1.3.281, and the versions ledger holds the graph to one copy.
 ash = "0.38"
-# A DXGI swap chain made by the renderer itself, on Windows. Its buffers reach wgpu through the dx12
-# hal as `ID3D12Resource`, and the command queue comes back from it the same way. The version is the
-# one wgpu-hal links, for the reason given for `ash`: two copies are two unrelated COM types.
-windows = { version = "0.62", default-features = false, features = [
-    "Win32_Foundation",
-    "Win32_Graphics_Direct3D12",
-    "Win32_Graphics_Dxgi",
-    "Win32_Graphics_Dxgi_Common",
-    "Win32_Security",
-    "Win32_System_Threading",
-] }
 
 # --- platform, clipboards and accessibility --------------------------------------------------
 # `winit`, `accesskit_winit`, `arboard`, `smithay-clipboard` and `zbus` are the windowing
@@ -201,7 +207,6 @@ peniko = "0.6.1"
 # rasterisers implement. `default-features = false` drops the `text` feature, and with it fontdb,
 # rustybuzz and a second font stack alongside the one this framework already has.
 usvg = { version = "0.46.0", default-features = false }
-etagere = "0.3"
 bytemuck = { version = "1.25", features = ["derive"] }
 
 # --- raster image codecs: named only by zgui-image --------------------------------------------
@@ -305,7 +310,7 @@ toml = "1.1"
 # through inotify for a node that arrives later. `mm` maps a dumb buffer. `event` covers the
 # eventfd a wake channel is and the `poll` a frame loop parks in. `time` reads `CLOCK_MONOTONIC`,
 # to anchor the clock an input report is stamped against to the frame loop's own origin; without
-# it the two share no zero.
+# it the two share no zero. `zgui-bench` reads the process's and a thread's CPU clocks with it.
 #
 # `zgui-platform-wayland` reads that same clock, for the timeline its presentation feedback is
 # stamped in. A workspace entry is one entry, so this list is the union and every member takes all

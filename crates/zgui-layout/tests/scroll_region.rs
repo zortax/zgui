@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use support::{Element, Fixture, Frame, lay_out, measurer, relayout};
 use zgui_layout::LayoutStore;
 use zgui_layout::scroll_region::gutter;
-use zgui_testkit_scene::dump::{TreeDump, golden};
-use zgui_testkit_scene::text::Writer;
+use zgui_testkit::dump::{TreeDump, golden};
+use zgui_testkit::text::Writer;
 
 /// A rendering of a layout, as the shared tree-dump seam wants it.
 struct Rendering(String);
@@ -30,7 +30,7 @@ fn golden_path(name: &str) -> PathBuf {
 
 /// Every fragment's rectangle, in painting order, as text.
 fn fragment_rects(store: &LayoutStore, frame: &Frame) -> String {
-    let placements = zgui_scene::Placements::of(&frame.spatial);
+    let placements = zgui_space::Placements::of(&frame.spatial);
     let mut out = String::new();
     let root = store.root().expect("a root");
     for key in zgui_layout::fragment::stacking::paint_order(store, root) {

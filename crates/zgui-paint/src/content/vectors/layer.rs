@@ -1,32 +1,35 @@
-//! Whole drawings rasterised on the CPU into the image pool, and the rules that decide when.
+//! Whole drawings rasterised on the CPU into images, and the rules that decide when.
 //!
 //! A drawing that would need the general rasteriser for a gradient or a clip is painted whole into
-//! one premultiplied sRGB tile and drawn as one colour sprite. The sprite rides the box's transform
-//! and clip like an image, so a moved replay and a scroll move it at no cost, and a static page of
-//! such drawings never builds the general rasteriser.
+//! one premultiplied sRGB raster and drawn as one image. The image rides the box's transform and
+//! clip, so a moved replay and a scroll move it at no cost, and a static page of such drawings never
+//! builds the general rasteriser.
 //!
-//! A tile is exact for one linear map and one sixteenth-pixel phase. While a drawing changes scale, a
-//! tile of the same source within half to twice the scale is stretched instead, until the drawing
-//! holds still for [`SETTLE_FRAMES`] frames. New rasters are budgeted per frame, and a drawing that
-//! rasterises too often is drawn shape by shape for a while.
+//! A raster is exact for one linear map and one sixteenth-pixel phase. While a drawing changes
+//! scale, a raster of the same source within half to twice the scale is stretched instead, until
+//! the drawing holds still for [`SETTLE_FRAMES`] frames. New rasters are budgeted per frame, and a
+//! drawing that rasterises too often is drawn shape by shape for a while.
+//!
+//! The cache keeps each raster's texels, so the compositor's image of it can be made again.
 
 use std::sync::Arc;
 use web_time::Instant;
 
+use crate::VectorId;
+use iceblink::{ImageDesc, ImageFormat};
+use kurbo::{self, Affine};
 use rustc_hash::FxHashMap;
-use zgui_atlas::{Atlas, AtlasKey, AtlasTile, TextureKind};
 use zgui_geom::{Device, DevicePx, Point, Rect, Size};
 use zgui_profile::{Counter, counter};
-use zgui_scene::VectorId;
-use zgui_scene::kurbo::{self, Affine};
 
 use crate::content::vectors::Drawing;
 use crate::content::vectors::cpu::{LayerJob, VectorPainter, Zeno};
+use crate::emit::record::{ImageKey, ImagePixels};
 use crate::emit::vector::ShapePaint;
 
 mod tiles;
 
-pub use tiles::Tiles;
+pub use tiles::{Tile, Tiles};
 
 /// What a drawing asks the layer cache for.
 #[derive(Clone, Copy, Debug)]
@@ -57,25 +60,65 @@ pub enum LayerFallback {
     Budget,
     /// It rasterised too often lately.
     Demoted,
-    /// The atlas had no room for its tile.
-    Atlas,
+}
+
+/// The texels of one raster, and the image the compositor keeps them as.
+#[derive(Clone, Debug)]
+pub struct LayerPixels {
+    /// The image.
+    pub key: ImageKey,
+    /// The width, in texels.
+    pub width: u32,
+    /// The height, in texels.
+    pub height: u32,
+    /// The premultiplied texels, or `None` for a raster not rasterised yet.
+    pub texels: Option<Arc<[u8]>>,
+}
+
+impl LayerPixels {
+    /// Returns the texels as the recorder takes them.
+    ///
+    /// A raster not rasterised yet is transparent at revision zero, and its texels are at
+    /// revision one.
+    pub fn pixels(&self) -> ImagePixels<'_> {
+        ImagePixels {
+            desc: ImageDesc {
+                width: self.width,
+                height: self.height,
+                format: ImageFormat::RGBA8_PREMULTIPLIED,
+            },
+            revision: u64::from(self.texels.is_some()),
+            texels: self.texels.as_deref(),
+        }
+    }
+}
+
+impl PartialEq for LayerPixels {
+    fn eq(&self, other: &Self) -> bool {
+        self.key == other.key
+            && self.width == other.width
+            && self.height == other.height
+            && match (&self.texels, &other.texels) {
+                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+                (None, None) => true,
+                _ => false,
+            }
+    }
 }
 
 /// What the layer cache answers.
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayerAnswer {
-    /// Draw this tile as one sprite at `local`, in the fragment's own space.
+    /// Draw this raster as one image at `local`, in the fragment's own space.
     Sprite {
-        /// Where the texels are.
-        tile: AtlasTile,
-        /// What the atlas holds them under.
-        key: AtlasKey,
-        /// The sprite's rectangle.
+        /// The raster.
+        raster: LayerPixels,
+        /// The image's rectangle.
         local: Rect<DevicePx, Device>,
-        /// Whether the tile is of another scale or phase, stretched until the drawing settles.
+        /// Whether the raster is of another scale or phase, stretched until the drawing settles.
         provisional: bool,
     },
-    /// Draw one sprite per tile, each naming its raster, which the end of the walk places.
+    /// Draw one image per tile, which the end of the walk rasterises where the frame needs it.
     Tiles {
         /// The tiles.
         tiles: Tiles,
@@ -106,12 +149,17 @@ pub trait VectorLayerSource {
         true
     }
 
-    /// Places, rasterises or blanks every tile sprite of the frame, and returns the device
-    /// rectangles of the tiles the frame needed and deferred.
+    /// Notes that the tile image `key` is shown at `admitted` on the surface this frame, or
+    /// nowhere for `None`.
+    fn shown(&self, _key: ImageKey, _admitted: Option<Rect<DevicePx, Device>>) {}
+
+    /// Rasterises the tiles shown this frame where the frame needs them, hands each raster to
+    /// `write`, and returns the device rectangles of the tiles the frame needed and deferred.
     fn settle(
         &self,
-        _scene: &mut zgui_scene::Scene,
+        _viewport: Size<i32, Device>,
         _damage: &zgui_bits::DamageSet,
+        _write: &mut dyn FnMut(&LayerPixels),
     ) -> Vec<Rect<i32, Device>> {
         Vec::new()
     }
@@ -150,17 +198,17 @@ impl LayerKey {
     }
 }
 
-/// One raster in the atlas.
+/// One raster.
 #[derive(Clone, Debug)]
 struct Entry {
-    /// What the atlas holds it under.
-    key: AtlasKey,
+    /// The raster's texels and image.
+    pixels: LayerPixels,
     /// The shapes, held so the address in the key is not reused while the key stands.
     #[expect(dead_code, reason = "held for its address")]
     shapes: Arc<[zgui_svg::Shape]>,
     /// The raster's rectangle, in path space.
     path_bounds: kurbo::Rect,
-    /// The tile's bytes, its levels of detail included.
+    /// The raster's bytes.
     bytes: u64,
     /// The frame it was last drawn in.
     used: u32,
@@ -236,7 +284,7 @@ struct Spent {
 }
 
 /// The layers a window keeps, and the history of each drawing that asked for one.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub(crate) struct VectorLayerCache {
     /// The rasters, by key.
     entries: FxHashMap<LayerKey, Entry>,
@@ -248,25 +296,23 @@ pub(crate) struct VectorLayerCache {
     frame: u32,
     /// Whether the general vector rasteriser is built.
     raster_ready: bool,
-    /// The handle the next tile is tried under.
+    /// The handle the next raster takes, below the namespace.
     next_handle: u64,
-    /// The bytes of every entry's tile.
+    /// The bytes of every entry's raster.
     bytes: u64,
     /// What this frame has spent.
     spent: Spent,
-    /// Tiles of scales no drawing uses any more, removed when the frame ends.
-    superseded: Vec<AtlasKey>,
+    /// Rasters of scales no drawing uses any more, removed when the frame ends.
+    superseded: Vec<LayerKey>,
     /// What paints the rasters.
     painter: Zeno,
-    /// How many sprites the cache has answered, monotonic.
+    /// How many images the cache has answered, monotonic.
     hits: u64,
     /// The tiled sources of large drawings, and their rasters.
     tiles: tiles::TileCache,
-    /// The lifetime of the cache the tile names are handed out in.
-    generation: zgui_scene::ResourceGeneration,
 }
 
-/// The handle namespace of layer tiles in the image pool.
+/// The image key namespace of whole layer rasters.
 ///
 /// Image node handles reach it only past node index `0x7D00_0000`.
 pub(crate) const LAYER_NAMESPACE: u64 = 0x7D00_0000_0000_0000;
@@ -323,9 +369,6 @@ pub(crate) const MAX_SIDE: u32 = 2048;
 /// The most bytes one layer may have, its levels of detail aside.
 pub(crate) const MAX_BYTES: u64 = 4 * 1024 * 1024;
 
-/// The longest side a tile shares an atlas page with; past it the tile has a texture of its own.
-const SHARED_SIDE: u32 = 1024;
-
 /// How many rasters within [`DEMOTE_WINDOW`] frames demote a drawing.
 const DEMOTE_RASTERS: usize = 3;
 
@@ -364,31 +407,11 @@ struct Geometry {
     det: f64,
 }
 
-impl Default for VectorLayerCache {
-    fn default() -> Self {
-        Self {
-            entries: FxHashMap::default(),
-            histories: FxHashMap::default(),
-            costs: FxHashMap::default(),
-            frame: 0,
-            raster_ready: false,
-            next_handle: LAYER_NAMESPACE,
-            bytes: 0,
-            spent: Spent::default(),
-            superseded: Vec::new(),
-            painter: Zeno::default(),
-            hits: 0,
-            tiles: tiles::TileCache::default(),
-            generation: zgui_scene::ResourceGeneration::FIRST,
-        }
-    }
-}
-
 /// How a route decided.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Route {
     /// The exact raster exists.
-    Hit(AtlasTile, AtlasKey),
+    Hit,
     /// A raster of another scale stands in.
     Provisional(LayerKey),
     /// Rasterise now.
@@ -407,30 +430,27 @@ impl VectorLayerCache {
         counter::set(Counter::VectorLayerBytesLive, self.bytes());
     }
 
-    /// Sets the lifetime of the cache the tile names are handed out in.
-    pub(crate) fn set_generation(&mut self, generation: zgui_scene::ResourceGeneration) {
-        self.generation = generation;
-    }
-
     /// Sets whether the general vector rasteriser is built.
     pub(crate) fn set_raster_ready(&mut self, ready: bool) {
         self.raster_ready = ready;
     }
 
-    /// Ends a frame, after the frame's uploads are flushed.
+    /// Ends a frame.
     ///
-    /// Removes the superseded tiles this frame did not draw and nothing holds, then forgets the
-    /// drawings no request touched for [`HISTORY_FRAMES`] frames and the costs nothing names.
-    pub(crate) fn end_frame(&mut self, atlas: &mut Atlas) {
-        let mut removed = Vec::new();
-        for key in self.superseded.drain(..) {
-            if !atlas.used_this_frame(key) && atlas.remove_if_unreferenced(key) {
-                removed.push(key);
+    /// Removes the superseded rasters this frame did not draw, then forgets the drawings no
+    /// request touched for [`HISTORY_FRAMES`] frames and the costs nothing names.
+    pub(crate) fn end_frame(&mut self) {
+        let frame = self.frame;
+        for key in core::mem::take(&mut self.superseded) {
+            if self
+                .entries
+                .get(&key)
+                .is_some_and(|entry| entry.used != frame)
+            {
+                self.remove(&key);
             }
         }
-        self.forget_tiles(&removed);
-        self.sweep_tiles(atlas);
-        let frame = self.frame;
+        self.sweep_tiles();
         self.histories
             .retain(|_, history| frame.wrapping_sub(history.seen) < HISTORY_FRAMES);
         if self.costs.len() > self.entries.len() + self.histories.len() {
@@ -449,21 +469,19 @@ impl VectorLayerCache {
         }
     }
 
-    /// The bytes of every layer tile, the tiles of large drawings included.
+    /// The bytes of every raster, the tiles of large drawings included.
     pub(crate) fn bytes(&self) -> u64 {
         self.bytes + self.tiles.bytes()
     }
 
-    /// The bytes of the layer tiles this frame drew.
-    ///
-    /// A tile a record holds and this frame did not draw can still go, with the record.
-    pub(crate) fn pinned_bytes(&self, atlas: &Atlas) -> u64 {
+    /// The bytes of the rasters this frame drew.
+    pub(crate) fn pinned_bytes(&self) -> u64 {
         self.entries
             .values()
-            .filter(|entry| entry.used == self.frame || atlas.used_this_frame(entry.key))
+            .filter(|entry| entry.used == self.frame)
             .map(|entry| entry.bytes)
             .sum::<u64>()
-            + self.pinned_tile_bytes(atlas)
+            + self.pinned_tile_bytes()
     }
 
     /// How many rasters the cache keeps, the tiles of large drawings included.
@@ -471,48 +489,31 @@ impl VectorLayerCache {
         self.entries.len() + self.tiles.rasterised()
     }
 
-    /// How many sprites the cache has answered, monotonic.
+    /// How many images the cache has answered, monotonic.
     pub(crate) fn hits(&self) -> u64 {
         self.hits
     }
 
-    /// The bytes of the layer tiles a record holds.
-    pub(crate) fn held_bytes(&self, atlas: &Atlas) -> u64 {
-        self.entries
-            .values()
-            .filter(|entry| atlas.refs(entry.key).is_some_and(|refs| refs > 0))
-            .map(|entry| entry.bytes)
-            .sum()
-    }
-
-    /// Every layer tile and its bytes.
-    pub(crate) fn tiles(&self) -> FxHashMap<AtlasKey, u64> {
-        self.entries
-            .values()
-            .map(|entry| (entry.key, entry.bytes))
-            .chain(self.tile_entries())
-            .collect()
-    }
-
-    /// Removes the least recently drawn layers nothing holds until `bytes` have gone, and reports
-    /// how many went.
-    pub(crate) fn evict(&mut self, atlas: &mut Atlas, bytes: u64) -> u64 {
+    /// Removes the least recently drawn rasters this frame did not draw until `bytes` have gone,
+    /// and reports how many went.
+    pub(crate) fn evict(&mut self, bytes: u64) -> u64 {
         /// One raster the budget may remove.
         #[derive(Clone, Copy)]
         enum Cold {
             Layer(LayerKey),
             Tile(u64),
         }
+        let frame = self.frame;
         let mut cold: Vec<(u32, Cold)> = self
             .entries
             .iter()
-            .filter(|(_, entry)| !pinned(atlas, entry.key))
+            .filter(|(_, entry)| entry.used != frame)
             .map(|(key, entry)| (entry.used, Cold::Layer(*key)))
             .collect();
         cold.extend(
-            self.cold_tiles(atlas)
+            self.cold_tiles()
                 .into_iter()
-                .map(|(used, handle, _)| (used, Cold::Tile(handle))),
+                .map(|(used, handle)| (used, Cold::Tile(handle))),
         );
         cold.sort_unstable_by_key(|(used, _)| *used);
         let mut freed = 0;
@@ -520,59 +521,33 @@ impl VectorLayerCache {
             if freed >= bytes {
                 break;
             }
-            match which {
-                Cold::Layer(key) => {
-                    let Some(entry) = self.entries.get(&key) else {
-                        continue;
-                    };
-                    if atlas.remove_if_unreferenced(entry.key) {
-                        freed += entry.bytes;
-                        self.bytes = self.bytes.saturating_sub(entry.bytes);
-                        self.entries.remove(&key);
-                        counter::bump(Counter::VectorLayersEvicted);
-                    }
-                }
-                Cold::Tile(handle) => {
-                    if let Some(gone) = self.evict_tile(atlas, handle) {
-                        freed += gone;
-                        counter::bump(Counter::VectorLayersEvicted);
-                    }
-                }
+            let gone = match which {
+                Cold::Layer(key) => self.remove(&key),
+                Cold::Tile(handle) => self.evict_tile(handle),
+            };
+            if let Some(gone) = gone {
+                freed += gone;
+                counter::bump(Counter::VectorLayersEvicted);
             }
         }
         freed
     }
 
-    /// Drops the entries whose tiles the atlas removed.
-    pub(crate) fn forget_tiles(&mut self, removed: &[AtlasKey]) {
-        if removed.is_empty() {
-            return;
-        }
-        let removed: rustc_hash::FxHashSet<AtlasKey> = removed.iter().copied().collect();
-        self.forget_tile_rasters(&removed);
-        if self.entries.is_empty() {
-            return;
-        }
-        let mut freed = 0;
-        self.entries.retain(|_, entry| {
-            let gone = removed.contains(&entry.key);
-            if gone {
-                freed += entry.bytes;
-            }
-            !gone
-        });
-        self.bytes = self.bytes.saturating_sub(freed);
-    }
-
-    /// Forgets everything after the atlas itself is cleared.
+    /// Forgets everything.
     pub(crate) fn clear(&mut self) {
         self.entries.clear();
         self.histories.clear();
         self.costs.clear();
         self.superseded.clear();
         self.bytes = 0;
-        self.next_handle = LAYER_NAMESPACE;
-        self.tiles = tiles::TileCache::default();
+        self.tiles.clear();
+    }
+
+    /// Removes the raster of `key`, and returns its bytes.
+    fn remove(&mut self, key: &LayerKey) -> Option<u64> {
+        let entry = self.entries.remove(key)?;
+        self.bytes = self.bytes.saturating_sub(entry.bytes);
+        Some(entry.bytes)
     }
 
     /// Records that the shapes of `owner`'s last source took no general route.
@@ -584,17 +559,7 @@ impl VectorLayerCache {
     }
 
     /// The layer for `request`.
-    ///
-    /// `evict` frees one generation of the atlas and names what it removed, for a raster the atlas
-    /// has no room for. Every tile answered is pushed to `named`, so the record that draws it holds
-    /// it.
-    pub(crate) fn layer(
-        &mut self,
-        atlas: &mut Atlas,
-        request: LayerRequest<'_>,
-        named: &mut Vec<AtlasKey>,
-        evict: &mut dyn FnMut(&mut Atlas) -> Vec<AtlasKey>,
-    ) -> LayerAnswer {
+    pub(crate) fn layer(&mut self, request: LayerRequest<'_>) -> LayerAnswer {
         let drawing = request.drawing;
         let source = (request.revision, Arc::as_ptr(&drawing.shapes).addr());
         let history = self.histories.entry(request.owner).or_default();
@@ -615,23 +580,19 @@ impl VectorLayerCache {
             return self.tiled(&request, &mapping);
         }
         let geometry = mapping.as_ref().and_then(whole);
-        let route = self.route(request.owner, geometry.as_ref(), &cost, atlas);
+        let route = self.route(request.owner, geometry.as_ref(), &cost);
         let Some(geometry) = geometry else {
             return LayerAnswer::Items(LayerFallback::Ineligible);
         };
         let local = |path_bounds: kurbo::Rect| rect(drawing.fit.transform_rect_bbox(path_bounds));
-        if matches!(
-            route,
-            Route::Hit(..) | Route::Provisional(_) | Route::Raster
-        ) {
+        if matches!(route, Route::Hit | Route::Provisional(_) | Route::Raster) {
             self.hits += 1;
         }
         match route {
-            Route::Hit(tile, key) => {
-                named.push(key);
+            Route::Hit => {
+                let entry = &self.entries[&geometry.key];
                 LayerAnswer::Sprite {
-                    tile,
-                    key,
+                    raster: entry.pixels.clone(),
                     local: local(geometry.path_bounds),
                     provisional: false,
                 }
@@ -642,14 +603,9 @@ impl VectorLayerCache {
                     .get_mut(&near)
                     .expect("a near key has an entry");
                 entry.used = self.frame;
-                let path_bounds = entry.path_bounds;
-                let key = entry.key;
-                let tile = atlas.get(key).expect("a near entry has its tile");
-                named.push(key);
                 LayerAnswer::Sprite {
-                    tile,
-                    key,
-                    local: local(path_bounds),
+                    raster: entry.pixels.clone(),
+                    local: local(entry.path_bounds),
                     provisional: true,
                 }
             }
@@ -657,29 +613,16 @@ impl VectorLayerCache {
                 local: local(geometry.path_bounds),
             },
             Route::Items(why) => LayerAnswer::Items(why),
-            Route::Raster => match self.raster(atlas, &request, &geometry, &cost, evict) {
-                Some((tile, key)) => {
-                    named.push(key);
-                    LayerAnswer::Sprite {
-                        tile,
-                        key,
-                        local: local(geometry.path_bounds),
-                        provisional: false,
-                    }
-                }
-                None => LayerAnswer::Items(LayerFallback::Atlas),
+            Route::Raster => LayerAnswer::Sprite {
+                raster: self.raster(&request, &geometry, &cost),
+                local: local(geometry.path_bounds),
+                provisional: false,
             },
         }
     }
 
     /// Decides how `owner` draws this frame, and updates its history.
-    fn route(
-        &mut self,
-        owner: VectorId,
-        geometry: Option<&Geometry>,
-        cost: &SourceCost,
-        atlas: &mut Atlas,
-    ) -> Route {
+    fn route(&mut self, owner: VectorId, geometry: Option<&Geometry>, cost: &SourceCost) -> Route {
         let frame = self.frame;
         let history = self.note_key(owner, geometry.map(|geometry| geometry.key));
         let Some(geometry) = geometry else {
@@ -690,20 +633,11 @@ impl VectorLayerCache {
             return Route::Items(LayerFallback::Ineligible);
         }
         if let Some(entry) = self.entries.get_mut(&geometry.key) {
-            match atlas.get(entry.key) {
-                Some(tile) => {
-                    entry.used = frame;
-                    return Route::Hit(tile, entry.key);
-                }
-                None => {
-                    let gone = entry.bytes;
-                    self.entries.remove(&geometry.key);
-                    self.bytes = self.bytes.saturating_sub(gone);
-                }
-            }
+            entry.used = frame;
+            return Route::Hit;
         }
         let near = if history.same {
-            self.nearest(atlas, &geometry.key, geometry.scale)
+            self.nearest(&geometry.key, geometry.scale)
         } else {
             None
         };
@@ -785,15 +719,12 @@ impl VectorLayerCache {
     }
 
     /// The entry of the same source and paint whose scale is closest to `scale`, within half to
-    /// twice it, whose tile is still in the atlas.
-    fn nearest(&self, atlas: &Atlas, key: &LayerKey, scale: f64) -> Option<LayerKey> {
+    /// twice it.
+    fn nearest(&self, key: &LayerKey, scale: f64) -> Option<LayerKey> {
         self.entries
             .iter()
             .filter(|(held, _)| held.same_source(key))
-            .filter(|(_, entry)| {
-                let ratio = entry.scale / scale;
-                (0.5..=2.0).contains(&ratio) && atlas.contains(entry.key)
-            })
+            .filter(|(_, entry)| (0.5..=2.0).contains(&(entry.scale / scale)))
             .min_by(|(_, a), (_, b)| {
                 let distance = |entry: &Entry| (entry.scale / scale).ln().abs();
                 distance(a).total_cmp(&distance(b))
@@ -801,15 +732,13 @@ impl VectorLayerCache {
             .map(|(held, _)| *held)
     }
 
-    /// Rasterises `geometry` into a new tile, and records it.
+    /// Rasterises `geometry` into a new raster, records it and returns it.
     fn raster(
         &mut self,
-        atlas: &mut Atlas,
         request: &LayerRequest<'_>,
         geometry: &Geometry,
         cost: &SourceCost,
-        evict: &mut dyn FnMut(&mut Atlas) -> Vec<AtlasKey>,
-    ) -> Option<(AtlasTile, AtlasKey)> {
+    ) -> LayerPixels {
         let started = Instant::now();
         let mut texels = vec![0; geometry.width as usize * geometry.height as usize * 4];
         self.painter.paint(
@@ -825,31 +754,14 @@ impl VectorLayerCache {
             },
             &mut texels,
         );
-        let size = Size::new(geometry.width as i32, geometry.height as i32);
-        let standalone = geometry.width > SHARED_SIDE || geometry.height > SHARED_SIDE;
-        let levels = if standalone {
-            mips(texels, geometry.width, geometry.height)
-        } else {
-            vec![texels]
+        let bytes = texels.len() as u64;
+        let pixels = LayerPixels {
+            key: ImageKey(LAYER_NAMESPACE | self.next_handle),
+            width: geometry.width,
+            height: geometry.height,
+            texels: Some(Arc::from(texels)),
         };
-        let bytes: u64 = levels.iter().map(|level| level.len() as u64).sum();
-        let levels: Vec<Arc<Vec<u8>>> = levels.into_iter().map(Arc::new).collect();
-        let key = fresh_key(&mut self.next_handle, atlas);
-        let insert = |atlas: &mut Atlas| {
-            if standalone {
-                atlas.insert_standalone(key, size, || levels.clone())
-            } else {
-                atlas.get_or_insert(key, size, || Arc::clone(&levels[0]))
-            }
-        };
-        let tile = match insert(atlas) {
-            Ok(tile) => tile,
-            Err(_) => {
-                let removed = evict(atlas);
-                self.forget_tiles(&removed);
-                insert(atlas).ok()?
-            }
-        };
+        self.next_handle = (self.next_handle + 1) & HANDLE_BITS;
         counter::bump(Counter::VectorLayersRasterised);
         counter::add(
             Counter::VectorLayerRasterUs,
@@ -868,7 +780,7 @@ impl VectorLayerCache {
         self.entries.insert(
             geometry.key,
             Entry {
-                key,
+                pixels: pixels.clone(),
                 shapes: Arc::clone(&request.drawing.shapes),
                 path_bounds: geometry.path_bounds,
                 bytes,
@@ -878,11 +790,11 @@ impl VectorLayerCache {
         );
         self.bytes += bytes;
         self.supersede(&geometry.key);
-        Some((tile, key))
+        pixels
     }
 
-    /// Sends the tiles of `key`'s source beyond its [`KEPT_SCALES`] most recently drawn scales to
-    /// be removed when the frame ends.
+    /// Sends the rasters of `key`'s source beyond its [`KEPT_SCALES`] most recently drawn scales
+    /// to be removed when the frame ends.
     fn supersede(&mut self, key: &LayerKey) {
         let mut scales: Vec<([i32; 4], u32)> = Vec::new();
         for (held, entry) in &self.entries {
@@ -903,26 +815,10 @@ impl VectorLayerCache {
             .take(KEPT_SCALES)
             .map(|(linear, _)| *linear)
             .collect();
-        for (held, entry) in &self.entries {
+        for held in self.entries.keys() {
             if held.same_source(key) && !kept.contains(&held.linear) {
-                self.superseded.push(entry.key);
+                self.superseded.push(*held);
             }
-        }
-    }
-}
-
-/// Whether a record holds `key` or this frame drew it.
-fn pinned(atlas: &Atlas, key: AtlasKey) -> bool {
-    atlas.refs(key).is_some_and(|refs| refs > 0) || atlas.used_this_frame(key)
-}
-
-/// A layer key no tile holds, from the layer namespace.
-fn fresh_key(next_handle: &mut u64, atlas: &Atlas) -> AtlasKey {
-    loop {
-        let key = AtlasKey::new(*next_handle, TextureKind::Image);
-        *next_handle = LAYER_NAMESPACE | (next_handle.wrapping_add(1) & HANDLE_BITS);
-        if !atlas.contains(key) {
-            return key;
         }
     }
 }
@@ -1088,7 +984,7 @@ fn mapping(request: &LayerRequest<'_>, cost: &SourceCost) -> Option<Mapping> {
 
 /// A hash of what an inherited paint resolves to.
 fn paint_hash(paint: ShapePaint) -> u64 {
-    let mut hash = zgui_scene::ContentHash::new()
+    let mut hash = zgui_space::ContentHash::new()
         .f32s(&paint.fill.to_premultiplied_srgb())
         .f32(paint.stroke_width);
     if let Some(stroke) = paint.stroke {
@@ -1122,31 +1018,6 @@ fn rect(bounds: kurbo::Rect) -> Rect<DevicePx, Device> {
             DevicePx(bounds.height() as f32),
         ),
     )
-}
-
-/// `texels` and each level of detail below it, every level a box filter of the one above.
-fn mips(texels: Vec<u8>, width: u32, height: u32) -> Vec<Vec<u8>> {
-    let mut levels = vec![texels];
-    let (mut w, mut h) = (width as usize, height as usize);
-    while w > 1 || h > 1 {
-        let (nw, nh) = ((w / 2).max(1), (h / 2).max(1));
-        let above = levels.last().expect("level zero");
-        let mut level = vec![0; nw * nh * 4];
-        for y in 0..nh {
-            for x in 0..nw {
-                let (x0, y0) = ((2 * x).min(w - 1), (2 * y).min(h - 1));
-                let (x1, y1) = ((2 * x + 1).min(w - 1), (2 * y + 1).min(h - 1));
-                for channel in 0..4 {
-                    let at = |x: usize, y: usize| u32::from(above[(y * w + x) * 4 + channel]);
-                    let sum = at(x0, y0) + at(x1, y0) + at(x0, y1) + at(x1, y1);
-                    level[(y * nw + x) * 4 + channel] = ((sum + 2) / 4) as u8;
-                }
-            }
-        }
-        levels.push(level);
-        (w, h) = (nw, nh);
-    }
-    levels
 }
 
 #[cfg(test)]

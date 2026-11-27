@@ -72,12 +72,11 @@ fn every_registered_cache_is_empty_after_forget() {
         let window = &mut app.app_mut().windows_mut()[0];
         let filled = filled(window);
         assert!(
-            filled.contains(&CacheId::GlyphAtlas)
-                && filled.contains(&CacheId::ParagraphShaping)
+            filled.contains(&CacheId::ParagraphShaping)
                 && filled.contains(&CacheId::VectorResources),
-            "the fixture is meant to fill the glyph atlas, the shaping cache and the vector cache \
-             before anything is forgotten, and filled only {filled:?} — an empty cache is emptied \
-             by doing nothing at all"
+            "the fixture is meant to fill the shaping cache and the vector cache before anything \
+             is forgotten, and filled only {filled:?} — an empty cache is emptied by doing nothing \
+             at all"
         );
         window.forget_caches();
         filled
@@ -98,28 +97,6 @@ fn every_registered_cache_is_empty_after_forget() {
         !before.is_empty(),
         "and something was held before, or nothing was asserted"
     );
-}
-
-/// How many primitives of each kind the window's last frame held.
-///
-/// Every kind, because the route a drawing takes decides the kind it arrives as: the triangle here
-/// is a coverage sprite beside the glyphs, and a larger one would be a vector item.
-fn primitives(window: &zgui_runtime::Window) -> [usize; 12] {
-    let held = &window.scene().primitives;
-    [
-        held.quads.len(),
-        held.shaded.len(),
-        held.shadows.len(),
-        held.decorations.len(),
-        held.mono_sprites.len(),
-        held.subpixel_sprites.len(),
-        held.color_sprites.len(),
-        held.marks.len(),
-        held.vectors.len(),
-        held.externals.len(),
-        held.backdrops.len(),
-        held.groups.len(),
-    ]
 }
 
 /// Every route the document's drawings took.
@@ -146,14 +123,11 @@ fn a_window_that_has_forgotten_everything_fills_its_caches_again() {
     let mut app = window();
     app.settle(8);
 
-    let (held, glyphs, drawn) = {
+    let (shown, drawn) = {
         let window = &app.app().windows()[0];
-        (
-            primitives(window),
-            window.scene().primitives.mono_sprites.len(),
-            routes(window),
-        )
+        (support::drawing(window), routes(window))
     };
+    let glyphs = shown.glyphs().len();
     assert!(
         glyphs > 0 && !drawn.is_empty(),
         "the fixture drew {glyphs} glyphs and a drawing by the routes {drawn:?} before anything \
@@ -165,9 +139,9 @@ fn a_window_that_has_forgotten_everything_fills_its_caches_again() {
 
     let window = &app.app().windows()[0];
     assert_eq!(
-        primitives(window),
-        held,
-        "the same document must draw the same primitives after its caches were dropped"
+        support::drawing(window),
+        shown,
+        "the compositor must show the same boxes and text after the caches were dropped"
     );
     assert_eq!(
         routes(window),
@@ -259,33 +233,5 @@ fn a_budget_drops_rebuildable_content_but_pins_active_shaping() {
         window.layout().borrow().flattenings(),
         held.2,
         "enforcing a soft shaping limit rebuilt the live text contexts"
-    );
-}
-
-/// The one place a cache's second half is named, because the report cannot see it.
-///
-/// The glyph atlas is registered as one cache and holds two things: the tiles, which the report
-/// counts in bytes, and beside them what each glyph key rasterised to — where the pixels go, and
-/// whether there were any. The second has no byte figure and so contributes nothing to `resident`,
-/// which means the registry-wide claim would go on holding if it were never emptied. It has to be
-/// emptied: a remembered placement whose tile has gone names a rectangle something else now
-/// occupies, which is the failure the whole eviction work exists to prevent.
-#[test]
-fn forgetting_the_atlas_forgets_the_glyph_placements_beside_it() {
-    let mut app = window();
-    app.settle(8);
-
-    let window = &mut app.app_mut().windows_mut()[0];
-    assert!(
-        window.content().glyphs_held() > 0,
-        "the fixture must have rasterised something for this to be an assertion at all"
-    );
-
-    window.forget_caches();
-
-    assert_eq!(
-        window.content().glyphs_held(),
-        0,
-        "the placements outlived the tiles they name"
     );
 }

@@ -5,8 +5,7 @@
 //! that takes the general rasteriser.
 //!
 //! The panel covers the whole window on purpose. It makes "everything outside the drawing" one flat
-//! colour, which is what lets a scissored repaint be compared to a full one pixel for pixel instead
-//! of only inside the rectangle it promised to redraw.
+//! colour.
 
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -158,10 +157,11 @@ pub fn runs() -> Option<&'static Runs> {
 fn run<V: IntoView + 'static>(title: &str, view: impl FnMut() -> V + 'static) -> Vec<Recorded> {
     let log: Log = Arc::new(Mutex::new(Vec::new()));
     zgui::app()
+        .with_compositor_client(Box::new(zgui_testkit_compositor::driver))
         .with_title(title)
         .with_size(SURFACE as f32, SURFACE as f32)
         .with_stylesheet(SHEET)
-        .with_renderer(Box::new(device::factory(&log, PANEL)))
+        .with_compositor_renderer(device::factory(&log))
         .run_on(buffers, view)
         .expect("the application ran");
     let frames = core::mem::take(&mut *log.lock().unwrap_or_else(|held| held.into_inner()));

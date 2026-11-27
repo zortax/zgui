@@ -92,6 +92,7 @@ fn scrolling(harness: &Harness, content: f32, viewport: f32, offset: f32) -> Nod
                 zgui::geom::DevicePx(200.0),
                 zgui::geom::DevicePx(viewport),
             ),
+            ..ScrollPosition::default()
         }),
     );
     harness.window.frame();

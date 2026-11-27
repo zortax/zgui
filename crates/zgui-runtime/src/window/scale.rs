@@ -68,6 +68,9 @@ impl Window {
             // a page on a one-times output arrives halfway down it on a two-times one, and coming
             // back the other way arrives at an offset the smaller surface has no content for.
             self.rescale_scroll(scale / from);
+            // Every recorded chunk holds the old ratio's geometry, also the chunks of content
+            // recorded beyond the surface, which no walk of the new layout may reach again.
+            self.forget_compositor_sync();
             zgui_profile::latency::note_with("w.rescale", || {
                 format!("scale={scale} boxes={marked}")
             });

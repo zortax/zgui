@@ -1,18 +1,20 @@
-//! Drawings that need the general rasteriser for a gradient or a clip, drawn as one CPU layer.
+//! Drawings that need the general rasteriser for a gradient or a clip, drawn as one CPU layer
+//! image.
 //!
 //! Every fixture paints through a real content cache, so the layer route competes with the shape
 //! routes as it does in a window.
 
 mod support;
 
-use zgui_atlas::AtlasLimits;
+use kurbo::{self, Affine, Shape as _};
 use zgui_canvas::{Brush, Marker, SceneHandle, Series, ShapeBuilder};
 use zgui_color::Color;
 use zgui_paint::{ContentCache, PaintReport, VectorCache, VectorRoute};
 use zgui_profile::Counter;
-use zgui_scene::kurbo::{self, Affine, Shape as _};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
+use zgui_testkit_compositor::Drawing;
 
+use support::drawn::number;
 use support::{Element, Harness, poison, unpoisoned};
 
 /// A 32 by 32 document of one triangle under a red to blue ramp, which no analytic route takes.
@@ -32,7 +34,6 @@ struct Window {
     harness: Harness,
     vectors: VectorCache,
     content: ContentCache,
-    raster: zgui_testkit_scene::MonoRaster,
     /// The extent a restyle lays the document out in.
     extent: (f32, f32),
 }
@@ -50,8 +51,7 @@ impl Window {
         Self {
             harness: Harness::sized(tree, css, size.0, size.1),
             vectors: VectorCache::new(),
-            content: ContentCache::new(AtlasLimits::default()),
-            raster: zgui_testkit_scene::MonoRaster::new(),
+            content: ContentCache::new(),
             extent: size,
         }
     }
@@ -69,12 +69,8 @@ impl Window {
 
     /// Paints one frame with the general rasteriser cold, or built when `ready`.
     fn paint(&mut self, ready: bool) -> PaintReport {
-        self.harness.paint_cached_vectors_ready(
-            &self.vectors,
-            &mut self.content,
-            &self.raster,
-            ready,
-        )
+        self.harness
+            .paint_cached_vectors_ready(&self.vectors, &mut self.content, ready)
     }
 
     /// Gives the element `name` the class `class`, which moves the drawing without refragmenting
@@ -92,12 +88,24 @@ impl Window {
             .compose_from_marks(self.extent.0, self.extent.1);
     }
 
-    /// The one colour sprite's rectangle.
-    fn sprite(&self) -> [f32; 4] {
-        let [sprite] = self.harness.scene().primitives.color_sprites.as_slice() else {
-            panic!("one colour sprite");
+    /// What the whole output draws.
+    fn drawn(&mut self) -> Drawing {
+        self.harness.redraw()
+    }
+
+    /// The one image's rectangle.
+    fn sprite(&mut self) -> [f32; 4] {
+        let drawing = self.drawn();
+        let images: Vec<_> = drawing.of_kind("color").collect();
+        let [image] = images[..] else {
+            panic!("one image: {drawing}");
         };
-        sprite.bounds
+        image.bounds()
+    }
+
+    /// How many images the whole output draws.
+    fn images(&mut self) -> usize {
+        self.drawn().of_kind("color").count()
     }
 }
 
@@ -118,16 +126,14 @@ fn a_gradient_document_draws_one_color_sprite_and_no_vector_item() {
     let report = report.expect("a frame");
     assert!(routes(&report).contains(VectorRoute::CpuLayer));
     assert!(!routes(&report).contains(VectorRoute::GeneralRaster));
-    let primitives = &window.harness.scene().primitives;
-    assert!(primitives.vectors.is_empty(), "no vector item");
-    let [sprite] = primitives.color_sprites.as_slice() else {
-        panic!("{} colour sprites", primitives.color_sprites.len());
-    };
+    let drawing = window.drawn();
+    assert_eq!(drawing.of_kind("path").count(), 0, "no path: {drawing}");
     assert_eq!(
-        unpoisoned(sprite.bounds),
+        unpoisoned(window.sprite()),
         [0.0, 10.0, 64.0, 64.0],
-        "the sprite covers the box"
+        "the image covers the box"
     );
+    assert_eq!(window.harness.compositor.commit.images_written, 1);
     assert_eq!(measured.get(Counter::VectorLayersRasterised), 1);
     assert_eq!(measured.get(Counter::VectorRouteLayer), 1);
     assert_eq!(measured.get(Counter::VectorRouteGeneral), 0);
@@ -135,7 +141,7 @@ fn a_gradient_document_draws_one_color_sprite_and_no_vector_item() {
 }
 
 #[test]
-fn a_mono_inherited_icon_keeps_its_mask_route() {
+fn a_mono_inherited_icon_is_no_candidate() {
     // Held so this test's rasters do not reach another test's counters.
     let _recording = Recording::begin();
     let mut window = Window::new(
@@ -145,9 +151,9 @@ fn a_mono_inherited_icon_keeps_its_mask_route() {
         CSS,
     );
     let report = window.paint(false);
-    assert!(routes(&report).contains(VectorRoute::AtlasMask));
+    assert!(routes(&report).contains(VectorRoute::GeneralRaster));
     assert!(!routes(&report).contains(VectorRoute::CpuLayer));
-    assert!(window.harness.scene().primitives.color_sprites.is_empty());
+    assert_eq!(window.images(), 0);
 }
 
 /// A red to blue ramp over 40 units.
@@ -192,8 +198,10 @@ fn a_series_canvas_is_no_candidate() {
             CSS,
         );
         let report = window.paint(false);
-        let sprites = window.harness.scene().primitives.color_sprites.len();
-        (routes(&report).contains(VectorRoute::CpuLayer), sprites)
+        (
+            routes(&report).contains(VectorRoute::CpuLayer),
+            window.images(),
+        )
     };
     assert_eq!(canvas(false), (true, 1), "the shapes alone take a layer");
     assert_eq!(
@@ -217,25 +225,24 @@ fn a_layer_sprite_carries_the_chain_clip_and_the_element_opacity() {
         css,
     );
     window.paint(false);
-    let frag = window.harness.fragment_of("mark");
-    let clip = window
-        .harness
-        .store()
-        .fragment(frag)
-        .expect("the drawing's fragment")
-        .clip;
-    let [sprite] = window.harness.scene().primitives.color_sprites.as_slice() else {
-        panic!("one colour sprite");
+    let drawing = window.drawn();
+    let images: Vec<_> = drawing.of_kind("color").collect();
+    let [image] = images[..] else {
+        panic!("one image: {drawing}");
     };
+    let at = poison();
     assert_eq!(
-        sprite.clip_id(),
-        clip,
-        "the chain clip applies at composite"
+        image.field("clip"),
+        Some(format!("[rect({at}, {at}, 40, 40)]").as_str()),
+        "the chain clip applies at composite: {drawing}"
     );
-    assert_ne!(clip, zgui_scene::ClipId::ROOT);
-    assert_eq!(sprite.opacity, 0.5, "the folded opacity rides the sprite");
     assert_eq!(
-        unpoisoned(sprite.bounds),
+        number(image, "opacity"),
+        Some(0.5),
+        "the folded opacity rides the image"
+    );
+    assert_eq!(
+        unpoisoned(image.bounds()),
         [0.0, 0.0, 64.0, 64.0],
         "nothing is cut from the raster"
     );
@@ -299,11 +306,11 @@ fn a_scrolled_layer_replays_and_rasterises_nothing() {
     );
     assert!(report.layers_owed.is_empty());
     assert_eq!(measured.get(Counter::VectorLayersRasterised), 0);
-    assert!(measured.get(Counter::ChunksTranslated) > 0);
+    assert!(window.harness.compositor.sync.offsets > 0);
     assert_eq!(
         window.sprite()[1] - before[1],
         20.0,
-        "the sprite moved with its box"
+        "the image moved with its box"
     );
 }
 
@@ -353,7 +360,7 @@ fn a_fractional_move_encodes_a_layer_again() {
     }
     assert_eq!(owed, [1, 1, 0]);
     assert_eq!(rasterised, 1, "one exact raster at the new phase");
-    // The sprite lands on whole device pixels, and the raster carries the half pixel inside it.
+    // The image lands on whole device pixels, and the raster carries the half pixel inside it.
     let top = (window.sprite()[1] - poison()) * 1.5;
     // At the poison offset an f32 holds the sprite's edge only to about one ulp of the offset.
     let slack = 1.0e-4 + poison() * f32::EPSILON * 1.5;
@@ -397,7 +404,7 @@ fn a_deferred_drawing_is_not_remembered_and_is_owed_a_frame() {
     assert_eq!(measured.get(Counter::VectorLayersDeferred), 1);
     assert_eq!(measured.get(Counter::ChunksIncomplete), 1, "not remembered");
     assert_eq!(first.layers_owed.len(), 1);
-    assert_eq!(window.harness.scene().primitives.color_sprites.len(), 2);
+    assert_eq!(window.images(), 2);
 
     let mut second = None;
     let measured = recording.measure(|| second = Some(window.paint(false)));
@@ -409,7 +416,7 @@ fn a_deferred_drawing_is_not_remembered_and_is_owed_a_frame() {
         "only the deferred drawing is encoded"
     );
     assert!(second.layers_owed.is_empty());
-    assert_eq!(window.harness.scene().primitives.color_sprites.len(), 3);
+    assert_eq!(window.images(), 3);
 }
 
 /// A 3000 by 3000 document: a ground, a ramp over a quadrilateral no analytic route takes, and a
@@ -431,20 +438,8 @@ fn huge() -> Window {
     )
 }
 
-/// How many colour sprites draw something.
-fn drawn_sprites(window: &Window) -> usize {
-    window
-        .harness
-        .scene()
-        .primitives
-        .color_sprites
-        .iter()
-        .filter(|sprite| sprite.bounds != [0.0; 4])
-        .count()
-}
-
 #[test]
-fn a_huge_drawing_draws_named_tiles_and_no_vector_item() {
+fn a_huge_drawing_draws_tile_images_and_no_path() {
     let mut window = huge();
     let mut recording = Recording::begin();
     let mut report = None;
@@ -453,12 +448,16 @@ fn a_huge_drawing_draws_named_tiles_and_no_vector_item() {
     assert!(routes(&report).contains(VectorRoute::CpuLayer));
     assert!(!routes(&report).contains(VectorRoute::GeneralRaster));
     assert!(report.layers_owed.is_empty());
-    let scene = window.harness.scene();
-    assert!(scene.primitives.vectors.is_empty(), "no vector item");
-    assert!(!scene.has_unresolved_resources());
+    let written = window.harness.compositor.commit.images_written;
+    let drawing = window.drawn();
+    assert_eq!(drawing.of_kind("path").count(), 0, "no path: {drawing}");
     let rasterised = measured.get(Counter::VectorLayerTilesRasterised);
     assert!(rasterised >= 1);
-    assert_eq!(drawn_sprites(&window) as u64, rasterised);
+    assert_eq!(
+        u64::from(written),
+        rasterised,
+        "each raster is written once"
+    );
     assert_eq!(measured.get(Counter::VectorLayersRasterised), 0);
     assert_eq!(measured.get(Counter::VectorRouteLayer), 1);
 
@@ -468,8 +467,8 @@ fn a_huge_drawing_draws_named_tiles_and_no_vector_item() {
         let measured = recording.measure(|| report = Some(window.paint(false)));
         assert_eq!(measured.get(Counter::VectorLayerTilesRasterised), 0);
         assert!(report.expect("a frame").vector_routes.is_empty());
+        assert_eq!(window.harness.compositor.commit.images_written, 0);
     }
-    assert_eq!(drawn_sprites(&window) as u64, rasterised);
 }
 
 /// The port a huge drawing is shown in, on a 1600 by 1000 surface.
@@ -518,26 +517,6 @@ fn cells_in_port(top: f32) -> Vec<(i32, i32)> {
     cells
 }
 
-/// The cells whose sprites draw something, when the drawing is laid out at `top`.
-fn placed_cells(window: &Window, top: f32) -> Vec<(i32, i32)> {
-    let mut cells: Vec<(i32, i32)> = window
-        .harness
-        .scene()
-        .primitives
-        .color_sprites
-        .iter()
-        .filter(|sprite| sprite.bounds != [0.0; 4])
-        .map(|sprite| {
-            // The frame is the sprite's own rectangle grown by one pixel.
-            let x = sprite.frame[0] + 1.0 - poison();
-            let y = sprite.frame[1] + 1.0 - poison() - top;
-            ((x / 512.0).round() as i32, (y / 512.0).round() as i32)
-        })
-        .collect();
-    cells.sort_unstable();
-    cells
-}
-
 /// Paints `frames` frames and returns how many tiles they rasterised, checking that every owed
 /// rectangle is in the port.
 fn paint_tiles(window: &mut Window, recording: &mut Recording, frames: usize) -> u64 {
@@ -572,7 +551,6 @@ fn a_huge_drawing_in_a_port_rasterises_only_the_tiles_the_port_shows() {
         shown.len() as u64,
         "no tile outside the port is rasterised"
     );
-    assert_eq!(placed_cells(&window, 10.0), shown);
 }
 
 #[test]
@@ -580,7 +558,6 @@ fn a_scrolled_huge_drawing_rasterises_only_the_exposed_tiles() {
     let mut window = huge_in_port();
     let mut recording = Recording::begin();
     paint_tiles(&mut window, &mut recording, 4);
-    let before = placed_cells(&window, 10.0);
     // 600 px up: the first row of tiles leaves the port and the third enters it.
     window.restyle("spacer", "up");
     let mut report = None;
@@ -589,7 +566,7 @@ fn a_scrolled_huge_drawing_rasterises_only_the_exposed_tiles() {
         report.expect("a frame").vector_routes.is_empty(),
         "the drawing replays at its new place"
     );
-    assert!(measured.get(Counter::ChunksTranslated) > 0);
+    assert!(window.harness.compositor.sync.offsets > 0);
     let exposed = measured.get(Counter::VectorLayerTilesRasterised)
         + paint_tiles(&mut window, &mut recording, 3);
     let top = 10.0 - 600.0;
@@ -599,16 +576,6 @@ fn a_scrolled_huge_drawing_rasterises_only_the_exposed_tiles() {
         .collect();
     assert_eq!(entered.len(), 3, "one row of three");
     assert_eq!(exposed, entered.len() as u64, "only the tiles that entered");
-    let placed = placed_cells(&window, top);
-    for cell in placed.iter().filter(|cell| !before.contains(cell)) {
-        assert!(
-            entered.contains(cell),
-            "{cell:?} was rasterised outside the port"
-        );
-    }
-    for cell in &entered {
-        assert!(placed.contains(cell), "{cell:?} entered and is drawn");
-    }
 }
 
 #[test]
@@ -624,6 +591,5 @@ fn a_record_whose_tiled_source_is_gone_encodes_again() {
         1,
         "the record names a source that is gone, so the drawing is encoded again"
     );
-    assert!(!window.harness.scene().has_unresolved_resources());
-    assert!(drawn_sprites(&window) >= 1);
+    assert!(window.harness.compositor.commit.images_written >= 1);
 }

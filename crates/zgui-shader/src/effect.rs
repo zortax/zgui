@@ -1,19 +1,18 @@
-//! One declared effect: the program its own build produced, and the handle a device draws it by.
+//! One declared effect: the program its own build produced, and the handle items draw it by.
 
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-use zgui_render_wgpu::EffectProgram;
-use zgui_scene::ShaderId;
-use zgui_wgsl::ShaderReads;
+use iceblink::{Prebuilt, ShaderDesc, ShaderSource};
+use zgui_paint::content::shader::{Declaration, ShaderId, ShaderMode, ShaderReads};
 
 use crate::handle::{ShaderHandle, ShaderParams};
+use crate::program::EffectProgram;
 
 /// An application shader, as `shader!` left it.
 ///
 /// Written as a `static`, because everything in it is decided while the application is built. It
-/// is registered the first time it is used and never again: the handle it takes is the process's,
-/// and every device catches up with it, so a second window and a device lost and rebuilt both end
-/// up drawing the same effect.
+/// is declared the first time it is registered and never again, so every window draws the same
+/// shader under the same handle.
 #[derive(Debug)]
 pub struct ShaderEffect<P: 'static> {
     /// What the application's build produced.
@@ -55,32 +54,38 @@ impl<P: ShaderParams> ShaderEffect<P> {
     /// Registering twice returns two handles on one effect: the declaration is taken once, and the
     /// parameters belong to the handle rather than to the declaration, so two parts of an
     /// application can draw the same shader with different parameters.
+    ///
+    /// An effect whose parameters disagree between its shader and Rust, as
+    /// [`validate`](ShaderEffect::validate) reports, is declared without a program and draws
+    /// nothing.
     pub fn register(&'static self) -> ShaderHandle<P> {
         let id = *self.id.get_or_init(|| {
-            // The handle is minted where the declaration is, so one handle names both halves of
-            // the effect: the vocabulary the paint stage decides with, and the program the device
-            // compiles. A style sheet reaches the first by name; a display list reaches the second
-            // by this.
-            let id = zgui_scene::declare_shader(
-                self.name,
-                self.program.mode,
-                self.reads,
-                P::LAYOUT.fields,
-                self.reach,
-            );
-            zgui_render_wgpu::declare(id, self.program);
-            id
+            let checked = self.validate();
+            if let Err(reason) = &checked {
+                tracing::error!(effect = self.name, "{reason}, so the effect draws nothing");
+            }
+            zgui_paint::content::shader::declare(Declaration {
+                name: self.name,
+                mode: self.program.mode,
+                desc: checked.ok().map(|()| self.desc()),
+                reads: self.reads,
+                fields: P::LAYOUT.fields,
+                reach: self.reach,
+            })
         });
         ShaderHandle::new(id, self.reads)
     }
 
     /// Whether the parameters this effect declares agree between its shader and Rust.
     ///
-    /// The same comparison a device makes when it registers the effect, made without one. A
-    /// disagreement makes the effect draw nothing, so an application that would rather find out
+    /// A disagreement makes the effect draw nothing, so an application that would rather find out
     /// early than look at an empty rectangle can ask here.
+    ///
+    /// # Errors
+    ///
+    /// Returns the first difference between the two layouts.
     pub fn validate(&self) -> Result<(), String> {
-        zgui_render_wgpu::check_effect(&self.program)
+        self.program.check_params()
     }
 
     /// What the effect is called, which is the name a driver error and a style sheet use.
@@ -96,9 +101,34 @@ impl<P: ShaderParams> ShaderEffect<P> {
     /// How far outside its own box this effect reads, in CSS pixels.
     ///
     /// Zero for everything but a filter that samples a neighbourhood. It is what the damage a
-    /// filtered box owes is grown by, and nothing but the effect can state it: reading further
-    /// than this feeds the filter its own previous output wherever a partial redraw stopped short.
+    /// filtered box owes is grown by: reading further than this feeds the filter its own previous
+    /// output wherever a partial redraw stopped short.
     pub fn reach(&self) -> f32 {
         self.reach
+    }
+
+    /// Returns the program the compositor creates the shader from.
+    fn desc(&self) -> ShaderDesc {
+        let program = &self.program;
+        ShaderDesc {
+            mode: match program.mode {
+                ShaderMode::Paint => iceblink::ShaderMode::PAINT,
+                ShaderMode::Coverage => iceblink::ShaderMode::COVERAGE,
+                ShaderMode::Filter => iceblink::ShaderMode::FILTER,
+            },
+            source: ShaderSource {
+                wgsl: Arc::from(program.source),
+                prebuilt: Some(Prebuilt {
+                    format: Arc::from(program.prebuilt_format),
+                    bytes: Arc::from(program.prebuilt),
+                }),
+            },
+            params_size: P::LAYOUT.size as u32,
+            reads: if self.reads.time {
+                iceblink::ShaderReads::TIME
+            } else {
+                iceblink::ShaderReads::default()
+            },
+        }
     }
 }

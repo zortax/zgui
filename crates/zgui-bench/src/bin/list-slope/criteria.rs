@@ -125,22 +125,24 @@ pub(crate) fn rebuilds(gesture: Gesture) -> Criterion {
 ///
 /// # What the recorded value says
 ///
-/// **0.9128–0.9193 over three runs.** One frame of a wheel glide over a virtualised list costs
-/// about nine tenths of what repainting the same realised rows costs. That is the number the scroll
-/// half of the compositor programme is argued against, and it is worth reading twice: carrying rows
-/// past a port is very nearly as expensive as drawing them again from their styles. The advisory
-/// lines say the same thing in units — 28 µs per realised row per drawn frame against 30 µs for the
-/// repaint.
+/// **0.1285–0.1406 over three runs.** One drawn frame of a wheel glide over a virtualised list
+/// costs about a seventh of what repainting the same realised rows costs. A glide frame writes one
+/// scroll offset, and the compositor shifts the rows it already drew and draws only the band that
+/// comes into view. The advisory lines say the same thing in units: 1.0 to 1.1 µs per realised row
+/// per drawn frame against about 8.0 µs for the repaint.
 ///
-/// The band is twelve per cent, which is four times the spread of the three runs it was recorded
-/// from and still narrow enough that a change moving either half by a fifth fails.
+/// The glide's cost is divided by the frames the compositor drew. A frame that left the output
+/// unchanged draws nothing and is not counted.
+///
+/// The band is thirty-five per cent, four times the spread of the three runs it was recorded
+/// from.
 pub(crate) const GLIDE: Criterion = Criterion {
     name: "LIST-glide",
     subject: "one drawn frame of a wheel glide over a hundred thousand rows, per realised row",
     baseline: "a full repaint of the same realised rows, per realised row",
     allowed: Allowed::Near {
-        recorded: 0.92,
-        tolerance: 0.12,
+        recorded: 0.137,
+        tolerance: 0.35,
     },
     advice: "The proportion between what carrying rows past a port costs and what repainting them \
              costs has moved. Both slopes are in the advisory lines above: the one that moved is \

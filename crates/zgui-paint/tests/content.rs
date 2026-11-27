@@ -1,17 +1,16 @@
-//! Decoded images reaching the display list through the content cache.
+//! Decoded images reaching the compositor through the content cache.
 //!
 //! The glyph half of the cache is exercised where a text engine is available; this is the other
 //! half, and it is the one a document draws a picture through. What it has to show is that a
-//! replaced fragment resolves to a tile of this framework's own atlas, that the tile is the extent
-//! of the image rather than of the box, and that a replaced box with nothing attached draws nothing
-//! at all rather than a placeholder.
+//! replaced fragment draws one compositor image of the picture's own texels, that the image is the
+//! extent of the picture rather than of the box, and that a replaced box with nothing attached
+//! draws nothing at all rather than a placeholder.
 
 mod support;
 
-use zgui_atlas::{AtlasLimits, MemorySink};
 use zgui_geom::Size;
 use zgui_paint::ContentCache;
-use zgui_text::NoRaster;
+use zgui_testkit_compositor::{Drawing, Instance};
 
 use support::{Element, Harness};
 
@@ -33,240 +32,176 @@ fn image() -> (Size<u32, zgui_geom::Device>, Vec<u8>) {
     (size, texels)
 }
 
-/// An image attached to a replaced node is drawn as a colour sprite over its content box.
+/// The images the whole output draws.
+fn images(drawing: &Drawing) -> Vec<&Instance> {
+    drawing.of_kind("color").collect()
+}
+
+/// An image attached to a replaced node is drawn as one image over its content box.
 #[test]
-fn an_attached_image_becomes_a_colour_sprite_over_the_content_box() {
+fn an_attached_image_becomes_an_image_over_the_content_box() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
-    let mut sink = MemorySink::new();
+    let mut cache = ContentCache::new();
     let (size, texels) = image();
     cache
         .set_image(harness.replaced_id("picture"), size, texels)
         .expect("the buffer matches the extent");
 
-    harness.paint_content(&mut cache, &NoRaster);
-
-    let sprites = &harness.scene().primitives.color_sprites;
+    harness.paint_content(&mut cache);
     assert_eq!(
-        sprites.len(),
-        1,
-        "one replaced box with content attached is one colour sprite"
+        harness.compositor.commit.images_written, 1,
+        "the texels reach the compositor before anything samples them"
     );
-    let sprite = &sprites[0];
+
+    let drawing = harness.redraw();
+    let [image] = images(&drawing)[..] else {
+        panic!("one replaced box with content attached is one image: {drawing}");
+    };
     let content_box = harness
         .store()
         .fragment(harness.fragment_of("picture"))
         .expect("the replaced box produced a fragment")
         .content_box();
     assert_eq!(
-        sprite.bounds,
+        image.bounds(),
         [
             content_box.origin.x.0,
             content_box.origin.y.0,
             content_box.size.width.0,
             content_box.size.height.0,
         ],
-        "the sprite covers the content box, which is what an image is stretched to"
+        "the image covers the content box, which is what a picture is stretched to"
     );
-    assert_eq!(
-        [sprite.tile.bounds[2], sprite.tile.bounds[3]],
-        [16, 8],
-        "the tile is the image's own extent, not the box's"
-    );
-
-    cache.flush(&mut sink).expect("the in-memory sink accepts");
-    assert_eq!(
-        sink.bytes_written(),
-        16 * 8 * 4,
-        "the texels have to reach the texture before anything samples it"
+    let tile = image.field("tile").expect("a tile");
+    assert!(
+        tile.ends_with(", 16, 8]"),
+        "the image is the picture's own extent, not the box's: {drawing}"
     );
 }
 
 /// A replaced box with nothing attached draws nothing, and says so by drawing nothing.
 #[test]
-fn a_replaced_box_with_no_content_draws_no_sprite() {
+fn a_replaced_box_with_no_content_draws_no_image() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
-    harness.paint_content(&mut cache, &NoRaster);
+    let mut cache = ContentCache::new();
+    harness.paint_content(&mut cache);
 
     assert!(
-        harness.scene().primitives.color_sprites.is_empty(),
+        images(&harness.redraw()).is_empty(),
         "an image that has not been decoded yet is not a grey rectangle"
     );
-    assert_eq!(cache.report().tiles, 0);
+    assert_eq!(harness.compositor.commit.images_written, 0);
 }
 
-/// The same image drawn twice is one tile.
+/// The same image drawn twice is written once.
 #[test]
-fn one_image_drawn_twice_is_one_tile() {
+fn one_image_drawn_twice_is_written_once() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let id = harness.replaced_id("picture");
     let (size, texels) = image();
     cache.set_image(id, size, texels).expect("well formed");
 
-    harness.paint_content(&mut cache, &NoRaster);
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
+    assert_eq!(harness.compositor.commit.images_written, 1);
+    harness.paint_content(&mut cache);
     assert_eq!(
-        cache.report().tiles,
-        1,
-        "drawing an image twice must not upload it twice"
+        harness.compositor.commit.images_written, 0,
+        "drawing an image twice must not write it twice"
     );
-
-    // Detaching the content leaves the tile where it is: the atlas frees space by eviction, and a
-    // tile freed the moment its last user let go would be re-uploaded by the next frame that drew
-    // the same picture again.
-    cache.remove_image(id);
-    assert_eq!(cache.report().tiles, 1);
 }
 
-/// A pool with no room evicts a cold generation and retries, rather than drawing nothing.
+/// Detaching a picture lets the compositor's image go once no chunk draws it.
 #[test]
-fn a_full_pool_makes_room_for_a_new_picture_by_evicting_a_cold_one() {
+fn a_detached_picture_releases_its_image() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    // One texture of 64 texels square per pool: a 48-square tile fills it past reuse, so a second
-    // 48-square picture has nowhere to go until the first is evicted.
-    let limits = AtlasLimits {
-        texture_size: 64,
-        max_texture_size: 64,
-        max_textures_per_pool: 1,
-        soft_bytes: None,
-    };
-    let mut cache = ContentCache::new(limits);
+    let mut cache = ContentCache::new();
     let id = harness.replaced_id("picture");
-    let size = Size::new(48u32, 48u32);
-    let texels = || {
-        std::sync::Arc::new(
-            (0..size.width * size.height)
-                .flat_map(|_| [255u8, 0, 0, 255])
-                .collect::<Vec<u8>>(),
-        )
-    };
+    let (size, texels) = image();
+    cache.set_image(id, size, texels).expect("well formed");
+    harness.paint_content(&mut cache);
+    assert_eq!(images(&harness.redraw()).len(), 1);
 
-    cache
-        .set_image_shared(id, 1, size, texels())
-        .expect("well formed");
-    harness.paint_content(&mut cache, &NoRaster);
-    assert_eq!(cache.report().tiles, 1, "the first picture fills the pool");
-
-    cache
-        .set_image_shared(id, 2, size, texels())
-        .expect("well formed");
-    harness.paint_content(&mut cache, &NoRaster);
-
-    assert_eq!(
-        harness.scene().primitives.color_sprites.len(),
-        1,
-        "the new picture is drawn: a full pool is a reason to evict, never to draw nothing"
-    );
-    assert_eq!(
-        cache.report().tiles,
-        1,
-        "the cold picture went and the new one has its room"
+    cache.remove_image(id);
+    harness.paint_content(&mut cache);
+    assert!(images(&harness.redraw()).is_empty());
+    assert!(
+        harness.compositor.sync.released >= 1,
+        "the image no chunk draws is removed: {:?}",
+        harness.compositor.sync
     );
 }
 
-/// After a flush, a shared attachment's texels are given back and the tile serves it; a tile
-/// that later goes missing is reported for a re-decode rather than drawn wrong or lost quietly.
+/// Once the frame is committed, a shared attachment's texels are given back and the compositor's
+/// image serves it. An image the compositor no longer holds is reported for a re-decode rather than
+/// drawn wrong or lost quietly.
 #[test]
-fn a_settled_attachment_is_served_by_its_tile_and_reported_when_the_tile_goes() {
+fn a_settled_attachment_is_served_by_its_image_and_reported_when_the_image_goes() {
     let mut harness = Harness::new(tree(), CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let id = harness.replaced_id("picture");
     let (size, texels) = image();
     cache
         .set_image_shared(id, 7, size, std::sync::Arc::new(texels))
         .expect("well formed");
 
-    harness.paint_content(&mut cache, &NoRaster);
-    let mut sink = MemorySink::new();
-    cache.flush(&mut sink).expect("the in-memory sink accepts");
+    harness.paint_content(&mut cache);
     assert!(
         cache.image_bytes() > 0,
-        "the texels are held until the flush settles"
+        "the texels are held until the frame settles"
     );
+    assert!(cache.image_tile_resident(7));
 
     cache.settle_uploaded(0);
     assert_eq!(
         cache.image_bytes(),
         0,
-        "a flushed shared attachment holds no host bytes"
+        "a shared attachment the compositor holds keeps no host bytes"
     );
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
     assert_eq!(
-        harness.scene().primitives.color_sprites.len(),
+        images(&harness.redraw()).len(),
         1,
-        "the tile alone serves the picture"
+        "the compositor's image alone serves the picture"
     );
     assert!(
         cache.take_missing_images().is_empty(),
-        "nothing is missing while the tile is resident"
+        "nothing is missing while the compositor holds the image"
     );
 
-    // Ordinary eviction cannot take a shown tile — the replay records hold it — so the way a
-    // tile actually disappears from under an uploaded attachment is a lost device. A fresh
-    // walk with no records is what re-emits and notices.
-    cache.clear();
+    // A fresh painter and compositor hold no image, which is what a rejected commit leaves.
     let mut fresh = Harness::new(tree(), CSS);
     fresh.compose(200.0, 100.0);
     let id = fresh.replaced_id("picture");
     cache.set_image_uploaded(id, 7, size);
 
-    fresh.paint_content(&mut cache, &NoRaster);
+    fresh.paint_content(&mut cache);
     assert!(
-        fresh.scene().primitives.color_sprites.is_empty(),
-        "a picture whose tile is gone draws nothing this frame"
+        images(&fresh.redraw()).is_empty(),
+        "a picture the compositor holds no image of draws nothing this frame"
     );
     assert_eq!(
         cache.take_missing_images(),
         vec![id],
         "and is reported exactly once for a re-decode"
     );
+    assert!(!cache.image_tile_resident(7));
 }
 
-/// Content attached with levels of detail gets a texture of exactly its own size.
+/// Two nodes attached under one shared handle draw one image of one shared buffer.
 #[test]
-fn a_mipped_attachment_gets_a_standalone_texture_at_its_own_extent() {
-    let mut harness = Harness::new(tree(), CSS);
-    harness.compose(200.0, 100.0);
-
-    let mut cache = ContentCache::new(AtlasLimits::default());
-    let size = Size::new(600u32, 600u32);
-    let texels = std::sync::Arc::new(vec![9u8; (size.width * size.height * 4) as usize]);
-    let mips = vec![zgui_paint::MipLevel {
-        size: Size::new(300, 300),
-        texels: std::sync::Arc::new(vec![9u8; 300 * 300 * 4]),
-    }];
-    cache
-        .set_image_shared_mipped(harness.replaced_id("picture"), 7, size, size, texels, mips)
-        .expect("well formed");
-
-    harness.paint_content(&mut cache, &NoRaster);
-    let mut sink = MemorySink::new();
-    cache.flush(&mut sink).expect("the in-memory sink accepts");
-
-    use zgui_atlas::{TextureId, TextureKind};
-    assert_eq!(
-        sink.size_of(TextureId::new(TextureKind::Image, 0)),
-        Some(Size::new(600, 600)),
-        "the texture is the image, exactly, rather than a page grown to hold it"
-    );
-}
-
-/// Two nodes attached under one shared handle resolve to one tile of one shared buffer.
-#[test]
-fn two_nodes_sharing_a_handle_share_one_tile() {
+fn two_nodes_sharing_a_handle_share_one_image() {
     let tree = Element::new("root").children(vec![
         Element::new("picture").image(),
         Element::new("picture").image(),
@@ -274,7 +209,7 @@ fn two_nodes_sharing_a_handle_share_one_tile() {
     let mut harness = Harness::new(tree, CSS);
     harness.compose(200.0, 100.0);
 
-    let mut cache = ContentCache::new(AtlasLimits::default());
+    let mut cache = ContentCache::new();
     let (size, texels) = image();
     let texels = std::sync::Arc::new(texels);
     let ids = harness.replaced_ids("picture");
@@ -285,23 +220,14 @@ fn two_nodes_sharing_a_handle_share_one_tile() {
             .expect("well formed");
     }
 
-    harness.paint_content(&mut cache, &NoRaster);
+    harness.paint_content(&mut cache);
+    assert_eq!(
+        harness.compositor.commit.images_written, 1,
+        "one decode shown twice is one image, which is what the shared handle buys"
+    );
 
-    assert_eq!(
-        harness.scene().primitives.color_sprites.len(),
-        2,
-        "each node draws its own sprite"
-    );
-    assert_eq!(
-        cache.report().tiles,
-        1,
-        "one decode shown twice is one tile, which is what the shared handle buys"
-    );
-    let mut sink = MemorySink::new();
-    cache.flush(&mut sink).expect("the in-memory sink accepts");
-    assert_eq!(
-        sink.bytes_written(),
-        16 * 8 * 4,
-        "and one upload: the second node added no bytes"
-    );
+    let drawing = harness.redraw();
+    let shown = images(&drawing);
+    assert_eq!(shown.len(), 2, "each node draws the image: {drawing}");
+    assert_eq!(shown[0].field("tile"), shown[1].field("tile"), "{drawing}");
 }

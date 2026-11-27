@@ -22,18 +22,12 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
 
 use zgui_geom::{CssPx, Point};
 use zgui_platform::SurfaceEvent;
 use zgui_profile::{COUNTERS_ENABLED, counter};
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
 use zgui_view::{BuildCx, IntoView, View};
 use zgui_vocab::{Modifiers, PointerAction, PointerEvent, Timestamp};
 
@@ -183,14 +177,13 @@ fn a_transition_advances_frame_over_frame_on_an_idle_loop() {
     // Nothing here calls `frame`. Every frame was asked for by the loop itself, because something
     // told it to come back — which is one of the two halves under test.
     //
-    // The other half is what reaches the *display list*, and it is asserted on rather than the
+    // The other half is what reaches the *screen*, and it is asserted on rather than the
     // interpolated value, because the two fail independently. The lowered style a button is drawn
     // through is shared and does not move while a transition runs, so a per-fragment paint cache
     // that does not know about the override replays the transition's first frame for the whole of
     // its length: the values advance, the obligations are marked, the damage is right, and the
     // picture on the screen never changes.
-    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
-    let mut harness = drawn_into(HOVER_CSS, &fills, |cx: &mut BuildCx<'_>| {
+    let mut harness = support::app_with_text(HOVER_CSS, |cx: &mut BuildCx<'_>| {
         let view = zgui_elements::column()
             .class("root")
             .child(zgui_elements::column().class("btn"));
@@ -206,10 +199,9 @@ fn a_transition_advances_frame_over_frame_on_an_idle_loop() {
             harness.parked_deadline().is_some(),
             "the loop stopped asking to be woken while the transition was still running"
         );
-        fills.borrow_mut().clear();
         harness.advance(FRAME);
         assert_eq!(harness.pump(), 1, "the deadline produced no frame");
-        drawn.push(brightest_fill(&fills));
+        drawn.push(brightest_fill(&shown_fills(&harness)));
     }
 
     let first = drawn[0];
@@ -224,128 +216,71 @@ fn a_transition_advances_frame_over_frame_on_an_idle_loop() {
     harness.assert_park_invariant();
 }
 
-/// The solid fills of every frame drawn by one window, newest last.
-type Fills = Rc<RefCell<Vec<Vec<zgui_color::Color>>>>;
-
-/// The brightest solid fill in the last frame, quantised so a comparison is exact.
+/// The premultiplied red channel of every solid quad fill the window shows, quantised so a
+/// comparison is exact.
 ///
-/// The window's only non-transparent fills are the button's background, which is what the
-/// transition moves; taking the brightest is what identifies it without the test knowing anything
-/// about the order the display list happens to be in.
-fn brightest_fill(fills: &Fills) -> u32 {
-    fills
-        .borrow()
-        .last()
-        .into_iter()
-        .flatten()
-        .map(|color| (color.to_premultiplied_srgb()[0] * 10_000.0) as u32)
-        .max()
-        .unwrap_or_default()
+/// The drawing is what separates the two halves an animation fails in independently: the
+/// override column says what the animation computed, and this says what reached the screen.
+fn shown_fills(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> Vec<u32> {
+    support::drawing(&harness.app().windows()[0])
+        .quads()
+        .iter()
+        .filter_map(|quad| quad.color("fill"))
+        .map(|[red, ..]| (red * 10_000.0).round() as u32)
+        .collect()
 }
 
-/// An application under `css`, with every frame's solid fills recorded and text shaped by the
-/// test shaper.
+/// The brightest of `fills`.
 ///
-/// The recording renderer is what separates the two halves an animation fails in independently: the
-/// override column says what the animation computed, and this says what reached the display list.
-fn drawn_into<V>(
-    css: &str,
-    fills: &Fills,
-    view: V,
-) -> zgui_platform_headless::Harness<zgui_runtime::Runtime>
+/// The window's only non-transparent fills are the button's background, which is what the
+/// transition moves. Taking the brightest identifies it without the test knowing anything about
+/// the order the quads are drawn in.
+fn brightest_fill(fills: &[u32]) -> u32 {
+    fills.iter().copied().max().unwrap_or_default()
+}
+
+/// Returns how many frames the window's compositor has drawn.
+fn frames(harness: &zgui_platform_headless::Harness<zgui_runtime::Runtime>) -> u64 {
+    support::frames_drawn(&harness.app().windows()[0])
+}
+
+/// An application under `css`, with the damage of every frame recorded and text shaped by the
+/// test shaper.
+fn damage_logged<V>(css: &str, view: V) -> zgui_platform_headless::Harness<zgui_runtime::Runtime>
 where
     V: FnMut(&mut BuildCx<'_>) -> Box<dyn zgui_view::Anchor> + 'static,
 {
-    let factory = Rc::clone(fills);
     let handler = zgui_runtime::App::new()
         .with_title("anim")
         .with_size(400.0, 300.0)
         .with_stylesheet(css)
-        .with_renderer(Box::new(
-            move |_surface: &Arc<dyn zgui_platform::Surface>, target: RenderTarget| {
-                let mut renderer = Fill {
-                    fills: Rc::clone(&factory),
-                    target: None,
-                    atlas: zgui_atlas::MemorySink::default(),
-                };
-                renderer.configure(target);
-                Ok::<Box<dyn Renderer>, zgui_runtime::AppError>(Box::new(renderer))
-            },
-        ))
+        .with_probe(std::rc::Rc::new(DamageLog))
+        .with_compositor(support::client())
+        .with_renderer(Box::new(support::screen))
         .with_text_engine(Box::new(|| {
-            Box::new(zgui_layout::Paragraphs::new(
-                zgui_testkit_scene::MonoShaper::new(),
-            ))
+            Box::new(zgui_layout::Paragraphs::new(zgui_testkit::MonoShaper::new()))
         }))
-        .with_glyph_raster(Box::new(|| Arc::new(zgui_testkit_scene::MonoRaster::new())))
         .into_handler(view)
         .expect("the reactive runtime installs");
     zgui_platform_headless::Harness::new(handler)
 }
 
 thread_local! {
-    /// The bounds of the damage of every frame drawn on this thread, oldest first.
+    /// The bounds of the region every frame on this thread painted again, oldest first.
     static DAMAGE: RefCell<Vec<Option<zgui_geom::Rect<i32, zgui_geom::Device>>>> =
         const { RefCell::new(Vec::new()) };
 }
 
-/// A renderer that records the solid fills of every frame and draws nothing.
-struct Fill {
-    /// Where the frames go.
-    fills: Fills,
-    /// The surface it was pointed at.
-    target: Option<RenderTarget>,
-    /// Tiles go into plain memory, so the upload path still runs.
-    atlas: zgui_atlas::MemorySink,
-}
+/// A probe that records the region every frame's paint walk was gated on.
+struct DamageLog;
 
-impl Renderer for Fill {
-    fn capabilities(&self) -> RenderCapabilities {
-        RenderCapabilities::MINIMAL
-    }
-
-    fn configure(&mut self, target: RenderTarget) {
-        self.target = Some(target);
-    }
-
-    fn target(&self) -> Option<RenderTarget> {
-        self.target
-    }
-
-    fn draw(&mut self, scene: &zgui_scene::Scene, damage: &zgui_bits::DamageSet) -> FrameOutcome {
-        DAMAGE.with_borrow_mut(|frames| frames.push(damage.bounds()));
-        self.fills.borrow_mut().push(
-            scene
-                .primitives
-                .quads
-                .iter()
-                .filter_map(|quad| match scene.paints.get(quad.fill.id()?) {
-                    Some(zgui_scene::Paint::Solid(color)) => Some(*color),
-                    _ => None,
-                })
-                .collect(),
-        );
-        FrameOutcome::Presented(zgui_render::FrameStats {
-            vector_passes: 0,
-            draw_calls: 0,
-            damage_px: 0,
-            bytes_uploaded: 0,
-            memory: MemoryReport::ZERO,
-        })
-    }
-
-    fn register_external(&mut self, _texture: ExternalTexture) -> TextureHandle {
-        TextureHandle(0)
-    }
-
-    fn release_external(&mut self, _handle: TextureHandle) {}
-
-    fn memory(&self) -> MemoryReport {
-        MemoryReport::ZERO
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn zgui_atlas::TextureSink {
-        &mut self.atlas
+impl zgui_runtime::FrameProbe for DamageLog {
+    fn frame_ended(&self, window: &zgui_runtime::Window) {
+        let painted = window
+            .last_frame_report()
+            .expect("a frame that ended has a report")
+            .painted;
+        DAMAGE.with_borrow_mut(|frames| frames.push(painted.bounds()));
     }
 }
 
@@ -357,8 +292,7 @@ fn animating_one_button_does_not_touch_its_seven_identical_siblings() {
     // description fades all eight. The unhover half is the one that bites: the moment the pointer
     // leaves, the element's computed style is the one its siblings have, so it is being drawn
     // through the very same entry they are.
-    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
-    let mut harness = drawn_into(ROW_CSS, &fills, |cx: &mut BuildCx<'_>| {
+    let mut harness = support::app_with_text(ROW_CSS, |cx: &mut BuildCx<'_>| {
         let mut row = zgui_elements::column().class("root");
         for _ in 0..8 {
             row = row.child(zgui_elements::column().class("btn"));
@@ -374,7 +308,7 @@ fn animating_one_button_does_not_touch_its_seven_identical_siblings() {
 
     let mut moved_while_hovering = 0;
     for _ in 0..4 {
-        fills.borrow_mut().clear();
+        let before = frames(&harness);
         harness.advance(FRAME);
         harness.pump();
         assert_eq!(
@@ -382,7 +316,9 @@ fn animating_one_button_does_not_touch_its_seven_identical_siblings() {
             others,
             "hovering one button moved the values of the others"
         );
-        moved_while_hovering += assert_moving_alone(&fills, "hovering");
+        if frames(&harness) > before {
+            moved_while_hovering += assert_moving_alone(&shown_fills(&harness), "hovering");
+        }
     }
     assert!(
         moved_while_hovering > 0,
@@ -396,7 +332,7 @@ fn animating_one_button_does_not_touch_its_seven_identical_siblings() {
     harness.settle(8);
     let mut moved_while_unhovering = 0;
     for _ in 0..4 {
-        fills.borrow_mut().clear();
+        let before = frames(&harness);
         harness.advance(FRAME);
         harness.pump();
         assert_eq!(
@@ -404,7 +340,9 @@ fn animating_one_button_does_not_touch_its_seven_identical_siblings() {
             others,
             "unhovering one button moved the values of the others"
         );
-        moved_while_unhovering += assert_moving_alone(&fills, "unhovering");
+        if frames(&harness) > before {
+            moved_while_unhovering += assert_moving_alone(&shown_fills(&harness), "unhovering");
+        }
     }
     assert!(
         moved_while_unhovering > 0,
@@ -420,26 +358,23 @@ fn animating_one_button_does_not_touch_its_seven_identical_siblings() {
 /// the half the override column cannot report on: that column is per node by construction, so an
 /// assertion made against it is true whatever the painter went on to do with what it read.
 ///
-/// Returns how many frames had a button mid-transition in them, because *nothing painted at all*
-/// satisfies "at most one" perfectly. The caller asserts that number is not zero, which is what
-/// stops the whole case passing over a transition that never ran and a window that drew nothing.
-fn assert_moving_alone(fills: &Fills, phase: &str) -> usize {
-    let mut frames_with_one = 0;
-    for frame in fills.borrow().iter() {
-        let moving = frame
-            .iter()
-            .map(|color| (color.to_premultiplied_srgb()[0] * 10_000.0) as u32)
-            .filter(|value| {
-                *value != 0 && !(626..=628).contains(value) && !(9409..=9411).contains(value)
-            })
-            .count();
-        assert!(
-            moving <= 1,
-            "while {phase}, {moving} buttons were painted in a colour only the transition produces"
-        );
-        frames_with_one += usize::from(moving == 1);
-    }
-    frames_with_one
+/// Returns 1 if the frame had a button mid-transition in it, because *nothing painted at all*
+/// satisfies "at most one" perfectly. The caller asserts the sum over frames is not zero, which is
+/// what stops the whole case passing over a transition that never ran and a window that drew
+/// nothing.
+fn assert_moving_alone(fills: &[u32], phase: &str) -> usize {
+    let moving = fills
+        .iter()
+        .filter(|value| {
+            **value != 0 && !(626..=628).contains(*value) && !(9411..=9413).contains(*value)
+        })
+        .count();
+    assert!(
+        moving <= 1,
+        "while {phase}, {moving} buttons were painted in a colour only the transition produces: \
+         {fills:?}"
+    );
+    usize::from(moving == 1)
 }
 
 #[test]
@@ -494,8 +429,7 @@ fn a_colour_animation_replays_every_chunk_after_its_first_frame() {
     // The colour is in a slot the box owns, so a frame that moves it rewrites the slot and replays
     // the chunk that names it. Re-encoding five hundred boxes per frame for a colour is the cost
     // this removes; a replay that drew the colour it was recorded with is the failure it risks.
-    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
-    let mut harness = drawn_into(SHIMMER_CSS, &fills, |cx: &mut BuildCx<'_>| {
+    let mut harness = support::app_with_text(SHIMMER_CSS, |cx: &mut BuildCx<'_>| {
         let mut grid = zgui_elements::column().class("root");
         for _ in 0..500 {
             grid = grid.child(zgui_elements::column().class("bone"));
@@ -513,10 +447,9 @@ fn a_colour_animation_replays_every_chunk_after_its_first_frame() {
     counter::reset();
     let mut drawn = Vec::new();
     for _ in 0..4 {
-        fills.borrow_mut().clear();
         harness.advance(FRAME);
         assert_eq!(harness.pump(), 1, "the deadline produced no frame");
-        drawn.push(brightest_fill(&fills));
+        drawn.push(brightest_fill(&shown_fills(&harness)));
     }
     let frames = counter::snapshot();
     assert!(
@@ -544,8 +477,7 @@ fn an_animated_box_damages_only_what_its_clip_admits() {
     // Both boxes are three times as wide as the port that clips them. A colour moved in the slots
     // the box owns is damaged by the animation stage, and an opacity by the fragment pass. Either
     // damage cut to anything wider than the port redraws pixels no box can draw into.
-    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
-    let mut harness = drawn_into(CLIPPED_CSS, &fills, |cx: &mut BuildCx<'_>| {
+    let mut harness = damage_logged(CLIPPED_CSS, |cx: &mut BuildCx<'_>| {
         let port = zgui_elements::column()
             .class("port")
             .child(zgui_elements::column().class("fade"))
@@ -586,8 +518,7 @@ fn a_box_inside_text_shows_every_frame_of_its_colour_animation() {
     let _guard = measuring();
     // The lines the box is on draw its background, so it never takes slots of its own: the colour
     // reaches the screen only through the repaint of those lines.
-    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
-    let mut harness = drawn_into(INLINE_CSS, &fills, |cx: &mut BuildCx<'_>| {
+    let mut harness = support::app_with_text(INLINE_CSS, |cx: &mut BuildCx<'_>| {
         let para = zgui_elements::text()
             .class("para")
             .child(|| "aa ")
@@ -608,10 +539,9 @@ fn a_box_inside_text_shows_every_frame_of_its_colour_animation() {
 
     let mut drawn = Vec::new();
     for _ in 0..4 {
-        fills.borrow_mut().clear();
         harness.advance(FRAME);
         assert_eq!(harness.pump(), 1, "the deadline produced no frame");
-        drawn.push(brightest_fill(&fills));
+        drawn.push(brightest_fill(&shown_fills(&harness)));
     }
     assert!(
         drawn.windows(2).all(|pair| pair[1] > pair[0]),
@@ -632,8 +562,7 @@ fn a_forwards_fill_mode_holds_the_last_keyframe_after_the_animation_has_ended() 
     // Both halves are asserted, because each passes without the other. Holding the value while
     // still asking for frames is a finished animation that wakes the process sixty times a second
     // for ever; parking without holding it is the snap-back.
-    let fills: Fills = Rc::new(RefCell::new(Vec::new()));
-    let mut harness = drawn_into(FORWARDS_CSS, &fills, |cx: &mut BuildCx<'_>| {
+    let mut harness = support::app_with_text(FORWARDS_CSS, |cx: &mut BuildCx<'_>| {
         let view = zgui_elements::column()
             .class("root")
             .child(zgui_elements::column().class("panel"));
@@ -643,17 +572,17 @@ fn a_forwards_fill_mode_holds_the_last_keyframe_after_the_animation_has_ended() 
 
     let mut drawn = Vec::new();
     for _ in 0..24 {
-        fills.borrow_mut().clear();
+        let before = frames(&harness);
         harness.advance(FRAME);
         harness.pump();
-        if !fills.borrow().is_empty() {
-            drawn.push(brightest_fill(&fills));
+        if frames(&harness) > before {
+            drawn.push(brightest_fill(&shown_fills(&harness)));
         }
     }
 
     // `rgb(200, 200, 200)` at the last keyframe's opacity, premultiplied and quantised the way
     // `brightest_fill` quantises: 200/255 × 0.2. The number is the stylesheet's, not a recording.
-    let held = ((200.0 / 255.0) * 0.2 * 10_000.0) as u32;
+    let held = ((200.0 / 255.0) * 0.2 * 10_000.0_f32).round() as u32;
     let last = *drawn.last().expect("the panel was drawn at least once");
     assert!(
         last.abs_diff(held) <= 1,

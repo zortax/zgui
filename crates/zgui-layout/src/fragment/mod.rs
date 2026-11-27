@@ -30,7 +30,7 @@ use zgui_dom::NodeKey;
 use zgui_dom::host::ReplacedId;
 use zgui_dom::side::BoxKey;
 use zgui_geom::{Device, DevicePx, Edges, Rect, Size};
-use zgui_scene::{ClipId, ScrollFrameId, SpatialId, StackingContextId};
+use zgui_space::{ClipId, ScrollFrameId, SpatialId, StackingContextId};
 
 use crate::axis::Axis;
 
@@ -337,7 +337,7 @@ pub struct Fragment {
     ///
     /// Those two rectangles are device pixels only after this system's matrix is applied. It is
     /// the document's root space, which resolves to the identity unless the poison test mode is
-    /// on — see [`zgui_scene::spatial::poison`] — or the content space of the nearest scroll
+    /// on — see [`zgui_space::spatial::poison`] — or the content space of the nearest scroll
     /// container above that draws its content in one — see [`scroll_nodes`]. Use
     /// [`Fragment::on_device`] and the accessors beside it, never the raw rectangles, wherever
     /// device pixels are meant. Two fragments' raw rectangles compare only when they name the
@@ -421,7 +421,7 @@ impl FragmentExtra {
 pub fn identity_hash() -> u64 {
     static HASH: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
     *HASH.get_or_init(|| {
-        use zgui_scene::Content;
+        use zgui_space::Content;
         zgui_geom::Matrix4::IDENTITY.content_hash()
     })
 }
@@ -594,7 +594,7 @@ impl Fragment {
     pub fn on_device(
         &self,
         rect: Rect<DevicePx, Device>,
-        placements: &zgui_scene::Placements,
+        placements: &zgui_space::Placements,
     ) -> Rect<DevicePx, Device> {
         if self.anchor == SpatialId::VIEWPORT {
             return rect;
@@ -607,7 +607,7 @@ impl Fragment {
     pub fn on_device_in(
         &self,
         rect: Rect<DevicePx, Device>,
-        tree: &zgui_scene::SpatialTree,
+        tree: &zgui_space::SpatialTree,
     ) -> Rect<DevicePx, Device> {
         if self.anchor == SpatialId::VIEWPORT {
             return rect;
@@ -621,14 +621,14 @@ impl Fragment {
     }
 
     /// [`Fragment::ink`] in device pixels.
-    pub fn device_ink(&self, placements: &zgui_scene::Placements) -> Rect<DevicePx, Device> {
+    pub fn device_ink(&self, placements: &zgui_space::Placements) -> Rect<DevicePx, Device> {
         self.on_device(self.ink, placements)
     }
 
     /// [`Fragment::subtree_ink`] in device pixels.
     pub fn device_subtree_ink(
         &self,
-        placements: &zgui_scene::Placements,
+        placements: &zgui_space::Placements,
     ) -> Rect<DevicePx, Device> {
         self.on_device(self.subtree_ink, placements)
     }
@@ -641,7 +641,7 @@ mod tests {
     #[test]
     fn ink_is_put_on_the_device_through_the_anchor() {
         use zgui_geom::{DevicePx, Matrix4, Point, Rect, Size};
-        use zgui_scene::{OwnSpace, Placements, PropertyOwner, SpatialTree};
+        use zgui_space::{OwnSpace, Placements, PropertyOwner, SpatialTree};
 
         let mut tree = SpatialTree::with_viewport();
         let owner = PropertyOwner::new(2).expect("a handle is never the empty word");
@@ -735,7 +735,7 @@ mod tests {
 
     #[test]
     fn the_stacking_context_and_the_scroll_frame_round_trip_every_value() {
-        use zgui_scene::{ScrollFrameId, StackingContextId};
+        use zgui_space::{ScrollFrameId, StackingContextId};
 
         let mut fragment = fragment();
         assert_eq!(fragment.stacking(), None);
@@ -763,12 +763,12 @@ mod tests {
             Some(FragmentExtra::NONE),
             "a new fragment holds the defaults it always held"
         );
-        let mut tree = zgui_scene::SpatialTree::with_viewport();
+        let mut tree = zgui_space::SpatialTree::with_viewport();
         let space = tree.viewport();
         let other = tree.space_of(
             space,
-            zgui_scene::PropertyOwner::new(2).expect("a handle is never the empty word"),
-            zgui_scene::OwnSpace::of(
+            zgui_space::PropertyOwner::new(2).expect("a handle is never the empty word"),
+            zgui_space::OwnSpace::of(
                 Some(zgui_geom::Matrix4::translation(1.0, 0.0, 0.0)),
                 None,
                 false,

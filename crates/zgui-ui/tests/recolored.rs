@@ -153,7 +153,7 @@ impl Opened {
         self.stage.composed_colours_in(around)
     }
 
-    /// Which still the animated box shows exactly, or a panic naming the nearest one.
+    /// Which still the animated box shows to one level, or a panic naming the nearest one.
     fn step(&self, frame: usize) -> usize {
         let moving = self.pixels(self.moving);
         let mut nearest = (u8::MAX, 0);
@@ -170,7 +170,8 @@ impl Opened {
                 })
                 .max()
                 .unwrap_or(0);
-            if worst == 0 {
+            // An inline colour is stored at 8 bits, an animated one in a float paint slot.
+            if worst <= 1 {
                 return index;
             }
             nearest = nearest.min((worst, index));

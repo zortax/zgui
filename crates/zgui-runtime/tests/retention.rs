@@ -17,7 +17,7 @@ mod support;
 use zgui_profile::{COUNTERS_ENABLED, Counter};
 use zgui_reactive::RwSignal;
 use zgui_reactive::prelude::{Get, Set};
-use zgui_testkit_scene::counters::Recording;
+use zgui_testkit::counters::Recording;
 
 /// A tall window: two overlapping lines at the top, one far line at the bottom.
 const CSS: &str = "

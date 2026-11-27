@@ -80,7 +80,7 @@ fn a_paint_only_change_still_damages_the_fragment_it_repainted() {
         store
             .fragment(frag)
             .expect("live")
-            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
+            .device_ink(&zgui_space::Placements::of(&frame.spatial))
     };
     let node = store.node(target).source;
 
@@ -162,7 +162,7 @@ fn a_repaint_mark_on_a_translucent_paintless_box_damages_its_subtree() {
         store
             .fragment(frag)
             .expect("live")
-            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
+            .device_ink(&zgui_space::Placements::of(&frame.spatial))
     };
     let node = store.node(target).source;
 
@@ -232,7 +232,7 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
         store
             .fragment(frag)
             .expect("live")
-            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
+            .device_ink(&zgui_space::Placements::of(&frame.spatial))
     };
 
     frame.damage = DamageSet::new();
@@ -256,7 +256,7 @@ fn a_fragment_that_only_moved_is_marked_for_repositioning_and_damages_both_place
         store
             .fragment(frag)
             .expect("live")
-            .device_ink(&zgui_scene::Placements::of(&frame.spatial))
+            .device_ink(&zgui_space::Placements::of(&frame.spatial))
     };
     assert_eq!(after.origin.y.0, before.origin.y.0 - 40.0);
     assert_eq!(after.size, before.size, "it moved and did nothing else");
@@ -310,7 +310,7 @@ fn a_box_that_stops_producing_a_piece_damages_where_that_piece_was() {
     let vacated = store
         .fragment(last)
         .expect("live")
-        .device_ink(&zgui_scene::Placements::of(&frame.spatial));
+        .device_ink(&zgui_space::Placements::of(&frame.spatial));
 
     // Laid out much wider, the paragraph fits on fewer lines and the last of them ceases to exist.
     frame.damage = DamageSet::new();
@@ -506,7 +506,7 @@ fn a_repaint_of_a_painted_span_damages_the_line_that_paints_it() {
     let ink = store
         .fragment(line)
         .expect("live")
-        .device_ink(&zgui_scene::Placements::of(&frame.spatial));
+        .device_ink(&zgui_space::Placements::of(&frame.spatial));
 
     frame.damage = DamageSet::new();
     let root = store.root().expect("a root");
@@ -540,18 +540,18 @@ fn a_repaint_damages_its_ink_where_the_document_space_draws_it() {
         .resolve(frame.spatial.document())
         .expect("the document space resolves");
     let document = frame.spatial.establish(
-        zgui_scene::PropertyOwner::DOCUMENT,
-        zgui_scene::SpatialNode {
+        zgui_space::PropertyOwner::DOCUMENT,
+        zgui_space::SpatialNode {
             parent: Some(viewport),
             local: held.then(&zgui_geom::Matrix4::translation(300.0, 0.0, 0.0)),
-            anchoring: zgui_scene::Anchoring::Scrolling,
+            anchoring: zgui_space::Anchoring::Scrolling,
         },
     );
     let root = store.root().expect("a root");
     fragments(&mut frame, &mut store, root, &mut Everything);
 
     let target = second_child(&store);
-    let placements = zgui_scene::Placements::of(&frame.spatial);
+    let placements = zgui_space::Placements::of(&frame.spatial);
     let (raw, device) = {
         let fragment = store
             .fragment(store.fragments_of_box(target)[0])
@@ -605,30 +605,30 @@ fn a_resized_box_damages_its_old_ink_where_the_last_publish_drew_it() {
         .spatial
         .resolve(frame.spatial.document())
         .expect("the document space resolves");
-    let document_at = |offset: f32| zgui_scene::SpatialNode {
+    let document_at = |offset: f32| zgui_space::SpatialNode {
         parent: Some(viewport),
         local: held.then(&zgui_geom::Matrix4::translation(offset, 0.0, 0.0)),
-        anchoring: zgui_scene::Anchoring::Scrolling,
+        anchoring: zgui_space::Anchoring::Scrolling,
     };
     frame
         .spatial
-        .establish(zgui_scene::PropertyOwner::DOCUMENT, document_at(300.0));
+        .establish(zgui_space::PropertyOwner::DOCUMENT, document_at(300.0));
     let root = store.root().expect("a root");
     fragments(&mut frame, &mut store, root, &mut Everything);
 
     let target = second_child(&store);
-    let ink_of = |store: &LayoutStore, placements: &zgui_scene::Placements| {
+    let ink_of = |store: &LayoutStore, placements: &zgui_space::Placements| {
         store
             .fragment(store.fragments_of_box(target)[0])
             .expect("live")
             .device_ink(placements)
     };
-    let drawn = zgui_scene::Placements::of(&frame.spatial);
+    let drawn = zgui_space::Placements::of(&frame.spatial);
     let old = ink_of(&store, &drawn);
 
     frame
         .spatial
-        .establish(zgui_scene::PropertyOwner::DOCUMENT, document_at(0.0));
+        .establish(zgui_space::PropertyOwner::DOCUMENT, document_at(0.0));
     let node = store.node(target).source;
     let index = fixture
         .document
@@ -646,7 +646,7 @@ fn a_resized_box_damages_its_old_ink_where_the_last_publish_drew_it() {
         marked: Vec::new(),
     };
     support::fragments_after(&mut frame, &mut store, root, &mut dirty, &drawn);
-    let new = ink_of(&store, &zgui_scene::Placements::of(&frame.spatial));
+    let new = ink_of(&store, &zgui_space::Placements::of(&frame.spatial));
 
     assert_eq!(old.origin.x.0 - new.origin.x.0, 300.0);
     assert!(

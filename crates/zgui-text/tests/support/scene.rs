@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use zgui_geom::CssPx;
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{
     BreakRequest, BrokenParagraph, InlineBoxGeometry, ParagraphCache, ParagraphContent, StyledRun,
     TextMap, lay_out,

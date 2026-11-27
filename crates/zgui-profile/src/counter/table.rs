@@ -179,30 +179,16 @@ counters! {
     /// frame served without asking the style engine anything.
     TierCPlacements => tier_c_placements, Group::BackendNeutral;
 
-    /// Transform changes served by writing one coordinate system and damaging what it moved.
+    /// Transform changes served by writing the coordinate system a box established.
     ///
-    /// The skip [`Counter::PlaceWritesWithReemit`] is measured against: a box whose matrix moved
-    /// used to cost its fragments being composed again and its primitives being emitted again, and
-    /// what it costs here is one write into the node the box established plus the union of where
-    /// its ink was and where it is.
+    /// The skip [`Counter::PlaceWritesWithReemit`] is measured against: a write moves the box and
+    /// everything it painted without composing or painting any of it again.
     PlaceWritesWithoutReemit => place_writes_without_reemit,
         Group::Skip { done: Counter::PlaceWritesWithReemit };
 
-    /// Transform changes that had to be composed again rather than written.
-    ///
-    /// An interactive transform with no declared travel, and a keyframed one that left the travel
-    /// it declared. Both are correct and both cost what a transform used to cost, so this is the
-    /// denominator the skip above is only meaningful against.
+    /// Transform changes that had to be composed again rather than written, because the box has
+    /// no coordinate system of its own to write yet.
     PlaceWritesWithReemit => place_writes_with_reemit, Group::BackendNeutral;
-
-    /// Frames on which a moving box left the order band its animation declared.
-    ///
-    /// Draw order is assigned once, before anything moves, and a box given its own band is ordered
-    /// against the whole of where its animation said it would go. Leaving that region means the
-    /// order it holds can no longer be trusted against its neighbours, so the frame composes it
-    /// again and inserts it afresh. Anything other than zero over a run whose animations stay
-    /// inside their keyframes is a travel union that was computed too small.
-    OrderBandEscapes => order_band_escapes, Group::BackendNeutral;
 
     /// Offscreen targets allocated for groups that must be composited as a unit.
     GroupTargets => group_targets, Group::BackendNeutral;
@@ -212,6 +198,13 @@ counters! {
 
     /// Cached primitive ranges reused by offsetting them rather than re-encoding them.
     ChunksTranslated => chunks_translated, Group::Skip { done: Counter::ChunksReencoded };
+
+    /// Chunks recorded again that the compositor found identical to the recording they replaced,
+    /// so they damaged nothing.
+    ChunksIdentical => chunks_identical, Group::Skip { done: Counter::ChunksReencoded };
+
+    /// Entries the paint order's lists inserted or removed in the compositor's order tree.
+    OrderEntriesDiffed => order_entries_diffed, Group::BackendNeutral;
 
     /// Encodings thrown away because something they drew had nowhere to go.
     ///
@@ -236,24 +229,16 @@ counters! {
     /// Bytes of chunk, transient and resolved-remap content copied into the persistent arenas.
     ChunkBytesUploaded => chunk_bytes_uploaded, Group::RendererSpecific;
 
-    /// Primitives added to the scene.
+    /// Primitives added to the scene, and compositor items a frame drew.
     PrimitivesEmitted => primitives_emitted, Group::BackendNeutral;
 
-    /// Primitives dropped before reaching the scene because nothing damaged could see them.
+    /// Primitives dropped before reaching the scene, and compositor items a frame culled, because
+    /// nothing damaged could see them.
     PrimitivesCulled => primitives_culled, Group::Skip { done: Counter::PrimitivesEmitted };
 
-    /// Sprites whose resource had to be looked up again after the whole frame had been pushed.
-    ///
-    /// A sprite names the content it samples; where that content landed in a texture is a separate
-    /// answer, and a sprite pushed before the answer exists carries a placeholder until a pass over
-    /// the frame fills it in. The pass is per instance and only over the instances that need it,
-    /// which is why the alternative — reading the placement in the shader — was refused: that is one
-    /// more load per *pixel* of the commonest primitive there is.
-    SpritesFixedUp => sprites_fixed_up, Group::BackendNeutral;
-
-    /// Sprites whose resource was already placed when they were pushed.
-    SpritesResolvedAtPush => sprites_resolved_at_push,
-        Group::Skip { done: Counter::SpritesFixedUp };
+    /// Subtrees the paint walk did not enter, because nothing damaged could see them or they are
+    /// faded to nothing.
+    PaintSubtreesCulled => paint_subtrees_culled, Group::Skip { done: Counter::NodesVisited };
 
     /// Insertions into the structure that assigns draw order.
     ///
@@ -324,74 +309,22 @@ counters! {
     /// nothing at all.
     VelloPasses => vello_passes, Group::BackendNeutral;
 
-    /// Clip layers folded into vector passes so that differently clipped items could share one.
-    ///
-    /// It sits beside [`Counter::VelloPasses`] because folding a clip *moves* the cost of a
-    /// distinctly clipped item rather than deleting it, and a suite watching only the pass count
-    /// would read that trade as a free win.
-    VectorClipLayers => vector_clip_layers, Group::BackendNeutral;
-
-    /// Glyphs positioned on the surface, whether or not they had to be rasterised.
+    /// Glyphs recorded into glyph runs.
     GlyphsPlaced => glyphs_placed, Group::BackendNeutral;
 
-    /// Glyphs turned into pixels, which is the expensive half of drawing text.
+    /// Glyph bitmaps the compositor rasterised at the commits of the window's transactions, which
+    /// is the expensive half of drawing text.
     ///
-    /// Read beside [`Counter::GlyphsPlaced`]: a page whose text has not changed places the same
-    /// glyphs every frame and must rasterise none of them, so anything other than zero on a repaint
-    /// of unchanged text is a cache that is not being consulted. Hinting a single glyph costs tens
-    /// of microseconds, which is why this is the one text counter a budget is written against.
+    /// Read beside [`Counter::GlyphsPlaced`]: a page whose text has not changed must rasterise
+    /// none of its glyphs again, so anything other than zero on a repaint of unchanged text is a
+    /// cache that is not being consulted.
     GlyphsRasterised => glyphs_rasterised, Group::BackendNeutral;
-
-    /// Glyphs turned into pixels again because the tile holding them had been freed.
-    ///
-    /// A subset of [`Counter::GlyphsRasterised`], and the one that separates a cache filling up
-    /// from a cache thrashing: a first sighting of a glyph has to be rasterised whatever the
-    /// policy is, and a glyph rasterised twice is work a different policy would not have done.
-    /// Read as a fraction of [`Counter::GlyphsPlaced`] over a window rather than as a total —
-    /// a total only ever grows, so a session that thrashed for one second and behaved for an hour
-    /// is indistinguishable from one that thrashed throughout.
-    RebuiltAfterEviction => rebuilt_after_eviction, Group::BackendNeutral;
-
-    /// Glyphs rasterised on the layout workers before the emit walk asked for them.
-    ///
-    /// The walk still counts each key it asks for in [`Counter::GlyphsRasterised`]. A prefetched
-    /// key that the walk does not ask for is wasted work. When this is larger than
-    /// `GlyphsRasterised` on the same frame, the difference is the least waste of the prediction.
-    GlyphsPrefetched => glyphs_prefetched, Group::BackendNeutral;
-
-    /// Cached rasters freed to bring the atlas back under its soft limit.
-    ///
-    /// Read beside [`Counter::RebuiltAfterEviction`]: this one alone says only that the budget is
-    /// doing something, and a budget that frees a thousand tiles a frame and rebuilds them all is
-    /// doing something worse than nothing.
-    AtlasTilesEvicted => atlas_tiles_evicted, Group::BackendNeutral;
-
-    /// Images that could not enter the atlas, even after an eviction step made room.
-    ///
-    /// Each count is a picture a frame resolved and then drew nothing for. A nonzero total that
-    /// keeps growing means the colour pool is too small for the working set, or a single image is
-    /// larger than any texture the device may create.
-    ImageInsertFailed => image_insert_failed, Group::BackendNeutral;
 
     /// Encoded bytes live `ImageBytes` registrations are holding.
     ///
     /// These sit beside the decoded texels and the tiles: an in-memory picture costs its encoded
     /// form for as long as the application holds the handle, whatever the caches do.
     EncodedImageBytes => encoded_image_bytes, Group::BackendNeutral;
-
-    /// Atlas tiles a cached primitive range took ownership of when it was recorded.
-    ///
-    /// A range that is replayed rather than encoded draws its glyphs without looking any of them
-    /// up, so nothing else tells the atlas those tiles are still being drawn. The record holds
-    /// them instead, and this counts the holds it took.
-    RecordTilesRetained => record_tiles_retained, Group::BackendNeutral;
-
-    /// Holds given up when a cached range was re-encoded or dropped.
-    ///
-    /// Its pair. Over the life of a window the two totals converge, and a gap between them that
-    /// grows is a record whose keys were never given back — which is an atlas where nothing is
-    /// ever evictable again, and no other counter here can see it.
-    RecordTilesReleased => record_tiles_released, Group::BackendNeutral;
 
     /// Surface pixels inside the damage rectangles that were redrawn.
     DamagePx => damage_px, Group::RendererSpecific;
@@ -413,9 +346,6 @@ counters! {
     /// Individual atlas rectangles copied to GPU textures.
     AtlasTextureWrites => atlas_texture_writes, Group::RendererSpecific;
 
-    /// Non-empty staged atlas upload batches submitted to the queue.
-    AtlasUploadBatches => atlas_upload_batches, Group::RendererSpecific;
-
     /// Side-table slots flattened again for a renderer.
     ///
     /// Read beside upload bytes: this stays at zero for unchanged tables and exposes a CPU-side
@@ -427,18 +357,6 @@ counters! {
     /// Ordinarily non-zero only while the belt grows to its working set. A recurring value points
     /// directly at GPU backlog or a workload that repeatedly exceeds that working set.
     UploadChunksAllocated => upload_chunks_allocated, Group::RendererSpecific;
-
-    /// Mapped staging bytes the upload belt keeps warm for reuse.
-    ///
-    /// The belt's steady working set. A figure far above what ordinary frames write means a burst
-    /// grew the belt and the retention period has not yet let it go.
-    StagingWarmBytes => staging_warm_bytes, Group::RendererSpecific;
-
-    /// Staging bytes in one-shot chunks: oversized transfers that leave with their frame.
-    ///
-    /// Read as a high-water sign of image and scene bursts. It falls to zero on its own; a value
-    /// that persists means large uploads on every frame.
-    StagingOneShotBytes => staging_one_shot_bytes, Group::RendererSpecific;
 
     /// Nanoseconds the GPU spent in the renderer's timed passes.
     ///
@@ -475,7 +393,7 @@ counters! {
     /// Fragments the layout tree is holding right now.
     FragmentsLive => fragments_live, Group::Live;
 
-    /// Bytes of compiled per-fragment paintings the paint cache is holding right now.
+    /// Bytes of the chunks the compositor is holding right now.
     PaintChunkBytes => paint_chunk_bytes_live, Group::Live;
 
     /// Chunks the renderer's persistent arenas hold right now.
@@ -488,41 +406,15 @@ counters! {
     /// while the memory it holds is never returned — which is exactly the failure this watches for.
     BoxesLive => boxes_live, Group::Live;
 
-    /// Rasterised entries the texture atlas is holding right now.
+    /// Tiles the compositor's atlas is holding right now.
     AtlasEntriesLive => atlas_entries_live, Group::Live;
 
-    /// Glyph placement or blank-raster answers remembered beside the atlas.
-    GlyphEntriesLive => glyph_entries_live, Group::Live;
-
-    /// Layers the vector scratch texture is allocated with right now.
-    ScratchLayers => scratch_layers, Group::Live;
-
-    /// Bytes the vector scratch texture occupies on the device right now.
-    ScratchBytes => scratch_bytes, Group::Live;
 
     /// Frames whose vector content was refused because the scratch had no room for it.
     ///
     /// Every one of these is content the user asked for and did not get, drawn nowhere and
     /// reported nowhere else.
     VectorFramesDropped => vector_frames_dropped, Group::BackendNeutral;
-
-    /// Times a renderer built its general vector rasteriser.
-    ///
-    /// At most one per renderer. The build costs hundreds of milliseconds and a large fixed
-    /// allocation, so a document that can draw every shape from the atlas must keep this at zero.
-    VectorBackendBuilt => vector_backend_built, Group::RendererSpecific;
-
-    /// Rasterisations the general vector rasteriser performed on the device.
-    VelloRenders => vello_renders, Group::RendererSpecific;
-
-    /// Vector item encodings the general rasteriser found current and used again.
-    VectorEncodeHits => vector_encode_hits, Group::RendererSpecific;
-
-    /// Vector item encodings the general rasteriser had to make.
-    VectorEncodeMisses => vector_encode_misses, Group::RendererSpecific;
-
-    /// Shapes emitted as coverage masks in the shared atlas.
-    VectorRouteMask => vector_route_mask, Group::BackendNeutral;
 
     /// Shapes emitted as items for the general vector rasteriser.
     VectorRouteGeneral => vector_route_general, Group::BackendNeutral;
@@ -536,14 +428,8 @@ counters! {
     /// Shapes and series parts emitted as path glyphs.
     VectorRoutePathGlyphs => vector_route_path_glyphs, Group::BackendNeutral;
 
-    /// Path glyph phase cells rasterised.
-    PathGlyphTilesRasterised => path_glyph_tiles_rasterised, Group::BackendNeutral;
-
     /// Union coverage bins planned this frame.
     MarksUnionBins => marks_union_bins, Group::BackendNeutral;
-
-    /// Mark payload bytes uploaded.
-    MarksPayloadBytes => marks_payload_bytes, Group::RendererSpecific;
 
     /// Series payloads built.
     SeriesPayloadsBuilt => series_payloads_built, Group::BackendNeutral;
@@ -563,21 +449,6 @@ counters! {
     /// Recognitions and shape mark payloads kept nowhere, because every entry of their full cache
     /// was pinned.
     MarksUncached => marks_uncached, Group::BackendNeutral;
-
-    /// Coverage masks rasterised because no tile held their geometry.
-    VectorMaskMisses => vector_mask_misses, Group::BackendNeutral;
-
-    /// Mask requests declined because the frame had spent its budget for new masks.
-    VectorMaskBudgetOverflow => vector_mask_budget_overflow, Group::BackendNeutral;
-
-    /// Vector items a chunk replay moved.
-    VectorReplaysMoved => vector_replays_moved, Group::BackendNeutral;
-
-    /// Times one shape part went from the mask route to a decline, or back.
-    VectorTierChanges => vector_tier_changes, Group::BackendNeutral;
-
-    /// Geometry identities the mask cache maps to atlas tiles right now.
-    VectorMaskTilesLive => vector_mask_tiles_live, Group::Live;
 
     /// Drawings emitted as one CPU layer sprite.
     VectorRouteLayer => vector_route_layer, Group::BackendNeutral;
@@ -618,14 +489,6 @@ counters! {
 
     /// Bytes of CPU layer tiles the layer cache keeps right now.
     VectorLayerBytesLive => vector_layer_bytes_live, Group::Live;
-
-    /// Primitives whose paint was re-anchored because the primitive moved.
-    ///
-    /// A ramp and a sampled image are read at the point being drawn, in the coordinates they were
-    /// resolved against, so a rectangle carried forward to a new position has to say how far it
-    /// came. Only a paint that is read at a point is counted: a flat fill is the same colour
-    /// everywhere and moving it is not re-anchoring anything.
-    PaintsReanchored => paints_reanchored, Group::BackendNeutral;
 
     /// Bytes the text engine's shaped paragraphs hold right now, as the engine estimates them.
     ///
@@ -684,6 +547,18 @@ counters! {
 
     /// Boxes those walks read.
     RepaintWalkBoxes => repaint_walk_boxes, Group::BackendNeutral;
+
+    /// Frames that ran the window's whole pipeline, from input to paint.
+    ZguiFrames => zgui_frames, Group::BackendNeutral;
+
+    /// Frames that only presented what the compositor's own scrolling moved.
+    CompositorTicks => compositor_ticks, Group::BackendNeutral;
+
+    /// Scroll gestures handed to the compositor.
+    GesturesHanded => gestures_handed, Group::BackendNeutral;
+
+    /// Scroll offsets the window took over from the compositor.
+    ScrollsAdopted => scrolls_adopted, Group::BackendNeutral;
 }
 
 impl Counter {

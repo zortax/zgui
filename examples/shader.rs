@@ -20,9 +20,8 @@
 //!   them — a shape that is *data*, which is what a coverage effect is for. The third is cut with
 //!   `--zgui-corner-shape`, which is the engine's own and needs no shader at all.
 
-use zgui::geom::{Css, CssPx, DevicePx, Point, Rect, Size};
+use zgui::geom::{Css, CssPx, Device, DevicePx, Point, Rect, Size};
 use zgui::prelude::*;
-use zgui::view::FrameHandle;
 
 /// What the trail is drawn with, as Rust has it. The WGSL below declares the same four floats.
 #[repr(C)]
@@ -180,11 +179,31 @@ struct Glow {
     /// The effect, and the parameters it draws with.
     handle: ShaderHandle<Trail>,
     /// Where the pointer is, as the event said it: on the surface, in CSS pixels.
-    ///
-    /// Two conversions are owed before a shader can read it, and both belong in `paint`: an event
-    /// speaks CSS pixels and a shader is drawn in device pixels, and an event speaks the surface's
-    /// coordinates while an effect is written against its own box's.
     pointer: Point<CssPx, Css>,
+    /// The pane's corner on the surface and the device pixels per CSS pixel, as the last paint
+    /// found them.
+    ///
+    /// An event speaks CSS pixels on the surface, and a shader is written in device pixels against
+    /// its own box, so these two are what convert one into the other.
+    placed: (Point<DevicePx, Device>, f32),
+}
+
+impl Glow {
+    /// Points the trail at the pointer.
+    ///
+    /// The parameters are the handle's, so the next frame draws them without the pane painting
+    /// again.
+    fn follow(&self) {
+        let (origin, scale) = self.placed;
+        self.handle.set_params(Trail {
+            head: [
+                self.pointer.x.0 * scale - origin.x.0,
+                self.pointer.y.0 * scale - origin.y.0,
+            ],
+            reach: 42.0 * scale,
+            hue: 0.58,
+        });
+    }
 }
 
 impl CustomElement for Glow {
@@ -202,20 +221,9 @@ impl CustomElement for Glow {
             Point::new(DevicePx(0.0), DevicePx(0.0)),
             Size::new(size.width, size.height),
         );
-        // Both conversions the stored position owes: into device pixels, which is what a shader
-        // is drawn in, and into this pane's own coordinates, which is what an effect is written
-        // against. Only here is the scale and the pane's corner known.
-        let scale = painter.scale();
-        let origin = painter.origin();
-        self.handle.set_params(Trail {
-            head: [
-                self.pointer.x.0 * scale - origin.x.0,
-                self.pointer.y.0 * scale - origin.y.0,
-            ],
-            reach: 42.0 * scale,
-            hue: 0.58,
-        });
-        // One instance, in the same arena a background lives in, drawn in the same pass.
+        // Only here is the scale and the pane's corner known.
+        self.placed = (painter.origin(), painter.scale());
+        self.follow();
         painter.effect(whole, 14.0 * painter.scale(), &self.handle);
     }
 }
@@ -237,29 +245,19 @@ fn Pane() -> impl IntoView {
     let (glow, handle) = zgui::custom::custom(Glow {
         handle: trail.clone(),
         pointer: Point::new(CssPx(0.0), CssPx(0.0)),
+        placed: (Point::new(DevicePx(0.0), DevicePx(0.0)), 1.0),
     });
-
-    // The effect reads the clock, so something has to keep asking for frames. A frame callback
-    // that reschedules itself is exactly that, and the pane repaints from it — an effect writes no
-    // fragment of its own accord, so nothing else would damage its rectangle.
-    let pump: RwSignal<Option<FrameHandle>, LocalStorage> = RwSignal::new_local(None);
-    fn tick(element: CustomHandle<Glow>, pump: RwSignal<Option<FrameHandle>, LocalStorage>) {
-        let again = element.clone();
-        pump.set(Some(request_frame(move |_| {
-            again.repaint();
-            tick(again, pump);
-        })));
-    }
-    tick(handle.clone(), pump);
 
     let moved = {
         let element = handle.clone();
         move |cx: &mut EventCx<'_, events::PointerMove>| {
-            // An event says where the pointer is on the surface, and only `paint` knows where this
-            // pane ended up, so the position is stored as it arrived and converted there.
+            // The pane does not paint again: the trail's parameters change, and the next frame
+            // draws them.
             let at = cx.position;
-            element.update(|glow| glow.pointer = at);
-            element.repaint();
+            element.update(|glow| {
+                glow.pointer = at;
+                glow.follow();
+            });
         }
     };
 

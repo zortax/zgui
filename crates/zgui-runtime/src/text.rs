@@ -9,7 +9,7 @@
 //! screen.
 
 use zgui_layout::MeasureContent;
-use zgui_scene::TextPaintTable;
+use zgui_text::TextPaintTable;
 use zgui_text::{ClusterRun, ParagraphKey, ShapedClusters, ShapedGlyphs, ShapedRun};
 
 /// What a text engine is holding shaped, and how often it has been read.
@@ -215,6 +215,10 @@ impl ShapedGlyphs for Box<dyn TextEngine> {
     fn visit_line(&self, paragraph: ParagraphKey, line: u16, visit: &mut dyn FnMut(ShapedRun<'_>)) {
         (**self).visit_line(paragraph, line, visit);
     }
+
+    fn brush(&self, brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        (**self).brush(brush)
+    }
 }
 
 impl ShapedClusters for Box<dyn TextEngine> {
@@ -394,7 +398,7 @@ impl MeasureContent for NoText {
     fn paint_slot(&mut self, paint: &zgui_text_style::TextPaint) -> zgui_text::Brush {
         let colour = paint.color;
         self.paints.slot_for(paint.key.addr() as u64, || {
-            zgui_scene::TextPaint::new(colour)
+            zgui_text::TextPaint::new(colour)
         })
     }
 }
@@ -416,6 +420,10 @@ impl ShapedGlyphs for NoText {
         _line: u16,
         _visit: &mut dyn FnMut(ShapedRun<'_>),
     ) {
+    }
+
+    fn brush(&self, brush: zgui_text::Brush) -> Option<zgui_text::TextPaint> {
+        self.paints.get(brush).copied()
     }
 }
 

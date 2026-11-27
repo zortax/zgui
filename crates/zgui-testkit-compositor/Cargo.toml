@@ -1,0 +1,30 @@
+[package]
+name = "zgui-testkit-compositor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "The compositor and renderer zgui's tests draw through"
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+keywords.workspace = true
+categories.workspace = true
+include.workspace = true
+
+# L7 — runtime and tooling. Every dependency is inherited: `foo.workspace = true`.
+#
+# The one test crate that names compositor implementations: every other test takes its compositor
+# and renderer from the factory here, so a second implementation reaches every test by an
+# environment variable.
+[dependencies]
+iceblink.workspace = true
+iceblink-core.workspace = true
+iceblink-cpu.workspace = true
+iceblink-driver.workspace = true
+iceblink-testing.workspace = true
+iceblink-text.workspace = true
+iceblink-vello.workspace = true
+iceblink-wgpu.workspace = true
+
+[lints]
+workspace = true

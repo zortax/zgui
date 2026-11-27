@@ -2,9 +2,8 @@
 name = "zgui-color"
 version.workspace = true
 edition.workspace = true
-# `src/gamma.rs` is derived from the Windows Terminal project under the MIT License (see NOTICE).
-license = "Apache-2.0 AND MIT"
-description = "CSS color spaces, conversion and interpolation"
+license.workspace = true
+description = "CSS color spaces, conversion and interpolation, over the compositor's color types"
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
@@ -14,9 +13,7 @@ include.workspace = true
 
 # L0 — foundation. Every dependency is inherited: `foo.workspace = true`.
 [dependencies]
-
-[dev-dependencies]
-proptest.workspace = true
+iceblink.workspace = true
 
 [lints]
 workspace = true

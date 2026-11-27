@@ -1,7 +1,8 @@
-//! `verify`: the finished display list as text, live against a full repaint.
+//! `verify`: the picture each window shows, as the drawing of its last frame, live against a
+//! window that records everything again from nothing on every turn.
 //!
-//! Two windows, the same 42 steps, and a line-by-line comparison of what each finished with. It is
-//! the standing byte-identity gate `cargo xtask ci` runs, and no phase may relax it.
+//! Two windows, the same script, and a line-by-line comparison of what each shows. It is the
+//! standing gate `cargo xtask ci` runs, and no phase may relax it.
 
 use zgui::geom::{DevicePx, Size};
 use zgui::platform::SurfaceEvent;
@@ -9,7 +10,7 @@ use zgui::runtime::Runtime;
 use zgui_platform_headless::Harness;
 
 use crate::draw::mounted_recorder;
-use crate::gallery::{HEIGHT, WIDTH, mounted_scheme, runtime};
+use crate::gallery::{HEIGHT, WIDTH, mounted_scheme};
 use crate::input::focus_a_field;
 use crate::inspect::{document, swatch_centres};
 
@@ -51,7 +52,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
     let _ = (boxes, fragments, live_scheme, &live_full, &size);
     Some(match phase {
         "verify" => {
-            let mut cold = Harness::new(runtime(&size));
+            let mut cold = crate::gallery::harness(&size);
             let cold_scheme = mounted_scheme();
             let cold_full = mounted_recorder();
             cold.deliver_to_first(SurfaceEvent::Resized(Size::new(
@@ -71,8 +72,6 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 centres: cold_centres,
                 scheme: cold_scheme,
             };
-            live_full.wanted.set(true);
-            cold_full.wanted.set(true);
             let tabs = focus_a_field(harness);
             assert_eq!(
                 tabs,
@@ -85,35 +84,31 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
             // What the comparison below is allowed to be believed about. See
             // [`gradient::Coverage`](crate::verify::gradient::Coverage).
             let mut gradients = crate::verify::gradient::Coverage::default();
+            let mut glyphs = 0;
             let mut compare_here =
                 |step: usize,
                  what: &str,
                  harness: &mut Harness<Runtime>,
                  cold: &mut Harness<Runtime>| {
-                    crate::verify::repaint_everything(harness, false);
-                    crate::verify::repaint_everything(cold, true);
-                    let (live_list, cold_list) = (
-                        live_full
-                            .taken()
-                            .expect("the live window redrew everything"),
-                        cold_full
-                            .taken()
-                            .expect("the cold window redrew everything"),
+                    crate::verify::settled(harness, false);
+                    crate::verify::settled(cold, true);
+                    let (live_drawing, cold_drawing) = (
+                        live_full.drawing().expect("the live window drew a frame"),
+                        cold_full.drawing().expect("the cold window drew a frame"),
                     );
-                    // The control for everything below. Two display lists that agree about nothing
-                    // agree, and a list of nothing is what a window holds whenever its last frame
-                    // answered damage that had already been paid — which is most of them. Without
-                    // this the comparison passes at every size in which both windows happened to
-                    // have drawn nothing last.
-                    let drawn = live_list
-                        .lines()
-                        .filter(|line| line.starts_with("  "))
-                        .count();
-                    assert!(
-                        drawn > 0,
-                        "step {step} ({what}): the whole surface was damaged and the frame that \
-                         answered it emitted nothing, so nothing here is being compared"
-                    );
+                    // The control for everything below. Two drawings that agree about nothing
+                    // agree, so both windows have to show something.
+                    let drawn = live_drawing.instances().len();
+                    for (which, drawing) in [("live", &live_drawing), ("cold", &cold_drawing)] {
+                        assert!(
+                            !drawing.instances().is_empty(),
+                            "step {step} ({what}): the {which} window shows nothing, so nothing \
+                             here is being compared"
+                        );
+                    }
+                    glyphs += live_drawing.glyphs().len();
+                    let (live_list, cold_list) =
+                        (live_drawing.to_string(), cold_drawing.to_string());
                     checked += 1;
                     gradients.sample(&live_list);
                     match crate::verify::compare(
@@ -136,7 +131,7 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                             faulted.push(step);
                             println!("  VERIFY FAULT {found}");
                         }
-                        None => println!("  VERIFY ok   step {step} ({what}), {drawn} primitives"),
+                        None => println!("  VERIFY ok   step {step} ({what}), {drawn} instances"),
                     }
                 };
             compare_here(0, "settled", harness, &mut cold);
@@ -146,7 +141,10 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                 compare_here(index + 1, &format!("{step:?}"), harness, &mut cold);
             }
             let (live_boxes, live_frags) = document(&harness.app().windows()[0]);
-            let transcript = crate::verify::transcript(&harness.app().windows()[0]);
+            let transcript = live_full
+                .drawing()
+                .expect("the live window drew a frame")
+                .to_string();
             // Both sets are printed as the steps themselves and not as counts. A count is a number
             // that can be met two ways; the standing gate over this phase holds the run to the
             // steps it named, so a fault that moves from one step to another is a new fault.
@@ -162,7 +160,10 @@ pub(crate) fn run(driver: &mut Driver, phase: &str) -> Option<u64> {
                  by less than {} of a device pixel",
                 format_args!("1/{}", (1.0 / crate::verify::GRID).round() as u32),
             );
-            println!("  VERIFY covers {}", gradients.describe());
+            println!(
+                "  VERIFY covers {} and {glyphs} glyph instances",
+                gradients.describe()
+            );
             gradients.assert_non_vacuous(&size);
             if std::env::var_os("VERIFY_DUMP").is_some() {
                 println!("{transcript}");

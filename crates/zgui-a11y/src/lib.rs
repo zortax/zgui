@@ -56,7 +56,7 @@
 //!     .expect("a fresh document is not poisoned");
 //!
 //! let layout = LayoutStore::new(document.store().document());
-//! let placements = zgui_scene::Placements::EMPTY;
+//! let placements = zgui_space::Placements::EMPTY;
 //! let world = World {
 //!     document: &document,
 //!     layout: &layout,

@@ -3,14 +3,11 @@
 use core::cell::{RefCell, RefMut};
 use std::sync::Arc;
 
-use zgui_atlas::{AtlasKey, TextureKind};
-use zgui_scene::kurbo::BezPath;
-use zgui_scene::peniko;
+use kurbo::BezPath;
 
 use super::{Part, lower, split_of};
-use crate::content::vectors::{
-    GlyphSheets, Splits, VectorMask, VectorMaskRequest, VectorMaskSource, VectorMaskStyle,
-};
+use crate::content::vectors::path_glyphs::PartStyle;
+use crate::content::vectors::{Splits, VectorMaskSource};
 
 /// The identity map.
 const IDENTITY: [f64; 4] = [1.0, 0.0, 0.0, 1.0];
@@ -20,10 +17,6 @@ const IDENTITY: [f64; 4] = [1.0, 0.0, 0.0, 1.0];
 struct Source(RefCell<Splits>);
 
 impl VectorMaskSource for Source {
-    fn vector_mask(&self, _request: VectorMaskRequest<'_>) -> Option<VectorMask> {
-        None
-    }
-
     fn glyph_splits(&self) -> Option<RefMut<'_, Splits>> {
         Some(self.0.borrow_mut())
     }
@@ -45,20 +38,13 @@ fn triangles() -> Arc<BezPath> {
 /// Splits `path` and lowers its fill, as emission does in one frame.
 fn emit(source: &Source, path: &Arc<BezPath>) {
     let found = split_of(path, IDENTITY, source).expect("one outline");
-    let sheets = GlyphSheets {
-        texture: 0,
-        table: vec![[0; 4]; 16],
-        reach: vec![[-5, -1, 6, 8]],
-        keys: vec![AtlasKey::new(1, TextureKind::Mono)],
-    };
     let part = Part {
         index: 0,
-        style: VectorMaskStyle::Fill(peniko::Fill::NonZero),
-        scale: 1.0,
+        style: PartStyle::Fill,
         rule: Some(peniko::Fill::NonZero),
     };
     let place = |x: f64, y: f64| [x, y];
-    lower(path, IDENTITY, &found, &sheets, &part, &place, source).expect("a payload");
+    lower(path, IDENTITY, &found, &part, &place, source).expect("a payload");
 }
 
 /// Runs one frame of `draw`.

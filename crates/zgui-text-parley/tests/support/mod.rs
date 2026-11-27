@@ -8,7 +8,7 @@
 use std::sync::Arc;
 
 use zgui_geom::CssPx;
-use zgui_scene::PaintSlot;
+use zgui_space::PaintSlot;
 use zgui_text::{FontSource, ParagraphContent, StyledRun, TextMap};
 use zgui_text_parley::{Controls, FontSystem, FontSystemOptions, Shaper};
 use zgui_text_style::{

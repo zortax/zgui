@@ -36,15 +36,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use zgui::atlas::TextureSink;
-use zgui::bits::DamageSet;
+use iceblink::{
+    BufferAge, Frame, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
+};
 use zgui::platform::{AppHandler, PlatformCx, SurfaceEvent, SurfaceId, WakeReason};
 use zgui::prelude::*;
-use zgui::render::{
-    ExternalTexture, FrameOutcome, MemoryReport, RenderCapabilities, RenderTarget, Renderer,
-    TextureHandle,
-};
-use zgui::scene::Scene;
 use zgui::view;
 use zgui_geom::{Css, CssPx, Point, Size};
 use zgui_vocab::{Modifiers, PointerId, PointerKind, ScrollDelta, ScrollPhase, WheelEvent};
@@ -117,10 +113,13 @@ fn main() -> Result<(), zgui::Error> {
         .with_size(560.0, 420.0)
         .with_stylesheet(SHEET)
         .with_renderer(Box::new(move |surface, target| {
-            Ok(Box::new(Stamping::new(
-                open_device(surface, target)?,
-                Arc::clone(&counted),
-            )))
+            let open = zgui_bench::renderers::window(surface, target)?;
+            let counted = Arc::clone(&counted);
+            let factory: iceblink::RendererFactory =
+                Box::new(
+                    move || Ok(Box::new(Stamping::new(open()?, counted)) as Box<dyn Renderer>),
+                );
+            Ok(factory)
         }))
         .run_on(
             // This desktop's own backend, so that `ZGUI_PLATFORM` selects which one is measured.
@@ -395,32 +394,6 @@ fn report(counted: &[Counted], stamps: &[Instant]) -> String {
     )
 }
 
-/// Opens the graphics device for `surface`, exactly as a window of this framework opens one.
-fn open_device(
-    surface: &Arc<dyn zgui::platform::Surface>,
-    target: RenderTarget,
-) -> Result<Box<dyn Renderer>, zgui::Error> {
-    let handles = Arc::clone(surface).gpu_shared().ok_or_else(|| {
-        zgui::Error::Platform(zgui::platform::PlatformError::Backend(
-            "this window offers no handles a graphics API can draw into".to_owned(),
-        ))
-    })?;
-    // The notify only when asked for, matching the application default — a bench wired
-    // differently from the loop it measures reports a cadence no application shows.
-    let builder = zgui_render_wgpu::Builder::new();
-    let builder = if matches!(std::env::var("ZGUI_PRESENT_PACING"), Ok(v) if v.trim() == "notify") {
-        let presented = Arc::clone(surface);
-        builder.with_pre_present(Box::new(move |_| {
-            presented.pre_present_notify();
-        }))
-    } else {
-        builder
-    };
-    let mut renderer = builder.for_surface(target, handles)?;
-    zgui_render_vector_vello::attach(&mut renderer, target.size);
-    Ok(Box::new(renderer))
-}
-
 /// A renderer that stamps every frame it presents and then draws it.
 struct Stamping {
     /// What actually draws.
@@ -455,9 +428,13 @@ impl Renderer for Stamping {
         self.inner.target()
     }
 
-    fn draw(&mut self, scene: &Scene, damage: &DamageSet) -> FrameOutcome {
+    fn target_age(&self) -> BufferAge {
+        self.inner.target_age()
+    }
+
+    fn draw(&mut self, frame: &Frame) -> FrameOutcome {
         let at = Instant::now();
-        let outcome = self.inner.draw(scene, damage);
+        let outcome = self.inner.draw(frame);
         if matches!(outcome, FrameOutcome::Presented(_)) {
             if let Ok(mut stamps) = self.stamps.lock() {
                 stamps.push(at);
@@ -469,31 +446,15 @@ impl Renderer for Stamping {
         outcome
     }
 
-    fn shifts_composed_pixels(&self) -> bool {
-        self.inner.shifts_composed_pixels()
-    }
-
-    fn shift_composed(&mut self, shift: zgui::render::ScrollShift) {
-        self.inner.shift_composed(shift);
-    }
-
-    fn register_external(&mut self, texture: ExternalTexture) -> TextureHandle {
-        self.inner.register_external(texture)
-    }
-
-    fn release_external(&mut self, handle: TextureHandle) {
-        self.inner.release_external(handle);
-    }
-
     fn memory(&self) -> MemoryReport {
         self.inner.memory()
     }
 
-    fn vector_status(&self) -> zgui::render::VectorStatus {
+    fn vector_status(&self) -> iceblink::VectorStatus {
         self.inner.vector_status()
     }
 
-    fn target_pool(&self) -> zgui::render::TargetPoolReport {
+    fn target_pool(&self) -> iceblink::TargetPoolReport {
         self.inner.target_pool()
     }
 
@@ -509,10 +470,6 @@ impl Renderer for Stamping {
     // reads as a loop that is never made to wait and keeps the hold at nothing.
     fn acquire_block(&self) -> core::time::Duration {
         self.inner.acquire_block()
-    }
-
-    fn texture_sink(&mut self) -> &mut dyn TextureSink {
-        self.inner.texture_sink()
     }
 
     fn as_any_mut(&mut self) -> Option<&mut dyn core::any::Any> {

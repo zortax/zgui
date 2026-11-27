@@ -330,7 +330,6 @@ impl Shared {
         let presented = std::mem::replace(&mut self.presented, false);
         let declined = std::mem::replace(&mut self.declined, false);
         if presented {
-            self.pacer.committed(now);
             // A frame for a new extent is not counted as a miss: see `answering_resize`.
             self.chained = if self.answering_resize {
                 None
@@ -361,12 +360,12 @@ impl Shared {
 
     /// Closes out a delivered [`SurfaceEvent::PresentReady`].
     ///
-    /// A held frame that reached the surface owes a callback, like any presented frame. One that
-    /// did not — an acquisition that failed, or a frame a configure made obsolete — owes nothing,
-    /// and the application asks for the frame that replaces it.
-    pub(crate) fn end_of_present(&mut self, began: Instant, now: Instant) {
+    /// A held frame that reached the surface owes the callback that rode the commit `pre_present`
+    /// made, like any presented frame. One that did not — an acquisition that failed, or a frame
+    /// a configure made obsolete — owes nothing, and the application asks for the frame that
+    /// replaces it.
+    pub(crate) fn end_of_present(&mut self, began: Instant) {
         if std::mem::replace(&mut self.presented, false) {
-            self.pacer.committed(now);
             self.chained = self.chain(began);
             // A new extent cancels a held frame, so a held frame that is presented shows the
             // current extent.
@@ -399,8 +398,11 @@ impl Shared {
     pub(crate) fn redrawn(&mut self, began: Instant, now: Instant, again: bool) -> EndOfRedraw {
         let end = self.end_of_redraw(began, now, again);
         let answering = std::mem::take(&mut self.answering_resize);
-        if end != EndOfRedraw::Declined && !answering {
-            self.ahead.redrawn(now.saturating_duration_since(began));
+        if end != EndOfRedraw::Declined {
+            self.pacer.drew();
+            if !answering {
+                self.ahead.redrawn(now.saturating_duration_since(began));
+            }
         }
         end
     }
@@ -497,6 +499,15 @@ impl Shared {
     /// Records that a lock surface acknowledged a configure that its next commit has to match.
     pub(crate) const fn owe_exact_extent(&mut self) {
         self.exact_owed = true;
+    }
+
+    /// Records that a buffer is about to be committed at `now`, with a frame callback that is
+    /// owed from then on.
+    pub(crate) fn presenting(&mut self, now: Instant) {
+        self.presented = true;
+        // Owed here, and not when the redraw ends: a frame a driver thread presents can be
+        // answered before the redraw that composed it ends.
+        self.pacer.committed(now);
     }
 
     /// Records that a frame of `size` is about to be committed.
@@ -1028,7 +1039,11 @@ mod tests {
         // That commit carried no buffer, so a press draws and presents without the answer.
         shared.pacer.input();
         assert!(shared.pacer.take(&mut visibility, now));
-        assert!(shared.pacer.present_now(now));
+        assert!(
+            shared
+                .pacer
+                .present_now(now, crate::frame::Composer::Redraw)
+        );
     }
 
     #[test]
@@ -1112,20 +1127,30 @@ mod tests {
         shared.pacer.compose_ahead(true);
         shared.pacer.committed(now);
         assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Waiting);
-        assert!(!shared.pacer.present_now(now));
+        assert!(
+            !shared
+                .pacer
+                .present_now(now, crate::frame::Composer::Redraw)
+        );
         assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Held);
     }
 
     #[test]
-    fn a_held_frame_that_reached_the_surface_owes_a_callback() {
+    fn a_frame_owes_its_callback_from_its_commit_until_the_answer() {
         let mut shared = Shared::new();
         shared.visibility.configured = true;
         let now = Instant::now();
-        shared.end_of_present(now, now);
+        shared.end_of_present(now);
         assert!(!shared.pacer.owes_callback(), "nothing was presented");
-        shared.presented = true;
-        shared.end_of_present(now, now);
+        shared.presenting(now);
+        let serial = shared.begin_callback();
         assert!(shared.pacer.owes_callback());
+        shared.frame_callback(serial, now);
+        assert_eq!(shared.end_of_redraw(now, now, true), EndOfRedraw::Presented);
+        assert!(
+            !shared.pacer.owes_callback(),
+            "an answer that arrived before the redraw ended is not owed again"
+        );
     }
 
     #[test]
@@ -1133,7 +1158,11 @@ mod tests {
         let mut shared = Shared::new();
         shared.resized(logical(800.0, 600.0), 1.0);
         shared.pacer.committed(Instant::now());
-        assert!(!shared.pacer.present_now(Instant::now()));
+        assert!(
+            !shared
+                .pacer
+                .present_now(Instant::now(), crate::frame::Composer::Redraw)
+        );
         shared.resized(logical(900.0, 600.0), 1.0);
         assert!(!shared.pacer.held());
     }

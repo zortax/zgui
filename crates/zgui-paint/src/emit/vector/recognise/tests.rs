@@ -1,8 +1,7 @@
-use zgui_geom::Affine2;
-use zgui_scene::kurbo::{
+use kurbo::{
     self, BezPath, Circle, Ellipse, PathEl, Point, Rect, RoundedRect, RoundedRectRadii, Shape as _,
 };
-use zgui_scene::peniko;
+use zgui_geom::Affine2;
 
 use super::{
     BUTT, Decomposition, Limits, Orientation, Part, ROUND, SQUARE, recognise, separated, tau,

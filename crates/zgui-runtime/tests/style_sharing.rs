@@ -94,17 +94,22 @@ fn equal_styles_under_different_parents_share_groups_and_draw_their_own_lines() 
         4,
         "the narrow label wraps to three lines and the wide one fits on one: {lines:?}"
     );
-    let sprites = &window.scene().primitives.mono_sprites;
-    assert_eq!(sprites.len(), 2 * GLYPHS, "each label draws its own glyphs");
+    let drawing = support::drawing(window);
+    let sprites = drawing.glyphs();
+    assert_eq!(
+        sprites.len(),
+        2 * GLYPHS,
+        "each label draws its own glyphs: {drawing}"
+    );
     for line in &lines {
         let inside = sprites
             .iter()
             .filter(|sprite| {
                 // The centre, because a glyph is snapped to whole pixels and a centred line box
                 // is not.
-                let ink = sprite.ink();
-                let x = ink.origin.x.0 + ink.size.width.0 / 2.0;
-                let y = ink.origin.y.0 + ink.size.height.0 / 2.0;
+                let [x, y, width, height] = support::world(sprite);
+                let x = x + width / 2.0;
+                let y = y + height / 2.0;
                 (line.origin.x.0..=line.right().0).contains(&x)
                     && (line.origin.y.0..=line.bottom().0).contains(&y)
             })
