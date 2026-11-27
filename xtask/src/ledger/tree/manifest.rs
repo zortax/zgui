@@ -79,6 +79,8 @@ pub(crate) struct Dependency {
     pub(crate) inherited: bool,
     /// The path, for a path dependency.
     pub(crate) path: Option<String>,
+    /// The repository URL, for a git dependency.
+    pub(crate) git: Option<String>,
 }
 
 impl Dependency {
@@ -93,6 +95,7 @@ impl Dependency {
             default_features: None,
             inherited: false,
             path: None,
+            git: None,
         };
         match value {
             Value::String(version) => dependency.version = Some(version.clone()),
@@ -102,6 +105,7 @@ impl Dependency {
                     .and_then(Value::as_str)
                     .map(str::to_owned);
                 dependency.path = table.get("path").and_then(Value::as_str).map(str::to_owned);
+                dependency.git = table.get("git").and_then(Value::as_str).map(str::to_owned);
                 dependency.inherited = table
                     .get("workspace")
                     .and_then(Value::as_bool)

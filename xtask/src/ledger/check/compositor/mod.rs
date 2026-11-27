@@ -8,8 +8,8 @@
 //! could come to rely on behaviour the contract does not promise, and would then break with a
 //! second implementation that is correct.
 //!
-//! Every crate of the compositor's checkout other than the contract crate is an implementation.
-//! The checkout is the directory that holds `iceblink` at `crates/iceblink`.
+//! Every crate taken from the contract crate's git repository, other than the contract crate
+//! itself, is an implementation.
 //!
 //! A member is checked in three ways:
 //!
@@ -20,7 +20,6 @@
 mod code;
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 use crate::ledger::report::Report;
 use crate::ledger::tree::Tree;
@@ -29,9 +28,6 @@ use crate::ledger::tree::member::Member;
 
 /// The compositor crate that states the contract.
 const CONTRACT: &str = "iceblink";
-
-/// Where [`CONTRACT`] sits in the compositor's checkout.
-const CONTRACT_IN_CHECKOUT: &str = "crates/iceblink";
 
 /// The members that may name an implementation, and why.
 const ALLOWED: &[(&str, &str)] = &[
@@ -69,7 +65,7 @@ pub(crate) fn check(tree: &Tree) -> Report {
         report.violation(
             tree.manifest.rel_path.clone(),
             format!(
-                "no `{CONTRACT}` path dependency ends in `{CONTRACT_IN_CHECKOUT}`, so the \
+                "no `{CONTRACT}` git dependency names the compositor's repository, so the \
                  compositor's crates cannot be told apart"
             ),
         );
@@ -109,27 +105,19 @@ pub(crate) fn check(tree: &Tree) -> Report {
     report
 }
 
-/// Returns the packages of the compositor's checkout other than [`CONTRACT`], or `None` when the
-/// workspace gives [`CONTRACT`] no path inside a checkout.
+/// Returns the packages of the compositor's repository other than [`CONTRACT`], or `None` when
+/// the workspace takes [`CONTRACT`] from no git repository.
 fn implementations(workspace: &[Dependency]) -> Option<Vec<String>> {
-    let contract = workspace
+    let repository = workspace
         .iter()
-        .find(|dependency| dependency.name == CONTRACT)?;
-    let contract = Path::new(contract.path.as_deref()?);
-    if !contract.ends_with(CONTRACT_IN_CHECKOUT) {
-        return None;
-    }
-    let checkout = contract.ancestors().nth(2)?;
+        .find(|dependency| dependency.name == CONTRACT)?
+        .git
+        .as_deref()?;
 
     Some(
         workspace
             .iter()
-            .filter(|dependency| {
-                dependency
-                    .path
-                    .as_deref()
-                    .is_some_and(|path| Path::new(path).starts_with(checkout))
-            })
+            .filter(|dependency| dependency.git.as_deref() == Some(repository))
             .map(|dependency| dependency.name.clone())
             .filter(|name| name != CONTRACT)
             .collect(),

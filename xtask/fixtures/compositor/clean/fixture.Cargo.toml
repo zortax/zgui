@@ -3,7 +3,7 @@
 members = ["crates/*"]
 
 [workspace.dependencies]
-iceblink = { path = "../compositor/crates/iceblink", version = "0.1.0" }
-iceblink-core = { path = "../compositor/crates/core", version = "0.1.0" }
-renderer = { path = "../compositor/crates/wgpu", version = "0.1.0", package = "iceblink-wgpu" }
-iceblink-wgsl = { path = "../compositor/crates/wgsl", version = "0.1.0" }
+iceblink = { git = "https://example.com/iceblink", version = "0.1.0" }
+iceblink-core = { git = "https://example.com/iceblink", version = "0.1.0" }
+renderer = { git = "https://example.com/iceblink", version = "0.1.0", package = "iceblink-wgpu" }
+iceblink-wgsl = { git = "https://example.com/iceblink", version = "0.1.0" }
